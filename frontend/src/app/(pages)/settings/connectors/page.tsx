@@ -102,9 +102,11 @@ function parseCustomHeaders(raw: string): Record<string, string> | undefined {
 
 function isGoogleMcpConnector(connector: McpConnectorSummary) {
     try {
-        return new URL(connector.serverUrl).hostname
-            .toLowerCase()
-            .endsWith("googleapis.com");
+        const hostname = new URL(connector.serverUrl).hostname.toLowerCase();
+        return (
+            hostname === "googleapis.com" ||
+            hostname.endsWith(".googleapis.com")
+        );
     } catch {
         return false;
     }

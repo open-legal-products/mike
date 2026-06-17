@@ -189,9 +189,44 @@ export async function discoverOAuthMetadata(serverUrl: string): Promise<OAuthMet
     };
 }
 
+export function isGoogleOAuthHost(serverUrl: string): boolean {
+    try {
+        const hostname = new URL(serverUrl).hostname.toLowerCase();
+        return (
+            hostname === "googleapis.com" ||
+            hostname.endsWith(".googleapis.com")
+        );
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Non-standard authorization-request parameters a given provider requires.
+ *
+ * The MCP SDK builds a spec-compliant authorization URL and exposes no hook for
+ * adding provider-specific query parameters, so these are applied in
+ * {@link DbMcpOAuthProvider.redirectToAuthorization} — the one point at which
+ * the provider is handed the fully-built URL before the user is sent to it.
+ */
+export function providerAuthorizationParams(
+    serverUrl: string,
+): Record<string, string> {
+    // Google only returns a refresh token when the request opts into offline
+    // access (`access_type=offline`), and only re-issues one when it is forced
+    // to re-prompt for consent (`prompt=consent`). Google does not implement the
+    // OIDC `offline_access` scope that the SDK would otherwise handle on its
+    // own, so these proprietary parameters are the supported way to obtain a
+    // durable refresh token. Without them a Google connector authorizes once and
+    // then breaks as soon as the short-lived access token expires.
+    if (isGoogleOAuthHost(serverUrl)) {
+        return { access_type: "offline", prompt: "consent" };
+    }
+    return {};
+}
+
 function oauthClientEnvFor(serverUrl: string) {
-    const hostname = new URL(serverUrl).hostname.toLowerCase();
-    const prefix = hostname.endsWith("googleapis.com")
+    const prefix = isGoogleOAuthHost(serverUrl)
         ? "GOOGLE_MCP_OAUTH"
         : "MCP_OAUTH";
     return {
@@ -593,11 +628,18 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
     }
 
     async redirectToAuthorization(authorizationUrl: URL) {
-        if (this.mode === "initiate") {
-            this.lastAuthorizeUrl = authorizationUrl;
-            return;
+        if (this.mode !== "initiate") {
+            throw new McpOAuthRequiredError();
         }
-        throw new McpOAuthRequiredError();
+        // Apply any provider-specific authorization parameters the SDK cannot
+        // express on its own (e.g. Google's offline-access flags). Using `set`
+        // keeps the SDK's own parameters intact and avoids duplicates.
+        for (const [key, value] of Object.entries(
+            providerAuthorizationParams(this.connector.server_url),
+        )) {
+            authorizationUrl.searchParams.set(key, value);
+        }
+        this.lastAuthorizeUrl = authorizationUrl;
     }
 
     async saveCodeVerifier(codeVerifier: string) {
@@ -683,6 +725,13 @@ export async function startUserMcpConnectorOAuth(
         redirectUri,
     );
     const env = oauthClientEnvFor(connector.server_url);
+    // Scope is intentionally left to the SDK when not explicitly configured: it
+    // resolves it as `scope || resourceMetadata.scopes_supported ||
+    // clientMetadata.scope`, i.e. it already falls back to the scopes the MCP
+    // server advertises in its protected-resource metadata. Passing a scope
+    // derived from the *authorization server* metadata here would wrongly take
+    // priority over that and request the wrong scopes (e.g. Google's generic
+    // OIDC scopes instead of the Drive/Gmail scopes the connector needs).
     const result = await runMcpOAuth(provider, {
         serverUrl: connector.server_url,
         ...(env.scope ? { scope: env.scope } : {}),
