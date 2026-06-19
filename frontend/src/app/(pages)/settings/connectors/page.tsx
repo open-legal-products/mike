@@ -301,17 +301,38 @@ export default function ConnectorsPage() {
         }
         popup.location.href = authorizationUrl;
 
+        // Wait for authorization to complete. Strict identity providers (Google
+        // among them) serve their consent page with
+        // `Cross-Origin-Opener-Policy: same-origin`, which severs `window.opener`
+        // and makes `popup.closed` unreadable from here. That breaks both the
+        // callback's `postMessage` and any `popup.closed` polling, and a blocked
+        // `popup.closed` read can even report a false "closed". So we treat the
+        // backend's `oauthConnected` flag as the source of truth and poll for it,
+        // while still honouring a `postMessage` on the chance it gets through.
         await new Promise<void>((resolve, reject) => {
-            const timeout = window.setTimeout(() => {
+            let settled = false;
+            const finish = (action: () => void) => {
+                if (settled) return;
+                settled = true;
                 cleanup();
-                reject(new Error("OAuth authorization timed out."));
-            }, 5 * 60 * 1000);
+                action();
+            };
+            const timeout = window.setTimeout(
+                () =>
+                    finish(() =>
+                        reject(new Error("OAuth authorization timed out.")),
+                    ),
+                5 * 60 * 1000,
+            );
             const poll = window.setInterval(() => {
-                if (popup.closed) {
-                    cleanup();
-                    reject(new Error("OAuth authorization window was closed."));
-                }
-            }, 700);
+                void getMcpConnector(connectorId)
+                    .then((connector) => {
+                        if (connector.oauthConnected) finish(resolve);
+                    })
+                    .catch(() => {
+                        // Transient read errors shouldn't abort the wait.
+                    });
+            }, 1500);
             const cleanup = () => {
                 window.clearTimeout(timeout);
                 window.clearInterval(poll);
@@ -331,19 +352,26 @@ export default function ConnectorsPage() {
                     { type: "mcp_oauth_result_ack" },
                     event.origin,
                 );
-                cleanup();
                 if (event.data.success) {
-                    resolve();
+                    finish(resolve);
                     return;
                 }
-                reject(
-                    new Error(
-                        event.data.detail || "OAuth authorization failed.",
+                finish(() =>
+                    reject(
+                        new Error(
+                            event.data.detail || "OAuth authorization failed.",
+                        ),
                     ),
                 );
             };
             window.addEventListener("message", onMessage);
         });
+
+        try {
+            popup.close();
+        } catch {
+            // COOP may block closing a severed popup; it self-closes anyway.
+        }
 
         const refreshed = await refreshMcpConnectorTools(connectorId);
         replaceConnector(refreshed);
