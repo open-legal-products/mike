@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
     formatMcpErrorForAgent,
     mcpToolResultErrorMessage,
+    sanitizeMcpToolErrorResult,
 } from "./errors";
 
 describe("formatMcpErrorForAgent", () => {
@@ -143,5 +144,31 @@ describe("mcpToolResultErrorMessage", () => {
                 content: [{ type: "text", text: "ok" }],
             }),
         ).toBeNull();
+    });
+
+    it("keeps error text but strips unrecognized fields from logs", () => {
+        expect(
+            sanitizeMcpToolErrorResult({
+                isError: true,
+                content: [
+                    {
+                        type: "text",
+                        text: "The caller does not have permission.",
+                        accessToken: "must-not-be-logged",
+                    },
+                ],
+                _meta: {
+                    authorization: "must-not-be-logged",
+                },
+            }),
+        ).toEqual({
+            isError: true,
+            content: [
+                {
+                    type: "text",
+                    text: "The caller does not have permission.",
+                },
+            ],
+        });
     });
 });

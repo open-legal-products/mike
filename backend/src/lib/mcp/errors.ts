@@ -161,3 +161,32 @@ export function mcpToolResultErrorMessage(result: unknown): string | null {
     const structuredError = serverErrorFrom(record.structuredContent);
     return structuredError?.message ?? "MCP server reported a tool error.";
 }
+
+export function sanitizeMcpToolErrorResult(result: unknown): UnknownRecord {
+    const record = asRecord(result);
+    if (!record) return { isError: true };
+
+    const content = Array.isArray(record.content)
+        ? record.content.map((item) => {
+              const contentItem = asRecord(item);
+              if (!contentItem) return { type: "unknown" };
+              return {
+                  type:
+                      typeof contentItem.type === "string"
+                          ? contentItem.type
+                          : "unknown",
+                  ...(contentItem.type === "text" &&
+                  typeof contentItem.text === "string"
+                      ? { text: truncate(contentItem.text.trim()) }
+                      : {}),
+              };
+          })
+        : undefined;
+    const structuredError = serverErrorFrom(record.structuredContent);
+
+    return {
+        isError: true,
+        ...(content ? { content } : {}),
+        ...(structuredError ? { structuredError } : {}),
+    };
+}

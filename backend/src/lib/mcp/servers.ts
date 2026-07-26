@@ -27,6 +27,7 @@ import {
 import {
     formatMcpErrorForAgent,
     mcpToolResultErrorMessage,
+    sanitizeMcpToolErrorResult,
 } from "./errors";
 import {
     CLIENT_INFO,
@@ -585,6 +586,7 @@ export async function executeMcpToolCall(
                 connectorName: connector.name,
                 toolName: tool.tool_name,
                 error: toolError,
+                serverResponse: sanitizeMcpToolErrorResult(result),
             });
             await insertMcpAuditLog(db, {
                 user_id: userId,
