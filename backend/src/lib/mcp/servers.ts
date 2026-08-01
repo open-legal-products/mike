@@ -588,6 +588,11 @@ export async function executeMcpToolCall(
                 error: toolError,
                 serverResponse: sanitizeMcpToolErrorResult(result),
             });
+            const content = stringifyMcpResult({
+                ok: false,
+                error: toolError,
+                serverResult: result,
+            });
             await insertMcpAuditLog(db, {
                 user_id: userId,
                 connector_id: connector.id,
@@ -597,14 +602,13 @@ export async function executeMcpToolCall(
                 status: "error",
                 error_message: toolError,
                 duration_ms: Date.now() - started,
-                result_size_chars: 0,
+                // The model-facing payload is the full (truncated) serialized
+                // result, not an empty body — record its real size so audit
+                // rows reflect what was actually returned.
+                result_size_chars: content.length,
             });
             return {
-                content: stringifyMcpResult({
-                    ok: false,
-                    error: toolError,
-                    serverResult: result,
-                }),
+                content,
                 event: {
                     type: "mcp_tool_call",
                     connector_id: connector.id,
@@ -646,6 +650,26 @@ export async function executeMcpToolCall(
             toolName: tool.tool_name,
             ...diagnostic,
         });
+        // This payload can embed remote-server-authored text (diagnostic.message
+        // and diagnostic.serverError originate from the MCP server's error
+        // response). Route it through stringifyMcpResult so it carries the same
+        // "untrusted data, not instructions" wrapper as the success and
+        // tool-error paths — otherwise a hostile server could smuggle prompt
+        // injection into the model-facing content through the transport-error
+        // channel alone.
+        const content = stringifyMcpResult({
+            ok: false,
+            error: diagnostic.message,
+            ...(diagnostic.httpStatus
+                ? { httpStatus: diagnostic.httpStatus }
+                : {}),
+            ...(diagnostic.mcpCode !== undefined
+                ? { mcpCode: diagnostic.mcpCode }
+                : {}),
+            ...(diagnostic.serverError
+                ? { serverError: diagnostic.serverError }
+                : {}),
+        });
         await insertMcpAuditLog(db, {
             user_id: userId,
             connector_id: connector.id,
@@ -655,22 +679,10 @@ export async function executeMcpToolCall(
             status: "error",
             error_message: diagnostic.message,
             duration_ms: Date.now() - started,
-            result_size_chars: 0,
+            result_size_chars: content.length,
         });
         return {
-            content: JSON.stringify({
-                ok: false,
-                error: diagnostic.message,
-                ...(diagnostic.httpStatus
-                    ? { httpStatus: diagnostic.httpStatus }
-                    : {}),
-                ...(diagnostic.mcpCode !== undefined
-                    ? { mcpCode: diagnostic.mcpCode }
-                    : {}),
-                ...(diagnostic.serverError
-                    ? { serverError: diagnostic.serverError }
-                    : {}),
-            }),
+            content,
             event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,
