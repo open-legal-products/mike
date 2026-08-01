@@ -191,7 +191,14 @@ export async function discoverOAuthMetadata(serverUrl: string): Promise<OAuthMet
 
 export function isGoogleOAuthHost(serverUrl: string): boolean {
     try {
-        const hostname = new URL(serverUrl).hostname.toLowerCase();
+        // A DNS hostname may carry a trailing "." (the fully-qualified,
+        // absolute form: `googleapis.com.` names the same host as
+        // `googleapis.com`). `URL` preserves that dot, so strip it before the
+        // suffix comparison — otherwise a legitimate absolute Google URL would
+        // fail the match and silently skip the offline-access parameters.
+        const hostname = new URL(serverUrl).hostname
+            .toLowerCase()
+            .replace(/\.$/, "");
         return (
             hostname === "googleapis.com" ||
             hostname.endsWith(".googleapis.com")
@@ -743,6 +750,18 @@ export async function startUserMcpConnectorOAuth(
     if (!provider.lastAuthorizeUrl) {
         throw new Error("OAuth authorization URL was not returned by the MCP SDK.");
     }
+    // We are about to send the user through an interactive authorization
+    // redirect, which means the SDK did not (and could not) complete the flow
+    // from stored credentials — typically because the only token row is an
+    // expired access token with no usable refresh token. That stale row must
+    // not survive: `oauthConnected` (client.ts) is `!!encrypted_access_token`
+    // with no expiry check, so leaving the row in place makes the frontend
+    // completion poll resolve immediately on a token that is already dead,
+    // closing the consent popup mid-flow and looping the connector forever.
+    // Invalidating "tokens" here makes `oauthConnected` an honest "this
+    // authorization attempt has completed" signal: it flips to true only once a
+    // fresh token is persisted by the OAuth callback.
+    await provider.invalidateCredentials("tokens");
     return {
         authorizationUrl: provider.lastAuthorizeUrl.toString(),
         alreadyAuthorized: false,
