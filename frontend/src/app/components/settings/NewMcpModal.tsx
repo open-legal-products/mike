@@ -95,7 +95,12 @@ export function NewMcpModal({
                       }
             }
             cancelAction={
-                step === "working" || step === "auth"
+                // "working" is a brief synchronous create with nothing to
+                // interrupt, so it stays uncancellable. "auth" now offers a
+                // Cancel button: COOP can sever the popup so the flow may never
+                // report a result on its own, and the user needs a reliable
+                // escape hatch instead of waiting out the five-minute timeout.
+                step === "working"
                     ? false
                     : {
                           label: step === "success" ? "Done" : "Cancel",
