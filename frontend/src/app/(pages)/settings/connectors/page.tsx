@@ -25,15 +25,19 @@ import {
     needsMfaVerification,
 } from "@/app/components/popups/MfaVerificationPopup";
 import {
+    type GoogleDriveStatus,
     type McpConnectorSummary,
     MikeApiError,
     createMcpConnector,
     deleteMcpConnector,
+    disconnectGoogleDrive,
+    getGoogleDriveStatus,
     getMcpConnector,
     isMfaRequiredError,
     listMcpConnectors,
     refreshMcpConnectorTools,
     setMcpToolEnabled,
+    startGoogleDriveOAuth,
     startMcpConnectorOAuth,
     updateMcpConnector,
 } from "@/app/lib/mikeApi";
@@ -123,6 +127,179 @@ function isGoogleMcpConnector(connector: McpConnectorSummary) {
     } catch {
         return false;
     }
+}
+
+/**
+ * First-party Google Drive card. Unlike MCP connectors there is no server
+ * URL to enter and no per-tool management — one Connect click runs the
+ * backend's own OAuth flow (GA Drive REST API, no Google preview program),
+ * after which the assistant's google_drive_* tools activate automatically.
+ */
+function GoogleDriveCard() {
+    const [status, setStatus] = useState<GoogleDriveStatus | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const abortRef = useRef<AbortController | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        getGoogleDriveStatus()
+            .then((s) => {
+                if (!cancelled) setStatus(s);
+            })
+            .catch(() => {
+                if (!cancelled)
+                    setStatus({ connected: false, scope: null, configured: false });
+            });
+        return () => {
+            cancelled = true;
+            abortRef.current?.abort();
+        };
+    }, []);
+
+    const connect = async () => {
+        setBusy(true);
+        setError(null);
+        // Open the popup synchronously with the click so browsers don't block
+        // it, then navigate it once the backend hands us the URL.
+        const popup = window.open(
+            "about:blank",
+            "mike_google_drive_oauth",
+            "popup,width=560,height=720,menubar=no,toolbar=no,location=no,status=no",
+        );
+        try {
+            const { authorizationUrl } = await startGoogleDriveOAuth();
+            if (!popup) {
+                window.location.assign(authorizationUrl);
+                return;
+            }
+            popup.location.href = authorizationUrl;
+
+            // Google's consent page severs window.opener (COOP), so poll our
+            // own status endpoint as the source of truth — same approach as
+            // the MCP connector flow.
+            const abortController = new AbortController();
+            abortRef.current?.abort();
+            abortRef.current = abortController;
+            await new Promise<void>((resolve, reject) => {
+                let settled = false;
+                const started = Date.now();
+                let pollTimer = 0;
+                const finish = (action: () => void) => {
+                    if (settled) return;
+                    settled = true;
+                    window.clearTimeout(timeout);
+                    window.clearTimeout(pollTimer);
+                    abortController.signal.removeEventListener("abort", onAbort);
+                    action();
+                };
+                const timeout = window.setTimeout(
+                    () =>
+                        finish(() =>
+                            reject(new Error("Google authorization timed out.")),
+                        ),
+                    5 * 60 * 1000,
+                );
+                const runPoll = () => {
+                    void getGoogleDriveStatus()
+                        .then((s) => {
+                            if (settled) return;
+                            if (s.connected) {
+                                setStatus(s);
+                                finish(resolve);
+                                return;
+                            }
+                            schedule();
+                        })
+                        .catch(() => {
+                            if (!settled) schedule();
+                        });
+                };
+                const schedule = () => {
+                    const delay = Date.now() - started < 60_000 ? 1500 : 5000;
+                    pollTimer = window.setTimeout(runPoll, delay);
+                };
+                const onAbort = () =>
+                    finish(() => reject(new Error("Authorization cancelled.")));
+                abortController.signal.addEventListener("abort", onAbort);
+                schedule();
+            });
+            popup.close();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Failed to connect Google Drive.");
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const disconnect = async () => {
+        setBusy(true);
+        setError(null);
+        try {
+            await disconnectGoogleDrive();
+            setStatus((s) =>
+                s ? { ...s, connected: false, scope: null } : s,
+            );
+        } catch (e) {
+            setError(
+                e instanceof Error ? e.message : "Failed to disconnect Google Drive.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <AccountSection className="p-4">
+            <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-900">
+                        Google Drive
+                    </p>
+                    <p className="mt-0.5 text-xs text-gray-500">
+                        {status?.connected
+                            ? "Connected — the assistant can search and read your Drive files (read-only)."
+                            : "Let the assistant search and read your Google Drive files (read-only)."}
+                    </p>
+                </div>
+                {status === null ? (
+                    <span className="text-xs text-gray-400">Loading…</span>
+                ) : status.connected ? (
+                    <button
+                        type="button"
+                        onClick={() => void disconnect()}
+                        disabled={busy}
+                        className="text-sm text-gray-500 transition-colors hover:text-gray-800 disabled:opacity-50"
+                    >
+                        {busy ? "Disconnecting…" : "Disconnect"}
+                    </button>
+                ) : (
+                    <button
+                        type="button"
+                        onClick={() => void connect()}
+                        disabled={busy}
+                        className={`inline-flex h-9 items-center gap-1.5 text-sm ${accountGlassPrimaryButtonClassName}`}
+                    >
+                        {busy ? "Waiting for Google…" : "Connect"}
+                    </button>
+                )}
+            </div>
+            {busy && !status?.connected && (
+                <button
+                    type="button"
+                    onClick={() => abortRef.current?.abort()}
+                    className="mt-2 text-xs text-gray-400 underline-offset-2 hover:underline"
+                >
+                    Cancel
+                </button>
+            )}
+            {error && (
+                <p className="mt-2 whitespace-pre-wrap text-xs text-red-600">
+                    {error}
+                </p>
+            )}
+        </AccountSection>
+    );
 }
 
 export default function ConnectorsPage() {
@@ -762,6 +939,10 @@ export default function ConnectorsPage() {
                     {error}
                 </div>
             )}
+
+            <div className="mb-3">
+                <GoogleDriveCard />
+            </div>
 
             <div className="space-y-3">
                 {!loading &&

@@ -8,6 +8,7 @@ import { resolveRequestedModel } from "../routerModels";
 import { UserFacingError } from "../userFacingError";
 import { createServerSupabase } from "../supabase";
 import { buildUserMcpTools, type McpToolEvent } from "../mcpConnectors";
+import { buildGoogleDriveTools } from "../integrations/googleDrive";
 import type { SourceDocument } from "../sourceDocuments";
 import {
   COURTLISTENER_TOOLS,
@@ -280,6 +281,7 @@ export async function runLLMStream(params: {
     unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   const mcpTools = await buildUserMcpTools(userId, db);
+  const googleDriveTools = await buildGoogleDriveTools(userId, db);
   const conversationTools = includeAskInputs
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
@@ -287,6 +289,7 @@ export async function runLLMStream(params: {
   const activeTools = [
     ...baseTools,
     ...mcpTools,
+    ...googleDriveTools,
     ...(extraTools ?? []),
     ...(clientTools?.schemas ?? []),
   ];

@@ -82,6 +82,56 @@ authentication behavior, Ollama setup, and first-run guidance.
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
+## Google Drive Integration
+
+Mike can search and read a user's Google Drive files directly from chat — ask
+*"Search my Google Drive for the consulting agreement and summarize it"* and
+the assistant uses its `google_drive_search` / `google_drive_read_file` /
+`google_drive_list_recent` tools (read-only; Google Docs/Sheets/Slides are
+exported as text, PDF and Word files are converted). Each user connects their
+own Google account with one click from **Account > Connectors > Google
+Drive**; tokens are encrypted at rest and access is limited to the
+`drive.readonly` scope.
+
+This is a first-party integration over the GA Google Drive REST API. It does
+**not** use Google's hosted Drive MCP server, which is gated behind the
+Google Workspace Developer Preview Program — no preview enrollment is needed.
+
+### Self-hosting setup (one-time, per deployment)
+
+1. In [Google Cloud Console](https://console.cloud.google.com), pick or
+   create a project.
+2. **APIs & Services > Library**: enable the **Google Drive API**
+   (`drive.googleapis.com`).
+3. **APIs & Services > OAuth consent screen**: configure it (External is
+   fine). While the app is in *Testing* mode only listed test users can
+   connect — add your users, or publish the app. The `drive.readonly` scope
+   is *restricted*: serving more than 100 users in production requires
+   Google's OAuth app verification.
+4. **APIs & Services > Credentials > Create credentials > OAuth client ID >
+   Web application**, and add your backend's callback as an authorized
+   redirect URI:
+
+       https://<your-backend-host>/user/integrations/google-drive/oauth/callback
+
+   (local development: `http://localhost:3001/user/integrations/google-drive/oauth/callback`)
+5. Set the client in `backend/.env` and restart the backend:
+
+       GOOGLE_DRIVE_OAUTH_CLIENT_ID=...apps.googleusercontent.com
+       GOOGLE_DRIVE_OAUTH_CLIENT_SECRET=...
+
+   If you already configured `GOOGLE_MCP_OAUTH_CLIENT_ID`/`_SECRET` for MCP
+   connectors, the Drive integration reuses them automatically — just add
+   the extra redirect URI from step 4 to the same OAuth client.
+
+Fresh databases created from `backend/schema.sql` already include the Drive
+token tables. Existing deployments should apply
+`backend/migrations/20260804_01_google_drive_integration.sql`.
+
+Each user then clicks **Connect** on **Account > Connectors**, approves the
+Google consent screen once, and the assistant's Drive tools activate for
+their chats. Disconnecting revokes the grant and deletes the stored tokens.
+
 ## System workflows
 
 Mike's system assistant and tabular-review workflows are maintained in the

@@ -5,6 +5,7 @@ import {
     MikeApiError,
     type McpConnectorSummary,
     createMcpConnector,
+    getGoogleDriveStatus,
     getMcpConnector,
     listMcpConnectors,
     refreshMcpConnectorTools,
@@ -23,6 +24,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
         refreshMcpConnectorTools: vi.fn(),
         startMcpConnectorOAuth: vi.fn(),
         getMcpConnector: vi.fn(),
+        getGoogleDriveStatus: vi.fn(),
     };
 });
 
@@ -116,6 +118,13 @@ describe("ConnectorsPage OAuth poll cancellation", () => {
             alreadyAuthorized: false,
             callbackOrigin: "https://api.example",
         });
+        // This file exercises the MCP OAuth wait, not the first-party Drive
+        // card that shares the page. Leave its status pending so the card stays
+        // in its "Loading…" state and never contributes a second "Connect" or
+        // "Cancel" button to these role queries.
+        vi.mocked(getGoogleDriveStatus).mockReturnValue(
+            new Promise(() => {}),
+        );
         // Authorization never completes, so the poll keeps running until
         // something cancels it.
         vi.mocked(getMcpConnector).mockResolvedValue(

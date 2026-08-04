@@ -868,6 +868,36 @@ export async function setMcpToolEnabled(
     );
 }
 
+// ---------------------------------------------------------------------------
+// Native Google Drive integration (first-party — not an MCP connector)
+// ---------------------------------------------------------------------------
+
+export type GoogleDriveStatus = {
+    connected: boolean;
+    scope: string | null;
+    /** Whether the backend has a Google OAuth client configured at all. */
+    configured: boolean;
+};
+
+export async function getGoogleDriveStatus(): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>("/user/integrations/google-drive");
+}
+
+export async function startGoogleDriveOAuth(): Promise<{
+    authorizationUrl: string;
+}> {
+    return apiRequest<{ authorizationUrl: string }>(
+        "/user/integrations/google-drive/oauth/start",
+        { method: "POST" },
+    );
+}
+
+export async function disconnectGoogleDrive(): Promise<void> {
+    return apiRequest<void>("/user/integrations/google-drive", {
+        method: "DELETE",
+    });
+}
+
 export async function getProject(projectId: string): Promise<Project> {
     return apiRequest<Project>(`/projects/${projectId}`);
 }
