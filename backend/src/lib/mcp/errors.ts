@@ -1,3 +1,5 @@
+import { mcpOAuthProviderFor } from "./providers";
+
 const MAX_MCP_ERROR_MESSAGE_CHARS = 2_000;
 const POST_ERROR_MARKER = "Error POSTing to endpoint:";
 
@@ -146,10 +148,9 @@ export function formatMcpErrorForAgent(error: unknown): McpErrorDiagnostic {
  * One-line, user-facing failure message for connector management routes
  * (create/refresh/oauth). Reuses the agent-facing diagnostic — which already
  * strips embedded response bodies such as Google's full HTML 400 page — and
- * adds one targeted hint: Google's MCP endpoints are versioned, and their
- * discovery metadata advertises the UNversioned path (`…/mcp`), so hitting
- * the advertised path yields an opaque generic 400. Users who copy the URL
- * from the metadata (or from Google's own docs) land exactly there.
+ * appends any provider-specific endpoint hint from the provider registry
+ * (e.g. Google's discovery metadata advertises an unversioned `…/mcp` path
+ * that yields an opaque generic 400; the hint points at the versioned one).
  */
 export function conciseMcpErrorMessage(
     error: unknown,
@@ -157,19 +158,14 @@ export function conciseMcpErrorMessage(
 ): string {
     const diagnostic = formatMcpErrorForAgent(error);
     let message = diagnostic.message;
-    if (serverUrl && (diagnostic.httpStatus === 400 || diagnostic.httpStatus === 404)) {
+    if (serverUrl && diagnostic.httpStatus) {
         try {
             const url = new URL(serverUrl);
-            const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
-            const isGoogle =
-                hostname === "googleapis.com" ||
-                hostname.endsWith(".googleapis.com");
-            if (isGoogle && !/\/v\d+(\/|$)/.test(url.pathname)) {
-                message +=
-                    " Google's MCP endpoints are versioned — check the server URL " +
-                    "(for example the Drive MCP endpoint is " +
-                    "https://drivemcp.googleapis.com/mcp/v1, not /mcp).";
-            }
+            const hint = mcpOAuthProviderFor(url)?.endpointHint?.(
+                url,
+                diagnostic.httpStatus,
+            );
+            if (hint) message += ` ${hint}`;
         } catch {
             // Unparseable URL — no hint to add.
         }

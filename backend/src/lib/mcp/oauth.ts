@@ -20,6 +20,7 @@ import {
     stateHash,
     validateRemoteMcpUrl,
 } from "./client";
+import { mcpOAuthProviderFor } from "./providers";
 import {
     CLIENT_INFO,
     OAUTH_STATE_TTL_MS,
@@ -190,26 +191,12 @@ export async function discoverOAuthMetadata(serverUrl: string): Promise<OAuthMet
 }
 
 export function isGoogleOAuthHost(serverUrl: string): boolean {
-    try {
-        // A DNS hostname may carry a trailing "." (the fully-qualified,
-        // absolute form: `googleapis.com.` names the same host as
-        // `googleapis.com`). `URL` preserves that dot, so strip it before the
-        // suffix comparison — otherwise a legitimate absolute Google URL would
-        // fail the match and silently skip the offline-access parameters.
-        const hostname = new URL(serverUrl).hostname
-            .toLowerCase()
-            .replace(/\.$/, "");
-        return (
-            hostname === "googleapis.com" ||
-            hostname.endsWith(".googleapis.com")
-        );
-    } catch {
-        return false;
-    }
+    return mcpOAuthProviderFor(serverUrl)?.id === "google";
 }
 
 /**
- * Non-standard authorization-request parameters a given provider requires.
+ * Non-standard authorization-request parameters a given provider requires
+ * (from the provider registry in providers.ts).
  *
  * The MCP SDK builds a spec-compliant authorization URL and exposes no hook for
  * adding provider-specific query parameters, so these are applied in
@@ -219,23 +206,11 @@ export function isGoogleOAuthHost(serverUrl: string): boolean {
 export function providerAuthorizationParams(
     serverUrl: string,
 ): Record<string, string> {
-    // Google only returns a refresh token when the request opts into offline
-    // access (`access_type=offline`), and only re-issues one when it is forced
-    // to re-prompt for consent (`prompt=consent`). Google does not implement the
-    // OIDC `offline_access` scope that the SDK would otherwise handle on its
-    // own, so these proprietary parameters are the supported way to obtain a
-    // durable refresh token. Without them a Google connector authorizes once and
-    // then breaks as soon as the short-lived access token expires.
-    if (isGoogleOAuthHost(serverUrl)) {
-        return { access_type: "offline", prompt: "consent" };
-    }
-    return {};
+    return mcpOAuthProviderFor(serverUrl)?.authorizationParams ?? {};
 }
 
 function oauthClientEnvFor(serverUrl: string) {
-    const prefix = isGoogleOAuthHost(serverUrl)
-        ? "GOOGLE_MCP_OAUTH"
-        : "MCP_OAUTH";
+    const prefix = mcpOAuthProviderFor(serverUrl)?.envPrefix ?? "MCP_OAUTH";
     return {
         clientId:
             process.env[`${prefix}_CLIENT_ID`] ||
@@ -732,23 +707,17 @@ export async function startUserMcpConnectorOAuth(
         redirectUri,
     );
     const env = oauthClientEnvFor(connector.server_url);
-    // Google's authorization servers do not implement RFC 7591 dynamic client
+    // Some providers (Google, Slack) do not implement RFC 7591 dynamic client
     // registration, so without a pre-configured OAuth client the SDK's normal
     // "no client? register one" fallback dead-ends deep inside the flow with a
-    // message no operator can act on. Fail here instead, with the exact setup
-    // instructions — including the redirect URI this deployment needs, so it
-    // can be copy-pasted into the Google Cloud Console form.
-    if (!env.clientId && isGoogleOAuthHost(connector.server_url)) {
+    // message no operator can act on. Fail here instead, with the provider's
+    // exact setup instructions — including the redirect URI this deployment
+    // needs, so it can be copy-pasted into the provider's console form.
+    const providerQuirks = mcpOAuthProviderFor(connector.server_url);
+    if (!env.clientId && providerQuirks?.setupInstructions) {
         const stored = await loadOAuthToken(connector.id, db);
         if (!stored?.client_id) {
-            throw new Error(
-                "Google MCP servers need a pre-configured OAuth client — Google does not " +
-                    "support automatic (dynamic) client registration. Create an OAuth client in " +
-                    "Google Cloud Console (APIs & Services → Credentials → Create credentials → " +
-                    `OAuth client ID → Web application) with authorized redirect URI ${redirectUri}, ` +
-                    "then set GOOGLE_MCP_OAUTH_CLIENT_ID and GOOGLE_MCP_OAUTH_CLIENT_SECRET in " +
-                    "backend/.env (see .env.example) and restart the backend.",
-            );
+            throw new Error(providerQuirks.setupInstructions(redirectUri));
         }
     }
     // Scope is intentionally left to the SDK when not explicitly configured: it
