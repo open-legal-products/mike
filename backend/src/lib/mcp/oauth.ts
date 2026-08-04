@@ -732,6 +732,25 @@ export async function startUserMcpConnectorOAuth(
         redirectUri,
     );
     const env = oauthClientEnvFor(connector.server_url);
+    // Google's authorization servers do not implement RFC 7591 dynamic client
+    // registration, so without a pre-configured OAuth client the SDK's normal
+    // "no client? register one" fallback dead-ends deep inside the flow with a
+    // message no operator can act on. Fail here instead, with the exact setup
+    // instructions — including the redirect URI this deployment needs, so it
+    // can be copy-pasted into the Google Cloud Console form.
+    if (!env.clientId && isGoogleOAuthHost(connector.server_url)) {
+        const stored = await loadOAuthToken(connector.id, db);
+        if (!stored?.client_id) {
+            throw new Error(
+                "Google MCP servers need a pre-configured OAuth client — Google does not " +
+                    "support automatic (dynamic) client registration. Create an OAuth client in " +
+                    "Google Cloud Console (APIs & Services → Credentials → Create credentials → " +
+                    `OAuth client ID → Web application) with authorized redirect URI ${redirectUri}, ` +
+                    "then set GOOGLE_MCP_OAUTH_CLIENT_ID and GOOGLE_MCP_OAUTH_CLIENT_SECRET in " +
+                    "backend/.env (see .env.example) and restart the backend.",
+            );
+        }
+    }
     // Scope is intentionally left to the SDK when not explicitly configured: it
     // resolves it as `scope || resourceMetadata.scopes_supported ||
     // clientMetadata.scope`, i.e. it already falls back to the scopes the MCP

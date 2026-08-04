@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock only the two module-internal seams that would otherwise require a live
 // MCP server and Supabase: the SDK's `auth()` driver and `loadConnector`. Their
@@ -190,8 +190,70 @@ function makeRecordingDb(deletes: RecordedDelete[]): Db {
 }
 
 describe("startUserMcpConnectorOAuth", () => {
+    // Any real deployment that reaches these flows has a Google OAuth client
+    // configured (Google offers no dynamic registration); mirror that here so
+    // the suite exercises the flow rather than the missing-client guard. The
+    // guard itself is tested explicitly below.
+    const PRIOR_CLIENT_ID = process.env.GOOGLE_MCP_OAUTH_CLIENT_ID;
     beforeEach(() => {
         vi.clearAllMocks();
+        process.env.GOOGLE_MCP_OAUTH_CLIENT_ID =
+            "test-client.apps.googleusercontent.com";
+    });
+    afterEach(() => {
+        if (PRIOR_CLIENT_ID === undefined) {
+            delete process.env.GOOGLE_MCP_OAUTH_CLIENT_ID;
+        } else {
+            process.env.GOOGLE_MCP_OAUTH_CLIENT_ID = PRIOR_CLIENT_ID;
+        }
+    });
+
+    it("fails fast with setup instructions when no Google OAuth client is configured", async () => {
+        delete process.env.GOOGLE_MCP_OAUTH_CLIENT_ID;
+        const connector = makeConnector(
+            "https://drivemcp.googleapis.com/mcp/v1",
+        );
+        loadConnectorMock.mockResolvedValue(connector);
+        // No stored token row either — the true first-run state.
+        const db = {
+            from() {
+                return {
+                    select() {
+                        return {
+                            eq() {
+                                return {
+                                    maybeSingle: () =>
+                                        Promise.resolve({
+                                            data: null,
+                                            error: null,
+                                        }),
+                                };
+                            },
+                        };
+                    },
+                };
+            },
+        } as unknown as Db;
+
+        await expect(
+            startUserMcpConnectorOAuth(
+                "user-1",
+                connector.id,
+                "https://app.test/callback",
+                db,
+            ),
+        ).rejects.toThrow(/GOOGLE_MCP_OAUTH_CLIENT_ID/);
+        // The message must carry the deployment's actual redirect URI so the
+        // operator can paste it straight into the Google Cloud Console form.
+        await expect(
+            startUserMcpConnectorOAuth(
+                "user-1",
+                connector.id,
+                "https://app.test/callback",
+                db,
+            ),
+        ).rejects.toThrow(/https:\/\/app\.test\/callback/);
+        expect(authMock).not.toHaveBeenCalled();
     });
 
     it("invalidates the stale token row when an interactive redirect is required", async () => {
