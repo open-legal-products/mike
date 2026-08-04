@@ -108,6 +108,16 @@ describe("providerAuthorizationParams", () => {
             providerAuthorizationParams("https://mcp.example.com/mcp"),
         ).toEqual({});
     });
+
+    it("adds nothing for Slack hosts", () => {
+        // Slack needs no proprietary parameters: its MCP authorization
+        // endpoint takes user scopes via the standard `scope` parameter and
+        // refresh-token issuance is governed by the app's token-rotation
+        // setting, not by request flags.
+        expect(
+            providerAuthorizationParams("https://mcp.slack.com/mcp"),
+        ).toEqual({});
+    });
 });
 
 describe("DbMcpOAuthProvider.redirectToAuthorization", () => {
@@ -253,6 +263,46 @@ describe("startUserMcpConnectorOAuth", () => {
                 db,
             ),
         ).rejects.toThrow(/https:\/\/app\.test\/callback/);
+        expect(authMock).not.toHaveBeenCalled();
+    });
+
+    it("fails fast with setup instructions when no Slack OAuth client is configured", async () => {
+        // Slack, like Google, has no RFC 7591 dynamic client registration:
+        // without a pre-created Slack app the SDK's register-a-client fallback
+        // dead-ends mid-flow, so the guard must fire first with actionable
+        // instructions.
+        delete process.env.SLACK_MCP_OAUTH_CLIENT_ID;
+        delete process.env.MCP_OAUTH_CLIENT_ID;
+        const connector = makeConnector("https://mcp.slack.com/mcp");
+        loadConnectorMock.mockResolvedValue(connector);
+        const db = {
+            from() {
+                return {
+                    select() {
+                        return {
+                            eq() {
+                                return {
+                                    maybeSingle: () =>
+                                        Promise.resolve({
+                                            data: null,
+                                            error: null,
+                                        }),
+                                };
+                            },
+                        };
+                    },
+                };
+            },
+        } as unknown as Db;
+
+        await expect(
+            startUserMcpConnectorOAuth(
+                "user-1",
+                connector.id,
+                "https://app.test/callback",
+                db,
+            ),
+        ).rejects.toThrow(/SLACK_MCP_OAUTH_CLIENT_ID/);
         expect(authMock).not.toHaveBeenCalled();
     });
 

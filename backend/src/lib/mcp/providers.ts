@@ -87,6 +87,45 @@ const PROVIDERS: McpOAuthProviderQuirks[] = [
                   "https://drivemcp.googleapis.com/mcp/v1, not /mcp)."
                 : null,
     },
+    {
+        id: "slack",
+        displayName: "Slack",
+        // Slack's hosted MCP server lives on mcp.slack.com, but its OAuth
+        // authorization/token endpoints live on slack.com — and users who
+        // guess the endpoint often try a slack.com path. Matching the whole
+        // slack.com zone keeps every such connector under this provider's
+        // env vars and error hints.
+        matches: (hostname) =>
+            hostname === "slack.com" || hostname.endsWith(".slack.com"),
+        envPrefix: "SLACK_MCP_OAUTH",
+        // No extra authorization parameters: unlike classic Slack OAuth
+        // (which splits bot `scope` from user `user_scope`), the MCP
+        // authorization endpoint `slack.com/oauth/v2_user/authorize` takes
+        // user scopes in the standard `scope` parameter, which the MCP SDK
+        // already fills from the server's protected-resource metadata.
+        setupInstructions: (redirectUri) =>
+            "Slack's MCP server needs a pre-configured OAuth client — Slack does not " +
+            "support automatic (dynamic) client registration. Create a Slack app at " +
+            "https://api.slack.com/apps whose manifest has a bot user and the agent " +
+            "feature (features.assistant_view), turn on the \"Slack MCP Server\" toggle " +
+            "under the app's Agents settings, enable PKCE under OAuth & Permissions, and " +
+            `add ${redirectUri} as a redirect URL (Slack requires HTTPS). Then set ` +
+            "SLACK_MCP_OAUTH_CLIENT_ID and SLACK_MCP_OAUTH_CLIENT_SECRET in backend/.env " +
+            "(see .env.example) and restart the backend.",
+        // Slack serves exactly one MCP endpoint. Anything else on the
+        // slack.com zone answers with a 302 redirect or an HTML page — the
+        // SDK then fails with an opaque non-2xx error, so point the user at
+        // the real endpoint instead of letting them puzzle over the status.
+        endpointHint: (url, httpStatus) =>
+            httpStatus >= 300 &&
+            httpStatus !== 401 &&
+            httpStatus !== 403 &&
+            !(url.hostname.toLowerCase() === "mcp.slack.com" &&
+                url.pathname === "/mcp")
+                ? "Slack's hosted MCP endpoint is https://mcp.slack.com/mcp — " +
+                  "other slack.com URLs answer with redirects or HTML error pages."
+                : null,
+    },
 ];
 
 /**

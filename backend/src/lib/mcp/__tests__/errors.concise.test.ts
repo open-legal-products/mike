@@ -51,6 +51,22 @@ describe("conciseMcpErrorMessage", () => {
     expect(message).not.toContain("versioned");
   });
 
+  it("adds the Slack endpoint hint when a wrong slack.com path redirects", () => {
+    // Wrong slack.com paths answer with a 302 (to an HTML page) instead of a
+    // JSON-RPC error; the SDK surfaces that as an opaque non-2xx failure.
+    const err = new Error("Streamable HTTP error: HTTP 302");
+    (err as Error & { code?: number }).code = 302;
+    const message = conciseMcpErrorMessage(err, "https://slack.com/api/mcp");
+    expect(message).toContain("https://mcp.slack.com/mcp");
+  });
+
+  it("stays quiet for the real Slack endpoint", () => {
+    const err = new Error("Streamable HTTP error: HTTP 404");
+    (err as Error & { code?: number }).code = 404;
+    const message = conciseMcpErrorMessage(err, "https://mcp.slack.com/mcp");
+    expect(message).not.toContain("other slack.com URLs");
+  });
+
   it("passes plain error messages through untouched", () => {
     const message = conciseMcpErrorMessage(new Error("OAuth state is invalid or expired."));
     expect(message).toBe("OAuth state is invalid or expired.");
