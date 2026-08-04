@@ -130,6 +130,35 @@ async function discoverProtectedResourceMetadataUrl(serverUrl: string) {
     throw new McpOAuthRequiredError();
 }
 
+/**
+ * Best-effort variant of {@link discoverProtectedResourceMetadataUrl} for
+ * seeding the MCP SDK's discovery.
+ *
+ * The SDK's own RFC 9728 lookup tries the path-aware well-known form first
+ * (`/.well-known/oauth-protected-resource/mcp`) and only falls back to the
+ * root form on a 4xx. Slack answers the path-aware form with a 302 (an HTML
+ * page), so the SDK never reaches the root document that actually exists —
+ * it silently proceeds with no resource metadata, which drops both the
+ * `scope` (resolved from the metadata's scopes_supported) and the RFC 8707
+ * `resource` parameter from the authorization request. Slack then rejects
+ * the scopeless request outright ("No scopes requested").
+ *
+ * Our own prober handles that server shape: it prefers the URL advertised in
+ * the 401 WWW-Authenticate challenge and otherwise tries BOTH well-known
+ * forms. Handing the resulting URL to the SDK via `resourceMetadataUrl`
+ * makes its discovery deterministic. Returns undefined when the server has
+ * no discoverable metadata — the SDK then behaves exactly as before.
+ */
+async function seedResourceMetadataUrl(
+    serverUrl: string,
+): Promise<URL | undefined> {
+    try {
+        return new URL(await discoverProtectedResourceMetadataUrl(serverUrl));
+    } catch {
+        return undefined;
+    }
+}
+
 async function fetchAuthorizationServerMetadata(
     authorizationServer: string,
 ): Promise<Record<string, unknown>> {
@@ -727,9 +756,16 @@ export async function startUserMcpConnectorOAuth(
     // derived from the *authorization server* metadata here would wrongly take
     // priority over that and request the wrong scopes (e.g. Google's generic
     // OIDC scopes instead of the Drive/Gmail scopes the connector needs).
+    // For that fallback to actually fire, the SDK must FIND the resource
+    // metadata — which its own discovery can miss (see
+    // seedResourceMetadataUrl), so seed it with the URL we discover ourselves.
+    const resourceMetadataUrl = await seedResourceMetadataUrl(
+        connector.server_url,
+    );
     const result = await runMcpOAuth(provider, {
         serverUrl: connector.server_url,
         ...(env.scope ? { scope: env.scope } : {}),
+        ...(resourceMetadataUrl ? { resourceMetadataUrl } : {}),
         fetchFn: guardedFetch,
     });
     if (result === "AUTHORIZED") {
@@ -793,9 +829,17 @@ export async function completeMcpConnectorOAuthAuthorization(
         config.redirectUri,
         state,
     );
+    // Seed discovery on the code-exchange leg too: RFC 8707 wants the same
+    // `resource` indicator in the token request as in the authorization
+    // request, and without the metadata the SDK would omit it here even
+    // though the authorization leg (seeded above) included it.
+    const resourceMetadataUrl = await seedResourceMetadataUrl(
+        connector.server_url,
+    );
     const result = await runMcpOAuth(provider, {
         serverUrl: connector.server_url,
         authorizationCode: code,
+        ...(resourceMetadataUrl ? { resourceMetadataUrl } : {}),
         fetchFn: guardedFetch,
     });
     if (result !== "AUTHORIZED") {

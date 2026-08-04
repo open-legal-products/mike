@@ -4,9 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // MCP server and Supabase: the SDK's `auth()` driver and `loadConnector`. Their
 // vi.fn()s are created via vi.hoisted so the (hoisted) vi.mock factories below
 // can reference them without a temporal-dead-zone error.
-const { authMock, loadConnectorMock } = vi.hoisted(() => ({
+const { authMock, loadConnectorMock, guardedFetchMock } = vi.hoisted(() => ({
     authMock: vi.fn(),
     loadConnectorMock: vi.fn(),
+    // Default: every discovery probe misses (404), so
+    // seedResourceMetadataUrl resolves to undefined without touching the
+    // network. Individual tests override this to simulate specific servers.
+    guardedFetchMock: vi.fn(async () => new Response("{}", { status: 404 })),
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
@@ -18,6 +22,7 @@ vi.mock("./client", async (importOriginal) => {
     return {
         ...actual,
         loadConnector: (...args: unknown[]) => loadConnectorMock(...args),
+        guardedFetch: (...args: unknown[]) => guardedFetchMock(...args),
     };
 });
 
@@ -304,6 +309,56 @@ describe("startUserMcpConnectorOAuth", () => {
             ),
         ).rejects.toThrow(/SLACK_MCP_OAUTH_CLIENT_ID/);
         expect(authMock).not.toHaveBeenCalled();
+    });
+
+    it("seeds the SDK with the resource-metadata URL advertised via WWW-Authenticate", async () => {
+        // The SDK's own RFC 9728 discovery tries the path-aware well-known
+        // form first and only falls back to the root form on a 4xx. Slack
+        // 302s the path-aware form, so unseeded discovery finds nothing and
+        // the authorization request goes out with NO scope — which Slack
+        // rejects ("No scopes requested"). The server's 401 challenge names
+        // the real metadata URL; assert we hand it to the SDK.
+        process.env.SLACK_MCP_OAUTH_CLIENT_ID = "slack-client-id";
+        const metadataUrl =
+            "https://mcp.slack.com/.well-known/oauth-protected-resource";
+        guardedFetchMock.mockImplementation(
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        jsonrpc: "2.0",
+                        id: null,
+                        error: { code: -32001, message: "missing_token" },
+                    }),
+                    {
+                        status: 401,
+                        headers: {
+                            "www-authenticate": `Bearer resource_metadata="${metadataUrl}"`,
+                        },
+                    },
+                ),
+        );
+        const connector = makeConnector("https://mcp.slack.com/mcp");
+        loadConnectorMock.mockResolvedValue(connector);
+        authMock.mockResolvedValue("AUTHORIZED");
+        const deletes: RecordedDelete[] = [];
+        const db = makeRecordingDb(deletes);
+
+        await startUserMcpConnectorOAuth(
+            "user-1",
+            connector.id,
+            "https://app.test/callback",
+            db,
+        );
+
+        expect(authMock).toHaveBeenCalledTimes(1);
+        const options = authMock.mock.calls[0][1] as {
+            resourceMetadataUrl?: URL;
+        };
+        expect(options.resourceMetadataUrl?.toString()).toBe(metadataUrl);
+        delete process.env.SLACK_MCP_OAUTH_CLIENT_ID;
+        guardedFetchMock.mockImplementation(
+            async () => new Response("{}", { status: 404 }),
+        );
     });
 
     it("invalidates the stale token row when an interactive redirect is required", async () => {
