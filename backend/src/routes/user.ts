@@ -42,6 +42,7 @@ import {
     startUserMcpConnectorOAuth,
     updateUserMcpConnector,
 } from "../lib/mcpConnectors";
+import { conciseMcpErrorMessage } from "../lib/mcp/errors";
 import {
     deleteAllUserChats,
     deleteAllUserTabularReviews,
@@ -1602,9 +1603,13 @@ userRouter.get("/mcp-connectors/oauth/callback", async (req, res) => {
                 ),
             );
     } catch (err) {
-        const detail = errorMessage(err);
+        // The popup only ever shows a fixed, sanitized string. The operator
+        // gets both the raw message and the concise diagnostic — the SDK
+        // embeds entire server response bodies, including HTML error pages,
+        // in its messages, so the concise form is what is actually readable.
         console.error("[user/mcp-connectors] oauth callback failed", {
-            error: detail,
+            error: errorMessage(err),
+            diagnostic: conciseMcpErrorMessage(err),
             stateHash: shortHash(state),
             hasCode: !!code,
             hasError: !!error,
@@ -1646,11 +1651,13 @@ userRouter.post(
             );
             res.json(connector);
         } catch (err) {
-            const detail = errorMessage(err);
+            // Full message (with any embedded response body) goes to the log;
+            // the user gets the concise diagnostic — never a raw HTML error
+            // page — plus the versioned-endpoint hint for Google URLs.
             console.error("[user/mcp-connectors] refresh failed", {
                 userId,
                 connectorId: req.params.connectorId,
-                error: detail,
+                error: errorMessage(err),
             });
             if (err instanceof McpOAuthRequiredError) {
                 return void res.status(401).json({
