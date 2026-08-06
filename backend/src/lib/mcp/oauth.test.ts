@@ -183,11 +183,22 @@ describe("DbMcpOAuthProvider.redirectToAuthorization", () => {
     });
 });
 
-// Records every `.from(table).delete().eq(column, value)` chain so a test can
-// assert exactly which rows the provider invalidated, without a real database.
+// Records every `.from(table).delete().eq(column, value)` and
+// `.from(table).update(patch).eq(column, value)` chain so a test can assert
+// exactly which rows the provider invalidated (and how), without a real
+// database.
 type RecordedDelete = { table: string; column: string; value: unknown };
+type RecordedUpdate = {
+    table: string;
+    patch: Record<string, unknown>;
+    column: string;
+    value: unknown;
+};
 
-function makeRecordingDb(deletes: RecordedDelete[]): Db {
+function makeRecordingDb(
+    deletes: RecordedDelete[],
+    updates: RecordedUpdate[] = [],
+): Db {
     return {
         from(table: string) {
             return {
@@ -199,9 +210,76 @@ function makeRecordingDb(deletes: RecordedDelete[]): Db {
                         },
                     };
                 },
+                update(patch: Record<string, unknown>) {
+                    return {
+                        eq(column: string, value: unknown) {
+                            updates.push({ table, patch, column, value });
+                            return Promise.resolve({ error: null });
+                        },
+                    };
+                },
             };
         },
     } as unknown as Db;
+}
+
+// Minimal in-memory stand-in for the single `user_mcp_oauth_tokens` row a
+// connector owns, supporting the exact query chains DbMcpOAuthProvider uses.
+// Lets tests observe how a full save → invalidate → read sequence composes,
+// which the pure recording db above cannot.
+function makeRowStoreDb() {
+    const store: { row: Record<string, unknown> | null } = { row: null };
+    const db = {
+        from(table: string) {
+            return {
+                select() {
+                    return {
+                        eq() {
+                            return {
+                                maybeSingle: async () => ({
+                                    data:
+                                        table === "user_mcp_oauth_tokens"
+                                            ? store.row
+                                            : null,
+                                    error: null,
+                                }),
+                            };
+                        },
+                    };
+                },
+                upsert(values: Record<string, unknown>) {
+                    if (table === "user_mcp_oauth_tokens") {
+                        store.row = { ...(store.row ?? {}), ...values };
+                    }
+                    return Promise.resolve({ error: null });
+                },
+                update(patch: Record<string, unknown>) {
+                    return {
+                        eq: () => {
+                            if (
+                                table === "user_mcp_oauth_tokens" &&
+                                store.row
+                            ) {
+                                store.row = { ...store.row, ...patch };
+                            }
+                            return Promise.resolve({ error: null });
+                        },
+                    };
+                },
+                delete() {
+                    return {
+                        eq: () => {
+                            if (table === "user_mcp_oauth_tokens") {
+                                store.row = null;
+                            }
+                            return Promise.resolve({ error: null });
+                        },
+                    };
+                },
+            };
+        },
+    } as unknown as Db;
+    return { db, store };
 }
 
 describe("startUserMcpConnectorOAuth", () => {
@@ -361,7 +439,7 @@ describe("startUserMcpConnectorOAuth", () => {
         );
     });
 
-    it("invalidates the stale token row when an interactive redirect is required", async () => {
+    it("clears stale token columns (but not the row) when an interactive redirect is required", async () => {
         // The exact broken-fleet state this PR targets: the SDK cannot complete
         // from stored credentials (expired access token, no usable refresh
         // token), so it reaches the authorization-redirect branch.
@@ -374,7 +452,8 @@ describe("startUserMcpConnectorOAuth", () => {
             return "REDIRECT";
         });
         const deletes: RecordedDelete[] = [];
-        const db = makeRecordingDb(deletes);
+        const updates: RecordedUpdate[] = [];
+        const db = makeRecordingDb(deletes, updates);
 
         const result = await startUserMcpConnectorOAuth(
             "user-1",
@@ -385,14 +464,100 @@ describe("startUserMcpConnectorOAuth", () => {
 
         expect(result.alreadyAuthorized).toBe(false);
         expect(result.authorizationUrl).toContain("access_type=offline");
-        // Without this delete `oauthConnected` (!!encrypted_access_token) would
-        // stay true on a dead token and the frontend poll would resolve on a
-        // phantom success, closing the consent popup mid-flow.
-        expect(deletes).toContainEqual({
-            table: "user_mcp_oauth_tokens",
-            column: "connector_id",
-            value: connector.id,
+        // Without nulling the token columns, `oauthConnected`
+        // (!!encrypted_access_token) would stay true on a dead token and the
+        // frontend poll would resolve on a phantom success, closing the consent
+        // popup mid-flow.
+        const tokenUpdates = updates.filter(
+            (update) =>
+                update.table === "user_mcp_oauth_tokens" &&
+                update.column === "connector_id" &&
+                update.value === connector.id,
+        );
+        expect(tokenUpdates).toHaveLength(1);
+        expect(tokenUpdates[0].patch).toMatchObject({
+            encrypted_access_token: null,
+            access_token_iv: null,
+            access_token_tag: null,
+            encrypted_refresh_token: null,
+            refresh_token_iv: null,
+            refresh_token_tag: null,
+            expires_at: null,
         });
+        // But the row itself must survive: it also carries the client_id /
+        // client_secret persisted after RFC 7591 dynamic client registration,
+        // which the OAuth callback leg needs to exchange the code. A whole-row
+        // delete here would strand every DCR-based server mid-flow.
+        expect(tokenUpdates[0].patch).not.toHaveProperty("client_id");
+        expect(tokenUpdates[0].patch).not.toHaveProperty(
+            "encrypted_client_secret",
+        );
+        expect(
+            deletes.filter((item) => item.table === "user_mcp_oauth_tokens"),
+        ).toHaveLength(0);
+    });
+
+    it("still returns dynamically-registered client information after a redirect-triggered invalidation", async () => {
+        // Regression test for the DCR-breaking whole-row delete: a server with
+        // no env-configured OAuth client relies on RFC 7591 dynamic client
+        // registration. During auth() the SDK registers a client (persisted via
+        // saveClientInformation) and then asks for the interactive redirect —
+        // after which we invalidate stale tokens. The callback leg then builds
+        // a fresh provider and calls clientInformation(); if the registered
+        // client is gone, the SDK throws "Existing OAuth client information is
+        // required when exchanging an authorization code" and the flow can
+        // never complete.
+        const priorGenericClientId = process.env.MCP_OAUTH_CLIENT_ID;
+        delete process.env.MCP_OAUTH_CLIENT_ID;
+        try {
+            const connector = makeConnector("https://mcp.example.com/mcp");
+            loadConnectorMock.mockResolvedValue(connector);
+            authMock.mockImplementation(
+                async (provider: DbMcpOAuthProvider) => {
+                    // The SDK's DCR step, followed by the redirect request.
+                    await provider.saveClientInformation({
+                        client_id: "dcr-client-id",
+                    });
+                    await provider.redirectToAuthorization(new URL(AUTH_URL));
+                    return "REDIRECT";
+                },
+            );
+            const { db, store } = makeRowStoreDb();
+
+            const result = await startUserMcpConnectorOAuth(
+                "user-1",
+                connector.id,
+                "https://app.test/callback",
+                db,
+            );
+            expect(result.alreadyAuthorized).toBe(false);
+
+            // The row survived the invalidation with the registered client
+            // intact (and no resurrected token material).
+            expect(store.row).not.toBeNull();
+            expect(store.row?.client_id).toBe("dcr-client-id");
+            expect(store.row?.encrypted_access_token ?? null).toBeNull();
+
+            // The OAuth callback leg constructs a fresh provider from the
+            // stored state; it must still see the registered client.
+            const callbackProvider = new DbMcpOAuthProvider(
+                db,
+                connector,
+                "user-1",
+                "initiate",
+                "https://app.test/callback",
+                "state-token",
+            );
+            await expect(
+                callbackProvider.clientInformation(),
+            ).resolves.toEqual({ client_id: "dcr-client-id" });
+        } finally {
+            if (priorGenericClientId === undefined) {
+                delete process.env.MCP_OAUTH_CLIENT_ID;
+            } else {
+                process.env.MCP_OAUTH_CLIENT_ID = priorGenericClientId;
+            }
+        }
     });
 
     it("does not touch stored tokens when the connector is already authorized", async () => {
@@ -400,7 +565,8 @@ describe("startUserMcpConnectorOAuth", () => {
         loadConnectorMock.mockResolvedValue(connector);
         authMock.mockResolvedValue("AUTHORIZED");
         const deletes: RecordedDelete[] = [];
-        const db = makeRecordingDb(deletes);
+        const updates: RecordedUpdate[] = [];
+        const db = makeRecordingDb(deletes, updates);
 
         const result = await startUserMcpConnectorOAuth(
             "user-1",
@@ -414,5 +580,6 @@ describe("startUserMcpConnectorOAuth", () => {
             alreadyAuthorized: true,
         });
         expect(deletes).toHaveLength(0);
+        expect(updates).toHaveLength(0);
     });
 });

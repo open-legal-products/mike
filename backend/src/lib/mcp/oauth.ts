@@ -712,10 +712,34 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
                 .eq("state_hash", stateHash(this.stateToken));
             return;
         }
-        if (scope === "tokens" || scope === "all") {
+        if (scope === "all") {
             await this.db
                 .from("user_mcp_oauth_tokens")
                 .delete()
+                .eq("connector_id", this.connector.id);
+            return;
+        }
+        if (scope === "tokens") {
+            // Null only the token columns instead of deleting the row. The row
+            // does double duty: besides tokens it stores the client_id /
+            // client_secret that `saveClientInformation` persisted after RFC
+            // 7591 dynamic client registration. Deleting the whole row here
+            // (mid-auth, right before the interactive redirect) would make
+            // `clientInformation()` come back empty on the OAuth callback leg,
+            // and the SDK refuses to exchange the authorization code without
+            // the registered client — permanently breaking DCR-based servers.
+            // `oauthConnected` only checks `encrypted_access_token`, so nulling
+            // the token columns is exactly enough to keep it honest.
+            await this.db
+                .from("user_mcp_oauth_tokens")
+                .update({
+                    ...tokenSecretPatch("access_token"),
+                    ...tokenSecretPatch("refresh_token"),
+                    token_type: null,
+                    scope: null,
+                    expires_at: null,
+                    updated_at: new Date().toISOString(),
+                })
                 .eq("connector_id", this.connector.id);
         }
     }
