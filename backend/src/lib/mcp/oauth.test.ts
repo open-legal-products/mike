@@ -29,7 +29,6 @@ vi.mock("./client", async (importOriginal) => {
 import {
     DbMcpOAuthProvider,
     McpOAuthRequiredError,
-    isGoogleOAuthHost,
     providerAuthorizationParams,
     startUserMcpConnectorOAuth,
 } from "./oauth";
@@ -61,43 +60,6 @@ function makeConnector(serverUrl: string): ConnectorRow {
 // provider, already carrying the standard OAuth params.
 const AUTH_URL =
     "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=abc&code_challenge=xyz";
-
-describe("isGoogleOAuthHost", () => {
-    it("matches googleapis.com and its real subdomains", () => {
-        expect(
-            isGoogleOAuthHost("https://drivemcp.googleapis.com/mcp/v1"),
-        ).toBe(true);
-        expect(
-            isGoogleOAuthHost("https://gmailmcp.googleapis.com/mcp"),
-        ).toBe(true);
-        expect(isGoogleOAuthHost("https://googleapis.com/x")).toBe(true);
-    });
-
-    it("rejects non-Google and look-alike hosts", () => {
-        expect(isGoogleOAuthHost("https://mcp.example.com/mcp")).toBe(false);
-        // Suffix-only matches must not pass: this is NOT a google host.
-        expect(isGoogleOAuthHost("https://notgoogleapis.com/x")).toBe(false);
-        // A subdomain of an attacker domain that merely contains the string.
-        expect(
-            isGoogleOAuthHost("https://googleapis.com.evil.test/mcp"),
-        ).toBe(false);
-        expect(isGoogleOAuthHost("not a url")).toBe(false);
-    });
-
-    it("matches the absolute (trailing-dot) form of a Google host", () => {
-        // `https://googleapis.com./x` names the same host as
-        // `googleapis.com`; `URL` keeps the trailing dot, so without stripping
-        // it the offline-access params would be silently skipped.
-        expect(isGoogleOAuthHost("https://googleapis.com./x")).toBe(true);
-        expect(
-            isGoogleOAuthHost("https://drivemcp.googleapis.com./mcp"),
-        ).toBe(true);
-    });
-
-    it("still rejects a look-alike host that carries a trailing dot", () => {
-        expect(isGoogleOAuthHost("https://notgoogleapis.com./x")).toBe(false);
-    });
-});
 
 describe("providerAuthorizationParams", () => {
     it("requests offline access + consent for Google hosts", () => {

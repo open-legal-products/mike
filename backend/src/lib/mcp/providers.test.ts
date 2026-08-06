@@ -33,7 +33,38 @@ describe("mcpOAuthProviderFor", () => {
         expect(
             mcpOAuthProviderFor("https://drivemcp.googleapis.com/mcp/v1")?.id,
         ).toBe("google");
+        expect(
+            mcpOAuthProviderFor("https://gmailmcp.googleapis.com/mcp")?.id,
+        ).toBe("google");
+        expect(mcpOAuthProviderFor("https://googleapis.com/x")?.id).toBe(
+            "google",
+        );
         expect(mcpOAuthProviderFor("https://mcp.example.com/mcp")).toBeNull();
+    });
+
+    it("rejects Google look-alike hosts", () => {
+        // Suffix-only string matches must not pass: this is NOT a google host.
+        expect(mcpOAuthProviderFor("https://notgoogleapis.com/x")).toBeNull();
+        // A subdomain of an attacker domain that merely contains the string.
+        expect(
+            mcpOAuthProviderFor("https://googleapis.com.evil.test/mcp"),
+        ).toBeNull();
+    });
+
+    it("resolves Google for the absolute (trailing-dot) host form", () => {
+        // `https://googleapis.com./x` names the same host as `googleapis.com`;
+        // `URL` keeps the trailing dot, so without stripping it the
+        // offline-access params would be silently skipped.
+        expect(mcpOAuthProviderFor("https://googleapis.com./x")?.id).toBe(
+            "google",
+        );
+        expect(
+            mcpOAuthProviderFor("https://drivemcp.googleapis.com./mcp")?.id,
+        ).toBe("google");
+    });
+
+    it("still rejects a look-alike host that carries a trailing dot", () => {
+        expect(mcpOAuthProviderFor("https://notgoogleapis.com./x")).toBeNull();
     });
 });
 
