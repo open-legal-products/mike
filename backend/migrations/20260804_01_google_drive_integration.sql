@@ -35,3 +35,17 @@ CREATE TABLE IF NOT EXISTS public.google_drive_oauth_states (
 );
 
 ALTER TABLE public.google_drive_oauth_states ENABLE ROW LEVEL SECURITY;
+
+-- Grant hardening, mirroring backend/schema.sql. On hosted Supabase, default
+-- privileges hand anon/authenticated access to every new table in public;
+-- these tables hold encrypted OAuth tokens, so strip the browser roles and
+-- grant the backend's service_role its data privileges explicitly.
+revoke all on public.user_google_drive_tokens from anon, authenticated;
+revoke all on public.google_drive_oauth_states from anon, authenticated;
+
+grant select, insert, update, delete
+  on public.user_google_drive_tokens
+  to service_role;
+grant select, insert, update, delete
+  on public.google_drive_oauth_states
+  to service_role;

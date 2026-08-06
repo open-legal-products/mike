@@ -4029,3 +4029,19 @@ CREATE TABLE IF NOT EXISTS public.google_drive_oauth_states (
 );
 
 ALTER TABLE public.google_drive_oauth_states ENABLE ROW LEVEL SECURITY;
+
+-- These two tables are created after the "Direct client grant hardening"
+-- section above ran, so its per-table revokes and its one-shot
+-- `grant ... on all tables in schema public to service_role` never saw them.
+-- Repeat both statements here explicitly, following the same pattern as the
+-- MCP OAuth tables: browser roles get nothing (the backend fronts all
+-- access), service_role gets the data privileges the backend needs.
+revoke all on public.user_google_drive_tokens from anon, authenticated;
+revoke all on public.google_drive_oauth_states from anon, authenticated;
+
+grant select, insert, update, delete
+  on public.user_google_drive_tokens
+  to service_role;
+grant select, insert, update, delete
+  on public.google_drive_oauth_states
+  to service_role;
