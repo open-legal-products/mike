@@ -287,18 +287,38 @@ describe("startUserMcpConnectorOAuth", () => {
     // configured (Google offers no dynamic registration); mirror that here so
     // the suite exercises the flow rather than the missing-client guard. The
     // guard itself is tested explicitly below.
-    const PRIOR_CLIENT_ID = process.env.GOOGLE_MCP_OAUTH_CLIENT_ID;
+    //
+    // Every env var a test in this block mutates is snapshotted here and
+    // restored in afterEach — never inline at the end of a test body, where a
+    // failed assertion would skip the restoration and (because
+    // vi.clearAllMocks() resets calls, not implementations) cascade into
+    // unrelated failures. The guardedFetch implementation is reset the same
+    // way for the same reason.
+    const ENV_KEYS = [
+        "GOOGLE_MCP_OAUTH_CLIENT_ID",
+        "SLACK_MCP_OAUTH_CLIENT_ID",
+        "MCP_OAUTH_CLIENT_ID",
+    ] as const;
+    const PRIOR_ENV = Object.fromEntries(
+        ENV_KEYS.map((key) => [key, process.env[key]]),
+    );
     beforeEach(() => {
         vi.clearAllMocks();
         process.env.GOOGLE_MCP_OAUTH_CLIENT_ID =
             "test-client.apps.googleusercontent.com";
     });
     afterEach(() => {
-        if (PRIOR_CLIENT_ID === undefined) {
-            delete process.env.GOOGLE_MCP_OAUTH_CLIENT_ID;
-        } else {
-            process.env.GOOGLE_MCP_OAUTH_CLIENT_ID = PRIOR_CLIENT_ID;
+        for (const key of ENV_KEYS) {
+            const prior = PRIOR_ENV[key];
+            if (prior === undefined) {
+                delete process.env[key];
+            } else {
+                process.env[key] = prior;
+            }
         }
+        guardedFetchMock.mockImplementation(
+            async () => new Response("{}", { status: 404 }),
+        );
     });
 
     it("fails fast with setup instructions when no Google OAuth client is configured", async () => {
@@ -433,10 +453,8 @@ describe("startUserMcpConnectorOAuth", () => {
             resourceMetadataUrl?: URL;
         };
         expect(options.resourceMetadataUrl?.toString()).toBe(metadataUrl);
-        delete process.env.SLACK_MCP_OAUTH_CLIENT_ID;
-        guardedFetchMock.mockImplementation(
-            async () => new Response("{}", { status: 404 }),
-        );
+        // Env and guardedFetch restoration happens in afterEach, so a failing
+        // assertion above cannot leak this test's setup into later tests.
     });
 
     it("clears stale token columns (but not the row) when an interactive redirect is required", async () => {
@@ -507,57 +525,48 @@ describe("startUserMcpConnectorOAuth", () => {
         // client is gone, the SDK throws "Existing OAuth client information is
         // required when exchanging an authorization code" and the flow can
         // never complete.
-        const priorGenericClientId = process.env.MCP_OAUTH_CLIENT_ID;
+        // No env-configured fallback client: this connector must rely purely
+        // on dynamic registration (afterEach restores the variable).
         delete process.env.MCP_OAUTH_CLIENT_ID;
-        try {
-            const connector = makeConnector("https://mcp.example.com/mcp");
-            loadConnectorMock.mockResolvedValue(connector);
-            authMock.mockImplementation(
-                async (provider: DbMcpOAuthProvider) => {
-                    // The SDK's DCR step, followed by the redirect request.
-                    await provider.saveClientInformation({
-                        client_id: "dcr-client-id",
-                    });
-                    await provider.redirectToAuthorization(new URL(AUTH_URL));
-                    return "REDIRECT";
-                },
-            );
-            const { db, store } = makeRowStoreDb();
+        const connector = makeConnector("https://mcp.example.com/mcp");
+        loadConnectorMock.mockResolvedValue(connector);
+        authMock.mockImplementation(async (provider: DbMcpOAuthProvider) => {
+            // The SDK's DCR step, followed by the redirect request.
+            await provider.saveClientInformation({
+                client_id: "dcr-client-id",
+            });
+            await provider.redirectToAuthorization(new URL(AUTH_URL));
+            return "REDIRECT";
+        });
+        const { db, store } = makeRowStoreDb();
 
-            const result = await startUserMcpConnectorOAuth(
-                "user-1",
-                connector.id,
-                "https://app.test/callback",
-                db,
-            );
-            expect(result.alreadyAuthorized).toBe(false);
+        const result = await startUserMcpConnectorOAuth(
+            "user-1",
+            connector.id,
+            "https://app.test/callback",
+            db,
+        );
+        expect(result.alreadyAuthorized).toBe(false);
 
-            // The row survived the invalidation with the registered client
-            // intact (and no resurrected token material).
-            expect(store.row).not.toBeNull();
-            expect(store.row?.client_id).toBe("dcr-client-id");
-            expect(store.row?.encrypted_access_token ?? null).toBeNull();
+        // The row survived the invalidation with the registered client
+        // intact (and no resurrected token material).
+        expect(store.row).not.toBeNull();
+        expect(store.row?.client_id).toBe("dcr-client-id");
+        expect(store.row?.encrypted_access_token ?? null).toBeNull();
 
-            // The OAuth callback leg constructs a fresh provider from the
-            // stored state; it must still see the registered client.
-            const callbackProvider = new DbMcpOAuthProvider(
-                db,
-                connector,
-                "user-1",
-                "initiate",
-                "https://app.test/callback",
-                "state-token",
-            );
-            await expect(
-                callbackProvider.clientInformation(),
-            ).resolves.toEqual({ client_id: "dcr-client-id" });
-        } finally {
-            if (priorGenericClientId === undefined) {
-                delete process.env.MCP_OAUTH_CLIENT_ID;
-            } else {
-                process.env.MCP_OAUTH_CLIENT_ID = priorGenericClientId;
-            }
-        }
+        // The OAuth callback leg constructs a fresh provider from the
+        // stored state; it must still see the registered client.
+        const callbackProvider = new DbMcpOAuthProvider(
+            db,
+            connector,
+            "user-1",
+            "initiate",
+            "https://app.test/callback",
+            "state-token",
+        );
+        await expect(callbackProvider.clientInformation()).resolves.toEqual({
+            client_id: "dcr-client-id",
+        });
     });
 
     it("does not touch stored tokens when the connector is already authorized", async () => {
