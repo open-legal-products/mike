@@ -168,4 +168,52 @@ describe("ConnectorsPage OAuth poll cancellation", () => {
 
         expect(vi.mocked(getMcpConnector).mock.calls.length).toBe(callsBefore);
     });
+
+    it("lets the user cancel a stuck reconnect instead of waiting out the timeout", async () => {
+        // The details modal's Refresh flow reuses the same OAuth popup wait as
+        // the add flow, but used to offer no way out: with COOP hiding the
+        // popup's fate, closing the consent window left the Refresh button
+        // stuck busy for the full five-minute timeout.
+        vi.mocked(listMcpConnectors).mockResolvedValue([makeSummary()]);
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Details" }));
+            await flushMicrotasks();
+        });
+
+        // Refresh hits the oauth_required branch and starts the popup wait.
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+            await flushMicrotasks();
+        });
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1500);
+        });
+        const callsBefore = vi.mocked(getMcpConnector).mock.calls.length;
+        expect(callsBefore).toBeGreaterThanOrEqual(1);
+
+        // The reconnect flow now surfaces a Cancel affordance; use it.
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+            await flushMicrotasks();
+        });
+
+        // The poll is torn down…
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(10_000);
+        });
+        expect(vi.mocked(getMcpConnector).mock.calls.length).toBe(callsBefore);
+
+        // …the button is immediately usable again, and a deliberate cancel is
+        // not surfaced as an error.
+        const refreshButton = screen.getByRole("button", {
+            name: /refresh/i,
+        }) as HTMLButtonElement;
+        expect(refreshButton.disabled).toBe(false);
+        expect(screen.queryByText(/cancelled/i)).toBeNull();
+    });
 });
