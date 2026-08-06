@@ -359,13 +359,20 @@ function GoogleDriveCard({
                     <button
                         type="button"
                         onClick={() => void connect()}
-                        disabled={busy}
+                        disabled={busy || !status.configured}
                         className={`inline-flex h-9 items-center gap-1.5 text-sm ${accountGlassPrimaryButtonClassName}`}
                     >
                         {busy ? "Waiting for Google…" : "Connect"}
                     </button>
                 )}
             </div>
+            {status !== null && !status.connected && !status.configured && (
+                <p className="mt-2 text-xs text-gray-500">
+                    Not available on this server: the administrator needs to
+                    configure a Google OAuth client (see &ldquo;Google Drive
+                    Integration&rdquo; in the README).
+                </p>
+            )}
             {busy && !status?.connected && (
                 <button
                     type="button"
