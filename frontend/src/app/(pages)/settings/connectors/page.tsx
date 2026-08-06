@@ -48,6 +48,8 @@ import { SettingsToggle } from "../SettingsToggle";
 
 type PendingMfaAction =
     | { type: "create" }
+    | { type: "drive-connect" }
+    | { type: "drive-disconnect" }
     | { type: "save"; connectorId: string }
     | { type: "clear-token"; connectorId: string }
     | { type: "delete"; connectorId: string }
@@ -130,12 +132,39 @@ function isGoogleMcpConnector(connector: McpConnectorSummary) {
 }
 
 /**
+ * Imperative surface the Google Drive card registers with its parent page.
+ * The page's MFA machinery needs it: when a Drive action is interrupted by
+ * an MFA challenge, the verification popup's "verified" callback must be able
+ * to re-invoke the exact action that was interrupted, and those actions live
+ * inside the card (they close over its local state).
+ */
+type GoogleDriveCardHandle = {
+    connect: () => Promise<void>;
+    disconnect: () => Promise<void>;
+};
+
+/**
  * First-party Google Drive card. Unlike MCP connectors there is no server
  * URL to enter and no per-tool management — one Connect click runs the
  * backend's own OAuth flow (GA Drive REST API, no Google preview program),
  * after which the assistant's google_drive_* tools activate automatically.
+ *
+ * Connect and Disconnect hit backend routes gated by requireMfaIfEnrolled,
+ * so both run through the page's `runSensitiveAction` wrapper — the same
+ * path every other sensitive action on this page takes — which pre-checks
+ * MFA and turns the backend's 403 `mfa_verification_required` into the
+ * verification popup instead of a dead-end error string.
  */
-function GoogleDriveCard() {
+function GoogleDriveCard({
+    runSensitiveAction,
+    handleRef,
+}: {
+    runSensitiveAction: (
+        action: PendingMfaAction,
+        fn: () => Promise<void>,
+    ) => Promise<void>;
+    handleRef: { current: GoogleDriveCardHandle | null };
+}) {
     const [status, setStatus] = useState<GoogleDriveStatus | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -168,65 +197,91 @@ function GoogleDriveCard() {
             "popup,width=560,height=720,menubar=no,toolbar=no,location=no,status=no",
         );
         try {
-            const { authorizationUrl } = await startGoogleDriveOAuth();
-            if (!popup) {
-                window.location.assign(authorizationUrl);
-                return;
-            }
-            popup.location.href = authorizationUrl;
+            await runSensitiveAction({ type: "drive-connect" }, async () => {
+                try {
+                    const { authorizationUrl } = await startGoogleDriveOAuth();
+                    if (!popup) {
+                        window.location.assign(authorizationUrl);
+                        return;
+                    }
+                    popup.location.href = authorizationUrl;
 
-            // Google's consent page severs window.opener (COOP), so poll our
-            // own status endpoint as the source of truth — same approach as
-            // the MCP connector flow.
-            const abortController = new AbortController();
-            abortRef.current?.abort();
-            abortRef.current = abortController;
-            await new Promise<void>((resolve, reject) => {
-                let settled = false;
-                const started = Date.now();
-                let pollTimer = 0;
-                const finish = (action: () => void) => {
-                    if (settled) return;
-                    settled = true;
-                    window.clearTimeout(timeout);
-                    window.clearTimeout(pollTimer);
-                    abortController.signal.removeEventListener("abort", onAbort);
-                    action();
-                };
-                const timeout = window.setTimeout(
-                    () =>
-                        finish(() =>
-                            reject(new Error("Google authorization timed out.")),
-                        ),
-                    5 * 60 * 1000,
-                );
-                const runPoll = () => {
-                    void getGoogleDriveStatus()
-                        .then((s) => {
+                    // Google's consent page severs window.opener (COOP), so
+                    // poll our own status endpoint as the source of truth —
+                    // same approach as the MCP connector flow.
+                    const abortController = new AbortController();
+                    abortRef.current?.abort();
+                    abortRef.current = abortController;
+                    await new Promise<void>((resolve, reject) => {
+                        let settled = false;
+                        const started = Date.now();
+                        let pollTimer = 0;
+                        const finish = (action: () => void) => {
                             if (settled) return;
-                            if (s.connected) {
-                                setStatus(s);
-                                finish(resolve);
-                                return;
-                            }
-                            schedule();
-                        })
-                        .catch(() => {
-                            if (!settled) schedule();
-                        });
-                };
-                const schedule = () => {
-                    const delay = Date.now() - started < 60_000 ? 1500 : 5000;
-                    pollTimer = window.setTimeout(runPoll, delay);
-                };
-                const onAbort = () =>
-                    finish(() => reject(new Error("Authorization cancelled.")));
-                abortController.signal.addEventListener("abort", onAbort);
-                schedule();
+                            settled = true;
+                            window.clearTimeout(timeout);
+                            window.clearTimeout(pollTimer);
+                            abortController.signal.removeEventListener(
+                                "abort",
+                                onAbort,
+                            );
+                            action();
+                        };
+                        const timeout = window.setTimeout(
+                            () =>
+                                finish(() =>
+                                    reject(
+                                        new Error(
+                                            "Google authorization timed out.",
+                                        ),
+                                    ),
+                                ),
+                            5 * 60 * 1000,
+                        );
+                        const runPoll = () => {
+                            void getGoogleDriveStatus()
+                                .then((s) => {
+                                    if (settled) return;
+                                    if (s.connected) {
+                                        setStatus(s);
+                                        finish(resolve);
+                                        return;
+                                    }
+                                    schedule();
+                                })
+                                .catch(() => {
+                                    if (!settled) schedule();
+                                });
+                        };
+                        const schedule = () => {
+                            const delay =
+                                Date.now() - started < 60_000 ? 1500 : 5000;
+                            pollTimer = window.setTimeout(runPoll, delay);
+                        };
+                        const onAbort = () =>
+                            finish(() =>
+                                reject(new Error("Authorization cancelled.")),
+                            );
+                        abortController.signal.addEventListener(
+                            "abort",
+                            onAbort,
+                        );
+                        schedule();
+                    });
+                    popup.close();
+                } catch (e) {
+                    // An MFA challenge is not a failure of this card: rethrow
+                    // so runSensitiveAction opens the verification popup and,
+                    // once the user verifies, re-invokes connect() through the
+                    // registered handle.
+                    if (isMfaRequiredError(e)) throw e;
+                    setError(
+                        e instanceof Error
+                            ? e.message
+                            : "Failed to connect Google Drive.",
+                    );
+                }
             });
-            popup.close();
-        } catch (e) {
-            setError(e instanceof Error ? e.message : "Failed to connect Google Drive.");
         } finally {
             setBusy(false);
         }
@@ -236,18 +291,37 @@ function GoogleDriveCard() {
         setBusy(true);
         setError(null);
         try {
-            await disconnectGoogleDrive();
-            setStatus((s) =>
-                s ? { ...s, connected: false, scope: null } : s,
-            );
-        } catch (e) {
-            setError(
-                e instanceof Error ? e.message : "Failed to disconnect Google Drive.",
-            );
+            await runSensitiveAction({ type: "drive-disconnect" }, async () => {
+                try {
+                    await disconnectGoogleDrive();
+                    setStatus((s) =>
+                        s ? { ...s, connected: false, scope: null } : s,
+                    );
+                } catch (e) {
+                    // Same contract as connect(): hand MFA challenges back to
+                    // the page's machinery, keep genuine failures local.
+                    if (isMfaRequiredError(e)) throw e;
+                    setError(
+                        e instanceof Error
+                            ? e.message
+                            : "Failed to disconnect Google Drive.",
+                    );
+                }
+            });
         } finally {
             setBusy(false);
         }
     };
+
+    // Register the actions with the parent so its MFA-verified callback can
+    // re-run the interrupted one. Re-registered every render (no dependency
+    // array) so the handle never closes over stale state.
+    useEffect(() => {
+        handleRef.current = { connect, disconnect };
+        return () => {
+            handleRef.current = null;
+        };
+    });
 
     return (
         <AccountSection className="p-4">
@@ -362,6 +436,10 @@ export default function ConnectorsPage() {
     useEffect(() => {
         void loadConnectors();
     }, [loadConnectors]);
+
+    // The Google Drive card registers its connect/disconnect here so
+    // handleMfaVerified can re-run whichever one an MFA challenge interrupted.
+    const googleDriveHandleRef = useRef<GoogleDriveCardHandle | null>(null);
 
     // Holds the AbortController for an in-flight OAuth completion wait. A single
     // flow can run at a time, so a ref (not state) is the right home: it is
@@ -896,6 +974,12 @@ export default function ConnectorsPage() {
         setPendingMfaAction(null);
         if (!action) return;
         if (action.type === "create") await handleCreate();
+        if (action.type === "drive-connect") {
+            await googleDriveHandleRef.current?.connect();
+        }
+        if (action.type === "drive-disconnect") {
+            await googleDriveHandleRef.current?.disconnect();
+        }
         if (action.type === "save") await handleSaveSelectedConnector();
         if (action.type === "clear-token") {
             await handleClearBearerToken(action.connectorId);
@@ -941,7 +1025,10 @@ export default function ConnectorsPage() {
             )}
 
             <div className="mb-3">
-                <GoogleDriveCard />
+                <GoogleDriveCard
+                    runSensitiveAction={runSensitiveAction}
+                    handleRef={googleDriveHandleRef}
+                />
             </div>
 
             <div className="space-y-3">
