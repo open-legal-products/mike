@@ -268,7 +268,6 @@ function GoogleDriveCard({
                         );
                         schedule();
                     });
-                    popup.close();
                 } catch (e) {
                     // An MFA challenge is not a failure of this card: rethrow
                     // so runSensitiveAction opens the verification popup and,
@@ -283,6 +282,15 @@ function GoogleDriveCard({
                 }
             });
         } finally {
+            // Close the OAuth window on every exit path — success, failure,
+            // timeout, user cancel, and the MFA detour (where the flow never
+            // even starts). Same discipline as connectConnectorOAuth below:
+            // anything short of a finally leaks a blank popup on early exits.
+            try {
+                popup?.close();
+            } catch {
+                // COOP may block closing a severed popup; it self-closes anyway.
+            }
             setBusy(false);
         }
     };
