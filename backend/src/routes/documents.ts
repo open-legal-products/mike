@@ -222,6 +222,45 @@ documentsRouter.get("/:documentId/display", requireAuth, async (req, res) => {
   }
 });
 
+// GET /single-documents/:documentId/file
+// Streams active-version source bytes for browser editors. Unlike /display,
+// this never substitutes a generated PDF rendition for an Office document.
+documentsRouter.get("/:documentId/file", requireAuth, async (req, res) => {
+  const userId = res.locals.userId as string;
+  const userEmail = res.locals.userEmail as string | undefined;
+  const { documentId } = req.params;
+  const versionIdParam =
+    typeof req.query.version_id === "string" ? req.query.version_id : null;
+  const db = createServerSupabase();
+
+  const { data: doc } = await db
+    .from("documents")
+    .select("id, user_id, project_id")
+    .eq("id", documentId)
+    .single();
+  if (!doc)
+    return void res.status(404).json({ detail: "Document not found" });
+  const access = await ensureDocAccess(doc, userId, userEmail, db);
+  if (!access.ok)
+    return void res.status(404).json({ detail: "Document not found" });
+
+  const active = await loadActiveVersion(documentId, db, versionIdParam);
+  if (!active)
+    return void res.status(404).json({ detail: "No file available" });
+  const raw = await downloadFile(active.storage_path);
+  if (!raw)
+    return void res.status(404).json({ detail: "Document bytes not available" });
+
+  const filename = downloadFilenameForVersion(
+    active.filename,
+    active.version_number,
+    active.source === "assistant_edit",
+  );
+  res.setHeader("Content-Type", contentTypeForDocumentType(active.file_type));
+  res.setHeader("Content-Disposition", buildContentDisposition("inline", filename));
+  res.send(Buffer.from(raw));
+});
+
 // POST /single-documents/download-zip
 // Synchronous zip, kept for small selections (instant download, no polling).
 // Large selections go through the durable "documents-zip" export job instead.
