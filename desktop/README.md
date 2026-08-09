@@ -35,9 +35,33 @@ npm run dist   # → dist/mac-arm64/Mike.app (unsigned)
 Unsigned prototype: first launch needs right-click → Open (Gatekeeper), and
 distribution would need Developer ID signing + notarization.
 
+## Icon
+
+The dock icon is the product's own 12-blade glass asterisk
+(`frontend/src/app/components/chat/mike-icon.tsx`) on a macOS Big-Sur-style
+plate. `assets/icon.html` is the source of truth; regenerate with:
+
+```bash
+npm run icon   # renders via Electron's Chromium, then iconutil → icon.icns
+```
+
+## E2E
+
+With the docker-compose stack running and the app packaged:
+
+```bash
+npm run e2e
+```
+
+Launches the **packaged** `Mike.app` (not `electron .`, so packaging
+regressions fail too) with a CDP port, drives it with Playwright: asserts the
+shell connects and routes an anonymous user to `/login`, signs up a fresh
+user through the real UI (local stack autoconfirms), creates a project via
+the wizard, and drops screenshots in `e2e/artifacts/`. Native menu items
+can't be driven over CDP — menu coverage is manual.
+
 ## Not done yet (deliberate prototype cuts)
 
-- App icon (default Electron icon for now)
 - Code signing / notarization (needs an Apple Developer identity)
 - Auto-update, crash reporting
 - Native drag-out of documents, dock badge for running reviews — good
