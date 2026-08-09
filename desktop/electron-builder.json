@@ -4,10 +4,16 @@
   "directories": {
     "output": "dist"
   },
-  "files": ["src/**/*", "package.json"],
+  "files": [
+    "src/**/*",
+    "package.json"
+  ],
   "mac": {
     "category": "public.app-category.productivity",
-    "target": ["dir"],
-    "identity": null
+    "target": [
+      "dir"
+    ],
+    "identity": null,
+    "icon": "assets/icon.icns"
   }
 }
