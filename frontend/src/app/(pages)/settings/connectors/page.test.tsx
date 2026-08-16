@@ -225,4 +225,28 @@ describe("ConnectorsPage OAuth poll cancellation", () => {
         expect(refreshButton.disabled).toBe(false);
         expect(screen.queryByText(/cancelled/i)).toBeNull();
     });
+
+    it("prefills the form when the Slack preset is clicked", async () => {
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: /add/i }));
+        fireEvent.click(
+            screen.getByRole("button", { name: /slack mcp\.slack\.com/i }),
+        );
+
+        expect(
+            (screen.getByPlaceholderText("Connector label") as HTMLInputElement)
+                .value,
+        ).toBe("Slack");
+        expect(
+            (
+                screen.getByPlaceholderText(
+                    "https://mcp.example.com/mcp",
+                ) as HTMLInputElement
+            ).value,
+        ).toBe("https://mcp.slack.com/mcp");
+    });
 });

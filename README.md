@@ -82,6 +82,63 @@ authentication behavior, Ollama setup, and first-run guidance.
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
+## Connectors
+
+Mike connects to the systems a legal team already works in — Slack, Google
+Drive, and any remote [MCP](https://modelcontextprotocol.io) server — from
+**Settings > Connectors**. There are two setup pathways, and every connector
+uses one of them:
+
+**Zero-setup (the server registers itself).** Most hosted MCP servers support
+OAuth dynamic client registration (RFC 7591). For these, nothing is configured
+on the Mike server at all: a user clicks **Add**, pastes the server URL (or
+picks a preset), and completes the provider's consent screen in a popup. Servers
+that use a bearer token or custom headers instead of OAuth also fall in this
+pathway — the credentials are entered in the same modal and stored encrypted.
+
+**Bring-your-own OAuth app (you register a client once).** Some providers do
+not implement dynamic client registration, so the person hosting Mike creates
+an OAuth client with that provider once, puts its credentials in
+`backend/.env`, and every user of the deployment can then connect their own
+account with one click:
+
+- **Google Drive** — first-party integration, see
+  [Google Drive Integration](#google-drive-integration) below.
+- **Google-hosted MCP servers** (`*.googleapis.com`) — create a Google Cloud
+  OAuth client and set `GOOGLE_MCP_OAUTH_CLIENT_ID` / `_SECRET`
+  (see `backend/.env.example`).
+- **Slack** — see [Slack](#slack) below.
+
+If a user starts an OAuth connect before the deployment is configured, the
+error message contains the exact provider-console steps and the redirect URI
+to paste — nothing fails silently.
+
+### Slack
+
+Slack's hosted MCP server (`https://mcp.slack.com/mcp`) gives the assistant
+search and read access to the channels and DMs the connecting user can see.
+Slack does not support dynamic client registration, so the deployment needs a
+Slack app (created once):
+
+1. Create an app at [api.slack.com/apps](https://api.slack.com/apps) — the
+   fastest path is **From an app manifest**, pasting
+   `docs/slack-mcp-app-manifest.example.json` and replacing the redirect URL
+   placeholder.
+2. If building the app by hand instead: give it a bot user and the agent
+   feature (`features.assistant_view`), turn on the **Slack MCP Server**
+   toggle under the app's *Agents* settings, and enable **PKCE** under
+   *OAuth & Permissions*.
+3. Add your backend's callback,
+   `https://<your-backend-host>/user/mcp-connectors/oauth/callback`, as a
+   redirect URL. Slack requires HTTPS — for local development use an HTTPS
+   tunnel and set `API_PUBLIC_URL` to the tunnel URL so the callback matches.
+4. Set `SLACK_MCP_OAUTH_CLIENT_ID` and `SLACK_MCP_OAUTH_CLIENT_SECRET` in
+   `backend/.env` and restart the backend.
+
+Each user then clicks **Add** on **Settings > Connectors**, picks the
+**Slack** preset, and approves Slack's consent screen. Tokens are encrypted
+at rest, and individual tools can be toggled per connector.
+
 ## Google Drive Integration
 
 Mike can search and read a user's Google Drive files directly from chat — ask
@@ -126,7 +183,7 @@ Google Workspace Developer Preview Program — no preview enrollment is needed.
 
 Fresh databases created from `backend/schema.sql` already include the Drive
 token tables. Existing deployments should apply
-`backend/migrations/20260804_01_google_drive_integration.sql`.
+`backend/migrations/20260825_05_google_drive_integration.sql`.
 
 Each user then clicks **Connect** on **Account > Connectors**, approves the
 Google consent screen once, and the assistant's Drive tools activate for

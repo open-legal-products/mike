@@ -21,6 +21,18 @@ export type NewMcpDraft = {
 
 export type NewMcpStep = "form" | "working" | "auth" | "success";
 
+/**
+ * Known hosted MCP servers, offered as one-click prefills. Only the fields
+ * change — the create flow is identical to a hand-typed server, so presets
+ * stay purely presentational. Google Drive is intentionally absent: it ships
+ * as a first-party integration (its own card on the Connectors page), not as
+ * an MCP connector.
+ */
+const CONNECTOR_PRESETS: ReadonlyArray<{
+    name: string;
+    serverUrl: string;
+}> = [{ name: "Slack", serverUrl: "https://mcp.slack.com/mcp" }];
+
 interface NewMcpModalProps {
     open: boolean;
     draft: NewMcpDraft;
@@ -130,6 +142,28 @@ export function NewMcpModal({
                         The assistant will have access to this MCP server and
                         its enabled tools.
                     </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        {CONNECTOR_PRESETS.map((preset) => (
+                            <button
+                                key={preset.serverUrl}
+                                type="button"
+                                onClick={() =>
+                                    onDraftChange({
+                                        ...draft,
+                                        name: preset.name,
+                                        serverUrl: preset.serverUrl,
+                                    })
+                                }
+                                disabled={step === "working"}
+                                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/70 bg-white/75 px-3 text-xs font-medium text-gray-600 shadow-[0_3px_9px_rgba(15,23,42,0.03),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-xl transition-colors hover:text-gray-900"
+                            >
+                                {preset.name}{" "}
+                                <span className="font-normal text-gray-400">
+                                    {new URL(preset.serverUrl).hostname}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
                     <NewMcpForm
                         draft={draft}
                         showToken={showToken}
