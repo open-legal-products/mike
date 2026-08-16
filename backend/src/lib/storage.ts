@@ -57,6 +57,15 @@ function getClient(): S3Client {
   return cachedClient;
 }
 
+// Every URL we presign and hand to the *browser* must be signed against an
+// endpoint the browser can actually reach. Self-hosted deploys talk to storage
+// over the compose network (http://storage:9000) — a hostname that only
+// resolves inside Docker — and an S3 signature is bound to the host it was
+// signed for, so the URL cannot be rewritten after the fact.
+// R2_PUBLIC_ENDPOINT_URL lets those deploys sign against the host-published
+// endpoint; cloud R2/S3 endpoints are already public, so it falls back to
+// R2_ENDPOINT_URL and nothing changes there. Used for both direct-upload PUTs
+// and presigned downloads.
 function getBrowserSigningClient(): S3Client {
   const endpoint =
     process.env.R2_PUBLIC_ENDPOINT_URL || process.env.R2_ENDPOINT_URL!;
@@ -402,7 +411,8 @@ export async function getSignedUrl(
 ): Promise<string | null> {
   if (!storageEnabled) return null;
   try {
-    // The browser follows this URL, so sign it for the public endpoint.
+    // Signed download URLs are followed by the browser too, so they need the
+    // same browser-reachable signing endpoint the direct-upload URLs use.
     const client = getBrowserSigningClient();
     // Override the response Content-Disposition so the browser uses this
     // filename on download, instead of the last path segment of the R2 key
