@@ -1,4 +1,4 @@
-# Mike for Mac (prototype)
+# Mike for Mac
 
 A native macOS shell around the Mike web app — the same pattern as the Word
 add-in: clients don't re-implement the product, they give the web app a
@@ -79,14 +79,123 @@ without touching the user's real settings.
 | `MIKE_E2E_CAPTURE_EXTERNAL` | file path; would-be "open in browser" URLs are appended here instead of opening tabs |
 | `MIKE_E2E_DOWNLOAD_LOG`     | file path; each finished download appends a JSONL line (`state`, `savePath`, `url`) — needed because an attached CDP automation client diverts downloads away from `setSavePath` |
 
-## Package
+## Package & test locally (no Apple account needed)
 
 ```bash
 npm run dist   # → dist/mac-arm64/Mike.app (unsigned)
+open dist/mac-arm64/Mike.app
 ```
 
-Unsigned prototype: first launch needs right-click → Open (Gatekeeper), and
-distribution would need Developer ID signing + notarization.
+**A locally-built app runs without any Gatekeeper prompt** — the "damaged / can't
+be opened" block only applies to apps *downloaded* from the internet (they get a
+`com.apple.quarantine` attribute; a file you built yourself does not). So this
+is the path to test the app end-to-end today, before anyone signs anything.
+
+To point it at a stack other than `http://localhost:3000`, use the connect
+screen (⌘⇧,) or launch with an override:
+
+```bash
+open dist/mac-arm64/Mike.app --args --server-url=http://localhost:3100
+# or, without packaging:
+npm start -- --server-url=http://localhost:3100
+```
+
+## Signing & notarization (for a distributable release)
+
+Everything above works unsigned for local use. To hand a `.dmg` to end users
+without the "damaged" Gatekeeper block, the build must be **signed with a
+Developer ID and notarized by Apple**. Only the org that owns the Apple Developer
+account can do this — the certificate is org-held and never needs to touch a
+contributor's machine. The config is already wired (`electron-builder.release.json`,
+`assets/entitlements.mac.plist`); the release build is `npm run dist:signed`, which
+signs and notarizes when three environment variables are present.
+
+### One-time setup (org account holder)
+
+1. **Apple Developer Program membership** ($99/yr) for the org.
+   `developer.apple.com` → Account → enroll (as an Organization).
+
+2. **Create a "Developer ID Application" certificate.** In Xcode:
+   Settings → Accounts → (add the org Apple ID) → *Manage Certificates…* → **+**
+   → **Developer ID Application**. This installs the certificate **and its
+   private key** into the login keychain. (No Xcode? `developer.apple.com` →
+   Certificates → **+** → *Developer ID Application*, then double-click the
+   downloaded `.cer` to import — but the machine that generated the CSR must
+   hold the private key.)
+
+   Confirm it's there:
+   ```bash
+   security find-identity -v -p codesigning
+   # → look for "Developer ID Application: <Org Name> (TEAMID)"
+   ```
+
+3. **Note the Team ID** (10 chars): `developer.apple.com` → Membership details.
+
+4. **Create a notarization credential** — an app-specific password is simplest:
+   `appleid.apple.com` → Sign-In and Security → **App-Specific Passwords** →
+   generate one (label it e.g. `notarytool`). Copy the `xxxx-xxxx-xxxx-xxxx`
+   value. *(For CI, prefer an App Store Connect API key instead — see below.)*
+
+### Build a signed + notarized release
+
+With the certificate in the keychain, set the three env vars and run the signed
+build. electron-builder signs with the Developer ID cert, submits to Apple's
+notary service, waits for the ticket, and **staples** it to the app:
+
+```bash
+export APPLE_ID="appleid@your-org.com"
+export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+export APPLE_TEAM_ID="ABCDE12345"
+
+npm run dist:signed
+# → dist/Mike-<version>-arm64.dmg  and  .zip  (signed, notarized, stapled)
+```
+
+Notarization typically takes a few minutes; electron-builder blocks until Apple
+returns the ticket. Verify the result:
+
+```bash
+codesign --verify --deep --strict --verbose=2 "dist/mac-arm64/Mike.app"
+xcrun stapler validate                          "dist/mac-arm64/Mike.app"
+spctl -a -vvv -t install                        "dist/mac-arm64/Mike.app"
+# the spctl line should print: source=Notarized Developer ID
+```
+
+A user who downloads that `.dmg` gets a normal double-click launch — no
+"damaged" warning, no Terminal workaround.
+
+### Doing it in CI (recommended for real releases)
+
+So the certificate lives only as encrypted secrets and never on a laptop:
+
+- Export the cert **with its private key** as a `.p12`
+  (Keychain Access → right-click the identity → Export), base64-encode it, and
+  store it as a secret (`MAC_CERT_P12_BASE64`) plus its export password
+  (`MAC_CERT_PASSWORD`).
+- In the workflow, decode it and either set `CSC_LINK`/`CSC_KEY_PASSWORD` (which
+  electron-builder imports into a temp keychain automatically) or import it
+  yourself with `security import`.
+- Provide notary creds as secrets. For CI an **App Store Connect API key** is
+  cleaner than an app-specific password: `developer.apple.com` → Users and
+  Access → Integrations → **App Store Connect API** → generate a key with
+  *Developer* access, download the `.p8` once, and set `APPLE_API_KEY` (path to
+  the `.p8`), `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER`; electron-builder's
+  `notarize` picks these up in place of the Apple-ID trio.
+- Run `npm run dist:signed` and upload the `dmg`/`zip` as release assets.
+
+> The signed path is documented and pre-wired but **can only be exercised with
+> the org's certificate**, so it is not verified in this repo's CI — the unsigned
+> local build and the e2e suites are.
+
+### If you choose *not* to sign
+
+Distributing the unsigned `.dmg` still works, it's just rougher for the
+downloader: the app opens as **System Settings → Privacy & Security → "Open
+Anyway"**, or from Terminal with
+`xattr -dr com.apple.quarantine /Applications/Mike.app`. (macOS 15 Sequoia
+removed the old Control-click → Open shortcut, so it's the Settings pane or the
+`xattr` command now.) Nothing about the app is degraded — signing is purely the
+download-trust gate.
 
 ## Icon
 
@@ -113,9 +222,14 @@ user through the real UI (local stack autoconfirms), creates a project via
 the wizard, and drops screenshots in `e2e/artifacts/`. Native menu items
 can't be driven over CDP — menu coverage is manual.
 
-## Not done yet (deliberate prototype cuts)
+## Needs a human / product decision
 
-- Code signing / notarization (needs an Apple Developer identity)
-- Auto-update, crash reporting
-- Native drag-out of documents, dock badge for running reviews — good
-  follow-ups once the shell direction is confirmed
+- **Signing & notarization** — config is wired (see above); needs the org's
+  Apple Developer ID to actually run.
+- **Release CI** — no workflow builds `desktop/` yet, so it will drift from the
+  frontend unless a build+e2e job is added.
+- **Auto-update** (electron-updater) — the `zip` target is already emitted for
+  it; wiring it up is a follow-up decision.
+- **`mike://` deep links** — the email-change confirmation link still opens in
+  the browser; a protocol handler would keep it in-app.
+- Native drag-out of documents, dock badge for running reviews — nice follow-ups.
