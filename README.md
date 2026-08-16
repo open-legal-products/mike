@@ -116,18 +116,22 @@ to paste — nothing fails silently.
 ### Slack
 
 Slack's hosted MCP server (`https://mcp.slack.com/mcp`) gives the assistant
-search and read access to the channels and DMs the connecting user can see.
-Slack does not support dynamic client registration, so the deployment needs a
-Slack app (created once):
+access to the channels and DMs the connecting user can see. The requested
+scopes are mostly read/search, plus a few write scopes (`chat:write`,
+`reactions:write`, `canvases:write`) — a user approving the consent screen is
+granting those too. Slack does not support dynamic client registration, so
+the deployment needs a Slack app (created once, by someone with app-creation
+rights in the workspace):
 
 1. Create an app at [api.slack.com/apps](https://api.slack.com/apps) — the
    fastest path is **From an app manifest**, pasting
    `docs/slack-mcp-app-manifest.example.json` and replacing the redirect URL
-   placeholder.
-2. If building the app by hand instead: give it a bot user and the agent
-   feature (`features.assistant_view`), turn on the **Slack MCP Server**
-   toggle under the app's *Agents* settings, and enable **PKCE** under
-   *OAuth & Permissions*.
+   placeholder. The manifest configures the bot user, the agent feature
+   (`features.assistant_view`), and the OAuth scopes. (Building by hand
+   instead: add the bot user and agent feature yourself.)
+2. Two settings the manifest cannot express, required on **either** path:
+   turn on the **Slack MCP Server** toggle under the app's *Agents* settings,
+   and enable **PKCE** under *OAuth & Permissions*.
 3. Add your backend's callback,
    `https://<your-backend-host>/user/mcp-connectors/oauth/callback`, as a
    redirect URL. Slack requires HTTPS — for local development use an HTTPS
@@ -136,8 +140,10 @@ Slack app (created once):
    `backend/.env` and restart the backend.
 
 Each user then clicks **Add** on **Settings > Connectors**, picks the
-**Slack** preset, and approves Slack's consent screen. Tokens are encrypted
-at rest, and individual tools can be toggled per connector.
+**Slack** preset, and approves Slack's consent screen. On workspaces with
+app approval enabled, a Workspace Owner/Admin must approve the app before
+members can authorize it. Tokens are encrypted at rest, and individual tools
+can be toggled per connector.
 
 ## Google Drive Integration
 
