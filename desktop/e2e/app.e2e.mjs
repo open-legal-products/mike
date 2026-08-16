@@ -3,9 +3,15 @@
 // drives it with Playwright over CDP (the shell's window IS a Chromium page),
 // signs up a fresh user, creates a project, and screenshots each stage.
 //
-// Prereqs: the docker-compose stack is up (frontend on :3000) and the app has
-// been packaged (npm run dist). Run from desktop/:
+// Prereqs: the docker-compose stack is up and the app has been packaged
+// (npm run dist). Run from desktop/:
 //   node e2e/app.e2e.mjs
+//   MIKE_E2E_URL=http://localhost:3100 node e2e/app.e2e.mjs   # shifted stack
+//
+// The app is launched with --server-url=$MIKE_E2E_URL (default
+// http://localhost:3000) plus MIKE_DOWNLOAD_DIR and MIKE_E2E_CAPTURE_EXTERNAL
+// pointed into e2e/artifacts/, so a test run never reads or writes the user's
+// real settings.json, ~/Downloads, or default browser.
 //
 // Driving over CDP deliberately exercises the same binary a user double-clicks
 // — not `electron .` — so packaging regressions (asar paths, resources) fail
@@ -30,6 +36,17 @@ const APP_BINARY = path.join(
   "Mike",
 );
 const ARTIFACTS = path.join(here, "artifacts");
+// Where the app under test points. Trailing slash stripped so `${SERVER_URL}/x`
+// composes cleanly.
+const SERVER_URL = (process.env.MIKE_E2E_URL ?? "http://localhost:3000").replace(
+  /\/$/,
+  "",
+);
+const DOWNLOAD_DIR = path.join(ARTIFACTS, "downloads");
+const CAPTURE_FILE = path.join(ARTIFACTS, "external-urls.txt");
+// Isolated userData: never touch the developer's real settings/window bounds,
+// and never collide with a running Mike.app on the single-instance lock.
+const USER_DATA_DIR = path.join(ARTIFACTS, "userdata");
 const CDP_PORT = 9223;
 const RUN_ID = Date.now().toString(36);
 const EMAIL = `desktop-e2e-${RUN_ID}@example.com`;
@@ -37,6 +54,7 @@ const PASSWORD = `E2e!${RUN_ID}aA1`;
 const PROJECT_NAME = `Desktop E2E ${RUN_ID}`;
 
 mkdirSync(ARTIFACTS, { recursive: true });
+mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
 const fail = (msg) => {
   console.error(`FAIL: ${msg}`);
@@ -62,10 +80,22 @@ const shot = async (page, name) => {
   console.log(`  📸 ${name}`);
 };
 
-const app = spawn(APP_BINARY, [`--remote-debugging-port=${CDP_PORT}`], {
-  stdio: "ignore",
-  detached: false,
-});
+const app = spawn(
+  APP_BINARY,
+  [`--remote-debugging-port=${CDP_PORT}`, `--server-url=${SERVER_URL}`],
+  {
+    stdio: "ignore",
+    detached: false,
+    // Sandbox the run: downloads land in artifacts, would-be openExternal
+    // calls are captured to a file instead of spraying real browser tabs.
+    env: {
+      ...process.env,
+      MIKE_DOWNLOAD_DIR: DOWNLOAD_DIR,
+      MIKE_E2E_CAPTURE_EXTERNAL: CAPTURE_FILE,
+      MIKE_USER_DATA_DIR: USER_DATA_DIR,
+    },
+  },
+);
 
 try {
   await waitForCdp();
@@ -80,14 +110,16 @@ try {
   //    screen). The shell persists sessions across launches (that's a
   //    feature), so a prior run's login may still be live — reset to an
   //    anonymous state before asserting the /login redirect.
-  await page.waitForURL(/localhost:3000/, { timeout: 15_000 });
+  await page.waitForURL((url) => url.href.startsWith(SERVER_URL), {
+    timeout: 15_000,
+  });
   if (!/\/login/.test(page.url())) {
     await context.clearCookies();
     await page.evaluate(() => {
       localStorage.clear();
       sessionStorage.clear();
     });
-    await page.goto("http://localhost:3000/");
+    await page.goto(`${SERVER_URL}/`);
   }
   await page.waitForURL(/\/login/, { timeout: 15_000 });
   console.log("✓ shell connected; anonymous user routed to /login");
@@ -134,10 +166,14 @@ try {
     await page.waitForTimeout(700);
   }
 
-  // 3. Create a project through the real UI (current design: "Create" opens
-  //    a wizard — name → Next → optional documents step).
-  await page.goto("http://localhost:3000/projects");
-  const createBtn = page.getByRole("button", { name: "Create", exact: true });
+  // 3. Create a project through the real UI (current design: the header's
+  //    "New project" icon button opens a wizard — name → Next → optional
+  //    documents step).
+  await page.goto(`${SERVER_URL}/projects`);
+  const createBtn = page.getByRole("button", {
+    name: "New project",
+    exact: true,
+  });
   await createBtn.waitFor({ timeout: 15_000 });
   await createBtn.click();
   await page.getByPlaceholder("Add project name").fill(PROJECT_NAME);
@@ -157,8 +193,15 @@ try {
   await shot(page, "03-project-created");
 
   // 4. Wordmark sanity: the sidebar/app chrome rendered (not an error page).
+  //    Read via waitForFunction — document.title is briefly empty during
+  //    client-side transitions, and a one-shot read can catch that window.
+  const titleOk = await page
+    .waitForFunction(() => /mike/i.test(document.title), null, {
+      timeout: 10_000,
+    })
+    .catch(() => null);
   const title = await page.title();
-  if (!/mike/i.test(title)) fail(`unexpected page title: ${title}`);
+  if (!titleOk) fail(`unexpected page title: ${title}`);
   console.log(`✓ page title: ${title}`);
 
   writeFileSync(
