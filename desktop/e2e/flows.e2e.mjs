@@ -373,7 +373,12 @@ try {
     );
     const captured = await waitFor(() => {
       try {
-        return readFileSync(CAPTURE_FILE, "utf8").includes(EXTERNAL_URL);
+        // Exact line match, not substring: the capture file is one URL per
+        // line, and matching the whole line is both a tighter assertion and
+        // free of the "URL substring" pattern static analysis flags.
+        return readFileSync(CAPTURE_FILE, "utf8")
+          .split("\n")
+          .includes(EXTERNAL_URL);
       } catch {
         return false;
       }
