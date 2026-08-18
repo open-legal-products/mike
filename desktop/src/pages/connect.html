@@ -108,6 +108,33 @@
         font-size: 12px;
         color: var(--muted);
       }
+      .divider {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 20px 0 16px;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .divider::before,
+      .divider::after {
+        content: "";
+        flex: 1;
+        border-top: 1px solid var(--border);
+      }
+      #local {
+        display: none;
+      }
+      #local p {
+        margin: 0 0 12px;
+        font-size: 12px;
+      }
+      #local .row {
+        margin-top: 0;
+        justify-content: flex-start;
+      }
     </style>
   </head>
   <body>
@@ -124,11 +151,33 @@
         <button id="save" class="primary">Save &amp; Connect</button>
       </div>
       <div class="status" id="status"></div>
+      <div id="local">
+        <div class="divider">or</div>
+        <p>
+          Run everything on this Mac instead — your documents and data never
+          leave this computer. No account on any server; password reset by
+          email is unavailable in this mode.
+        </p>
+        <div class="row">
+          <button id="run-local">Run locally on this Mac</button>
+        </div>
+      </div>
     </main>
     <script>
       const input = document.getElementById("url");
       const status = document.getElementById("status");
       window.mikeDesktop.getServerUrl().then((url) => (input.value = url));
+      const bootError = new URLSearchParams(location.search).get("error");
+      if (bootError) status.textContent = bootError;
+      if (window.mikeDesktop.localAvailable) {
+        window.mikeDesktop.localAvailable().then((ok) => {
+          if (ok) document.getElementById("local").style.display = "block";
+        });
+        document.getElementById("run-local").addEventListener("click", () => {
+          status.textContent = "Starting local mode…";
+          window.mikeDesktop.startLocal();
+        });
+      }
       const connect = async (save) => {
         status.textContent = "Connecting…";
         if (save) await window.mikeDesktop.setServerUrl(input.value);

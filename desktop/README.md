@@ -18,7 +18,10 @@ browser, so the shell can never fork the product.
 Out of the box the app points at the hosted service
 (`https://app.mikeoss.com`), so a downloaded build works with nothing else
 installed — open it, log in, done. Self-hosters point it at their own stack
-via the connect screen (⌘⇧,) or the overrides below.
+via the connect screen (⌘⇧,) or the overrides below. The connect screen also
+offers a third mode: **Run locally on this Mac** — the app supervises an
+entire Mike stack on loopback (see "Self-contained local mode" below), no
+Docker, no server, no account anywhere.
 
 ## Shortcuts
 
@@ -106,6 +109,43 @@ open dist/mac-arm64/Mike.app --args --server-url=http://localhost:3100
 # or, without packaging:
 npm start -- --server-url=http://localhost:3100
 ```
+
+## Self-contained local mode
+
+`src/local/supervisor.js` is docker-compose.yml reimplemented as a process
+tree: Postgres 17 → GoTrue (its own auth migrations) → product schema +
+migration ledger → PostgREST → a Node gateway proxy (the nginx
+`gateway.conf` port, plus per-install anon-key injection) → the backend →
+the Next standalone frontend, all loopback-only on fixed ports (42810–42815;
+fixed because the frontend bakes its API origins at build time). The web app
+and backend run byte-identical to the compose stack — only the process
+manager differs.
+
+Per-install secrets (JWT secret, anon/service keys, DB password, signing
+secrets) are minted on first run into `userData/local/secrets.json`; nothing
+secret ships in the build (the bundle carries only the well-known Supabase
+demo anon key as a placeholder, which the gateway swaps for the real
+per-install key — see `src/local/gateway.js`). Documents are plain files
+under `userData/local/storage` (backend `STORAGE_DRIVER=fs`); downloads use
+expiring HMAC blob-token URLs instead of S3 presigning. Postgres data lives
+in `userData/local/pgdata`; each service logs to `userData/local/logs/`.
+
+```bash
+npm run local:fetch    # once: postgres + postgrest binaries, gotrue built from source (needs go)
+npm run local:build    # backend tsc + frontend standalone (local URLs baked)
+npm run start:local    # dev-mode launch straight into local mode
+npm run e2e:local      # fresh-userData first-run e2e (MIKE_E2E_DEV=1 for dev mode)
+
+npm run local:stage    # stage built app into local-stack/app for packaging
+npm run dist:local     # package Mike.app WITH the whole stack inside
+```
+
+Known limits (deliberate v1 scope): password reset by email needs an SMTP
+server, so it's unavailable in local mode (stated on the connect screen);
+LLM calls still need a per-user API key (Settings → API Keys) or a local
+Ollama; docx→pdf renditions activate only if LibreOffice is installed (the
+supervisor auto-detects `/Applications/LibreOffice.app`) — without it the
+product falls back to client-side docx preview, as designed.
 
 ## Signing & notarization (for a distributable release)
 
