@@ -33,6 +33,7 @@ const DEFAULT_SERVER_URL = "https://app.mikeoss.com";
 const LOCAL_FRONTEND_URL = require("./local/config").FRONTEND_URL;
 const CONNECT_PAGE = path.join(__dirname, "pages", "connect.html");
 const LOCAL_BOOT_PAGE = path.join(__dirname, "pages", "local-boot.html");
+const WELCOME_PAGE = path.join(__dirname, "pages", "welcome.html");
 // Prefix for the shell's own bundled pages — the only file: URLs the main
 // window is ever allowed to show.
 const SHELL_PAGES_URL_PREFIX = pathToFileURL(
@@ -499,8 +500,33 @@ async function serverReachable(url) {
   }
 }
 
+// True first launch, in a build that can actually run locally: the user has
+// never chosen where Mike runs, so ask — "cloud or this Mac" is a decision a
+// user shouldn't need to know a keyboard shortcut to make. Any explicit
+// signal (an override, --local, or a saved choice) skips the chooser, so
+// automation and returning users never see it. Builds without the local
+// stack skip it too: with only one viable answer there is nothing to ask.
+function needsFirstRunChoice() {
+  if (serverUrlOverride() || process.argv.includes("--local")) return false;
+  const settings = loadSettings();
+  if (settings.mode || (typeof settings.serverUrl === "string" && settings.serverUrl.trim())) {
+    return false;
+  }
+  return localStackAvailable();
+}
+
+function localStackAvailable() {
+  try {
+    const { stackPaths } = require("./local/config");
+    return fs.existsSync(stackPaths(app).gotrue);
+  } catch {
+    return false;
+  }
+}
+
 async function connectOrExplain() {
   if (!win) return;
+  if (needsFirstRunChoice()) return void (await win.loadFile(WELCOME_PAGE));
   if (localMode()) return startLocalAndLoad();
   if (await serverReachable(serverUrl())) {
     await win.loadURL(serverUrl());
@@ -577,12 +603,16 @@ ipcMain.handle("mike:start-local", (event) => {
 ipcMain.handle("mike:local-available", () => {
   // The connect screen only offers "Run locally" when this build actually
   // carries the stack (binaries fetched / resources staged).
-  try {
-    const { stackPaths } = require("./local/config");
-    return fs.existsSync(stackPaths(app).gotrue);
-  } catch {
-    return false;
-  }
+  return localStackAvailable();
+});
+ipcMain.handle("mike:choose-cloud", (event) => {
+  if (!fromShellPage(event)) return;
+  // Recording the choice is what retires the first-run chooser.
+  saveSettings({ mode: "remote" });
+  return connectOrExplain();
+});
+ipcMain.handle("mike:open-connect", (event) => {
+  if (fromShellPage(event)) return showConnectPage();
 });
 
 // ---------------------------------------------------------------------------
