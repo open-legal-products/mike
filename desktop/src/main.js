@@ -23,7 +23,10 @@ const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
 
-const DEFAULT_SERVER_URL = "http://localhost:3000";
+// Out of the box the shell points at the hosted service, so a downloaded app
+// works with no local stack. Self-hosters retarget via the connect screen
+// (⌘⇧,), --server-url=, or MIKE_SERVER_URL — see serverUrl() below.
+const DEFAULT_SERVER_URL = "https://app.mikeoss.com";
 const CONNECT_PAGE = path.join(__dirname, "pages", "connect.html");
 // Prefix for the shell's own bundled pages — the only file: URLs the main
 // window is ever allowed to show.
