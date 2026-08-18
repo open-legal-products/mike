@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("mikeDesktop", {
   // shell's own pages; localAvailable and onLocalStatus are read-only.
   localAvailable: () => ipcRenderer.invoke("mike:local-available"),
   startLocal: () => ipcRenderer.invoke("mike:start-local"),
+  chooseCloud: () => ipcRenderer.invoke("mike:choose-cloud"),
+  openConnect: () => ipcRenderer.invoke("mike:open-connect"),
   onLocalStatus: (cb) =>
     ipcRenderer.on("mike:local-status", (_event, msg) => cb(String(msg))),
 });
