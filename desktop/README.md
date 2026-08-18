@@ -15,6 +15,11 @@ first-class home. The shell contributes the parts a browser tab can't:
 The web app receives **no** privileged APIs — it must behave identically in a
 browser, so the shell can never fork the product.
 
+Out of the box the app points at the hosted service
+(`https://app.mikeoss.com`), so a downloaded build works with nothing else
+installed — open it, log in, done. Self-hosters point it at their own stack
+via the connect screen (⌘⇧,) or the overrides below.
+
 ## Shortcuts
 
 | Shortcut | Action                          |
@@ -56,20 +61,21 @@ differently on purpose:
 
 ## Run (dev)
 
-Needs a running Mike frontend (`http://localhost:3000` by default — start the
-stack per the repo README, or point the app at a hosted deployment via ⌘⇧,).
+By default the shell loads the hosted service. To develop against a local
+frontend, start the stack per the repo README and retarget the shell (⌘⇧, or
+`--server-url=`):
 
 ```bash
 cd desktop
 npm install
-npm start
+npm start -- --server-url=http://localhost:3000
 ```
 
 ### Overrides (automation / e2e)
 
 Server URL precedence: `--server-url=<url>` CLI flag → `MIKE_SERVER_URL` env →
 saved settings (`~/Library/Application Support/Mike/settings.json`) → default
-`http://localhost:3000`. The overrides let e2e retarget the packaged app
+`https://app.mikeoss.com`. The overrides let e2e retarget the packaged app
 without touching the user's real settings.
 
 | Variable                    | Effect                                          |
@@ -83,7 +89,7 @@ without touching the user's real settings.
 
 ```bash
 npm run dist   # → dist/mac-arm64/Mike.app (unsigned)
-open dist/mac-arm64/Mike.app
+open dist/mac-arm64/Mike.app   # loads https://app.mikeoss.com
 ```
 
 **A locally-built app runs without any Gatekeeper prompt** — the "damaged / can't
@@ -91,8 +97,9 @@ be opened" block only applies to apps *downloaded* from the internet (they get a
 `com.apple.quarantine` attribute; a file you built yourself does not). So this
 is the path to test the app end-to-end today, before anyone signs anything.
 
-To point it at a stack other than `http://localhost:3000`, use the connect
-screen (⌘⇧,) or launch with an override:
+To point it at a stack other than the hosted default (e.g. a local
+docker-compose stack), use the connect screen (⌘⇧,) or launch with an
+override:
 
 ```bash
 open dist/mac-arm64/Mike.app --args --server-url=http://localhost:3100
