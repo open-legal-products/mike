@@ -25,9 +25,14 @@ const { pathToFileURL } = require("url");
 
 // Out of the box the shell points at the hosted service, so a downloaded app
 // works with no local stack. Self-hosters retarget via the connect screen
-// (⌘⇧,), --server-url=, or MIKE_SERVER_URL — see serverUrl() below.
+// (⌘⇧,), --server-url=, or MIKE_SERVER_URL — see serverUrl() below. A third
+// mode runs the ENTIRE stack on this Mac (src/local/supervisor.js): the
+// connect screen offers it, and once chosen the shell boots the local
+// services and loads the local frontend.
 const DEFAULT_SERVER_URL = "https://app.mikeoss.com";
+const LOCAL_FRONTEND_URL = require("./local/config").FRONTEND_URL;
 const CONNECT_PAGE = path.join(__dirname, "pages", "connect.html");
+const LOCAL_BOOT_PAGE = path.join(__dirname, "pages", "local-boot.html");
 // Prefix for the shell's own bundled pages — the only file: URLs the main
 // window is ever allowed to show.
 const SHELL_PAGES_URL_PREFIX = pathToFileURL(
@@ -67,13 +72,32 @@ function saveSettings(patch) {
 // then default. The two overrides exist so automation (e2e against a shifted
 // compose stack) can retarget the packaged app without touching the user's
 // real settings file.
-const serverUrl = () => {
+const serverUrlOverride = () => {
   const argv = process.argv.find((a) => a.startsWith("--server-url="));
   const override =
     argv?.slice("--server-url=".length) ?? process.env.MIKE_SERVER_URL;
-  if (typeof override === "string" && override.trim()) {
-    return override.trim().replace(/\/+$/, "");
-  }
+  return typeof override === "string" && override.trim()
+    ? override.trim().replace(/\/+$/, "")
+    : null;
+};
+
+// Local mode: the saved choice (or --local, for automation) — but an explicit
+// --server-url=/MIKE_SERVER_URL override always wins, so e2e can retarget a
+// machine whose saved mode is local without touching its settings.
+const localMode = () => {
+  if (serverUrlOverride()) return false;
+  if (process.argv.includes("--local")) return true;
+  return loadSettings().mode === "local";
+};
+
+const serverUrl = () => {
+  const override = serverUrlOverride();
+  if (override) return override;
+  // In local mode the product's origin is the supervised local frontend —
+  // returning it here keeps the origin fence, menu navigation, and the
+  // connect screen's prefill all pointed at the right place with no special
+  // cases downstream.
+  if (localMode()) return LOCAL_FRONTEND_URL;
   const configured = loadSettings().serverUrl;
   return typeof configured === "string" && configured.trim()
     ? configured.trim()
@@ -477,6 +501,7 @@ async function serverReachable(url) {
 
 async function connectOrExplain() {
   if (!win) return;
+  if (localMode()) return startLocalAndLoad();
   if (await serverReachable(serverUrl())) {
     await win.loadURL(serverUrl());
   } else {
@@ -484,11 +509,39 @@ async function connectOrExplain() {
   }
 }
 
-async function showConnectPage() {
+async function showConnectPage(error) {
   if (!win) return;
   await win.loadFile(CONNECT_PAGE, {
-    query: { server: serverUrl() },
+    query: { server: serverUrl(), ...(error ? { error } : {}) },
   });
+}
+
+// Boot the supervised local stack behind a progress page, then load the
+// local frontend. Loaded lazily: remote-mode users never pay for the
+// supervisor module.
+let localBootInFlight = null;
+async function startLocalAndLoad() {
+  if (!win) return;
+  const { startLocalStack, localStackRunning } = require("./local/supervisor");
+  if (localStackRunning()) return void (await win.loadURL(LOCAL_FRONTEND_URL));
+  if (localBootInFlight) return;
+  await win.loadFile(LOCAL_BOOT_PAGE);
+  localBootInFlight = (async () => {
+    try {
+      await startLocalStack(app, (msg) => {
+        win?.webContents.send("mike:local-status", msg);
+      });
+      await win.loadURL(LOCAL_FRONTEND_URL);
+    } catch (err) {
+      console.error("[mike-desktop] local stack failed", err);
+      await showConnectPage(
+        `Local mode failed to start: ${String(err?.message ?? err).slice(0, 300)}`,
+      );
+    } finally {
+      localBootInFlight = null;
+    }
+  })();
+  await localBootInFlight;
 }
 
 // ---------------------------------------------------------------------------
@@ -506,12 +559,30 @@ const fromShellPage = (event) =>
 ipcMain.handle("mike:get-server-url", () => serverUrl());
 ipcMain.handle("mike:set-server-url", (event, url) => {
   if (fromShellPage(event) && typeof url === "string" && url.trim()) {
-    saveSettings({ serverUrl: url.trim().replace(/\/+$/, "") });
+    // Choosing a URL is choosing remote mode — the two are one decision on
+    // the connect screen, so flipping them together can't strand the app
+    // pointed at a URL while local mode still owns the window.
+    saveSettings({ serverUrl: url.trim().replace(/\/+$/, ""), mode: "remote" });
   }
   return serverUrl();
 });
 ipcMain.handle("mike:retry", (event) => {
   if (fromShellPage(event)) return connectOrExplain();
+});
+ipcMain.handle("mike:start-local", (event) => {
+  if (!fromShellPage(event)) return;
+  saveSettings({ mode: "local" });
+  return startLocalAndLoad();
+});
+ipcMain.handle("mike:local-available", () => {
+  // The connect screen only offers "Run locally" when this build actually
+  // carries the stack (binaries fetched / resources staged).
+  try {
+    const { stackPaths } = require("./local/config");
+    return fs.existsSync(stackPaths(app).gotrue);
+  } catch {
+    return false;
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -671,6 +742,24 @@ if (!app.requestSingleInstanceLock()) {
   // Mac convention: closing the window keeps the app in the dock.
   app.on("window-all-closed", () => {
     // no-op on purpose; Cmd+Q quits.
+  });
+
+  // Local mode runs a database — it must stop cleanly (postgres fast
+  // shutdown) before the process dies, or the next boot pays crash
+  // recovery. Intercept the first quit, stop the stack, then quit for real.
+  let stackStopped = false;
+  app.on("before-quit", (event) => {
+    if (stackStopped) return;
+    let supervisor;
+    try {
+      supervisor = require("./local/supervisor");
+    } catch {
+      return;
+    }
+    if (!supervisor.localStackRunning()) return;
+    event.preventDefault();
+    stackStopped = true;
+    void supervisor.stopLocalStack().finally(() => app.quit());
   });
 }
 
