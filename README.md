@@ -152,7 +152,7 @@ Mike can search and read a user's Google Drive files directly from chat — ask
 the assistant uses its `google_drive_search` / `google_drive_read_file` /
 `google_drive_list_recent` tools (read-only; Google Docs/Sheets/Slides are
 exported as text, PDF and Word files are converted). Each user connects their
-own Google account with one click from **Account > Connectors > Google
+own Google account with one click from **Settings > Connectors > Google
 Drive**; tokens are encrypted at rest and access is limited to the
 `drive.readonly` scope.
 
@@ -160,17 +160,37 @@ This is a first-party integration over the GA Google Drive REST API. It does
 **not** use Google's hosted Drive MCP server, which is gated behind the
 Google Workspace Developer Preview Program — no preview enrollment is needed.
 
-### Self-hosting setup (one-time, per deployment)
+### Setup (one-time, per deployment)
+
+These steps apply to every deployment — a firm self-hosting its own fork and
+an operator hosting Mike for others alike. The one decision that differs is
+step 3, because `drive.readonly` is a Google *restricted* scope and Google's
+verification rules depend on **who connects**, not on who wrote the code.
 
 1. In [Google Cloud Console](https://console.cloud.google.com), pick or
    create a project.
 2. **APIs & Services > Library**: enable the **Google Drive API**
    (`drive.googleapis.com`).
-3. **APIs & Services > OAuth consent screen**: configure it (External is
-   fine). While the app is in *Testing* mode only listed test users can
-   connect — add your users, or publish the app. The `drive.readonly` scope
-   is *restricted*: serving more than 100 users in production requires
-   Google's OAuth app verification.
+3. **APIs & Services > OAuth consent screen** — pick the user type for your
+   audience:
+
+   - **Self-hosting for your own organization** (everyone who will connect
+     is in your Google Workspace org — the typical law firm): choose
+     **Internal**. No user cap, no Google verification, no security
+     assessment, no token expiry — at any firm size. The Cloud project must
+     be owned by that Workspace organization.
+   - **Hosting for users outside your organization** (consumer Gmail
+     accounts, multiple firms, a public instance): choose **External** and
+     plan for Google's verification. In *Testing* mode, only 100 listed
+     test users can connect **and their refresh tokens expire every
+     7 days** — each user must reconnect weekly, so Testing is for pilots,
+     not steady state. Published but unverified, the app has a *lifetime*
+     cap of 100 users (Google does not reset it) behind an "unverified
+     app" warning. Growing past that requires Google's restricted-scope
+     verification, including an annual third-party security assessment
+     (CASA). That cost lands once, on the operator of the deployment — one
+     verified client covers every user of the instance; individual users
+     never deal with it.
 4. **APIs & Services > Credentials > Create credentials > OAuth client ID >
    Web application**, and add your backend's callback as an authorized
    redirect URI:
@@ -191,7 +211,7 @@ Fresh databases created from `backend/schema.sql` already include the Drive
 token tables. Existing deployments should apply
 `backend/migrations/20260825_05_google_drive_integration.sql`.
 
-Each user then clicks **Connect** on **Account > Connectors**, approves the
+Each user then clicks **Connect** on **Settings > Connectors**, approves the
 Google consent screen once, and the assistant's Drive tools activate for
 their chats. Disconnecting revokes the grant and deletes the stored tokens.
 
