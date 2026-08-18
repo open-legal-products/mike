@@ -2,3 +2,4 @@ node_modules/
 dist/
 e2e/artifacts/
 local-stack/
+electron-builder.release.local.json

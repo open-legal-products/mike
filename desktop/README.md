@@ -134,11 +134,18 @@ in `userData/local/pgdata`; each service logs to `userData/local/logs/`.
 npm run local:fetch    # once: postgres + postgrest binaries, gotrue built from source (needs go)
 npm run local:build    # backend tsc + frontend standalone (local URLs baked)
 npm run start:local    # dev-mode launch straight into local mode
-npm run e2e:local      # fresh-userData first-run e2e (MIKE_E2E_DEV=1 for dev mode)
+MIKE_E2E_DEV=1 npm run e2e:local   # fresh-userData first-run e2e, dev mode
 
 npm run local:stage    # stage built app into local-stack/app for packaging
-npm run dist:local     # package Mike.app WITH the whole stack inside
+npm run dist:local     # package Mike.app WITH the whole stack inside (unsigned)
+npm run e2e:local      # same first-run e2e against the PACKAGED app
 ```
+
+On a first launch with no saved choice, a build that carries the stack shows
+a welcome chooser — **Use Mike Cloud / Run everything on this Mac / connect
+to your own server** — so local-first needs zero knowledge of shortcuts.
+Any explicit signal (`--server-url=`, `--local`, or a previously saved
+choice) skips the chooser, so automation and returning users never see it.
 
 Known limits (deliberate v1 scope): password reset by email needs an SMTP
 server, so it's unavailable in local mode (stated on the connect screen);
@@ -233,6 +240,51 @@ So the certificate lives only as encrypted secrets and never on a laptop:
 > The signed path is documented and pre-wired but **can only be exercised with
 > the org's certificate**, so it is not verified in this repo's CI — the unsigned
 > local build and the e2e suites are.
+
+### Signing the self-contained build (`dist:local:signed`)
+
+The self-contained app is harder to sign than the plain shell for one
+reason: **notarization requires every nested Mach-O in the bundle to carry
+its own hardened-runtime signature** — that's postgres and its ~10 dylibs,
+gotrue, postgrest, and any native `.node` modules in the backend's
+production dependencies. electron-builder signs only the binaries it is
+told about (`mac.binaries`), and the exact set changes whenever a pinned
+version changes, so the config is **generated, never hand-maintained**:
+
+```bash
+# prereqs: certificate in the keychain + the three APPLE_* env vars,
+# exactly as in the section above, then:
+npm run local:fetch && npm run local:build && npm run local:stage
+npm run dist:local:signed
+# = node scripts/make-signed-local-config.mjs   (scans local-stack/ for
+#     Mach-O files → writes electron-builder.release.local.json with
+#     extraResources + mac.binaries filled in)
+#   electron-builder --mac --config electron-builder.release.local.json
+```
+
+Verify the result the same way as the shell build, plus spot-check a nested
+binary and run the packaged first-run e2e against the signed app:
+
+```bash
+codesign --verify --deep --strict --verbose=2 dist/mac-arm64/Mike.app
+codesign -dv dist/mac-arm64/Mike.app/Contents/Resources/local-stack/bin/pg/bin/postgres
+xcrun stapler validate dist/mac-arm64/Mike.app
+spctl -a -vvv -t install dist/mac-arm64/Mike.app   # → Notarized Developer ID
+npm run e2e:local                                   # full boot inside the signed app
+```
+
+Two constraints worth knowing before touching anything here:
+- The dylib version-name **symlinks** in `pg/lib` must survive into the
+  bundle (electron-builder preserves them; the generator skips them because
+  codesign resolves links — signing a link twice fails the build). The
+  supervisor re-hydrates missing links at boot from `pg-symlinks.json`, but
+  a **signed** bundle is sealed: hydration writing into Resources would
+  break the signature, so links must be intact at packaging time. If
+  `codesign --verify` fails after a repackage, check the links first.
+- The entitlements file is shared with the shell build. Postgres, Go
+  binaries, and Node run fine under the hardened runtime with the existing
+  entitlements; do not add `com.apple.security.cs.*` exceptions
+  speculatively — notarization gets stricter about them every year.
 
 ### If you choose *not* to sign
 

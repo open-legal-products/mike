@@ -15,6 +15,7 @@
     "dist": "electron-builder --mac --config electron-builder.json",
     "dist:local": "electron-builder --mac --config electron-builder.local.json",
     "dist:signed": "electron-builder --mac --config electron-builder.release.json",
+    "dist:local:signed": "node scripts/make-signed-local-config.mjs && electron-builder --mac --config electron-builder.release.local.json",
     "e2e": "node e2e/app.e2e.mjs",
     "e2e:flows": "node e2e/flows.e2e.mjs",
     "e2e:local": "node e2e/local.e2e.mjs",

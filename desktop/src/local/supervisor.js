@@ -137,6 +137,28 @@ async function pgReachable(secrets) {
   }
 }
 
+// The pg dist relies on version-name dylib symlinks (libzstd.1.dylib →
+// libzstd.1.5.7.dylib). npm tarballs can't carry symlinks (the fetch script
+// hydrates them from pg-symlinks.json) and packaging can drop them again —
+// so hydrate idempotently at boot from the same manifest the npm package
+// ships. Skips silently when the links already exist.
+function hydratePgSymlinks(paths) {
+  const pgRoot = path.dirname(paths.pgBin);
+  const manifest = path.join(pgRoot, "pg-symlinks.json");
+  if (!fs.existsSync(manifest)) return;
+  for (const link of JSON.parse(fs.readFileSync(manifest, "utf8"))) {
+    const src = link.source.replace(/^native\//, "");
+    const dst = path.join(pgRoot, link.target.replace(/^native\//, ""));
+    if (fs.existsSync(dst)) continue;
+    try {
+      fs.symlinkSync(
+        path.relative(path.dirname(dst), path.join(pgRoot, src)),
+        dst,
+      );
+    } catch { /* read-only resources with links intact, or a race — fine */ }
+  }
+}
+
 function initdbIfNeeded(paths, dirs, secrets, status) {
   if (fs.existsSync(path.join(dirs.pgdata, "PG_VERSION"))) return;
   status("Creating local database (first run)…");
@@ -256,6 +278,7 @@ async function startLocalStack(app, status = () => {}) {
 
   try {
     // 1. Postgres
+    hydratePgSymlinks(paths);
     initdbIfNeeded(paths, dirs, secrets, status);
     status("Starting database…");
     // A previous hard kill (crash, force-quit) can leave a stale pid file
