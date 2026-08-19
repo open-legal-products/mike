@@ -38,6 +38,10 @@
         user-select: none;
       }
       main {
+        /* Same shape as welcome/connect: draggable body, no-drag content
+           island — a page with zero no-drag area turns the whole window
+           into a titlebar. */
+        -webkit-app-region: no-drag;
         text-align: center;
       }
       .spinner {
