@@ -482,6 +482,23 @@ function createWindow() {
     },
   );
 
+  // The shell's own pages mark `-webkit-app-region: drag` regions (their
+  // body doubles as a titlebar under hiddenInset), and Chromium only
+  // replaces a window's native drag regions when the NEXT document reports
+  // regions of its own. The web app declares no app-region at all, so
+  // navigating shell page → product leaves the shell page's regions in
+  // force — and after local-boot.html (whole body draggable) that is the
+  // entire window: a drag region swallows every mouse event
+  // (electron/electron#1354), so nothing in the product is clickable.
+  // Force every http(s) document to report an explicit no-drag region,
+  // which resets the native regions to none.
+  win.webContents.on("did-navigate", (_e, url) => {
+    if (!/^https?:/.test(url)) return;
+    void win.webContents
+      .insertCSS("html, body { -webkit-app-region: no-drag; }")
+      .catch(() => {});
+  });
+
   void connectOrExplain();
 }
 
