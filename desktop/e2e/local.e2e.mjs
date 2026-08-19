@@ -246,6 +246,23 @@ try {
   console.log(`✓ downloaded back via blob-token URL: ${path.basename(entry.savePath)}`);
   await shot(page, "local-04-download");
 
+  // 6. Guest mode: from a signed-out /login, "Continue as guest" must land
+  //    in the product with zero typing. Run it twice — the first click hits
+  //    the signUp fallback (the guest account doesn't exist yet), the second
+  //    proves signInWithPassword against the account the first one created.
+  for (const round of ["first click (creates the guest account)", "second click (signs into it)"]) {
+    await page.evaluate(() => localStorage.clear());
+    await page.goto(`${FRONTEND_URL}/login`);
+    const guestBtn = page.getByRole("button", { name: "Continue as guest" });
+    await guestBtn.waitFor({ timeout: 15_000 });
+    await guestBtn.click();
+    await page.waitForURL((url) => !/\/(login|signup)/.test(url.href), {
+      timeout: 30_000,
+    });
+    console.log(`✓ guest mode, ${round}: /login → signed-in product`);
+  }
+  await shot(page, "local-05-guest");
+
   writeFileSync(
     path.join(ARTIFACTS, "local-summary.json"),
     JSON.stringify(
