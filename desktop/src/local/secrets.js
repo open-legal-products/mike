@@ -34,6 +34,18 @@ function signJwt(payload, secret) {
   return `${header}.${body}.${b64url(sig)}`;
 }
 
+// The local guest account: a real GoTrue user, but one the shell owns the
+// credentials for, so "use Mike without signing up" is one click on the
+// login page. Random per install — a guest session on one Mac says nothing
+// about any other. Lives beside the other secrets (same trust boundary:
+// whoever can read this file can read pgdata anyway).
+function mintGuestCredentials() {
+  return {
+    guestEmail: "guest@mike.local",
+    guestPassword: crypto.randomBytes(18).toString("base64url"),
+  };
+}
+
 function mintSecrets() {
   const jwtSecret = crypto.randomBytes(48).toString("hex");
   const now = Math.floor(Date.now() / 1000);
@@ -49,13 +61,25 @@ function mintSecrets() {
     dbPassword: crypto.randomBytes(24).toString("hex"),
     downloadSigningSecret: crypto.randomBytes(32).toString("hex"),
     userApiKeysEncryptionSecret: crypto.randomBytes(32).toString("hex"),
+    ...mintGuestCredentials(),
   };
 }
 
 function loadOrCreateSecrets(secretsFile) {
   try {
     const parsed = JSON.parse(fs.readFileSync(secretsFile, "utf8"));
-    if (parsed?.version === 1 && parsed.jwtSecret) return parsed;
+    if (parsed?.version === 1 && parsed.jwtSecret) {
+      // Installs minted before guest mode existed lack the guest fields —
+      // top the file up in place. No version bump: nothing changed shape,
+      // a field was added, and old readers ignore unknown fields.
+      if (!parsed.guestEmail || !parsed.guestPassword) {
+        Object.assign(parsed, mintGuestCredentials());
+        fs.writeFileSync(secretsFile, JSON.stringify(parsed, null, 2), {
+          mode: 0o600,
+        });
+      }
+      return parsed;
+    }
   } catch {
     // fall through to mint
   }

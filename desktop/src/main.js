@@ -631,6 +631,26 @@ ipcMain.handle("mike:choose-cloud", (event) => {
 ipcMain.handle("mike:open-connect", (event) => {
   if (fromShellPage(event)) return showConnectPage();
 });
+ipcMain.handle("mike:guest-credentials", (event) => {
+  // The one bridge call the PRODUCT may make (everything above is
+  // shell-pages-only): the login page asks for the local guest account and
+  // shows "Continue as guest" when it gets one. Answer only in local mode
+  // and only to the local frontend itself — a hosted page, or anything a
+  // hosted page manages to load in this window, must never be able to pull
+  // credentials out of the shell.
+  if (!localMode()) return null;
+  let senderOrigin;
+  try {
+    senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
+  } catch {
+    return null;
+  }
+  if (senderOrigin !== new URL(LOCAL_FRONTEND_URL).origin) return null;
+  const { dataPaths } = require("./local/config");
+  const { loadOrCreateSecrets } = require("./local/secrets");
+  const secrets = loadOrCreateSecrets(dataPaths(app).secretsFile);
+  return { email: secrets.guestEmail, password: secrets.guestPassword };
+});
 
 // ---------------------------------------------------------------------------
 // Menu — the part a browser tab can never give the product. ⌘1–⌘5 mirror the
