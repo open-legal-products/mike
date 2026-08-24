@@ -45,6 +45,13 @@ import {
 } from "../lib/userDataExport";
 import { findProfileUserByEmail } from "../lib/userLookup";
 import {
+    getUserCommittees,
+    normalizeUserCommittees,
+    validateUserCommittees,
+} from "../lib/userCommittees";
+import { configuredModelSummaries } from "../lib/llm/registry";
+import type { CommitteeModel } from "../lib/llm/types";
+import {
     getAllUserRouterModels,
     replaceUserRouterModels,
     ROUTER_SLUGS,
@@ -74,6 +81,7 @@ type UserProfileRow = {
     legal_research_us: boolean | null;
     quick_actions_visible: boolean | null;
     dark_mode: boolean | null;
+    model_committees?: unknown;
 };
 
 function errorMessage(error: unknown): string {
@@ -182,6 +190,11 @@ function mcpOAuthPopupCsp(nonce: string) {
 }
 
 const PROFILE_SELECT =
+    "display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas, onboarding_version, password_set_at, message_credits_used, credits_reset_date, tier, title_model, tabular_model, mfa_on_login, legal_research_us, quick_actions_visible, dark_mode, model_committees";
+// model_committees is the newest column, so it gets the topmost retry
+// tier: a database missing only it keeps every other live column and
+// reports no committees.
+const PROFILE_SELECT_NO_COMMITTEES =
     "display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas, onboarding_version, password_set_at, message_credits_used, credits_reset_date, tier, title_model, tabular_model, mfa_on_login, legal_research_us, quick_actions_visible, dark_mode";
 // Deploy-before-migrate tolerance is per column: a database that already has
 // the 20260821 onboarding/password columns but not yet dark_mode must keep
@@ -248,6 +261,26 @@ async function selectProfile(
     // to light. A database old enough to lack the 20260821 columns too
     // fails the full select on one of those instead (they sort earlier in
     // the select list), so this tier is skipped and the tiers below handle it.
+    if (isMissingProfileColumn(cascadeError, "model_committees")) {
+        const noCommitteesQuery = db
+            .from("user_profiles")
+            .select(PROFILE_SELECT_NO_COMMITTEES)
+            .eq("user_id", userId);
+        const noCommittees =
+            mode === "single"
+                ? await noCommitteesQuery.single()
+                : await noCommitteesQuery.maybeSingle();
+        if (!noCommittees.error) {
+            if (noCommittees.data && typeof noCommittees.data === "object") {
+                Object.assign(noCommittees.data as Record<string, unknown>, {
+                    model_committees: [],
+                });
+            }
+            return noCommittees;
+        }
+        cascadeError = noCommittees.error;
+    }
+
     if (isMissingProfileColumn(cascadeError, "dark_mode")) {
         const noDarkQuery = db
             .from("user_profiles")
@@ -521,6 +554,7 @@ function serializeProfile(
         legalResearchUs: row.legal_research_us !== false,
         quickActionsVisible: row.quick_actions_visible !== false,
         darkMode: row.dark_mode === true,
+        modelCommittees: normalizeUserCommittees(row.model_committees),
         ...Object.fromEntries(
             ROUTER_SLUGS.map((slug) => [
                 ROUTER_PROFILE_FIELDS[slug],
@@ -700,6 +734,7 @@ function validateProfilePayload(body: unknown):
         "legalResearchUs",
         "quickActionsVisible",
         "darkMode",
+        "modelCommittees",
         ...ROUTER_SLUGS.map((slug) => ROUTER_PROFILE_FIELDS[slug]),
     ]);
     const invalidField = Object.keys(raw).find(
@@ -724,6 +759,7 @@ function validateProfilePayload(body: unknown):
         legal_research_us?: boolean;
         quick_actions_visible?: boolean;
         dark_mode?: boolean;
+        model_committees?: CommitteeModel[];
         updated_at: string;
     } = { updated_at: new Date().toISOString() };
     const routerModels: Partial<Record<RouterSlug, string[]>> = {};
@@ -771,6 +807,22 @@ function validateProfilePayload(body: unknown):
             return { ok: false, detail: "Unsupported tabularModel" };
         }
         update.tabular_model = resolved;
+    }
+
+    if ("modelCommittees" in raw) {
+        try {
+            update.model_committees = validateUserCommittees(
+                raw.modelCommittees,
+            );
+        } catch (error) {
+            return {
+                ok: false,
+                detail:
+                    error instanceof Error
+                        ? error.message
+                        : "Invalid modelCommittees",
+            };
+        }
     }
 
     if ("titleModel" in raw) {
@@ -1163,6 +1215,21 @@ userRouter.patch(
 );
 
 // GET /user/api-keys
+// Models this user can select beyond the static catalog the client already
+// knows: whatever the deployment declared, plus the user's own committees.
+userRouter.get("/models", requireAuth, async (_req, res) => {
+    const userId = res.locals.userId as string;
+    try {
+        const committees = await getUserCommittees(userId);
+        res.json({
+            models: configuredModelSummaries(committees),
+            committees,
+        });
+    } catch (error) {
+        sendInternalError(res, error);
+    }
+});
+
 userRouter.get("/api-keys", requireAuth, async (_req, res) => {
     const userId = res.locals.userId as string;
     const db = createServerSupabase();

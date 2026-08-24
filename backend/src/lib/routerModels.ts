@@ -1,6 +1,11 @@
 import { createServerSupabase } from "./supabase";
 import { UserFacingError } from "./userFacingError";
-import { resolveModel } from "./llm/models";
+import {
+    missingCommitteeApiKeyModels,
+    resolveModel,
+} from "./llm/models";
+import { getCommitteeModel } from "./llm/registry";
+import type { CommitteeModel, UserApiKeys } from "./llm/types";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -61,6 +66,10 @@ const ROUTER_LABELS: Record<RouterSlug, string> = {
  * - "fallback" (the default, for stored preferences): a preference the user
  *   set long ago must not brick every request; degrade to the caller's
  *   default exactly like an invalid model id, with a warning for operators.
+ *
+ * Callers that support committees pass `committeeModels` from the profile
+ * read they already made; omitting them simply means no committee ids are
+ * recognised, which is right for the paths that cannot run one.
  */
 export async function resolveRequestedModel(
     requested: string | null | undefined,
@@ -68,8 +77,40 @@ export async function resolveRequestedModel(
     userId: string,
     db: Db = createServerSupabase(),
     onOutsideSelection: "throw" | "fallback" = "fallback",
+    committeeModels?: CommitteeModel[],
+    apiKeys?: UserApiKeys,
 ): Promise<string> {
-    const resolved = resolveModel(requested, fallback);
+    const committees = committeeModels ?? [];
+    const resolved = resolveModel(requested, fallback, committees);
+
+    // A committee is dispatched before any provider adapter exists, so its
+    // gating is whether every member and chair is actually usable.
+    const committee = getCommitteeModel(resolved, committees);
+    if (committee) {
+        const missing = missingCommitteeApiKeyModels(
+            resolved,
+            apiKeys,
+            committees,
+        );
+        if (missing.length) {
+            throw new UserFacingError(
+                `Committee ${committee.label || committee.id} cannot run because these models are unavailable or missing API keys: ${missing.join(", ")}.`,
+            );
+        }
+        return resolved;
+    }
+
+    // A committee the user selected and later deleted must be an explicit
+    // error rather than a silent switch to some other model.
+    if (
+        requested?.startsWith("user-committee/") &&
+        onOutsideSelection === "throw"
+    ) {
+        throw new UserFacingError(
+            `The selected committee no longer exists. Select another model or recreate the committee in Settings → Models.`,
+        );
+    }
+
     const router = routerForModelId(resolved);
     if (!router) return resolved;
     const selection = await getUserRouterModels(userId, router, db);

@@ -178,3 +178,65 @@ describe("ModelToggle OpenCode Go group", () => {
         expect(screen.queryByText("OpenCode Go")).not.toBeInTheDocument();
     });
 });
+
+describe("ModelToggle committee group", () => {
+    const panel = {
+        id: "user-committee/panel",
+        label: "Trademark panel",
+        members: ["claude-opus-5", "gemini-3-flash-preview"],
+        chair: "gpt-5.5",
+    };
+
+    it("offers a committee whose members and chair are all usable", async () => {
+        const user = userEvent.setup();
+        render(
+            <ModelToggle
+                value="gemini-3-flash-preview"
+                onChange={vi.fn()}
+                apiKeys={keys({ claude: true, gemini: true, openai: true })}
+                committees={[panel]}
+            />,
+        );
+
+        await user.click(screen.getByRole("button", { name: "Choose model" }));
+        await user.click(await screen.findByText("Committee"));
+
+        expect(await screen.findByText("Trademark panel")).toBeInTheDocument();
+    });
+
+    it("hides a committee when one member's key is missing", async () => {
+        const user = userEvent.setup();
+        render(
+            <ModelToggle
+                value="gemini-3-flash-preview"
+                onChange={vi.fn()}
+                // No OpenAI key, so the chair cannot run.
+                apiKeys={keys({ claude: true, gemini: true })}
+                committees={[panel]}
+            />,
+        );
+
+        await user.click(screen.getByRole("button", { name: "Choose model" }));
+
+        expect(screen.queryByText("Committee")).not.toBeInTheDocument();
+    });
+
+    it("selects the committee by its id", async () => {
+        const onChange = vi.fn();
+        const user = userEvent.setup();
+        render(
+            <ModelToggle
+                value="gemini-3-flash-preview"
+                onChange={onChange}
+                apiKeys={keys({ claude: true, gemini: true, openai: true })}
+                committees={[panel]}
+            />,
+        );
+
+        await user.click(screen.getByRole("button", { name: "Choose model" }));
+        await user.click(await screen.findByText("Committee"));
+        await user.click(await screen.findByText("Trademark panel"));
+
+        expect(onChange).toHaveBeenCalledWith("user-committee/panel");
+    });
+});

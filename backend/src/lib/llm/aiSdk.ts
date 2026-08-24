@@ -374,6 +374,7 @@ export async function completeAiSdkText(
     systemPrompt?: string;
     user: string;
     maxTokens?: number;
+    abortSignal?: AbortSignal;
   },
   config: AiSdkAdapterConfig,
 ): Promise<string> {
@@ -384,6 +385,7 @@ export async function completeAiSdkText(
     prompt: params.user,
     maxOutputTokens: params.maxTokens ?? 512,
     reasoning: config.supportsReasoning === false ? undefined : "none",
+    abortSignal: params.abortSignal,
   });
   return result.text;
 }

@@ -6,6 +6,7 @@ export type Provider =
     | "claude"
     | "gemini"
     | "openai"
+    | "openai-compatible"
     | "openrouter"
     | "vercel"
     | "opencode-go"
@@ -62,6 +63,8 @@ export type StreamChatParams = {
     callbacks?: StreamCallbacks;
     runTools?: (calls: NormalizedToolCall[]) => Promise<NormalizedToolResult[]>;
     apiKeys?: UserApiKeys;
+    /** Committees the caller owns, on top of any the deployment declares. */
+    committeeModels?: CommitteeModel[];
     /**
      * Enable provider-side reasoning/thinking. Off by default — should only
      * be turned on for interactive chat surfaces where the user actually
@@ -74,4 +77,63 @@ export type StreamChatParams = {
 
 export type StreamChatResult = {
     fullText: string;
+};
+
+export type CompleteTextParams = {
+    model: string;
+    systemPrompt?: string;
+    user: string;
+    maxTokens?: number;
+    apiKeys?: UserApiKeys;
+    committeeModels?: CommitteeModel[];
+    /** Committee ids already being resolved, used to catch cycles. */
+    committeeStack?: string[];
+    abortSignal?: AbortSignal;
+};
+
+// ---------------------------------------------------------------------------
+// Configured models
+// ---------------------------------------------------------------------------
+// The static catalog in models.ts covers the hosted providers Mike ships with.
+// Deployments that also run self-hosted or third-party OpenAI-compatible
+// endpoints declare them through MIKE_MODEL_CONFIG_JSON; see registry.ts.
+
+export type ModelLocation = "cloud" | "local";
+
+export type ConfiguredModel = {
+    id: string;
+    provider: Provider;
+    location: ModelLocation;
+    label?: string;
+    /** Model name to send upstream when it differs from the Mike-facing id. */
+    apiModel?: string;
+    baseUrl?: string;
+    apiKeyEnv?: string;
+    apiKeyProvider?: keyof UserApiKeys;
+    apiKey?: string;
+    /**
+     * Local models frequently emit tool calls as prose rather than as
+     * structured tool-call fields. Leave unset to infer from `location`.
+     */
+    tolerateTextToolCalls?: boolean;
+};
+
+/**
+ * A committee answers one prompt with several models and has a chair model
+ * synthesize their replies into the single response the caller sees.
+ */
+export type CommitteeModel = {
+    id: string;
+    label?: string;
+    members: Array<
+        | string
+        | {
+              id?: string;
+              model: string;
+              label?: string;
+              systemPrompt?: string;
+          }
+    >;
+    chair: string;
+    strategy?: "synthesize";
 };

@@ -27,6 +27,8 @@ function profileDb(row: Record<string, unknown> | null) {
         chain[method] = vi.fn(() => chain);
     }
     chain.single = vi.fn(async () => ({ data: row, error: null }));
+    // getUserCommittees reads model_committees off the same profile row.
+    chain.maybeSingle = vi.fn(async () => ({ data: row, error: null }));
     return chain as never;
 }
 
@@ -137,6 +139,15 @@ function retryingProfileDb(
         chain[method] = vi.fn(() => chain);
     }
     chain.single = vi.fn(async () => results.shift() ?? second);
+    // A database this old has no model_committees column either; the read
+    // must degrade to "no committees" rather than fail the whole request.
+    chain.maybeSingle = vi.fn(async () => ({
+        data: null,
+        error: {
+            code: "42703",
+            message: 'column user_profiles.model_committees does not exist',
+        },
+    }));
     return chain as never;
 }
 

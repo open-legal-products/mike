@@ -197,6 +197,7 @@ export async function runLLMStream(params: {
   buildCitations?: (fullText: string) => unknown[];
   model?: string;
   apiKeys?: import("../llm").UserApiKeys;
+  committeeModels?: import("../llm").CommitteeModel[];
   signal?: AbortSignal;
   /** Let a route persist the completed turn before it signals stream success. */
   emitDone?: boolean;
@@ -230,6 +231,7 @@ export async function runLLMStream(params: {
     buildCitations,
     model,
     apiKeys,
+    committeeModels,
     signal,
     projectId,
     nonce,
@@ -401,15 +403,21 @@ export async function runLLMStream(params: {
     // asked for in THIS request. Tabular's stored preference has already been
     // normalized by getUserModelSettings, so what arrives here is either an
     // in-selection router model or a first-party id.
+    // Supplied by the caller, which has already loaded the profile — the
+    // resolution needs them to recognise the id and dispatch needs them to
+    // actually run the committee.
     const selectedModel = await resolveRequestedModel(
       model,
       DEFAULT_MAIN_MODEL,
       userId,
       db,
       "throw",
+      committeeModels,
+      apiKeys,
     );
     await streamChatWithTools({
       model: selectedModel,
+      committeeModels,
       systemPrompt,
       messages: chatMessages,
       tools: activeTools as OpenAIToolSchema[],

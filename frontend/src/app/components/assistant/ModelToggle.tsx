@@ -5,7 +5,7 @@ import {
   type ModelToggleOption,
 } from "@/shared/ui/ModelToggleUI";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
-import type { ApiKeyState } from "@/app/lib/mikeApi";
+import type { ApiKeyState, ModelCommittee } from "@/app/lib/mikeApi";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
 
 export type ModelOption = ModelToggleOption;
@@ -120,6 +120,8 @@ interface Props {
   openRouterModels?: string[];
   vercelModels?: string[];
   openCodeGoModels?: string[];
+  /** The user's committees, offered as selectable models of their own. */
+  committees?: ModelCommittee[];
   compact?: boolean;
 }
 
@@ -147,6 +149,16 @@ export function openCodeGoModelOptions(models: string[]): ModelOption[] {
   }));
 }
 
+export function committeeModelOptions(
+  committees: ModelCommittee[],
+): ModelOption[] {
+  return committees.map((committee) => ({
+    id: committee.id,
+    label: committee.label || committee.id,
+    group: "Committee",
+  }));
+}
+
 export function ModelToggle({
   value,
   onChange,
@@ -155,6 +167,7 @@ export function ModelToggle({
   openRouterModels = [],
   vercelModels = [],
   openCodeGoModels = [],
+  committees = [],
   compact = false,
 }: Props) {
   const ollamaModels = useOllamaModels();
@@ -163,15 +176,27 @@ export function ModelToggle({
     ...openRouterModelOptions(openRouterModels),
     ...vercelModelOptions(vercelModels),
     ...openCodeGoModelOptions(openCodeGoModels),
+    ...committeeModelOptions(committees),
     ...ollamaModels.map((model) => ({
       ...model,
       label: modelDisplayName(model.id),
     })),
   ];
+  const committeeById = new Map(
+    committees.map((committee) => [committee.id, committee] as const),
+  );
   const availableModels = models.filter((model) => {
     if (model.group === "Local") return true;
     if (apiKeysLoading) return false; // nothing offered until known
     if (!apiKeys) return true; // unknown after a failed load → fail open
+    // A committee is only offered when every member and its chair can run;
+    // half a committee is not a usable answer.
+    const committee = committeeById.get(model.id);
+    if (committee) {
+      return [...committee.members, committee.chair].every((member) =>
+        isModelAvailable(member, apiKeys),
+      );
+    }
     return isModelAvailable(model.id, apiKeys);
   });
   const selected = availableModels.find((model) => model.id === value);

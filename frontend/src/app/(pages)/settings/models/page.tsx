@@ -28,6 +28,7 @@ import { isModelAvailable } from "@/app/lib/modelAvailability";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { SETTINGS_CONTROL_CLASS } from "@/app/components/settings/SettingsTextInput";
 import { SettingsSection } from "../SettingsSection";
+import { CommitteeSettingsSection } from "@/app/components/settings/CommitteeSettingsSection";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
 
 type ModelPreferenceField = "titleModel" | "tabularModel";
@@ -147,6 +148,21 @@ export default function ModelPreferencesPage() {
                         />
                     </div>
                 </SettingsSection>
+            </section>
+            <section className="space-y-3">
+                <h2 className="text-2xl font-medium font-serif text-gray-900">
+                    Committees
+                </h2>
+                <CommitteeSettingsSection
+                    options={[
+                        ...MODELS,
+                        ...selectedOpenRouterOptions,
+                        ...selectedVercelOptions,
+                        ...selectedOpenCodeGoOptions,
+                        ...ollamaModels,
+                    ]}
+                    apiKeys={profile?.apiKeys}
+                />
             </section>
         </div>
     );

@@ -12,6 +12,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import {
     type ApiKeyState,
     type ApiKeyProvider,
+    type ModelCommittee,
     type PersonalisationDetails,
     type PracticeSetting,
     type ProfessionalTitle,
@@ -49,6 +50,7 @@ interface UserProfile {
     vercelModels: string[];
     openCodeGoModels: string[];
     darkMode: boolean;
+    modelCommittees: ModelCommittee[];
     apiKeys: ApiKeyState;
 }
 
@@ -78,6 +80,7 @@ interface UserProfileContextType {
         field: "titleModel" | "tabularModel",
         value: string,
     ) => Promise<boolean>;
+    updateModelCommittees: (committees: ModelCommittee[]) => Promise<boolean>;
     updateMfaOnLogin: (enabled: boolean) => Promise<boolean>;
     updateLegalResearchUs: (enabled: boolean) => Promise<boolean>;
     updateQuickActionsVisible: (visible: boolean) => Promise<boolean>;
@@ -152,6 +155,9 @@ function toProfile(data: ApiUserProfile): UserProfile {
         openCodeGoModels: Array.isArray(profile.openCodeGoModels)
             ? profile.openCodeGoModels
             : [],
+        modelCommittees: Array.isArray(profile.modelCommittees)
+            ? profile.modelCommittees
+            : [],
         apiKeys,
     };
 }
@@ -210,6 +216,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 vercelModels: [],
                 openCodeGoModels: [],
                 darkMode: false,
+                modelCommittees: [],
                 apiKeys: emptyApiKeys(),
             });
         } finally {
@@ -315,6 +322,24 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             try {
                 const updated = await updateUserProfile({
                     [field]: value,
+                });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [user],
+    );
+
+    const updateModelCommittees = useCallback(
+        async (committees: ModelCommittee[]): Promise<boolean> => {
+            if (!user) return false;
+            try {
+                const updated = await updateUserProfile({
+                    modelCommittees: committees,
                 });
                 setProfile((prev) =>
                     prev ? { ...prev, ...toProfile(updated) } : null,
@@ -512,6 +537,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 updatePersonalisation,
                 syncPasswordSet,
                 updateModelPreference,
+                updateModelCommittees,
                 updateMfaOnLogin,
                 updateLegalResearchUs,
                 updateQuickActionsVisible,

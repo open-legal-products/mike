@@ -508,6 +508,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         legal_research_us: legalResearchUs,
         title_model: titleModel,
         personalisation,
+        committees: committeeModels,
     } = await getUserModelSettings(userId, db);
     const personalisationPrompt = buildUserPersonalisationPrompt(
         personalisation,
@@ -625,6 +626,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             includeResearchTools: legalResearchUs,
             model,
             apiKeys,
+            committeeModels,
             signal: stream.signal,
             projectId: resolvedProjectId,
             nonce,

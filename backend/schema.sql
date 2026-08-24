@@ -46,6 +46,7 @@ create table if not exists public.user_profiles (
   title_model text,
   tabular_model text not null default 'gemini-3-flash-preview',
   quote_model text,
+  model_committees jsonb not null default '[]'::jsonb,
   mfa_on_login boolean not null default false,
   legal_research_us boolean not null default true,
   quick_actions_visible boolean not null default true,

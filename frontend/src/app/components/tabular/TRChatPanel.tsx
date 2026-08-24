@@ -41,7 +41,7 @@ import {
     isModelAvailable,
     type ModelProvider,
 } from "@/app/lib/modelAvailability";
-import type { ApiKeyState } from "@/app/lib/mikeApi";
+import type { ApiKeyState, ModelCommittee } from "@/app/lib/mikeApi";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
@@ -442,6 +442,7 @@ function TRChatInput({
     openRouterModels,
     vercelModels,
     openCodeGoModels,
+    committees,
     onHeightChange,
 }: {
     isLoading: boolean;
@@ -454,6 +455,7 @@ function TRChatInput({
     openRouterModels?: string[];
     vercelModels?: string[];
     openCodeGoModels?: string[];
+    committees?: ModelCommittee[];
     onHeightChange: (height: number) => void;
 }) {
     const [value, setValue] = useState("");
@@ -543,6 +545,7 @@ function TRChatInput({
                         openRouterModels={openRouterModels}
                         vercelModels={vercelModels}
                         openCodeGoModels={openCodeGoModels}
+                        committees={committees}
                     />
                     <button
                         type="button"
@@ -1933,6 +1936,7 @@ export function TRChatPanel({
                 openRouterModels={profile?.openRouterModels}
                 vercelModels={profile?.vercelModels}
                 openCodeGoModels={profile?.openCodeGoModels}
+                committees={profile?.modelCommittees}
                 onHeightChange={setInputHeight}
             />
 

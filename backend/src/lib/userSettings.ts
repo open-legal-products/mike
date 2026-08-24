@@ -7,6 +7,8 @@ import {
     type UserApiKeys,
 } from "./llm";
 import { getUserApiKeys as getStoredUserApiKeys } from "./userApiKeys";
+import { getUserCommittees } from "./userCommittees";
+import type { CommitteeModel } from "./llm/types";
 import {
     getAllUserRouterModels,
     isRouterModelSelected,
@@ -20,6 +22,7 @@ export type UserModelSettings = {
     tabular_model: string;
     legal_research_us: boolean;
     api_keys: UserApiKeys;
+    committees: CommitteeModel[];
     personalisation?: {
         displayName: string | null;
         organisation: string | null;
@@ -54,7 +57,8 @@ export async function getUserModelSettings(
     db?: ReturnType<typeof createServerSupabase>,
 ): Promise<UserModelSettings> {
     const client = db ?? createServerSupabase();
-    const [profileResult, api_keys, routerModels] = await Promise.all([
+    const [profileResult, api_keys, routerModels, committees] =
+        await Promise.all([
         client
             .from("user_profiles")
             .select(
@@ -64,6 +68,7 @@ export async function getUserModelSettings(
             .single(),
         getStoredUserApiKeys(userId, client),
         getAllUserRouterModels(userId, client),
+        getUserCommittees(userId, client),
     ]);
     let data = profileResult.data;
 
@@ -104,12 +109,13 @@ export async function getUserModelSettings(
     const titleFallback = resolveTitleModel(api_keys, routerModels);
 
     return {
+        committees,
         title_model: guardRouterModel(
-            resolveModel(data?.title_model, titleFallback),
+            resolveModel(data?.title_model, titleFallback, committees),
             titleFallback,
         ),
         tabular_model: guardRouterModel(
-            resolveModel(data?.tabular_model, DEFAULT_TABULAR_MODEL),
+            resolveModel(data?.tabular_model, DEFAULT_TABULAR_MODEL, committees),
             DEFAULT_TABULAR_MODEL,
         ),
         legal_research_us:

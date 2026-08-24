@@ -407,6 +407,27 @@ export interface PersonalisationDetails {
     practiceAreas?: string[];
 }
 
+/**
+ * A committee answers one prompt with several models and has a chair model
+ * synthesize their replies into the single answer shown to the user.
+ */
+export interface ModelCommittee {
+    id: string;
+    label: string;
+    members: string[];
+    chair: string;
+    strategy?: "synthesize";
+}
+
+export const USER_COMMITTEE_PREFIX = "user-committee/";
+export const MAX_USER_COMMITTEES = 8;
+export const MAX_COMMITTEE_MEMBERS = 8;
+export const MIN_COMMITTEE_MEMBERS = 2;
+
+export function isCommitteeId(model: string | null | undefined): boolean {
+    return !!model?.startsWith(USER_COMMITTEE_PREFIX);
+}
+
 export interface UserProfile {
     displayName: string | null;
     organisation: string | null;
@@ -430,6 +451,7 @@ export interface UserProfile {
     openRouterModels: string[];
     vercelModels: string[];
     openCodeGoModels: string[];
+    modelCommittees: ModelCommittee[];
     apiKeyStatus: ApiKeyStatus;
 }
 
@@ -526,6 +548,24 @@ export async function lookupUserByEmail(
     );
 }
 
+export interface ConfiguredModelSummary {
+    id: string;
+    label: string;
+    provider: string;
+    location: "cloud" | "local" | "committee";
+}
+
+/**
+ * Models beyond the static catalog the client already knows: whatever the
+ * deployment declared, plus the user's own committees.
+ */
+export async function getUserModels(): Promise<{
+    models: ConfiguredModelSummary[];
+    committees: ModelCommittee[];
+}> {
+    return apiRequest("/user/models");
+}
+
 export async function updateUserProfile(payload: {
     displayName?: string | null;
     organisation?: string | null;
@@ -541,6 +581,7 @@ export async function updateUserProfile(payload: {
     openRouterModels?: string[];
     vercelModels?: string[];
     openCodeGoModels?: string[];
+    modelCommittees?: ModelCommittee[];
 }): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile", {
         method: "PATCH",
