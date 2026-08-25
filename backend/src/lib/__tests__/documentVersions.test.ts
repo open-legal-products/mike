@@ -316,8 +316,8 @@ describe("attachLatestVersionNumbers", () => {
 });
 
 // Known SHA-256 vector for "abc" (FIPS 180-4). Call sites hand this helper a
-// mix of Buffers, raw ArrayBuffers, and views into larger buffers (multer's
-// file.buffer is one), so each of those has to produce the same digest.
+// mix of Buffers, raw ArrayBuffers, and views into larger buffers, so each of
+// those has to produce the same digest.
 const ABC_SHA256 =
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 

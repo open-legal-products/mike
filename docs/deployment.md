@@ -96,6 +96,46 @@ the web app deletes legacy Supabase local/session-storage entries and the Word
 add-in deletes legacy OfficeRuntime access/refresh tokens. Users authenticate
 once to establish the new cookie; tokens are not copied through JavaScript.
 
+### Object-storage CORS for direct uploads
+
+Mike's upload-session API gives an authenticated browser a short-lived signed
+`PUT` URL for one specific staging object. The bucket must therefore allow
+browser `PUT` requests from each deployed frontend origin. Configure the
+equivalent of this CORS policy in Cloudflare R2, MinIO, RustFS, or the selected
+S3-compatible provider:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://your-mike.example"],
+    "AllowedMethods": ["PUT", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "x-amz-*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+List exact trusted origins; do not use `*` for a production deployment. The
+signed URL authorizes only its generated object key and expires independently
+of the CORS cache. The backend still verifies the uploaded byte count and
+copies accepted bytes to a non-signed, sealed key before queuing processing.
+
+Upload sessions accept at most 50 supported files, 100 MB per file, and 2 GB
+in total. A user may keep two upload sessions open at once and create at most
+50 sessions per hour. Sessions expire after 30 minutes; individual signed URLs
+expire after 15 minutes and can be refreshed while the session is pending.
+These limits are enforced atomically in PostgreSQL, not only in the browser.
+
+The Express process also runs the durable upload-processing worker. It claims
+jobs with database leases, processes one sealed file at a time, retries a
+failed file up to three times, and cleans expired, cancelled, and terminally
+failed temporary objects. Terminal session metadata is retained for seven days
+so clients can inspect outcomes, then deleted in bounded cleanup batches.
+Deployments must therefore run `backend/src/index.ts`
+(the normal `npm start` entry point), rather than importing the Express app
+without starting its worker.
+
 Model-provider keys and the CourtListener token can be configured globally in
 `backend/.env` or per user under **Settings > API Keys**. When a key is
 configured globally, its matching field is read-only.

@@ -50,6 +50,7 @@ export {
   createWorkflow,
   deleteWorkflow,
   deleteWorkflowReferenceFile,
+  failedUploadMessage,
   getApiKeyStatus,
   getLibrary,
   getLibraryFolderChildren,
@@ -68,10 +69,13 @@ export {
   updateLastSelectedReasoningLevel,
   updateWorkflow,
   updateQuickAction,
+  UploadBatchError,
   uploadWorkflowReferenceFile,
   uploadStandaloneDocument,
+  uploadStandaloneDocuments,
+  uploadWorkflowReferenceFiles,
 } from "./client";
-export type { ApiKeyStatus } from "./client";
+export type { ApiKeyStatus, UploadOutcome, UploadProgress } from "./client";
 
 /**
  * List a project's documents (GET /projects/:id/documents). The base client

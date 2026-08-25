@@ -9,7 +9,17 @@ export const DOCUMENT_UPLOAD_CONCURRENCY = 2;
 export type DocumentUploadProgressEntry = {
     kind: "file" | "folder";
     name: string;
+    sourceName: string;
 };
+
+export function folderUploadProgressLabel(
+    statuses: readonly string[],
+): string {
+    const uploadedCount = statuses.filter((status) =>
+        ["uploaded", "processing", "completed"].includes(status),
+    ).length;
+    return `${uploadedCount} of ${statuses.length} uploaded`;
+}
 
 export type DocumentUploadFolderPathResolution<TFolder> =
     | {
@@ -170,13 +180,18 @@ export function documentUploadProgressEntries(
             const folderName = segments[0];
             if (!folderNames.has(folderName)) {
                 folderNames.add(folderName);
-                progressEntries.push({ kind: "folder", name: folderName });
+                progressEntries.push({
+                    kind: "folder",
+                    name: folderName,
+                    sourceName: folderName,
+                });
             }
             continue;
         }
         progressEntries.push({
             kind: "file",
             name: segments[0] ?? entry.file.name,
+            sourceName: segments[0] ?? entry.file.name,
         });
     }
 

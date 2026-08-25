@@ -1,6 +1,7 @@
 import { app } from "./app";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
+import { startUploadProcessingWorker } from "./lib/uploadProcessing";
 
 const PORT = process.env.PORT ?? 3001;
 
@@ -21,4 +22,5 @@ try {
 
 app.listen(PORT, () => {
   console.log(`Mike backend running on port ${PORT}`);
+  startUploadProcessingWorker();
 });

@@ -5,8 +5,10 @@ import {
   getLibrary,
   getLibraryFolderChildren,
   getProjectDirectoryLevel,
+  failedUploadMessage,
   listProjects,
-  uploadStandaloneDocument,
+  uploadStandaloneDocuments,
+  type UploadProgress,
 } from "../../api/mikeApi";
 import {
   partitionSupportedDocumentFiles,
@@ -195,17 +197,17 @@ export function AddDocumentsModal({
           })
         : getLibrary(activeTab, { limit: DIRECTORY_PAGE_SIZE }).then(
             (collection) => {
-            if (!cancelled) {
-              setLibraryFolders(collection.folders ?? []);
-              setDocuments(
-                [...(collection.documents ?? [])].sort((a, b) =>
-                  (b.created_at ?? "").localeCompare(a.created_at ?? ""),
-                ),
-              );
-              setLibraryHasMoreByLevel({
-                [ROOT_LEVEL_KEY]: !!collection.documentsHasMore,
-              });
-            }
+              if (!cancelled) {
+                setLibraryFolders(collection.folders ?? []);
+                setDocuments(
+                  [...(collection.documents ?? [])].sort((a, b) =>
+                    (b.created_at ?? "").localeCompare(a.created_at ?? ""),
+                  ),
+                );
+                setLibraryHasMoreByLevel({
+                  [ROOT_LEVEL_KEY]: !!collection.documentsHasMore,
+                });
+              }
             },
           );
 
@@ -277,7 +279,8 @@ export function AddDocumentsModal({
     if (!loadMore && loadedProjectLevels.has(levelKey)) return;
     if (loadingProjectLevels.has(levelKey)) return;
     const offset = loadMore
-      ? folderDocuments(projectDocuments[projectId] ?? [], parentFolderId).length
+      ? folderDocuments(projectDocuments[projectId] ?? [], parentFolderId)
+          .length
       : 0;
     setLoadingProjectLevels((current) => new Set(current).add(levelKey));
     setError(null);
@@ -373,35 +376,51 @@ export function AddDocumentsModal({
 
     setUploadingFilenames(supported.map((file) => file.name));
     setError(null);
-    const results = await Promise.allSettled(
-      supported.map((file) => uploadStandaloneDocument(file)),
-    );
-    const uploaded = results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
-    );
-    if (uploaded.length > 0) {
+    const addUploadedDocument = (document: Document) => {
       setDocuments((current) => [
-        ...uploaded,
-        ...current.filter(
-          (document) => !uploaded.some((item) => item.id === document.id),
-        ),
+        document,
+        ...current.filter((item) => item.id !== document.id),
       ]);
-      setSelectedDocuments((current) => [
-        ...current,
-        ...uploaded.filter(
-          (document) => !current.some((item) => item.id === document.id),
-        ),
-      ]);
+      setSelectedDocuments((current) =>
+        current.some((item) => item.id === document.id)
+          ? current
+          : [...current, document],
+      );
       setActiveTab("files");
-    }
-    if (results.some((result) => result.status === "rejected")) {
+    };
+    try {
+      const outcomes = await uploadStandaloneDocuments(supported, {
+        onProgress: (progress: UploadProgress<Document>) => {
+          if (progress.status === "completed" || progress.status === "error") {
+            setUploadingFilenames((current) =>
+              current.filter((filename) => filename !== progress.filename),
+            );
+          }
+          if (progress.status === "completed" && progress.result) {
+            addUploadedDocument(progress.result);
+          }
+        },
+      });
+      const uploaded = outcomes.flatMap((outcome) =>
+        outcome.status === "completed" && outcome.result
+          ? [outcome.result]
+          : [],
+      );
+      if (uploaded.length > 0) {
+        uploaded.forEach(addUploadedDocument);
+      }
+      if (outcomes.some((outcome) => outcome.status === "error")) {
+        setError(failedUploadMessage(outcomes));
+      }
+    } catch (reason) {
       setError(
-        uploaded.length > 0
-          ? "Some documents could not be uploaded."
+        reason instanceof Error
+          ? reason.message
           : "Documents could not be uploaded. Please try again.",
       );
+    } finally {
+      setUploadingFilenames([]);
     }
-    setUploadingFilenames([]);
   };
 
   const documentFolderId = (document: Document): string | null =>
@@ -486,9 +505,7 @@ export function AddDocumentsModal({
     if (loadingLibraryFolderIds.has(folderId)) return;
     setLoadingLibraryFolderIds((current) => new Set(current).add(folderId));
     if (loadMore) {
-      setLoadingMoreLibraryLevels((current) =>
-        new Set(current).add(folderId),
-      );
+      setLoadingMoreLibraryLevels((current) => new Set(current).add(folderId));
     }
     try {
       const offset = loadMore ? folderDocuments(documents, folderId).length : 0;
@@ -545,7 +562,6 @@ export function AddDocumentsModal({
       );
     }
   };
-
 
   const loadMoreLibraryRoot = async (): Promise<void> => {
     if (activeTab === "projects") return;
@@ -636,9 +652,7 @@ export function AddDocumentsModal({
             <span
               role="checkbox"
               aria-checked={someSelected ? "mixed" : allSelected}
-              aria-disabled={
-                !treeLoaded || items.length === 0
-              }
+              aria-disabled={!treeLoaded || items.length === 0}
               aria-label={`Select all files in ${folder.name}`}
               onClick={(event) => {
                 event.stopPropagation();

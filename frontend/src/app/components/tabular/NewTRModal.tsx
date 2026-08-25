@@ -6,8 +6,8 @@ import type { Document, Folder, Project, Workflow } from "../shared/types";
 import {
     getProject,
     listWorkflows,
-    uploadProjectDocument,
-    uploadStandaloneDocument,
+    uploadProjectDocuments,
+    uploadStandaloneDocuments,
 } from "@/app/lib/mikeApi";
 import { FileDirectory } from "../shared/FileDirectory";
 import { Modal } from "../modals/Modal";
@@ -101,8 +101,9 @@ export function NewTRModal({
             .then((workflows) => {
                 devLog("[workflows/ui:tabular-review-modal] loaded", {
                     workflowCount: workflows.length,
-                    systemCount: workflows.filter((workflow) => workflow.is_system)
-                        .length,
+                    systemCount: workflows.filter(
+                        (workflow) => workflow.is_system,
+                    ).length,
                     sample: workflows.slice(0, 5).map((workflow) => ({
                         id: workflow.id,
                         title: workflow.metadata.title,
@@ -115,10 +116,7 @@ export function NewTRModal({
                 setWorkflows(workflows);
             })
             .catch((error) => {
-                devLog(
-                    "[workflows/ui:tabular-review-modal] failed",
-                    error,
-                );
+                devLog("[workflows/ui:tabular-review-modal] failed", error);
                 setWorkflows([]);
             })
             .finally(() => setLoadingWorkflows(false));
@@ -173,9 +171,7 @@ export function NewTRModal({
 
     function submitterValue(e: React.FormEvent<HTMLFormElement>) {
         return (
-            (e.nativeEvent as SubmitEvent).submitter as
-                | HTMLButtonElement
-                | null
+            (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
         )?.value;
     }
 
@@ -233,12 +229,18 @@ export function NewTRModal({
                 : underProject
                   ? selectedProjectId
                   : undefined;
-            const uploaded = await Promise.all(
-                files.map((f) =>
-                    uploadProjectId
-                        ? uploadProjectDocument(uploadProjectId, f)
-                        : uploadStandaloneDocument(f),
-                ),
+            const outcomes = uploadProjectId
+                ? await uploadProjectDocuments(
+                      uploadProjectId,
+                      files.map((file) => ({ file })),
+                  )
+                : await uploadStandaloneDocuments(
+                      files.map((file) => ({ file })),
+                  );
+            const uploaded = outcomes.flatMap((outcome) =>
+                outcome.status === "completed" && outcome.result
+                    ? [outcome.result]
+                    : [],
             );
             if (uploadProjectId) {
                 setProjectDocs((prev) => [...uploaded, ...prev]);
@@ -413,9 +415,7 @@ export function NewTRModal({
 
                         {/* Workflow template */}
                         <div>
-                            <FieldLabel as="p">
-                                Workflow template
-                            </FieldLabel>
+                            <FieldLabel as="p">Workflow template</FieldLabel>
                             <ModalSelect
                                 id="new-tr-workflow-template"
                                 value={selectedWorkflowId ?? ""}
@@ -430,9 +430,7 @@ export function NewTRModal({
                         {/* Create under a project toggle */}
                         {!isProjectMode && (
                             <div className="space-y-3">
-                                <FieldLabel as="p">
-                                    Project
-                                </FieldLabel>
+                                <FieldLabel as="p">Project</FieldLabel>
                                 <ToggleSwitch
                                     checked={underProject}
                                     onCheckedChange={(next) => {
@@ -466,14 +464,13 @@ export function NewTRModal({
                         )}
 
                         <div>
-                            <FieldLabel as="p">
-                                Document grouping
-                            </FieldLabel>
+                            <FieldLabel as="p">Document grouping</FieldLabel>
                             <ToggleSwitch
                                 checked={groupBySubfolder}
                                 onCheckedChange={setGroupBySubfolder}
                             >
-                                Treat documents in the same folder as one review row
+                                Treat documents in the same folder as one review
+                                row
                             </ToggleSwitch>
                         </div>
                     </div>

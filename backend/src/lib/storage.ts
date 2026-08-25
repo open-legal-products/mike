@@ -12,7 +12,9 @@
 import {
   S3Client,
   PutObjectCommand,
+  CopyObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import * as S3Commands from "@aws-sdk/client-s3";
@@ -21,6 +23,9 @@ import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 const GetObjectCommand = (S3Commands as any).GetObjectCommand;
 
 let cachedClient: S3Client | undefined;
+let cachedUploadSigningClient:
+  | { endpoint: string; client: S3Client }
+  | undefined;
 
 function getClient(): S3Client {
   if (!cachedClient) {
@@ -35,6 +40,25 @@ function getClient(): S3Client {
     });
   }
   return cachedClient;
+}
+
+function getUploadSigningClient(): S3Client {
+  const endpoint =
+    process.env.R2_PUBLIC_ENDPOINT_URL ?? process.env.R2_ENDPOINT_URL!;
+  if (cachedUploadSigningClient?.endpoint === endpoint) {
+    return cachedUploadSigningClient.client;
+  }
+  const client = new S3Client({
+    region: "auto",
+    endpoint,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+    },
+  });
+  cachedUploadSigningClient = { endpoint, client };
+  return client;
 }
 
 const BUCKET = process.env.R2_BUCKET_NAME ?? "mike";
@@ -72,6 +96,90 @@ export async function uploadFile(
       ContentType: contentType,
     }),
   );
+}
+
+export async function getSignedUploadUrl(
+  key: string,
+  contentType: string,
+  expiresIn = 900,
+): Promise<string | null> {
+  if (!storageEnabled) return null;
+  try {
+    const client = getUploadSigningClient();
+    return await awsGetSignedUrl(
+      client,
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        ContentType: contentType,
+      }),
+      { expiresIn },
+    );
+  } catch (error) {
+    console.error("[storage] getSignedUploadUrl failed", { key, error });
+    return null;
+  }
+}
+
+export type StoredObjectMetadata = {
+  size: number;
+  etag: string | null;
+  contentType: string | null;
+};
+
+export class StorageOperationError extends Error {
+  constructor(operation: string, options?: { cause?: unknown }) {
+    super(`Object storage ${operation} failed`, options);
+    this.name = "StorageOperationError";
+  }
+}
+
+export async function headFile(
+  key: string,
+): Promise<StoredObjectMetadata | null> {
+  if (!storageEnabled) return null;
+  try {
+    const client = getClient();
+    const response = await client.send(
+      new HeadObjectCommand({ Bucket: BUCKET, Key: key }),
+    );
+    return {
+      size: response.ContentLength ?? 0,
+      etag: response.ETag ?? null,
+      contentType: response.ContentType ?? null,
+    };
+  } catch (error) {
+    const status = (error as { $metadata?: { httpStatusCode?: number } })
+      .$metadata?.httpStatusCode;
+    if (status !== 404) {
+      console.error("[storage] headFile failed", { key, error });
+      throw new StorageOperationError("HEAD", { cause: error });
+    }
+    return null;
+  }
+}
+
+export async function copyFile(
+  sourceKey: string,
+  targetKey: string,
+): Promise<void> {
+  requireStorageConfig();
+  const client = getClient();
+  const copySource = encodeURIComponent(`${BUCKET}/${sourceKey}`).replace(
+    /%2F/g,
+    "/",
+  );
+  try {
+    await client.send(
+      new CopyObjectCommand({
+        Bucket: BUCKET,
+        Key: targetKey,
+        CopySource: copySource,
+      }),
+    );
+  } catch (error) {
+    throw new StorageOperationError("copy", { cause: error });
+  }
 }
 
 // ---------------------------------------------------------------------------

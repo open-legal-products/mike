@@ -55,9 +55,12 @@ import {
     LIQUID_GLASS_TRANSLUCENT_CLASS,
 } from "@/app/components/ui/liquid-surface";
 import {
+    UploadBatchError,
+    failedUploadMessage,
     listWorkflows,
-    uploadProjectDocument,
-    uploadStandaloneDocument,
+    uploadProjectDocuments,
+    uploadStandaloneDocuments,
+    type UploadProgress,
 } from "@/app/lib/mikeApi";
 import {
     formatUnsupportedDocumentWarning,
@@ -165,7 +168,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         lastSelectedReasoningLevel: profile?.lastSelectedReasoningLevel,
     });
     const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-    const [uploadingFilenames, setUploadingFilenames] = useState<string[]>([]);
+    const [uploadingFiles, setUploadingFiles] = useState<
+        Array<{ clientId: string; filename: string }>
+    >([]);
     const [uploadWarning, setUploadWarning] = useState<string | null>(null);
     const [droppedDocuments, setDroppedDocuments] = useState<Document[]>([]);
     const [slashWorkflows, setSlashWorkflows] = useState<Workflow[] | null>(
@@ -307,40 +312,72 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             setUploadWarning(formatUnsupportedDocumentWarning(unsupported));
             if (supported.length === 0) return;
 
-            setUploadingFilenames(supported.map((file) => file.name));
-            const results = await Promise.allSettled(
-                supported.map((file) =>
-                    projectId
-                        ? uploadProjectDocument(projectId, file)
-                        : uploadStandaloneDocument(file),
-                ),
+            const uploadInputs = supported.map((file) => ({
+                file,
+                clientId: crypto.randomUUID(),
+            }));
+            setUploadingFiles(
+                uploadInputs.map(({ clientId, file }) => ({
+                    clientId,
+                    filename: file.name,
+                })),
             );
-            const uploaded = results.flatMap((result) =>
-                result.status === "fulfilled" ? [result.value] : [],
-            );
-            if (uploaded.length > 0) {
-                addAttachedDocuments(uploaded);
+            const addCompletedDocument = (document: Document) => {
+                addAttachedDocuments([document]);
                 setDroppedDocuments((prev) => {
                     const existing = new Set(
                         prev.map((document) => document.id),
                     );
                     return [
                         ...prev,
-                        ...uploaded.filter(
-                            (document) => !existing.has(document.id),
-                        ),
+                        ...(existing.has(document.id) ? [] : [document]),
                     ];
                 });
-                onDocumentsUploaded?.(uploaded);
-            }
-            if (results.some((result) => result.status === "rejected")) {
-                setUploadWarning(
-                    uploaded.length > 0
-                        ? "Some documents could not be uploaded."
-                        : "Documents could not be uploaded. Please try again.",
+            };
+            const handleProgress = (progress: UploadProgress<Document>) => {
+                if (
+                    progress.status === "completed" ||
+                    progress.status === "error"
+                ) {
+                    setUploadingFiles((current) =>
+                        current.filter(
+                            (upload) => upload.clientId !== progress.clientId,
+                        ),
+                    );
+                }
+                if (progress.status === "completed" && progress.result) {
+                    addCompletedDocument(progress.result);
+                }
+            };
+            try {
+                const outcomes = projectId
+                    ? await uploadProjectDocuments(projectId, uploadInputs, {
+                          onProgress: handleProgress,
+                      })
+                    : await uploadStandaloneDocuments(uploadInputs, {
+                          onProgress: handleProgress,
+                      });
+                const uploaded = outcomes.flatMap((outcome) =>
+                    outcome.status === "completed" && outcome.result
+                        ? [outcome.result]
+                        : [],
                 );
+                uploaded.forEach(addCompletedDocument);
+                if (uploaded.length > 0) onDocumentsUploaded?.(uploaded);
+                if (outcomes.some((outcome) => outcome.status === "error")) {
+                    setUploadWarning(failedUploadMessage(outcomes));
+                }
+            } catch (error) {
+                setUploadWarning(
+                    error instanceof UploadBatchError
+                        ? failedUploadMessage(error.outcomes)
+                        : error instanceof Error
+                          ? error.message
+                          : "Documents could not be uploaded. Please try again.",
+                );
+            } finally {
+                setUploadingFiles([]);
             }
-            setUploadingFilenames([]);
         },
         [addAttachedDocuments, onDocumentsUploaded, projectId],
     );
@@ -594,16 +631,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         </div>
                     )}
 
-                    {uploadingFilenames.length > 0 && (
+                    {uploadingFiles.length > 0 && (
                         <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2">
-                            {uploadingFilenames.map((filename, index) => (
+                            {uploadingFiles.map((upload) => (
                                 <div
-                                    key={`${filename}-${index}`}
+                                    key={upload.clientId}
                                     className={`inline-flex items-center gap-1 rounded-[10px] px-2 py-1 text-xs text-gray-600 ${LIQUID_GLASS_FLAT_CLASS}`}
                                 >
                                     <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                     <span className="max-w-[140px] truncate">
-                                        {filename}
+                                        {upload.filename}
                                     </span>
                                 </div>
                             ))}

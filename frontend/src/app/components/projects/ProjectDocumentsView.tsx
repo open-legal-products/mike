@@ -21,6 +21,7 @@ import {
     renameProjectFolder,
     resolveProjectFolderPath,
     uploadProjectDocument,
+    uploadProjectDocuments,
 } from "@/app/lib/mikeApi";
 import type { Document } from "@/app/components/shared/types";
 import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
@@ -188,6 +189,23 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
         () => ({
             uploadDocument: (file: File, targetFolderId?: string | null) =>
                 uploadProjectDocument(projectId, file, targetFolderId),
+            uploadDocuments: (
+                files: Array<{
+                    file: File;
+                    folderId: string | null;
+                    clientId: string;
+                }>,
+                options?: Parameters<typeof uploadProjectDocuments>[2],
+            ) =>
+                uploadProjectDocuments(
+                    projectId,
+                    files.map(({ file, folderId, clientId }) => ({
+                        file,
+                        folderId,
+                        clientId,
+                    })),
+                    options,
+                ),
             refreshCollection,
             createFolder: (name: string, parentFolderId?: string | null) =>
                 createProjectFolder(projectId, name, parentFolderId),
@@ -280,7 +298,9 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                         <ChevronDown className="h-3.5 w-3.5" />
                     </TabPillButton>
                     {actionsOpen && (
-                        <div className={`absolute right-0 top-full z-[120] mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}>
+                        <div
+                            className={`absolute right-0 top-full z-[120] mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
+                        >
                             <button
                                 onClick={() => {
                                     setActionsOpen(false);
@@ -357,9 +377,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 onAddDocumentsActionChange={
                     workspace.setAddDocumentsHeaderAction
                 }
-                onUploadFolderActionChange={
-                    handleUploadFolderActionChange
-                }
+                onUploadFolderActionChange={handleUploadFolderActionChange}
                 onCreateFolderActionChange={handleCreateFolderActionChange}
                 onFolderViewBackActionChange={handleFolderBackActionChange}
                 onFolderViewChange={handleFolderViewChange}

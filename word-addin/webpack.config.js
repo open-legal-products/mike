@@ -92,6 +92,13 @@ module.exports = async (_env, options) => {
     // HTTPS dev server so authentication and API calls stay same-origin and the
     // HttpOnly session cookie works consistently across Word hosts.
     const apiTarget = process.env.API_PROXY_TARGET || "http://localhost:3001";
+    const objectStorageTarget =
+      process.env.OBJECT_STORAGE_PROXY_TARGET || "http://localhost:9000";
+    const objectStorageBucketName =
+      process.env.OBJECT_STORAGE_BUCKET_NAME || "mike";
+    if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(objectStorageBucketName)) {
+      throw new Error("OBJECT_STORAGE_BUCKET_NAME is not a valid bucket name");
+    }
     devServerConfig.proxy = [
       {
         context: ["/api"],
@@ -99,6 +106,15 @@ module.exports = async (_env, options) => {
         changeOrigin: true,
         secure: false,
         pathRewrite: { "^/api": "" },
+      },
+      {
+        // A local signed URL can use https://localhost:3200 as its public
+        // endpoint. Keep the original Host header so it still matches the
+        // SigV4 signature while webpack forwards the bytes to local storage.
+        context: [`/${objectStorageBucketName}`],
+        target: objectStorageTarget,
+        changeOrigin: false,
+        secure: false,
       },
     ];
   }

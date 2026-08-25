@@ -5,7 +5,7 @@ import { Upload, User, X } from "lucide-react";
 import {
     addDocumentToProject,
     createProject,
-    uploadProjectDocument,
+    uploadProjectDocuments,
 } from "@/app/lib/mikeApi";
 import { FileDirectory } from "../shared/FileDirectory";
 import { AddUserInput } from "../shared/AddUserInput";
@@ -43,9 +43,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
     function submitterValue(e: React.FormEvent<HTMLFormElement>) {
         return (
-            (e.nativeEvent as SubmitEvent).submitter as
-                | HTMLButtonElement
-                | null
+            (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
         )?.value;
     }
 
@@ -53,7 +51,10 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
         const files = Array.from(e.target.files ?? []);
         e.target.value = "";
         if (!files.length) return;
-        setPendingFiles((prev) => [...prev, ...files.filter((f) => !prev.some((p) => p.name === f.name))]);
+        setPendingFiles((prev) => [
+            ...prev,
+            ...files.filter((f) => !prev.some((p) => p.name === f.name)),
+        ]);
     }
 
     async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -78,12 +79,19 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                           .filter((email) => email !== ownEmail)
                     : sharedUsers.map((user) => user.email),
             );
-            await Promise.all([
-                ...selectedDocuments.map((document) =>
-                    addDocumentToProject(project.id, document.id).catch(() => {}),
+            await Promise.all(
+                selectedDocuments.map((document) =>
+                    addDocumentToProject(project.id, document.id).catch(
+                        () => {},
+                    ),
                 ),
-                ...pendingFiles.map((f) => uploadProjectDocument(project.id, f).catch(() => {})),
-            ]);
+            );
+            if (pendingFiles.length > 0) {
+                await uploadProjectDocuments(
+                    project.id,
+                    pendingFiles.map((file) => ({ file })),
+                ).catch(() => []);
+            }
             onCreated({
                 ...project,
                 document_count: selectedDocuments.length + pendingFiles.length,
@@ -252,9 +260,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                         </div>
 
                         <div className="space-y-2">
-                            <FieldLabel as="p">
-                                Share with
-                            </FieldLabel>
+                            <FieldLabel as="p">Share with</FieldLabel>
                             <AddUserInput
                                 onAdd={handleAddShareUser}
                                 validateEmail={validateShareUser}
@@ -321,9 +327,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                     </div>
                 )}
 
-                {error && (
-                    <p className="mt-3 text-sm text-red-500">{error}</p>
-                )}
+                {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
             </form>
         </Modal>
     );

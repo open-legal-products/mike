@@ -3,10 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Upload, Loader2, X } from "lucide-react";
 import {
-    uploadStandaloneDocument,
-    uploadProjectDocument,
+    UploadBatchError,
+    failedUploadMessage,
+    uploadStandaloneDocuments,
+    uploadProjectDocuments,
     addDocumentToProject,
     getProject,
+    type UploadProgress,
 } from "@/app/lib/mikeApi";
 import type { Document, Folder } from "../shared/types";
 import { FileDirectory } from "../shared/FileDirectory";
@@ -17,6 +20,7 @@ import {
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
+import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
 
 interface Props {
     open: boolean;
@@ -53,11 +57,18 @@ export function AddDocumentsModal({
     tabs,
     disabledDocumentIds,
 }: Props) {
+    const uploadStateKey = `add-documents-upload:${projectId ?? "standalone"}:${projectDocumentsOnly ? "project" : "all"}:${breadcrumb.join("/")}`;
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
-    const [uploading, setUploading] = useState(false);
-    const [uploadingFilenames, setUploadingFilenames] = useState<string[]>([]);
+    const [uploading, setUploading] = useRemountPersistentState(
+        `${uploadStateKey}:active`,
+        false,
+    );
+    const [uploadingFiles, setUploadingFiles] = useRemountPersistentState<
+        Array<{ clientId: string; filename: string }>
+    >(`${uploadStateKey}:files`, []);
     const [uploadWarning, setUploadWarning] = useState<string | null>(null);
-    const [extraUploadedDocs, setExtraUploadedDocs] = useState<Document[]>([]);
+    const [extraUploadedDocs, setExtraUploadedDocs] =
+        useRemountPersistentState<Document[]>(`${uploadStateKey}:documents`, []);
     const [projectDocuments, setProjectDocuments] = useState<Document[]>([]);
     const [projectFolders, setProjectFolders] = useState<Folder[]>([]);
     const [projectDirectoryLoading, setProjectDirectoryLoading] =
@@ -117,24 +128,34 @@ export function AddDocumentsModal({
             wasOpenRef.current = false;
             return;
         }
+        const resumedAfterRemount = uploading || uploadingFiles.length > 0;
         setSelectedDocuments((prev) => {
-            if (!wasOpenRef.current) return initialSelectedDocuments ?? [];
-            const next = new Map(prev.map((document) => [document.id, document]));
+            if (!wasOpenRef.current && !resumedAfterRemount) {
+                return initialSelectedDocuments ?? [];
+            }
+            const next = new Map(
+                prev.map((document) => [document.id, document]),
+            );
             for (const document of initialSelectedDocuments ?? []) {
+                next.set(document.id, document);
+            }
+            for (const document of extraUploadedDocs) {
                 next.set(document.id, document);
             }
             return [...next.values()];
         });
-        setUploadingFilenames([]);
-        setUploadWarning(null);
-        if (!keepMounted) {
+        if (!wasOpenRef.current && !resumedAfterRemount) {
+            setUploadingFiles([]);
+            setUploadWarning(null);
+        }
+        if (!keepMounted && !wasOpenRef.current && !resumedAfterRemount) {
             // When kept mounted there is no refetch on reopen, so the
             // listing (including this session's uploads) must survive.
             setExtraUploadedDocs([]);
         }
         wasOpenRef.current = true;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open, initialSelectionKey]);
+    }, [open, initialSelectionKey, uploadStateKey]);
 
     const externalUploadKey = (externalUploadedDocuments ?? [])
         .map((document) => document.id)
@@ -142,7 +163,9 @@ export function AddDocumentsModal({
     useEffect(() => {
         if (!externalUploadedDocuments?.length) return;
         setExtraUploadedDocs((prev) => {
-            const next = new Map(prev.map((document) => [document.id, document]));
+            const next = new Map(
+                prev.map((document) => [document.id, document]),
+            );
             for (const document of externalUploadedDocuments) {
                 next.set(document.id, document);
             }
@@ -212,29 +235,81 @@ export function AddDocumentsModal({
             if (fileInputRef.current) fileInputRef.current.value = "";
             return;
         }
-        setUploadingFilenames(supported.map((file) => file.name));
+        const uploadInputs = supported.map((file) => ({
+            file,
+            clientId: crypto.randomUUID(),
+        }));
+        setUploadingFiles(
+            uploadInputs.map(({ clientId, file }) => ({
+                clientId,
+                filename: file.name,
+            })),
+        );
         setUploading(true);
-        try {
-            const uploaded = await Promise.all(
-                supported.map((f) =>
-                    projectId
-                        ? uploadProjectDocument(projectId, f)
-                        : uploadStandaloneDocument(f),
-                ),
+        const addUploadedDocument = (document: Document) => {
+            setExtraUploadedDocs((current) =>
+                current.some((existing) => existing.id === document.id)
+                    ? current
+                    : [document, ...current],
             );
-            setExtraUploadedDocs((prev) => [...uploaded, ...prev]);
-            setSelectedDocuments((prev) => [
-                ...prev,
-                ...uploaded.filter(
-                    (document) =>
-                        !prev.some((selected) => selected.id === document.id),
-                ),
-            ]);
+            setSelectedDocuments((current) =>
+                current.some((existing) => existing.id === document.id)
+                    ? current
+                    : [...current, document],
+            );
+        };
+        const handleProgress = (progress: UploadProgress<Document>) => {
+            if (progress.status === "completed" || progress.status === "error") {
+                setUploadingFiles((current) =>
+                    current.filter(
+                        (upload) => upload.clientId !== progress.clientId,
+                    ),
+                );
+            }
+            if (progress.status === "completed" && progress.result) {
+                addUploadedDocument(progress.result);
+            }
+        };
+        try {
+            const outcomes = projectId
+                ? await uploadProjectDocuments(
+                      projectId,
+                      uploadInputs,
+                      { onProgress: handleProgress },
+                  )
+                : await uploadStandaloneDocuments(
+                      uploadInputs,
+                      { onProgress: handleProgress },
+                  );
+            const uploaded = outcomes.flatMap((outcome) =>
+                outcome.status === "completed" && outcome.result
+                    ? [outcome.result]
+                    : [],
+            );
+            const failedCount = outcomes.length - uploaded.length;
+            if (failedCount > 0) {
+                setUploadWarning((current) =>
+                    [
+                        current,
+                        failedUploadMessage(outcomes),
+                    ]
+                        .filter(Boolean)
+                        .join(" "),
+                );
+            }
+            uploaded.forEach(addUploadedDocument);
         } catch (err) {
             console.error("Upload failed:", err);
+            setUploadWarning(
+                err instanceof UploadBatchError
+                    ? failedUploadMessage(err.outcomes)
+                    : err instanceof Error
+                    ? err.message
+                    : "Documents could not be uploaded. Please try again.",
+            );
         } finally {
             setUploading(false);
-            setUploadingFilenames([]);
+            setUploadingFiles([]);
             if (fileInputRef.current) fileInputRef.current.value = "";
         }
     }
@@ -277,8 +352,7 @@ export function AddDocumentsModal({
         const key = parentId ?? "root";
         setProjectDocumentLimitByLevel((current) => ({
             ...current,
-            [key]:
-                (current[key] ?? DIRECTORY_PAGE_SIZE) + DIRECTORY_PAGE_SIZE,
+            [key]: (current[key] ?? DIRECTORY_PAGE_SIZE) + DIRECTORY_PAGE_SIZE,
         }));
     }
 
@@ -335,11 +409,15 @@ export function AddDocumentsModal({
                     loading={projectDirectoryLoading}
                     selectedDocuments={selectedDocuments}
                     onChange={setSelectedDocuments}
-                    uploadingFilenames={uploadingFilenames}
+                    uploadingFilenames={uploadingFiles.map(
+                        (upload) => upload.filename,
+                    )}
                     showTabs={!projectDocumentsOnly}
                     initialTab={initialTab}
                     tabs={tabs}
-                    excludeProjectId={projectDocumentsOnly ? undefined : projectId}
+                    excludeProjectId={
+                        projectDocumentsOnly ? undefined : projectId
+                    }
                     disabledDocumentIds={disabledDocumentIds}
                     onExpandFolder={
                         projectDocumentsOnly
@@ -348,9 +426,7 @@ export function AddDocumentsModal({
                     }
                     loadedFolderIds={loadedProjectFolderIds}
                     documentLimitByLevel={projectDocumentLimitByLevel}
-                    documentsHasMoreByFolder={
-                        projectDocumentsHasMoreByFolder
-                    }
+                    documentsHasMoreByFolder={projectDocumentsHasMoreByFolder}
                     onLoadMoreFolderDocuments={(folderId) =>
                         handleLoadMoreProjectLevel(folderId)
                     }

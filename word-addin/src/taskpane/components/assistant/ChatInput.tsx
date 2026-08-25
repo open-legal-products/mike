@@ -10,9 +10,10 @@ import { WorkflowModal } from "../workflows/WorkflowModal";
 import { ChatInput as ChatInputShell } from "../../../shared/chat/ChatInput";
 import {
   getApiKeyStatus,
+  failedUploadMessage,
   getUserProfile,
   listWorkflows,
-  uploadStandaloneDocument,
+  uploadStandaloneDocuments,
   type ApiKeyStatus,
 } from "../../api/mikeApi";
 import { useSelectedModel } from "../../hooks/useSelectedModel";
@@ -304,33 +305,43 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       setDocumentUploadError(
         unsupported.length > 0 ? "Unsupported files were skipped." : null,
       );
-      const results = await Promise.allSettled(
-        supported.map((file) => uploadStandaloneDocument(file)),
-      );
-      const uploaded = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
+      try {
+        const outcomes = await uploadStandaloneDocuments(supported);
+        const uploaded = outcomes.flatMap((outcome) =>
+          outcome.status === "completed" && outcome.result
+            ? [outcome.result]
+            : [],
+        );
 
-      if (!mountedRef.current || generation !== uploadGenerationRef.current) {
-        return;
-      }
-      if (uploaded.length > 0) {
-        setAttachedDocuments((current) => {
-          const existing = new Set(current.map((document) => document.id));
-          return [
-            ...current,
-            ...uploaded.filter((document) => !existing.has(document.id)),
-          ];
-        });
-      }
-      if (results.some((result) => result.status === "rejected")) {
+        if (!mountedRef.current || generation !== uploadGenerationRef.current) {
+          return;
+        }
+        if (uploaded.length > 0) {
+          setAttachedDocuments((current) => {
+            const existing = new Set(current.map((document) => document.id));
+            return [
+              ...current,
+              ...uploaded.filter((document) => !existing.has(document.id)),
+            ];
+          });
+        }
+        if (outcomes.some((outcome) => outcome.status === "error")) {
+          setDocumentUploadError(failedUploadMessage(outcomes));
+        }
+      } catch (reason) {
         setDocumentUploadError(
-          uploaded.length > 0
-            ? "Some documents could not be uploaded."
+          reason instanceof Error
+            ? reason.message
             : "Documents could not be uploaded. Please try again.",
         );
+      } finally {
+        if (
+          mountedRef.current &&
+          generation === uploadGenerationRef.current
+        ) {
+          setUploadingLocalFiles(false);
+        }
       }
-      setUploadingLocalFiles(false);
     };
 
     const selectSlashWorkflow = (workflow: Workflow): void => {

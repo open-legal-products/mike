@@ -24,19 +24,10 @@ import {
   buildWorkflowsOverviewRpcArgs,
   parseWorkflowScope,
 } from "../lib/workflowsOverview";
-import { singleFileUpload } from "../lib/upload";
-import {
-  ALLOWED_DOCUMENT_TYPES,
-  ALLOWED_DOCUMENT_TYPES_LABEL,
-  contentTypeForDocumentType,
-} from "../lib/documentTypes";
-import { contentSha256 } from "../lib/documentVersions";
 import { sendInternalError } from "../lib/httpError";
 import {
   deleteFile,
   getSignedUrl,
-  uploadFile,
-  workflowReferenceKey,
 } from "../lib/storage";
 
 export const workflowsRouter = Router();
@@ -979,82 +970,6 @@ workflowsRouter.get(
   }),
 );
 
-// POST /workflows/:workflowId/reference-files
-workflowsRouter.post(
-  "/:workflowId/reference-files",
-  requireAuth,
-  singleFileUpload("file"),
-  asyncRoute(async (req, res) => {
-    const userId = res.locals.userId as string;
-    const userEmail = res.locals.userEmail as string | undefined;
-    const db = createServerSupabase();
-    const access = await resolveWorkflowAccess(
-      req.params.workflowId,
-      userId,
-      userEmail,
-      db,
-    );
-    if (!access || !access.allowEdit) {
-      return void res
-        .status(404)
-        .json({ detail: "Workflow not found or not editable" });
-    }
-    if (rejectReferenceFilesForTabularWorkflow(access, res)) return;
-    const file = req.file;
-    if (!file) return void res.status(400).json({ detail: "file is required" });
-    const fileType = file.originalname.includes(".")
-      ? file.originalname.split(".").pop()!.toLowerCase()
-      : "";
-    if (!ALLOWED_DOCUMENT_TYPES.has(fileType)) {
-      return void res.status(400).json({
-        detail: `Unsupported file type: ${fileType}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-      });
-    }
-    const referenceId = crypto.randomUUID();
-    const contentHash = contentSha256(file.buffer);
-    const ownerId = access.workflow.user_id ?? userId;
-    const storagePath = workflowReferenceKey(
-      ownerId,
-      req.params.workflowId,
-      referenceId,
-      contentHash,
-      file.originalname,
-    );
-    await uploadFile(
-      storagePath,
-      file.buffer.buffer.slice(
-        file.buffer.byteOffset,
-        file.buffer.byteOffset + file.buffer.byteLength,
-      ) as ArrayBuffer,
-      contentTypeForDocumentType(fileType),
-    );
-    const { data, error } = await db
-      .from("workflow_reference_documents")
-      .insert({
-        id: referenceId,
-        workflow_id: req.params.workflowId,
-        user_id: ownerId,
-        filename: file.originalname,
-        file_type: fileType,
-        storage_path: storagePath,
-        size_bytes: file.buffer.byteLength,
-        content_hash: contentHash,
-      })
-      .select(
-        "id, workflow_id, filename, file_type, size_bytes, created_at, updated_at",
-      )
-      .single();
-    if (error || !data) {
-      await deleteFile(storagePath).catch(() => {});
-      return void sendInternalError(
-        res,
-        error ?? new Error("Reference upload returned no data"),
-      );
-    }
-    res.status(201).json(data);
-  }),
-);
-
 // GET /workflows/:workflowId/reference-files/:referenceId/url
 workflowsRouter.get(
   "/:workflowId/reference-files/:referenceId/url",
@@ -1088,90 +1003,6 @@ workflowsRouter.get(
     if (!url)
       return void res.status(503).json({ detail: "Storage not configured" });
     res.json({ url, filename: reference.filename });
-  }),
-);
-
-// PUT /workflows/:workflowId/reference-files/:referenceId
-workflowsRouter.put(
-  "/:workflowId/reference-files/:referenceId",
-  requireAuth,
-  singleFileUpload("file"),
-  asyncRoute(async (req, res) => {
-    const userId = res.locals.userId as string;
-    const userEmail = res.locals.userEmail as string | undefined;
-    const db = createServerSupabase();
-    const access = await resolveWorkflowAccess(
-      req.params.workflowId,
-      userId,
-      userEmail,
-      db,
-    );
-    if (!access || !access.allowEdit) {
-      return void res
-        .status(404)
-        .json({ detail: "Workflow not found or not editable" });
-    }
-    if (rejectReferenceFilesForTabularWorkflow(access, res)) return;
-    const file = req.file;
-    if (!file) return void res.status(400).json({ detail: "file is required" });
-    const fileType = file.originalname.includes(".")
-      ? file.originalname.split(".").pop()!.toLowerCase()
-      : "";
-    if (!ALLOWED_DOCUMENT_TYPES.has(fileType)) {
-      return void res.status(400).json({
-        detail: `Unsupported file type: ${fileType}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-      });
-    }
-    const { data: current } = await db
-      .from("workflow_reference_documents")
-      .select("id, user_id, storage_path")
-      .eq("id", req.params.referenceId)
-      .eq("workflow_id", req.params.workflowId)
-      .maybeSingle();
-    if (!current)
-      return void res.status(404).json({ detail: "Reference file not found" });
-    const contentHash = contentSha256(file.buffer);
-    const storagePath = workflowReferenceKey(
-      current.user_id,
-      req.params.workflowId,
-      current.id,
-      contentHash,
-      file.originalname,
-    );
-    await uploadFile(
-      storagePath,
-      file.buffer.buffer.slice(
-        file.buffer.byteOffset,
-        file.buffer.byteOffset + file.buffer.byteLength,
-      ) as ArrayBuffer,
-      contentTypeForDocumentType(fileType),
-    );
-    const { data, error } = await db
-      .from("workflow_reference_documents")
-      .update({
-        filename: file.originalname,
-        file_type: fileType,
-        storage_path: storagePath,
-        size_bytes: file.buffer.byteLength,
-        content_hash: contentHash,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", current.id)
-      .select(
-        "id, workflow_id, filename, file_type, size_bytes, created_at, updated_at",
-      )
-      .single();
-    if (error || !data) {
-      await deleteFile(storagePath).catch(() => {});
-      return void sendInternalError(
-        res,
-        error ?? new Error("Reference replacement returned no data"),
-      );
-    }
-    if (current.storage_path !== storagePath) {
-      await deleteFile(current.storage_path).catch(() => {});
-    }
-    res.json(data);
   }),
 );
 

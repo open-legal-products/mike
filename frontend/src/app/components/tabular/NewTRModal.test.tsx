@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-    uploadProjectDocument,
-    uploadStandaloneDocument,
+    uploadProjectDocuments,
+    uploadStandaloneDocuments,
 } from "@/app/lib/mikeApi";
 import type { Document } from "../shared/types";
 import { NewTRModal } from "./NewTRModal";
@@ -10,8 +10,8 @@ import { NewTRModal } from "./NewTRModal";
 vi.mock("@/app/lib/mikeApi", () => ({
     getProject: vi.fn(),
     listWorkflows: vi.fn(async () => []),
-    uploadProjectDocument: vi.fn(),
-    uploadStandaloneDocument: vi.fn(),
+    uploadProjectDocuments: vi.fn(),
+    uploadStandaloneDocuments: vi.fn(),
 }));
 
 vi.mock("@/app/contexts/UserProfileContext", () => ({
@@ -60,13 +60,7 @@ describe("NewTRModal", () => {
 
     it("shows folder grouping on the first screen and excludes Templates", () => {
         const onAdd = vi.fn();
-        render(
-            <NewTRModal
-                open
-                onClose={vi.fn()}
-                onAdd={onAdd}
-            />,
-        );
+        render(<NewTRModal open onClose={vi.fn()} onAdd={onAdd} />);
 
         expect(screen.getByText("Document grouping")).toBeInTheDocument();
         expect(
@@ -125,9 +119,15 @@ describe("NewTRModal", () => {
             filename: "New agreement.pdf",
             file_type: "pdf",
         };
-        vi.mocked(uploadProjectDocument).mockResolvedValue(
-            uploadedDocument as Document,
-        );
+        vi.mocked(uploadProjectDocuments).mockResolvedValue([
+            {
+                clientId: "client-1",
+                filename: "New agreement.pdf",
+                status: "completed",
+                result: uploadedDocument as Document,
+                errorCode: null,
+            },
+        ]);
 
         render(
             <NewTRModal
@@ -149,17 +149,15 @@ describe("NewTRModal", () => {
         const file = new File(["agreement"], "New agreement.pdf", {
             type: "application/pdf",
         });
-        const input = document.querySelector<HTMLInputElement>(
-            'input[type="file"]',
-        );
+        const input =
+            document.querySelector<HTMLInputElement>('input[type="file"]');
         fireEvent.change(input!, { target: { files: [file] } });
 
         await waitFor(() =>
-            expect(uploadProjectDocument).toHaveBeenCalledWith(
-                "project-1",
-                file,
-            ),
+            expect(uploadProjectDocuments).toHaveBeenCalledWith("project-1", [
+                { file },
+            ]),
         );
-        expect(uploadStandaloneDocument).not.toHaveBeenCalled();
+        expect(uploadStandaloneDocuments).not.toHaveBeenCalled();
     });
 });

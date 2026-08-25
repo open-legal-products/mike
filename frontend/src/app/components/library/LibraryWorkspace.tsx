@@ -40,6 +40,7 @@ import {
   resolveLibraryFolderPath,
   searchLibraryDocuments,
     uploadLibraryDocument,
+    uploadLibraryDocuments,
     type LibraryKind,
 } from "@/app/lib/mikeApi";
 import type { Document } from "@/app/components/shared/types";
@@ -845,6 +846,23 @@ export function LibraryCollectionPage({
         () => ({
             uploadDocument: (file: File, folderId?: string | null) =>
                 uploadLibraryDocument(kind, file, folderId),
+            uploadDocuments: (
+                files: Array<{
+                    file: File;
+                    folderId: string | null;
+                    clientId: string;
+                }>,
+                options?: Parameters<typeof uploadLibraryDocuments>[2],
+            ) =>
+                uploadLibraryDocuments(
+                    kind,
+                    files.map(({ file, folderId, clientId }) => ({
+                        file,
+                        folderId,
+                        clientId,
+                    })),
+                    options,
+                ),
       refreshCollection: async () => {
         await loadLibrary(kind);
         setServerQueryRefreshVersion((current) => current + 1);

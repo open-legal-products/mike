@@ -7,6 +7,20 @@ import type {
 } from "../types";
 import { describeNetworkFailure } from "../lib/networkError";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
+import {
+  uploadFilesWithSessionCore,
+  type UploadOutcome,
+  type UploadProgress,
+} from "../../../../frontend/src/shared/api/uploadSessionClient";
+
+export {
+  UploadBatchError,
+  failedUploadMessage,
+} from "../../../../frontend/src/shared/api/uploadSessionClient";
+export type {
+  UploadOutcome,
+  UploadProgress,
+} from "../../../../frontend/src/shared/api/uploadSessionClient";
 
 type AuthHeaderProvider = () => Promise<Record<string, string>>;
 
@@ -154,6 +168,37 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function uploadSessionFiles<T>(args: {
+  purpose:
+    | "document_create"
+    | "workflow_reference_create"
+    | "workflow_reference_replace";
+  destination: Record<string, unknown>;
+  files: File[];
+  onProgress?: (progress: UploadProgress<T>) => void;
+}): Promise<UploadOutcome<T>[]> {
+  return uploadFilesWithSessionCore<T>({
+    purpose: args.purpose,
+    destination: args.destination,
+    files: args.files.map((file) => ({ file })),
+    onProgress: args.onProgress,
+    transport: {
+      apiRequest,
+      fetchStorage: (...fetchArgs) => clientConfig.fetchImpl(...fetchArgs),
+      isUploadIncomplete: (error) =>
+        error instanceof MikeApiError && error.code === "upload_incomplete",
+    },
+  });
+}
+
+function firstUploadResult<T>(outcomes: UploadOutcome<T>[]): T {
+  const first = outcomes[0];
+  if (!first || first.status !== "completed" || !first.result) {
+    throw new Error("The file could not be processed. Please try again.");
+  }
+  return first.result;
+}
+
 export async function listProjects(pagination?: {
   limit?: number;
   offset?: number;
@@ -240,17 +285,19 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
 }
 
 export async function uploadStandaloneDocument(file: File): Promise<Document> {
-  const authHeaders = await getAuthHeaders();
-  const form = new FormData();
-  form.append("file", file);
-  const path = "/single-documents";
-  const response = await sendRequest(apiUrl(path), {
-    method: "POST",
-    headers: authHeaders,
-    body: form,
+  return firstUploadResult(await uploadStandaloneDocuments([file]));
+}
+
+export async function uploadStandaloneDocuments(
+  files: File[],
+  options?: { onProgress?: (progress: UploadProgress<Document>) => void },
+): Promise<UploadOutcome<Document>[]> {
+  return uploadSessionFiles<Document>({
+    purpose: "document_create",
+    destination: { scope: "standalone" },
+    files,
+    onProgress: options?.onProgress,
   });
-  if (!response.ok) throw await toApiError(response, path);
-  return response.json() as Promise<Document>;
 }
 
 type LibraryKind = "files" | "templates";
@@ -492,16 +539,20 @@ export async function uploadWorkflowReferenceFile(
   workflowId: string,
   file: File,
 ): Promise<WorkflowReferenceDocument> {
-  const path = `/workflows/${workflowId}/reference-files`;
-  const form = new FormData();
-  form.append("file", file);
-  const response = await sendRequest(apiUrl(path), {
-    method: "POST",
-    headers: await getAuthHeaders(),
-    body: form,
+  return firstUploadResult(
+    await uploadWorkflowReferenceFiles(workflowId, [file]),
+  );
+}
+
+export async function uploadWorkflowReferenceFiles(
+  workflowId: string,
+  files: File[],
+): Promise<UploadOutcome<WorkflowReferenceDocument>[]> {
+  return uploadSessionFiles<WorkflowReferenceDocument>({
+    purpose: "workflow_reference_create",
+    destination: { workflow_id: workflowId },
+    files,
   });
-  if (!response.ok) throw await toApiError(response, path);
-  return response.json() as Promise<WorkflowReferenceDocument>;
 }
 
 export async function replaceWorkflowReferenceFile(
@@ -509,17 +560,16 @@ export async function replaceWorkflowReferenceFile(
   referenceId: string,
   file: File,
 ): Promise<WorkflowReferenceDocument> {
-  const path = `/workflows/${workflowId}/reference-files/${referenceId}`;
-  const form = new FormData();
-  form.append("file", file);
-  form.append("filename", file.name);
-  const response = await sendRequest(apiUrl(path), {
-    method: "PUT",
-    headers: await getAuthHeaders(),
-    body: form,
-  });
-  if (!response.ok) throw await toApiError(response, path);
-  return response.json() as Promise<WorkflowReferenceDocument>;
+  return firstUploadResult(
+    await uploadSessionFiles<WorkflowReferenceDocument>({
+      purpose: "workflow_reference_replace",
+      destination: {
+        workflow_id: workflowId,
+        reference_id: referenceId,
+      },
+      files: [file],
+    }),
+  );
 }
 
 export async function getWorkflowReferenceUrl(

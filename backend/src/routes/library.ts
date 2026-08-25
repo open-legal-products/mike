@@ -6,8 +6,6 @@ import {
   attachActiveVersionPaths,
   attachLatestVersionNumbers,
 } from "../lib/documentVersions";
-import { singleFileUpload } from "../lib/upload";
-import { handleDocumentUpload } from "./documents";
 import { parsePaginationQuery, type PaginationParams } from "../lib/pagination";
 import { normalizeSearchTerm } from "../lib/search";
 import { sendInternalError } from "../lib/httpError";
@@ -444,33 +442,6 @@ libraryRouter.post(
       deletedIds.push(...result.deletedIds);
     }
     res.json({ deletedIds });
-  },
-);
-
-// POST /library/:kind/documents
-libraryRouter.post(
-  "/:kind/documents",
-  requireAuth,
-  singleFileUpload("file"),
-  async (req, res) => {
-    const userId = res.locals.userId as string;
-    const kind = normalizeLibraryKind(req.params.kind);
-    if (!kind)
-      return void res.status(404).json({ detail: "Library not found" });
-    const db = createServerSupabase();
-    const folderId =
-      typeof req.body?.folder_id === "string" && req.body.folder_id.trim()
-        ? req.body.folder_id.trim()
-        : null;
-    if (folderId) {
-      const folder = await loadLibraryFolder(db, userId, kind, folderId);
-      if (!folder)
-        return void res.status(404).json({ detail: "Folder not found" });
-    }
-    await handleDocumentUpload(req, res, userId, null, db, {
-      libraryKind: kind,
-      libraryFolderId: folderId,
-    });
   },
 );
 

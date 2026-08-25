@@ -5,7 +5,7 @@ import {
   getWorkflowReferenceUrl,
   listWorkflowReferenceFiles,
   replaceWorkflowReferenceFile,
-  uploadWorkflowReferenceFile,
+  uploadWorkflowReferenceFiles,
 } from "../../api/mikeApi";
 
 /**
@@ -71,9 +71,13 @@ export function WorkflowReferenceFiles({
   const upload = async (file: File): Promise<void> => {
     setBusy(true);
     try {
-      await uploadWorkflowReferenceFile(workflowId, file);
+      const outcomes = await uploadWorkflowReferenceFiles(workflowId, [file]);
       await reload();
-      setError(null);
+      setError(
+        outcomes.some((outcome) => outcome.status === "error")
+          ? `${file.name} could not be uploaded. Please try again.`
+          : null,
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Upload failed");
     } finally {
@@ -85,7 +89,11 @@ export function WorkflowReferenceFiles({
     if (!replaceTarget.current) return;
     setBusy(true);
     try {
-      await replaceWorkflowReferenceFile(workflowId, replaceTarget.current.id, file);
+      await replaceWorkflowReferenceFile(
+        workflowId,
+        replaceTarget.current.id,
+        file,
+      );
       await reload();
       setError(null);
     } catch (reason) {
@@ -101,7 +109,9 @@ export function WorkflowReferenceFiles({
       <div className="flex items-center justify-between gap-2">
         <div>
           <p className="font-medium text-gray-700">Reference files</p>
-          <p className="mt-0.5 text-[11px] text-gray-400">Available when this workflow runs.</p>
+          <p className="mt-0.5 text-[11px] text-gray-400">
+            Available when this workflow runs.
+          </p>
         </div>
         {!readOnly && (
           <button
@@ -140,15 +150,24 @@ export function WorkflowReferenceFiles({
       ) : (
         <div className="mt-2 max-h-24 space-y-1 overflow-y-auto">
           {files.map((file) => (
-            <div key={file.id} className="flex items-center gap-2 rounded-md bg-white/55 px-2 py-1.5">
-              <span className="min-w-0 flex-1 truncate text-gray-600">{file.filename}</span>
+            <div
+              key={file.id}
+              className="flex items-center gap-2 rounded-md bg-white/55 px-2 py-1.5"
+            >
+              <span className="min-w-0 flex-1 truncate text-gray-600">
+                {file.filename}
+              </span>
               <button
                 type="button"
                 onClick={() =>
                   void getWorkflowReferenceUrl(workflowId, file.id)
                     .then(({ url }) => openExternalUrl(url))
                     .catch((reason: unknown) =>
-                      setError(reason instanceof Error ? reason.message : "Download failed"),
+                      setError(
+                        reason instanceof Error
+                          ? reason.message
+                          : "Download failed",
+                      ),
                     )
                 }
                 className="text-[10px] text-gray-500"
@@ -173,7 +192,11 @@ export function WorkflowReferenceFiles({
                       void deleteWorkflowReferenceFile(workflowId, file.id)
                         .then(reload)
                         .catch((reason: unknown) =>
-                          setError(reason instanceof Error ? reason.message : "Delete failed"),
+                          setError(
+                            reason instanceof Error
+                              ? reason.message
+                              : "Delete failed",
+                          ),
                         )
                     }
                     className="text-[10px] text-red-500"

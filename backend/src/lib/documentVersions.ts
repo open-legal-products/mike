@@ -9,7 +9,7 @@ type Supa = ReturnType<typeof createServerSupabase>;
  * prove a file matches the bytes the workspace held. Recompute whenever the
  * stored bytes change — a new version row, or an in-place overwrite.
  *
- * Accepts a view (e.g. multer's `file.buffer`) as well as a raw ArrayBuffer;
+ * Accepts a typed-array view as well as a raw ArrayBuffer;
  * several call sites pass views into a larger backing buffer, so the offset
  * and length must be respected rather than hashing the whole buffer.
  */

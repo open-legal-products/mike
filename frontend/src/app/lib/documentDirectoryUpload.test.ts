@@ -5,6 +5,7 @@ import {
     DOCUMENT_UPLOAD_CONCURRENCY,
     documentUploadEntriesFromFiles,
     documentUploadFolderSegments,
+    folderUploadProgressLabel,
     documentUploadPathSegments,
     documentUploadProgressEntries,
     MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD,
@@ -22,6 +23,16 @@ function folderFile(name: string, relativePath: string) {
 }
 
 describe("document directory upload paths", () => {
+    it("reports live folder upload counts", () => {
+        expect(
+            folderUploadProgressLabel([
+                "completed",
+                "processing",
+                "uploading",
+                "pending",
+            ]),
+        ).toBe("2 of 4 uploaded");
+    });
     it("returns immediately when there is no concurrent work", async () => {
         const worker = vi.fn(async (value: number) => value);
 
@@ -113,7 +124,7 @@ describe("document directory upload paths", () => {
         ]);
 
         expect(documentUploadProgressEntries(entries)).toEqual([
-            { kind: "folder", name: "Matter" },
+            { kind: "folder", name: "Matter", sourceName: "Matter" },
         ]);
     });
 
@@ -128,14 +139,16 @@ describe("document directory upload paths", () => {
         ];
 
         expect(documentUploadProgressEntries(entries)).toEqual([
-            { kind: "folder", name: "Matter" },
-            { kind: "file", name: "memo.docx" },
+            { kind: "folder", name: "Matter", sourceName: "Matter" },
+            { kind: "file", name: "memo.docx", sourceName: "memo.docx" },
         ]);
         expect(
             documentUploadProgressEntries([
                 { file: new File(["memo"], "memo.docx"), relativePath: "." },
             ]),
-        ).toEqual([{ kind: "file", name: "memo.docx" }]);
+        ).toEqual([
+            { kind: "file", name: "memo.docx", sourceName: "memo.docx" },
+        ]);
     });
 
     it("does not show an unresolved folder as an uploading row", () => {
@@ -146,7 +159,9 @@ describe("document directory upload paths", () => {
 
         expect(
             resolvedDocumentUploadProgressEntries(entries, new Map()),
-        ).toEqual([{ kind: "file", name: "memo.docx" }]);
+        ).toEqual([
+            { kind: "file", name: "memo.docx", sourceName: "memo.docx" },
+        ]);
     });
 
     it("shows the backend-resolved folder name once uploading can begin", () => {
@@ -159,7 +174,9 @@ describe("document directory upload paths", () => {
                 entries,
                 new Map([["NDAs", "NDAs (2)"]]),
             ),
-        ).toEqual([{ kind: "folder", name: "NDAs (2)" }]);
+        ).toEqual([
+            { kind: "folder", name: "NDAs (2)", sourceName: "NDAs" },
+        ]);
     });
 
     it("normalizes separators and excludes traversal segments", () => {

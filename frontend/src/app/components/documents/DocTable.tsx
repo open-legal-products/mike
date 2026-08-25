@@ -15,6 +15,7 @@ import {
 import { createPortal } from "react-dom";
 import { Loader2, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import {
+    UploadBatchError,
     deleteDocument,
     getDocumentUrl,
     downloadDocumentsZip,
@@ -23,8 +24,12 @@ import {
     replaceDocumentVersionFile,
     copyDocumentVersionFromDocument,
     deleteDocumentVersion,
+    failedUploadMessage,
     renameDocumentVersion,
     type DocumentVersion,
+    type UploadOutcome,
+    type UploadProgress,
+    type UploadProgressStatus,
 } from "@/app/lib/mikeApi";
 import type {
     Document,
@@ -43,6 +48,7 @@ import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { UploadOverlay } from "@/app/components/assistant/UploadOverlay";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
 import {
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
@@ -54,6 +60,7 @@ import {
     DOCUMENT_UPLOAD_CONCURRENCY,
     documentUploadEntriesFromFiles,
     documentUploadFolderSegments,
+    folderUploadProgressLabel,
     resolvedDocumentUploadProgressEntries,
     MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD,
     resolveDocumentUploadRootFolder,
@@ -145,6 +152,16 @@ interface DocTableOperations {
         file: File,
         folderId?: string | null,
     ) => Promise<Document>;
+    uploadDocuments?: (
+        files: Array<{
+            file: File;
+            folderId: string | null;
+            clientId: string;
+        }>,
+        options?: {
+            onProgress?: (progress: UploadProgress<Document>) => void;
+        },
+    ) => Promise<UploadOutcome<Document>[]>;
     refreshCollection: () => Promise<void>;
     createFolder: (name: string, parentFolderId?: string | null) => Promise<DocTableFolder>;
     resolveFolderPath: (
@@ -590,10 +607,16 @@ export function DocTable({
     const [dragOverVersionDocId, setDragOverVersionDocId] = useState<string | null>(null);
     const [uploadingVersionDocIds, setUploadingVersionDocIds] = useState<Set<string>>(() => new Set());
     const [versionUploadTargetDoc, setVersionUploadTargetDoc] = useState<Document | null>(null);
-    const [collectionUploadProgress, setCollectionUploadProgress] = useState<{
-        parentFolderId: string | null;
-        entries: DocumentUploadProgressEntry[];
-    } | null>(null);
+    const [collectionUploadProgress, setCollectionUploadProgress] =
+        useRemountPersistentState<{
+            parentFolderId: string | null;
+            entries: DocumentUploadProgressEntry[];
+            files: Array<{
+                clientId: string;
+                entry: DocumentUploadEntry;
+                status: UploadProgressStatus;
+            }>;
+        } | null>(`document-upload:${scopeKey}`, null);
     const [folderUploadConflict, setFolderUploadConflict] = useState<{
         folderName: string;
         suggestedName: string;
@@ -1231,14 +1254,33 @@ export function DocTable({
             );
             return;
         }
+        const progressFiles = supportedEntries.map((entry) => ({
+            clientId: crypto.randomUUID(),
+            entry,
+            status: "pending" as UploadProgressStatus,
+        }));
+        const clientIdByFile = new Map(
+            progressFiles.map((progress) => [
+                progress.entry.file,
+                progress.clientId,
+            ]),
+        );
         const resolvedRootFolderNames = new Map<string, string>();
         const updateCollectionUploadProgress = () => {
-            setCollectionUploadProgress({
-                parentFolderId: baseFolderId,
-                entries: resolvedDocumentUploadProgressEntries(
-                    supportedEntries,
-                    resolvedRootFolderNames,
-                ),
+            setCollectionUploadProgress((current) => {
+                const belongsToCurrentUpload = current?.files.some(
+                    (file) => file.clientId === progressFiles[0]?.clientId,
+                );
+                return {
+                    parentFolderId: baseFolderId,
+                    entries: resolvedDocumentUploadProgressEntries(
+                        supportedEntries,
+                        resolvedRootFolderNames,
+                    ),
+                    files: belongsToCurrentUpload && current
+                        ? current.files
+                        : progressFiles,
+                };
             });
         };
         updateCollectionUploadProgress();
@@ -1318,28 +1360,102 @@ export function DocTable({
                 return pending;
             };
 
-            const results = await settleWithConcurrency(
+            const folderResults = await settleWithConcurrency(
                 supportedEntries,
                 DOCUMENT_UPLOAD_CONCURRENCY,
                 async (entry) => {
                     const folderId = await resolveEntryFolder(entry);
-                    return operations.uploadDocument(entry.file, folderId);
+                    return { entry, folderId };
                 },
             );
-            const uploaded = results.flatMap((result) =>
+            const resolvedEntries = folderResults.flatMap((result) =>
                 result.status === "fulfilled" ? [result.value] : [],
             );
+            const folderFailureOutcomes = folderResults.flatMap(
+                (result, index): UploadOutcome<Document>[] =>
+                    result.status === "rejected"
+                        ? [
+                              {
+                                  clientId: progressFiles[index].clientId,
+                                  filename:
+                                      progressFiles[index].entry.file.name,
+                                  status: "error",
+                                  result: null,
+                                  errorCode: "folder_resolution_failed",
+                              },
+                          ]
+                        : [],
+            );
+            let batchOutcomes: UploadOutcome<Document>[] | null = null;
+            let uploaded: Document[];
+            if (operations.uploadDocuments) {
+                batchOutcomes = await operations.uploadDocuments(
+                    resolvedEntries.map(({ entry, folderId }) => ({
+                        file: entry.file,
+                        folderId,
+                        clientId: clientIdByFile.get(entry.file)!,
+                    })),
+                    {
+                        onProgress: (progress) => {
+                            setCollectionUploadProgress((current) =>
+                                current
+                                    ? {
+                                          ...current,
+                                          files: current.files.map((file) =>
+                                              file.clientId ===
+                                              progress.clientId
+                                                  ? {
+                                                        ...file,
+                                                        status: progress.status,
+                                                    }
+                                                  : file,
+                                          ),
+                                      }
+                                    : current,
+                            );
+                            if (
+                                progress.status === "completed" &&
+                                progress.result
+                            ) {
+                                handleDocsSelected([progress.result]);
+                            }
+                        },
+                    },
+                );
+                uploaded = batchOutcomes.flatMap((outcome) =>
+                    outcome.status === "completed" && outcome.result
+                        ? [outcome.result]
+                        : [],
+                );
+            } else {
+                const results = await settleWithConcurrency(
+                    resolvedEntries,
+                    DOCUMENT_UPLOAD_CONCURRENCY,
+                    ({ entry, folderId }) =>
+                        operations.uploadDocument(entry.file, folderId),
+                );
+                uploaded = results.flatMap((result) =>
+                    result.status === "fulfilled" ? [result.value] : [],
+                );
+            }
             handleDocsSelected(uploaded);
-            const failedCount = results.length - uploaded.length;
+            const failedCount = supportedEntries.length - uploaded.length;
             if (failedCount > 0) {
                 setCollectionActionWarning(
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be uploaded. Please try again.`,
+                    failedUploadMessage([
+                        ...folderFailureOutcomes,
+                        ...(batchOutcomes ?? []),
+                    ]),
                 );
             }
         } catch (err) {
             console.error("Document drop upload failed", err);
             setCollectionActionWarning(
-                "This folder could not be uploaded. Please try again.",
+                err instanceof UploadBatchError
+                    ? failedUploadMessage(err.outcomes)
+                    : err instanceof Error
+                      ? err.message
+                      : "This folder could not be uploaded. Please try again.",
             );
         } finally {
             setCollectionUploadProgress(null);
@@ -1666,6 +1782,7 @@ export function DocTable({
         fileType,
         depth,
         statusLabel,
+        nameTrailingLabel,
         entryKind = "file",
     }: {
         key: string;
@@ -1673,6 +1790,7 @@ export function DocTable({
         fileType: string | null;
         depth: number;
         statusLabel: string;
+        nameTrailingLabel?: string;
         entryKind?: "file" | "folder";
     }) {
         return (
@@ -1681,7 +1799,7 @@ export function DocTable({
                     className={`sticky left-0 z-[60] ${DOC_NAME_COL_W} ${stickyCellBg} py-2 pl-3 pr-2`}
                     style={treeNameCellStyle(depth)}
                 >
-                    <div className="flex items-center">
+                    <div className="flex min-w-0 items-center">
                         <Loader2 className="mr-3 h-2.5 w-2.5 animate-spin text-gray-400 shrink-0" />
                         {entryKind === "folder" && (
                             <span className="mr-2 flex h-4 w-4 shrink-0 items-center justify-center">
@@ -1695,7 +1813,14 @@ export function DocTable({
                                 <DocIcon fileType={fileType ?? filename} muted />
                             )}
                         </span>
-                        <span className="text-xs text-gray-400 truncate">{filename}</span>
+                        <span className="min-w-0 flex-1 truncate text-xs text-gray-400">
+                            {filename}
+                        </span>
+                        {nameTrailingLabel && (
+                            <span className="ml-2 shrink-0 text-xs tabular-nums text-gray-400">
+                                {nameTrailingLabel}
+                            </span>
+                        )}
                     </div>
                 </div>
                 <div className="ml-auto w-20 shrink-0 text-xs text-gray-300 lowercase truncate">
@@ -1722,16 +1847,43 @@ export function DocTable({
         if (collectionUploadProgress?.parentFolderId !== parentFolderId) {
             return null;
         }
-        return collectionUploadProgress.entries.map((entry, index) =>
+        const activeDirectFiles = collectionUploadProgress.files.filter(
+            (file) =>
+                documentUploadFolderSegments(file.entry).length === 0 &&
+                file.status !== "completed" &&
+                file.status !== "error",
+        );
+        const directRows = activeDirectFiles.map((file) =>
             renderDocumentActivityRow({
-                key: `uploading-${entry.kind}-${entry.name}-${index}`,
-                filename: entry.name,
+                key: `uploading-file-${file.clientId}`,
+                filename: file.entry.file.name,
                 fileType: null,
                 depth,
-                statusLabel: "Uploading",
-                entryKind: entry.kind,
+                statusLabel: "",
+                nameTrailingLabel: "Uploading",
             }),
         );
+        const folderRows = collectionUploadProgress.entries
+            .filter((entry) => entry.kind === "folder")
+            .map((entry, index) => {
+                const folderFiles = collectionUploadProgress.files.filter(
+                    (file) =>
+                        documentUploadFolderSegments(file.entry)[0] ===
+                        entry.sourceName,
+                );
+                return renderDocumentActivityRow({
+                    key: `uploading-folder-${entry.name}-${index}`,
+                    filename: entry.name,
+                    fileType: null,
+                    depth,
+                    statusLabel: "",
+                    nameTrailingLabel: folderUploadProgressLabel(
+                        folderFiles.map((file) => file.status),
+                    ),
+                    entryKind: "folder",
+                });
+            });
+        return [...directRows, ...folderRows];
     }
 
     const effectiveSort = sort ?? defaultSort;
