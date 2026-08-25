@@ -33,6 +33,7 @@
     "fast-xml-parser": "^5.7.1",
     "helmet": "^8.1.0",
     "html-to-text": "9.0.5",
+    "jsonrepair": "^3.15.0",
     "jszip": "^3.10.1",
     "libreoffice-convert": "^1.6.0",
     "mammoth": "^1.9.0",

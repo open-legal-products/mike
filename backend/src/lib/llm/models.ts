@@ -1,3 +1,4 @@
+import { getConfiguredModel } from "./registry";
 import type { Provider } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -103,6 +104,10 @@ const ALL_MODELS = new Set<string>([
 // ---------------------------------------------------------------------------
 
 export function providerForModel(model: string): Provider {
+    // Deployment-declared models win over the prefix rules so an operator can
+    // name a self-hosted endpoint whatever they like.
+    const configured = getConfiguredModel(model);
+    if (configured) return configured.provider;
     if (model.startsWith("ollama")) return "ollama";
     if (model.startsWith("openrouter/")) return "openrouter";
     if (model.startsWith("vercel/")) return "vercel";
@@ -129,6 +134,7 @@ export function resolveModel(
     if (
         canonical &&
         (ALL_MODELS.has(canonical) ||
+            getConfiguredModel(canonical) !== null ||
             canonical.startsWith("ollama/") ||
             /^(?:openrouter|vercel)\/[^\s/]+\/[^\s]+$/.test(canonical) ||
             // OpenCode Go's catalog ids are single-segment ("glm-5"), not the

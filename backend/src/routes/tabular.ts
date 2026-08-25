@@ -32,6 +32,10 @@ import {
     type Provider,
     type UserApiKeys,
 } from "../lib/llm";
+import {
+    apiKeyForConfiguredModel,
+    getConfiguredModel,
+} from "../lib/llm/registry";
 import { getUserModelSettings } from "../lib/userSettings";
 import {
     checkProjectAccess,
@@ -492,12 +496,25 @@ function providerLabel(provider: Provider): string {
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
     if (provider === "ollama") return "Local (Ollama)";
+    if (provider === "openai-compatible") return "Configured endpoint";
     return "Gemini";
 }
 
 function missingModelApiKey(model: string, apiKeys: UserApiKeys) {
     const provider = providerForModel(model);
     if (provider === "ollama") return null; // local, no key
+    if (provider === "openai-compatible") {
+        const configured = getConfiguredModel(model);
+        // A self-hosted endpoint authenticates however the deployment set it
+        // up, including not at all, so only cloud entries can be short a key.
+        if (!configured || configured.location === "local") return null;
+        if (apiKeyForConfiguredModel(configured, apiKeys)) return null;
+        return {
+            provider,
+            model,
+            detail: `An API key is required to use ${configured.label || model}. Add an API key or select a different tabular review model.`,
+        };
+    }
     if (apiKeys[provider]?.trim()) return null;
     return {
         provider,
