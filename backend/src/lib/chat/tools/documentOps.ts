@@ -5,6 +5,7 @@ import {
 } from "../../storage";
 import { convertedPdfKey, docxToPdf } from "../../convert";
 import { createServerSupabase } from "../../supabase";
+import { normalizeDisplayName } from "../../userLookup";
 import {
   applyTrackedEdits,
   extractDocxBodyText,
@@ -1179,11 +1180,24 @@ export async function runEditDocument(params: {
   const current = await loadCurrentVersionBytes(documentId, db);
   if (!current) return { ok: false, error: "Could not load document bytes." };
 
+  // LOCAL PATCH (not upstream): attribute tracked changes to the acting user
+  // instead of the literal string "Mike" — see mike-frontend-docker-patch
+  // memory for the reapply convention this follows.
+  const { data: authorProfile } = await db
+    .from("user_profiles")
+    .select("display_name, email")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const author =
+    normalizeDisplayName(authorProfile?.display_name) ??
+    (typeof authorProfile?.email === "string" ? authorProfile.email : null) ??
+    "Mike";
+
   const {
     bytes: editedBytes,
     changes,
     errors,
-  } = await applyTrackedEdits(current.bytes, edits, { author: "Mike" });
+  } = await applyTrackedEdits(current.bytes, edits, { author });
 
   if (changes.length === 0) {
     return {
