@@ -399,9 +399,13 @@ try {
       try {
         // Exact line match, not substring: the capture file is one URL per
         // line, and matching the whole line is both a tighter assertion and
-        // free of the "URL substring" pattern static analysis flags. Compare
-        // with `===` per line rather than Array#includes — the substring
-        // heuristic keys off the call shape, not the receiver's type.
+        // free of the "URL substring" pattern static analysis flags.
+        // `.some((line) => line === url)` rather than `.includes(url)`: both
+        // are exact whole-element comparisons here, but CodeQL's
+        // incomplete-url-substring-sanitization heuristic matches the
+        // `.includes(<url>)` call shape without checking whether the receiver
+        // is a string or an array, so the array form reads as a substring
+        // test to it. An explicit === says the same thing unambiguously.
         return readFileSync(CAPTURE_FILE, "utf8")
           .split("\n")
           .some((line) => line === EXTERNAL_URL);
