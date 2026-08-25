@@ -1501,27 +1501,27 @@ describe("user.routes", () => {
             );
         });
 
-        it("neutralizes a </script> breakout in the attacker-controlled error detail", async () => {
+        it("keeps a </script> breakout in ?error= out of the popup page", async () => {
             const log = vi
                 .spyOn(console, "error")
                 .mockImplementation(() => undefined);
 
-            // ?error= flows into the inline script's JSON literal.
-            // JSON.stringify leaves "<" alone, so an unescaped payload of
-            // </script><script>… would close the legitimate script element
-            // and inject markup.
+            // ?error= is attacker-controllable and reaches this route's error
+            // path. The failure detail shown to the user is a fixed string
+            // (the raw error only goes to the server log), and the popup's
+            // JSON literal additionally escapes "<" as \u003c — so a
+            // </script><script>… payload can neither be reflected nor close
+            // the legitimate script element.
             const res = await request(app).get(
                 "/user/mcp-connectors/oauth/callback?error=" +
                     encodeURIComponent("</script><script>evil()</script>"),
             );
 
             expect(res.status).toBe(400);
-            // No breakout: the only </script> left is the page's own closing
-            // tag, and the payload's "<" chars were escaped to \u003c inside
-            // the JS string literal.
+            expect(res.text).not.toContain("evil()");
+            // The only </script> left is the page's own closing tag.
             expect(res.text).not.toContain("</script><script");
             expect(res.text.match(/<\/script>/g)).toHaveLength(1);
-            expect(res.text).toContain("\\u003c/script>");
             log.mockRestore();
         });
     });
