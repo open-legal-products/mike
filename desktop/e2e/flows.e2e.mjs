@@ -375,10 +375,12 @@ try {
       try {
         // Exact line match, not substring: the capture file is one URL per
         // line, and matching the whole line is both a tighter assertion and
-        // free of the "URL substring" pattern static analysis flags.
+        // free of the "URL substring" pattern static analysis flags. Compare
+        // with `===` per line rather than Array#includes — the substring
+        // heuristic keys off the call shape, not the receiver's type.
         return readFileSync(CAPTURE_FILE, "utf8")
           .split("\n")
-          .includes(EXTERNAL_URL);
+          .some((line) => line === EXTERNAL_URL);
       } catch {
         return false;
       }
@@ -665,15 +667,17 @@ try {
       entry.url === result.url,
       `logged download URL differs from the presigned URL: ${entry.url}`,
     );
-    // The probe must have chosen downloadURL, not the browser bounce.
-    let captured = "";
+    // The probe must have chosen downloadURL, not the browser bounce. Same
+    // exact-line comparison as the external-link step above: one URL per line,
+    // so no substring test on a URL is needed (or wanted).
+    let capturedLines = [];
     try {
-      captured = readFileSync(CAPTURE_FILE, "utf8");
+      capturedLines = readFileSync(CAPTURE_FILE, "utf8").split("\n");
     } catch {
       /* nothing captured — good */
     }
     assert(
-      !captured.includes(result.url),
+      capturedLines.every((line) => line !== result.url),
       "presigned URL was bounced to the system browser instead of downloading",
     );
     assert(
