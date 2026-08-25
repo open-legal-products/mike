@@ -53,12 +53,33 @@ function backendPublicUrl(): string {
   ).replace(/\/+$/, "");
 }
 
-// Storage keys are backend-constructed, but resolve-and-check anyway so a
-// corrupted key can never escape the storage root.
+// The one place a storage key becomes a filesystem path. Every fs call in this
+// module goes through here, so containment is proven once rather than trusted
+// three times.
+//
+// Keys are backend-constructed today, but they are built from user-supplied
+// filenames, so resolve-and-check anyway: path.join alone is not a fence —
+// it *canonicalizes* "../" rather than rejecting it, so join(root, "../x")
+// happily lands outside root, and an absolute key ignores root entirely.
+// path.resolve collapses both cases into one absolute path we can then test.
+//
+// The test is deliberately a SINGLE startsWith guard. An earlier shape —
+//   if (resolved !== root && !resolved.startsWith(root + path.sep)) throw
+// — is equally safe at runtime, but falling through it only proves a
+// *disjunction* ("resolved is exactly root" OR "resolved is under root"),
+// which neither a reader nor a static analyser can reduce to a containment
+// fact; CodeQL reported the fs calls below as js/path-injection for precisely
+// that reason. Falling through the form below proves one thing and nothing
+// weaker: resolved is under rootPrefix.
+//
+// Comparing against root + path.sep, not bare root, is what closes the classic
+// sibling escape — "/data/store-evil" startsWith "/data/store". The endsWith
+// guard keeps that correct when root is itself a separator (e.g. "/").
 function fsPathFor(key: string): string {
   const root = path.resolve(FS_ROOT!);
+  const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
   const resolved = path.resolve(root, key);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+  if (!resolved.startsWith(rootPrefix)) {
     throw new Error(`storage key escapes STORAGE_FS_ROOT: ${key}`);
   }
   return resolved;

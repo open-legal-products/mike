@@ -211,6 +211,70 @@ describe("filesystem storage driver", () => {
       ),
     ).rejects.toThrow(/escapes STORAGE_FS_ROOT/);
   });
+
+  // Containment is the fs driver's whole security boundary: a key is
+  // attacker-influenced text (it carries a user-supplied filename), and
+  // path.join would silently *canonicalize* "../" into a real escape rather
+  // than refuse it. Pin the property from both sides so a future refactor of
+  // fsPathFor cannot quietly widen it.
+  describe("storage-root containment", () => {
+    const escapes = {
+      "parent traversal": "../outside.bin",
+      "deep traversal": "documents/u1/../../../../../../etc/passwd",
+      "traversal that ends up back inside is still a traversal attempt":
+        "documents/../../mike-storage-fs-elsewhere/x.bin",
+      "absolute key ignores the root entirely": "/etc/passwd",
+    };
+
+    for (const [name, key] of Object.entries(escapes)) {
+      it(`rejects ${name}`, async () => {
+        const storage = await loadFsStorage(root);
+        const bytes = new ArrayBuffer(1);
+        await expect(
+          storage.uploadFile(key, bytes, "application/octet-stream"),
+        ).rejects.toThrow(/escapes STORAGE_FS_ROOT/);
+        // Every fs entry point shares the one choke-point, so none of them
+        // may act on the key — but each surfaces the refusal in its own
+        // driver-agnostic way. downloadFile reports "no such object" as null
+        // (its S3 branch does the same), deleteFile propagates anything that
+        // isn't a benign missing-file.
+        await expect(storage.downloadFile(key)).resolves.toBeNull();
+        await expect(storage.deleteFile(key)).rejects.toThrow(
+          /escapes STORAGE_FS_ROOT/,
+        );
+      });
+    }
+
+    it("rejects a sibling directory that merely shares the root's prefix", async () => {
+      // The classic off-by-one: "/tmp/mike-storage-fs-abc-evil" starts with
+      // "/tmp/mike-storage-fs-abc", which is why the check compares against
+      // root + path.sep rather than root.
+      const storage = await loadFsStorage(root);
+      const sibling = path.basename(root) + "-evil";
+      await expect(
+        storage.uploadFile(
+          `../${sibling}/x.bin`,
+          new ArrayBuffer(1),
+          "application/octet-stream",
+        ),
+      ).rejects.toThrow(/escapes STORAGE_FS_ROOT/);
+      await expect(fs.access(`${root}-evil`)).rejects.toThrow();
+    });
+
+    it("accepts a normal key and writes it inside the root", async () => {
+      const storage = await loadFsStorage(root);
+      const key = "documents/u1/d1/source.pdf";
+      await storage.uploadFile(
+        key,
+        new TextEncoder().encode("inside").buffer as ArrayBuffer,
+        "application/pdf",
+      );
+      const written = path.join(root, "documents", "u1", "d1", "source.pdf");
+      await expect(fs.readFile(written, "utf8")).resolves.toBe("inside");
+      expect(path.resolve(written).startsWith(path.resolve(root) + path.sep))
+        .toBe(true);
+    });
+  });
 });
 
 describe("blob tokens", () => {
