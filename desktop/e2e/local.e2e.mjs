@@ -1,8 +1,8 @@
 // End-to-end proof of SELF-CONTAINED local mode: launch the app with --local
 // and a FRESH userData dir, let the supervisor initdb + boot the whole stack
 // (postgres, gotrue, postgrest, gateway, backend, frontend — no Docker, no
-// network beyond loopback), then drive the real product over CDP: sign up,
-// create a project, upload a document into the library, and download it back
+// network beyond loopback), then drive the real product over CDP: sign up and
+// onboard, create a project, upload a document into the library, download it back
 // — which round-trips the filesystem storage driver AND the blob-token
 // signed-URL route.
 //
@@ -19,13 +19,19 @@ import { spawn } from "node:child_process";
 import { mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  completeOnboardingIfRequired,
+  dismissFirstRunOverlay,
+  packagedAppBinary,
+  signUpThroughUi,
+} from "./helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP = path.join(here, "..");
 const DEV = process.env.MIKE_E2E_DEV === "1";
 const APP_BINARY = DEV
   ? path.join(DESKTOP, "node_modules", ".bin", "electron")
-  : path.join(DESKTOP, "dist", "mac-arm64", "Mike.app", "Contents", "MacOS", "Mike");
+  : packagedAppBinary(DESKTOP);
 const FRONTEND_URL = "http://localhost:42815";
 const ARTIFACTS = path.join(here, "artifacts");
 const DOWNLOAD_DIR = path.join(ARTIFACTS, "local-downloads");
@@ -119,41 +125,28 @@ try {
   console.log("✓ local stack booted from scratch; app routed to /login");
   await shot(page, "local-01-login");
 
-  // 2. Sign up — GoTrue autoconfirms, entirely offline.
-  await page.getByRole("link", { name: "Sign up" }).click();
-  await page.waitForURL(/\/signup/, { timeout: 15_000 });
-  await page.getByPlaceholder("Your name").fill("Local E2E");
-  await page.getByPlaceholder("Your organisation").fill("Mike Local CI");
-  await page.getByPlaceholder("Enter your email").fill(EMAIL);
-  await page.getByPlaceholder("Create a password (min. 6 characters)").fill(PASSWORD);
-  await page.getByPlaceholder("Confirm your password").fill(PASSWORD);
-  await page.locator('button[type="submit"]').click();
+  // 2. Sign up — GoTrue autoconfirms, entirely offline. Because it
+  //    autoconfirms, signUp returns a session and the page pushes to
+  //    /onboarding/profile rather than /signup/check-email, so the wizard is
+  //    part of the offline path too (the profile writes go to local postgres
+  //    through the local backend — still no network).
+  await signUpThroughUi(page, { email: EMAIL, password: PASSWORD });
   await page.waitForURL((url) => !/\/(login|signup)/.test(url.href), {
     timeout: 30_000,
+  });
+  await completeOnboardingIfRequired(page, {
+    name: "Local E2E",
+    organisation: "Mike Local CI",
   });
   await page
     .getByRole("button", { name: "Assistant", exact: true })
     .first()
     .waitFor({ timeout: 20_000 });
-  console.log(`✓ signed up + auto-signed-in as ${EMAIL} (no network)`);
+  console.log(`✓ signed up + onboarded + auto-signed-in as ${EMAIL} (no network)`);
   await shot(page, "local-02-signed-in");
 
   // 2b. Dismiss any first-run overlay (welcome / API-key modal).
-  for (let i = 0; i < 5; i++) {
-    const overlay = page.locator("div.fixed.inset-0").last();
-    if (!(await overlay.isVisible().catch(() => false))) break;
-    let clicked = false;
-    for (const name of [/skip/i, /later/i, /got it/i, /continue/i, /close/i]) {
-      const btn = overlay.getByRole("button", { name }).first();
-      if (await btn.isVisible().catch(() => false)) {
-        await btn.click();
-        clicked = true;
-        break;
-      }
-    }
-    if (!clicked) await page.keyboard.press("Escape");
-    await page.waitForTimeout(700);
-  }
+  await dismissFirstRunOverlay(page);
 
   // 3. Create a project through the real wizard.
   await page.goto(`${FRONTEND_URL}/projects`);
@@ -250,6 +243,15 @@ try {
   //    in the product with zero typing. Run it twice — the first click hits
   //    the signUp fallback (the guest account doesn't exist yet), the second
   //    proves signInWithPassword against the account the first one created.
+  //
+  //    Both clicks push to /onboarding/profile (the guest handler in
+  //    frontend/src/app/login/page.tsx sends every guest to the same place a
+  //    password login goes), and OnboardingGate then decides: round one is a
+  //    brand-new account, so it stays on the wizard and we walk it; round two
+  //    is the SAME account coming back with onboarding already complete, so
+  //    the gate bounces it straight to /assistant and the helper is a no-op.
+  //    That asymmetry is the interesting half of the guest story, which is why
+  //    the same helper runs in both rounds instead of only the first.
   for (const round of ["first click (creates the guest account)", "second click (signs into it)"]) {
     await page.evaluate(() => localStorage.clear());
     await page.goto(`${FRONTEND_URL}/login`);
@@ -259,6 +261,14 @@ try {
     await page.waitForURL((url) => !/\/(login|signup)/.test(url.href), {
       timeout: 30_000,
     });
+    await completeOnboardingIfRequired(page, {
+      name: "Local Guest",
+      organisation: "Mike Local CI",
+    });
+    await page
+      .getByRole("button", { name: "Assistant", exact: true })
+      .first()
+      .waitFor({ timeout: 20_000 });
     console.log(`✓ guest mode, ${round}: /login → signed-in product`);
   }
   await shot(page, "local-05-guest");
