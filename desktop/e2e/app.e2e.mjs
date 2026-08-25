@@ -1,5 +1,5 @@
 // End-to-end proof that the packaged Mike.app hosts the real product against
-// a real local stack: launches dist/mac-arm64/Mike.app with a debugging port,
+// a real local stack: launches dist/<mac dir>/Mike.app with a debugging port,
 // drives it with Playwright over CDP (the shell's window IS a Chromium page),
 // signs up a fresh user, creates a project, and screenshots each stage.
 //
@@ -25,11 +25,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// electron-builder names its macOS output directory after the target arch:
+// arm64 → dist/mac-arm64, x64 → dist/mac. Hardcoding mac-arm64 made the suite
+// unrunnable on an Intel Mac, so derive it from the arch we're running on.
+const MAC_DIST_DIR = process.arch === "arm64" ? "mac-arm64" : "mac";
 const APP_BINARY = path.join(
   here,
   "..",
   "dist",
-  "mac-arm64",
+  MAC_DIST_DIR,
   "Mike.app",
   "Contents",
   "MacOS",
@@ -50,6 +54,9 @@ const USER_DATA_DIR = path.join(ARTIFACTS, "userdata");
 const CDP_PORT = 9223;
 const RUN_ID = Date.now().toString(36);
 const EMAIL = `desktop-e2e-${RUN_ID}@example.com`;
+// Must clear the product's minimum (MIN_PASSWORD_LENGTH = 10, see
+// frontend/src/app/components/auth/passwordPolicy.ts). RUN_ID is a base-36
+// timestamp (~8 chars), so this lands at 15+.
 const PASSWORD = `E2e!${RUN_ID}aA1`;
 const PROJECT_NAME = `Desktop E2E ${RUN_ID}`;
 
@@ -126,26 +133,43 @@ try {
   await shot(page, "01-login");
 
   // 2. Sign up a fresh user through the product UI (local stack autoconfirms).
+  //    Fields are Email / Password / Confirm Password, addressed by the ids the
+  //    form actually renders (frontend/src/app/signup/page.tsx). The only
+  //    type="submit" on the page is "Sign up" — the Google button is
+  //    type="button" (components/auth/GoogleAuthButton.tsx).
   await page.getByRole("link", { name: "Sign up" }).click();
   await page.waitForURL(/\/signup/, { timeout: 15_000 });
-  await page.getByPlaceholder("Your name").fill("Desktop E2E");
-  await page.getByPlaceholder("Your organisation").fill("Mike Desktop CI");
-  await page.getByPlaceholder("Enter your email").fill(EMAIL);
-  await page
-    .getByPlaceholder("Create a password (min. 6 characters)")
-    .fill(PASSWORD);
-  await page.getByPlaceholder("Confirm your password").fill(PASSWORD);
+  await page.locator("#email").fill(EMAIL);
+  await page.locator("#password").fill(PASSWORD);
+  await page.locator("#confirmPassword").fill(PASSWORD);
   await page.locator('button[type="submit"]').click();
+
+  // 2a. Onboarding is mandatory, not skippable: OnboardingGate
+  //     (frontend/src/app/components/auth/OnboardingGate.tsx) bounces a signed-in
+  //     user whose profile.onboardingComplete is false back to
+  //     /onboarding/profile from every non-auth route, so the suite has to walk
+  //     it. Step 1 of 2 is #name/#organisation → "Continue"; step 2 of 2 is the
+  //     practice form, whose "Skip" calls completeOnboarding({}) and then
+  //     replaces the URL with /assistant.
+  //     (Signup shows an "Account created!" interstitial for ~2s first.)
+  await page.waitForURL(/\/onboarding\/profile/, { timeout: 30_000 });
+  await page.locator("#name").fill("Desktop E2E");
+  await page.locator("#organisation").fill("Mike Desktop CI");
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.waitForURL(/\/onboarding\/practice/, { timeout: 20_000 });
+  await page.getByRole("button", { name: "Skip", exact: true }).click();
+
   // URL change alone can lie (a failed signup can still bounce through "/") —
   // authenticated is when the app sidebar renders.
-  await page.waitForURL((url) => !/\/(login|signup)/.test(url.href), {
-    timeout: 30_000,
-  });
+  await page.waitForURL(
+    (url) => !/\/(login|signup|onboarding)/.test(url.href),
+    { timeout: 30_000 },
+  );
   await page
     .getByRole("button", { name: "Assistant", exact: true })
     .first()
     .waitFor({ timeout: 20_000 });
-  console.log(`✓ signed up + auto-signed-in as ${EMAIL}`);
+  console.log(`✓ signed up + onboarded + auto-signed-in as ${EMAIL}`);
   await shot(page, "02-signed-in");
 
   // 2b. Dismiss any first-run overlay (welcome / API-key modal). Try its own
