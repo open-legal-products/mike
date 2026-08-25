@@ -1,9 +1,15 @@
 FROM node:22-slim
 
-WORKDIR /app
-COPY package*.json ./
+# LOCAL PATCH (not upstream): built from the REPO ROOT context, not ./frontend.
+# frontend/src/app/components/shared/types.ts imports backend types through
+# ../../../../../backend/src/lib/..., which only resolves when both packages sit
+# side by side. Keeping /app/frontend + /app/backend makes those paths real, so
+# next build type-checks instead of degrading the imports to `any`.
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
 RUN npm ci
-COPY . .
+COPY frontend/ ./
+COPY backend/ /app/backend/
 
 RUN npm run build
 

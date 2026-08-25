@@ -275,7 +275,13 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      # LOCAL PATCH (not upstream): the frontend imports backend types via
+      # ../../../../../backend/src/lib/... (frontend/src/app/components/shared/types.ts).
+      # A ./frontend context cannot see backend/, so next build's tsc fails with
+      # "implicitly has an 'any' type". Build from the repo root instead and
+      # mirror the layout in the image. See frontend/Dockerfile.
+      context: .
+      dockerfile: frontend/Dockerfile
     environment:
       - API_BASE_URL=${API_BASE_URL:-http://backend:3001}
     ports:
