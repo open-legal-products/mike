@@ -42,22 +42,15 @@ import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  completeOnboardingIfRequired,
+  dismissFirstRunOverlay,
+  packagedAppBinary,
+  signUpThroughUi,
+} from "./helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// electron-builder names its macOS output directory after the target arch:
-// arm64 → dist/mac-arm64, x64 → dist/mac. Hardcoding mac-arm64 made the suite
-// unrunnable on an Intel Mac, so derive it from the arch we're running on.
-const MAC_DIST_DIR = process.arch === "arm64" ? "mac-arm64" : "mac";
-const APP_BINARY = path.join(
-  here,
-  "..",
-  "dist",
-  MAC_DIST_DIR,
-  "Mike.app",
-  "Contents",
-  "MacOS",
-  "Mike",
-);
+const APP_BINARY = packagedAppBinary(path.join(here, ".."));
 const ARTIFACTS = path.join(here, "artifacts");
 const SERVER_URL = (process.env.MIKE_E2E_URL ?? "http://localhost:3000").replace(
   /\/$/,
@@ -226,63 +219,23 @@ try {
       await page.goto(`${SERVER_URL}/`);
     }
     await page.waitForURL(/\/login/, { timeout: 15_000 });
-    await page.getByRole("link", { name: "Sign up" }).click();
-    await page.waitForURL(/\/signup/, { timeout: 15_000 });
-    // Email / Password / Confirm Password, addressed by the ids the form
-    // actually renders (frontend/src/app/signup/page.tsx). The only
-    // type="submit" on the page is "Sign up" — the Google button is
-    // type="button" (components/auth/GoogleAuthButton.tsx).
-    await page.locator("#email").fill(EMAIL);
-    await page.locator("#password").fill(PASSWORD);
-    await page.locator("#confirmPassword").fill(PASSWORD);
-    await page.locator('button[type="submit"]').click();
-
-    // Onboarding is mandatory, not skippable: OnboardingGate
-    // (frontend/src/app/components/auth/OnboardingGate.tsx) bounces a signed-in
-    // user whose profile.onboardingComplete is false back to
-    // /onboarding/profile from every non-auth route, so the suite has to walk
-    // it before any of the flows below can reach a product page. Step 1 of 2 is
-    // #name/#organisation → "Continue"; step 2 of 2 is the practice form, whose
-    // "Skip" calls completeOnboarding({}) and then replaces the URL with
-    // /assistant. (Signup shows an "Account created!" interstitial for ~2s.)
-    await page.waitForURL(/\/onboarding\/profile/, { timeout: 30_000 });
-    await page.locator("#name").fill("Desktop Flows E2E");
-    await page.locator("#organisation").fill("Mike Desktop CI");
-    await page.getByRole("button", { name: "Continue", exact: true }).click();
-    await page.waitForURL(/\/onboarding\/practice/, { timeout: 20_000 });
-    await page.getByRole("button", { name: "Skip", exact: true }).click();
-
-    await page.waitForURL(
-      (url) => !/\/(login|signup|onboarding)/.test(url.href),
-      { timeout: 30_000 },
-    );
+    await signUpThroughUi(page, { email: EMAIL, password: PASSWORD });
+    await page.waitForURL((url) => !/\/(login|signup)/.test(url.href), {
+      timeout: 30_000,
+    });
+    // Signup hands off to the two-step onboarding wizard; the sidebar only
+    // exists on the other side of it.
+    await completeOnboardingIfRequired(page, {
+      name: "Desktop Flows E2E",
+      organisation: "Mike Desktop CI",
+    });
     await page
       .getByRole("button", { name: "Assistant", exact: true })
       .first()
       .waitFor({ timeout: 20_000 });
 
     // Dismiss any first-run overlay (welcome / API-key modal).
-    for (let i = 0; i < 5; i++) {
-      const overlay = page.locator("div.fixed.inset-0").last();
-      if (!(await overlay.isVisible().catch(() => false))) break;
-      let clicked = false;
-      for (const name of [
-        /skip/i,
-        /later/i,
-        /got it/i,
-        /continue/i,
-        /close/i,
-      ]) {
-        const btn = overlay.getByRole("button", { name }).first();
-        if (await btn.isVisible().catch(() => false)) {
-          await btn.click();
-          clicked = true;
-          break;
-        }
-      }
-      if (!clicked) await page.keyboard.press("Escape");
-      await page.waitForTimeout(700);
-    }
+    await dismissFirstRunOverlay(page);
     await shot(page, "flows-01-signed-in");
   });
 
