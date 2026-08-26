@@ -117,7 +117,11 @@ export function AskInputPopup({
             else next.delete(id);
             return next;
         });
-        if (shouldSkip) goToNextUnresolved(id);
+        if (!shouldSkip) return;
+        goToNextUnresolved(id);
+        // Skipping can be what clears the last outstanding item. `skipped`
+        // hasn't re-rendered yet, so hand the id to submit() explicitly.
+        if (!firstUnresolvedId(id)) submit(id);
     };
 
     const confirmItem = (id: string) => {
@@ -127,6 +131,7 @@ export function AskInputPopup({
             return next;
         });
         goToNextUnresolved(id);
+        if (!firstUnresolvedId(id)) submit();
     };
 
     const addDocs = (
@@ -182,13 +187,11 @@ export function AskInputPopup({
         setOtherOpen((prev) => ({ ...prev, [item.id]: false }));
     };
 
-    const allResolved =
-        event.items.length > 0 && event.items.every(itemResolved);
-    const canSubmit = !submitted && allResolved && !!onSubmit;
-
-    const buildResponse = (): AskInputsResponse => {
+    // `pendingSkipId` covers the item being skipped by the very handler that
+    // triggers the submit — its `skipped` state update hasn't landed yet.
+    const buildResponse = (pendingSkipId?: string): AskInputsResponse => {
         const responses = event.items.map((item) => {
-            if (skipped.has(item.id)) {
+            if (skipped.has(item.id) || item.id === pendingSkipId) {
                 if (item.kind === "documents") {
                     return {
                         id: item.id,
@@ -268,17 +271,15 @@ export function AskInputPopup({
         return `Responses to Mike's questions:\n${lines.join("\n\n")}`;
     };
 
-    const submit = () => {
-        if (!canSubmit) return;
-        const response = buildResponse();
+    // Called straight from the handler that resolves the last outstanding
+    // item. It used to run from an effect with no dependency array, which
+    // re-ran after every render and double-fired under StrictMode.
+    const submit = (pendingSkipId?: string) => {
+        if (submitted || !onSubmit) return;
+        const response = buildResponse(pendingSkipId);
         setSubmitted(true);
-        onSubmit?.(response, buildContent(response), responseFiles(response));
+        onSubmit(response, buildContent(response), responseFiles(response));
     };
-
-    useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- auto-submit when every question is answered; submit() sets state as part of the side effect
-        if (canSubmit) submit();
-    });
 
     const dismiss = useCallback(() => {
         if (submitted || dismissed) return;

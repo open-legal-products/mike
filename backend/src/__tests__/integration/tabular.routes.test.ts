@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
+import { supabaseState, resetSupabaseState } from "../helpers/supabaseMock";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock fns reconfigured per-test. Access helpers + model settings are
@@ -21,108 +22,27 @@ const {
 }));
 
 // ---------------------------------------------------------------------------
-// Configurable Supabase stub (mirrors projects.routes.test). Each test seeds
-// `supabaseState` in beforeEach; terminal query operations resolve to the
-// per-table result, rpc() resolves to a per-call result. Insert payloads are
-// recorded so tests can assert on what got persisted.
+// Supabase + auth stubs, shared with the other route suites via ../helpers/.
+// Every suite here mounts `app`, which loads every router, so they all need the
+// same fakes; see helpers/supabaseMock.ts for how `supabaseState` (seeded in
+// beforeEach below) drives the responses.
+//
+// `vi.mock` factories are hoisted above the imports, so they cannot close over
+// a top-level import binding — they pull the helper in dynamically instead. The
+// explicit ".js" is what TypeScript's node16 module resolution requires of a
+// dynamic (ECMAScript) import; Vite resolves it back to the .ts source, and
+// both specifiers resolve to the same module instance as the static import
+// above, so the state object the tests mutate is the one the stub reads.
 // ---------------------------------------------------------------------------
-type QueryResult = { data: unknown; error: unknown };
+vi.mock("../../lib/supabase", async () => {
+    const { mockSupabase } = await import("../helpers/supabaseMock.js");
+    return { createServerSupabase: vi.fn(() => mockSupabase()) };
+});
 
-let supabaseState: {
-    rpc: QueryResult;
-    rpcCalls: { fn: string; args: unknown }[];
-    operations: string[];
-    tables: Record<string, QueryResult>;
-    inserts: { table: string; payload: unknown }[];
-};
-
-function resetSupabaseState() {
-    supabaseState = {
-        rpc: { data: [], error: null },
-        rpcCalls: [],
-        operations: [],
-        tables: {},
-        inserts: [],
-    };
-}
-resetSupabaseState();
-
-function resultForTable(table: string): QueryResult {
-    return supabaseState.tables[table] ?? { data: null, error: null };
-}
-
-function makeQuery(table: string) {
-    const q: Record<string, unknown> = {};
-    const chain = [
-    "select",
-    "update",
-    "delete",
-    "upsert",
-    "eq",
-    "neq",
-    "in",
-    "is",
-    "or",
-    "not",
-    "lt",
-    "gt",
-    "gte",
-    "lte",
-    "filter",
-    "order",
-    "limit",
-    "range",
-    "contains",
-    ];
-    for (const m of chain) q[m] = vi.fn(() => q);
-    q.insert = vi.fn((payload: unknown) => {
-        supabaseState.inserts.push({ table, payload });
-        return q;
-    });
-    q.single = vi.fn(() => Promise.resolve(resultForTable(table)));
-    q.maybeSingle = vi.fn(() => Promise.resolve(resultForTable(table)));
-  q.then = (
-    resolve: (v: unknown) => unknown,
-    reject?: (e: unknown) => unknown,
-  ) => Promise.resolve(resultForTable(table)).then(resolve, reject);
-    return q;
-}
-
-function mockSupabase() {
-    return {
-        from: vi.fn((table: string) => {
-            supabaseState.operations.push(`from:${table}`);
-            return makeQuery(table);
-        }),
-        rpc: vi.fn((fn: string, args: unknown) => {
-            supabaseState.operations.push(`rpc:${fn}`);
-            supabaseState.rpcCalls.push({ fn, args });
-            return Promise.resolve(supabaseState.rpc);
-        }),
-        auth: {
-            getUser: () =>
-                Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
-        },
-    };
-}
-
-vi.mock("../../lib/supabase", () => ({
-    createServerSupabase: vi.fn(() => mockSupabase()),
-}));
-
-vi.mock("../../middleware/auth", () => ({
-    requireAuth: (
-        _req: unknown,
-        res: { locals: Record<string, unknown> },
-        next: () => void,
-    ) => {
-        res.locals.userId = "u1";
-        res.locals.userEmail = "u1@test.local";
-        next();
-    },
-    requireMfaIfEnrolled: (_req: unknown, _res: unknown, next: () => void) =>
-        next(),
-}));
+vi.mock("../../middleware/auth", async () => {
+    const { authMock } = await import("../helpers/authMock.js");
+    return authMock();
+});
 
 vi.mock("../../lib/access", () => ({
     ensureReviewAccess: (...args: unknown[]) => ensureReviewAccess(...args),
@@ -658,13 +578,31 @@ describe("tabular.routes", () => {
     // ── DELETE /tabular-review/:reviewId ──────────────────────────────────
     describe("DELETE /tabular-review/:reviewId", () => {
         it("returns 204 on success", async () => {
-            supabaseState.tables.tabular_reviews = { data: null, error: null };
+            // The route now selects the deleted ids back, so the fixture has
+            // to report the row it removed.
+            supabaseState.tables.tabular_reviews = {
+                data: [{ id: "r1" }],
+                error: null,
+            };
 
             const res = await request(app)
                 .delete("/tabular-review/r1")
                 .set(...AUTH);
 
             expect(res.status).toBe(204);
+        });
+
+        it("returns 404 when the delete matches no review", async () => {
+            // A collaborator deleting a review they do not own matches nothing;
+            // answering 204 told the UI a no-op had succeeded.
+            supabaseState.tables.tabular_reviews = { data: [], error: null };
+
+            const res = await request(app)
+                .delete("/tabular-review/r1")
+                .set(...AUTH);
+
+            expect(res.status).toBe(404);
+            expect(res.body.detail).toBe("Review not found");
         });
 
         it("returns 500 when the delete errors", async () => {

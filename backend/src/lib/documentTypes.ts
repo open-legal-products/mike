@@ -12,6 +12,27 @@ export const ALLOWED_DOCUMENT_TYPES = new Set([
 export const ALLOWED_DOCUMENT_TYPES_LABEL =
   "pdf, docx, doc, xlsx, xlsm, xls, pptx, ppt";
 
+// The lowercased extension of a filename, or "" when it has none.
+export function documentSuffix(filename: string): string {
+  return filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
+}
+
+// Extension check every upload entry point performs before it touches
+// storage. The `detail` string is the exact 400 body those routes already
+// returned, so callers forward it verbatim and their wording is unchanged.
+export function parseAllowedSuffix(
+  filename: string,
+): { ok: true; suffix: string } | { ok: false; detail: string } {
+  const suffix = documentSuffix(filename);
+  if (!ALLOWED_DOCUMENT_TYPES.has(suffix)) {
+    return {
+      ok: false,
+      detail: `Unsupported file type: ${suffix}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
+    };
+  }
+  return { ok: true, suffix };
+}
+
 const WORD_TYPES = new Set(["docx", "doc"]);
 const SPREADSHEET_TYPES = new Set(["xlsx", "xlsm", "xls"]);
 const PRESENTATION_TYPES = new Set(["pptx", "ppt"]);

@@ -30,13 +30,12 @@ import {
 } from "../../lib/userSettings";
 import { checkProjectAccess } from "../../lib/access";
 import { generateAssistantChatTitle } from "../../lib/chatTitle";
+import { devLog } from "../../lib/chat/types";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
-const isDev = process.env.NODE_ENV !== "production";
-export const devLog = (...args: Parameters<typeof console.log>) => {
-    if (isDev) console.log(...args);
-};
+// Re-exported for chat.routes.ts, which imports it from here.
+export { devLog };
 
 type AccessibleChat = {
     id: string;

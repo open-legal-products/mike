@@ -2,8 +2,9 @@
 // call the service layer in workflows.service.ts, and map its typed results
 // onto status codes and JSON responses.
 
-import { Router, type NextFunction, type Request, type Response } from "express";
+import { Router, type Request, type Response } from "express";
 import { requireAuth } from "../../middleware/auth";
+import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { normalizeSearchTerm } from "../../lib/search";
@@ -44,14 +45,6 @@ import {
 export const workflowsRouter = Router();
 
 type Db = ReturnType<typeof createServerSupabase>;
-
-type AsyncRoute = (req: Request, res: Response) => Promise<unknown>;
-
-function asyncRoute(handler: AsyncRoute) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    void handler(req, res).catch(next);
-  };
-}
 
 // Installs missing default workflows before any listing; a failure here is
 // terminal for the request (500 with the opaque internal-error body).
@@ -513,9 +506,5 @@ workflowsRouter.post("/:workflowId/share", requireAuth, asyncRoute(async (req, r
 }));
 
 workflowsRouter.use(
-  (err: unknown, _req: Request, res: Response, next: NextFunction) => {
-    if (res.headersSent) return next(err);
-    console.error("[workflows] unhandled route error", err);
-    res.status(500).json({ detail: "Failed to process workflow request" });
-  },
+  routerErrorHandler("[workflows]"),
 );

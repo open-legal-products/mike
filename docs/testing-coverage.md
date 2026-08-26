@@ -1,8 +1,10 @@
 # Backend unit-test coverage
 
-The backend has a Vitest unit-test harness over `backend/src/lib/**`. This doc
-tracks what is covered, what still needs tests, and how the coverage ratchet
-works — so you can pick up a checkbox below and land it as a small PR.
+The backend has a Vitest unit-test harness over all of `backend/src/**`
+(routes, modules, workers, and middleware included — the scope was widened
+from `src/lib/**` in 2026-08 so untested areas can't silently drop to zero).
+This doc tracks what is covered, what still needs tests, and how the coverage
+ratchet works — so you can pick up a checkbox below and land it as a small PR.
 
 ## Running the tests
 
@@ -48,10 +50,13 @@ Per-area statement coverage from `npm run test:coverage`:
 | `lib/mcp/**` | 6 | minimal |
 | `lib/userSettings.ts`, `lib/officeText.ts`, `lib/spreadsheet.ts` | 0 | ✗ |
 
-Global: **52.72% statements / 46.31% branches / 53.24% functions / 54.11%
-lines**. The global number remains relatively low because `src/lib/**` includes
-several large feature libs (toolDispatcher, documentOps, CourtListener, MCP,
-and provider adapters) that dominate the line count.
+Global (measured over the widened `src/**` scope, which now includes
+`routes/`, `modules/`, `workers/` and `middleware/` rather than `src/lib/**`
+alone): **47.56% statements / 40.86% branches / 49.78% functions / 49.20%
+lines**; the ratchet floors in `backend/vitest.config.mts` sit ~2 points below
+those. The global number is held down by a few very large feature libs
+(toolDispatcher, documentOps, courtlistener, MCP, provider adapters) that are
+still untested and dominate the line count.
 
 ## TODO — untested libs, in priority order
 
@@ -113,7 +118,7 @@ better exercised by the e2e suite.
 ## Ratchet policy
 
 `backend/vitest.config.mts` enforces global coverage **floors** (currently
-statements 39 / branches 35 / functions 42 / lines 40). They are a
+statements 45 / branches 38 / functions 47 / lines 47). They are a
 no-regression ratchet, not a target:
 
 - **Floors only go up.** Never lower them to get a PR green — that means your

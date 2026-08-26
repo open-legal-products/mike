@@ -70,6 +70,7 @@ const GLASS_DOT =
 const SURFACE_LABELS: Record<string, string> = {
   assistant: "Assistant",
   project: "Project",
+  word: "Word",
   tabular: "Tabular",
   workflows: "Workflows",
   account: "Account",

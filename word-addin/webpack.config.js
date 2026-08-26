@@ -210,7 +210,11 @@ module.exports = async (_env, options) => {
         // Mike backend so HttpOnly auth cookies are never third-party cookies.
         REACT_APP_API_BASE_URL:
           process.env.REACT_APP_API_BASE_URL || "/api",
-        REACT_APP_DEFAULT_MODEL: "gemini-3-flash-preview",
+        // Deployment override only. Leaving it empty makes DEFAULT_MODEL_ID in
+        // src/taskpane/lib/modelCatalog.ts the single source of the default
+        // model — this config file cannot import that TypeScript constant, so
+        // repeating its value here would be a second copy that silently drifts.
+        REACT_APP_DEFAULT_MODEL: process.env.REACT_APP_DEFAULT_MODEL || "",
         // The Mike web app origin — the task pane links here (e.g. the
         // account/api-keys page); it never fetches from it.
         REACT_APP_WEB_APP_URL: isDev

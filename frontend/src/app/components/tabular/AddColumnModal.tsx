@@ -37,13 +37,14 @@ interface Props {
     existingCount: number;
     onClose: () => void;
     onAdd: (cols: ColumnConfig[]) => void;
-    editingColumn?: ColumnConfig;
-    onSave?: (col: ColumnConfig) => void;
-    onDelete?: () => void;
 }
 
-export function AddColumnModal({ open, existingCount, onClose, onAdd, editingColumn, onSave, onDelete }: Props) {
-    const isEditing = !!editingColumn;
+export function AddColumnModal({
+    open,
+    existingCount,
+    onClose,
+    onAdd,
+}: Props) {
     const formId = "add-column-modal-form";
     const [columns, setColumns] = useState<ColumnDraft[]>([{ ...EMPTY_DRAFT }]);
     const [collapsedIndices, setCollapsedIndices] = useState<number[]>([]);
@@ -55,19 +56,9 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
 
     useEffect(() => {
         if (!open) return;
-        if (editingColumn) {
-            setColumns([{
-                name: editingColumn.name,
-                prompt: editingColumn.prompt,
-                format: editingColumn.format ?? "text",
-                tags: editingColumn.tags ?? [],
-                tagInput: "",
-            }]);
-        } else {
-            setColumns([{ ...EMPTY_DRAFT }]);
-        }
+        setColumns([{ ...EMPTY_DRAFT }]);
         setCollapsedIndices([]);
-    }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [open]);
 
     useEffect(() => {
         if (presetsOpenIndex === null) return;
@@ -188,26 +179,15 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
         e.preventDefault();
         if (columns.some((col) => !col.name.trim() || !col.prompt.trim()))
             return;
-        if (isEditing && onSave && editingColumn) {
-            const col = columns[0]!;
-            onSave({
-                index: editingColumn.index,
+        onAdd(
+            columns.map((col, i) => ({
+                index: existingCount + i,
                 name: col.name.trim(),
                 prompt: col.prompt.trim(),
                 format: col.format,
                 tags: col.format === "tag" ? col.tags : undefined,
-            });
-        } else {
-            onAdd(
-                columns.map((col, i) => ({
-                    index: existingCount + i,
-                    name: col.name.trim(),
-                    prompt: col.prompt.trim(),
-                    format: col.format,
-                    tags: col.format === "tag" ? col.tags : undefined,
-                })),
-            );
-        }
+            })),
+        );
         resetForm();
         onClose();
     }
@@ -216,12 +196,9 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
         <Modal
             open={open}
             onClose={handleClose}
-            breadcrumbs={[
-                "Tabular Review",
-                isEditing ? "Edit column" : "New column",
-            ]}
+            breadcrumbs={["Tabular Review", "New column"]}
             primaryAction={{
-                label: isEditing ? "Save changes" : "Add columns",
+                label: "Add columns",
                 type: "submit",
                 form: formId,
                 disabled: columns.some(
@@ -229,15 +206,6 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                 ),
             }}
             cancelAction={{ label: "Cancel", onClick: handleClose }}
-            secondaryAction={
-                isEditing && onDelete
-                    ? {
-                          label: "Delete",
-                          variant: "danger",
-                          onClick: onDelete,
-                      }
-                    : undefined
-            }
         >
             <form
                 id={formId}
@@ -524,16 +492,14 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                             </div>
                         ))}
 
-                        {!isEditing && (
-                            <button
-                                type="button"
-                                onClick={addAnotherColumn}
-                                className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-gray-900"
-                            >
-                                <Plus className="h-4 w-4" />
-                                Add another column
-                            </button>
-                        )}
+                        <button
+                            type="button"
+                            onClick={addAnotherColumn}
+                            className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-gray-900"
+                        >
+                            <Plus className="h-4 w-4" />
+                            Add another column
+                        </button>
                 </div>
             </form>
         </Modal>

@@ -5,6 +5,16 @@ const url = process.env.SUPABASE_TEST_URL;
 const serviceKey = process.env.SUPABASE_TEST_SERVICE_ROLE_KEY;
 const maybeDescribe = url && serviceKey ? describe : describe.skip;
 
+/* supabase-js types an rpc() result's `data` as `any`, so the `.map()` /
+   `.every()` callbacks below get no inferred parameter type (and, under
+   noImplicitAny, no type check at all). Name the handful of overview columns
+   these assertions actually read. */
+type OverviewRow = {
+    id: string;
+    project_id: string | null;
+    columns_config: unknown[] | null;
+};
+
 maybeDescribe("Supabase tabular-review pagination", () => {
     let ownerId = "";
     let ownerEmail = "";
@@ -112,8 +122,8 @@ maybeDescribe("Supabase tabular-review pagination", () => {
         expect(firstPage.data).toHaveLength(20);
         expect(secondPage.data).toHaveLength(5);
 
-        const firstIds = (firstPage.data ?? []).map((row) => row.id);
-        const secondIds = (secondPage.data ?? []).map((row) => row.id);
+        const firstIds = (firstPage.data ?? []).map((row: OverviewRow) => row.id);
+        const secondIds = (secondPage.data ?? []).map((row: OverviewRow) => row.id);
         expect(new Set([...firstIds, ...secondIds]).size).toBe(25);
         expect([...firstIds, ...secondIds]).toEqual(
             [...projectReviewIds].sort(),
@@ -152,10 +162,10 @@ maybeDescribe("Supabase tabular-review pagination", () => {
         expect(standalone.error).toBeNull();
 
         const inProjectIds = new Set(
-            (inProject.data ?? []).map((row) => row.id as string),
+            (inProject.data ?? []).map((row: OverviewRow) => row.id as string),
         );
         const standaloneIds = new Set(
-            (standalone.data ?? []).map((row) => row.id as string),
+            (standalone.data ?? []).map((row: OverviewRow) => row.id as string),
         );
 
         for (const id of projectReviewIds) expect(inProjectIds.has(id)).toBe(true);
@@ -168,10 +178,10 @@ maybeDescribe("Supabase tabular-review pagination", () => {
             expect(standaloneIds.has(id)).toBe(false);
 
         expect(
-            (inProject.data ?? []).every((row) => row.project_id !== null),
+            (inProject.data ?? []).every((row: OverviewRow) => row.project_id !== null),
         ).toBe(true);
         expect(
-            (standalone.data ?? []).every((row) => row.project_id === null),
+            (standalone.data ?? []).every((row: OverviewRow) => row.project_id === null),
         ).toBe(true);
     });
 
@@ -191,7 +201,7 @@ maybeDescribe("Supabase tabular-review pagination", () => {
         expect(result.error).toBeNull();
         expect(result.data).toHaveLength(5);
         expect(
-            (result.data ?? []).every((row) => row.project_id === null),
+            (result.data ?? []).every((row: OverviewRow) => row.project_id === null),
         ).toBe(true);
     });
 
@@ -241,7 +251,7 @@ maybeDescribe("Supabase tabular-review pagination", () => {
 
         expect(result.error).toBeNull();
         const columnCounts = (result.data ?? []).map(
-            (row) =>
+            (row: OverviewRow) =>
                 (row.columns_config as unknown[] | null | undefined)?.length ??
                 0,
         );
@@ -287,7 +297,7 @@ maybeDescribe("Supabase tabular-review pagination", () => {
                 p_offset: offset,
             });
             expect(page.error).toBeNull();
-            collected.push(...(page.data ?? []).map((row) => row.id as string));
+            collected.push(...(page.data ?? []).map((row: OverviewRow) => row.id as string));
         }
 
         expect(new Set(collected).size).toBe(projectReviewIds.length);
@@ -303,7 +313,7 @@ maybeDescribe("Supabase tabular-review pagination", () => {
 
         expect(result.error).toBeNull();
         const returnedIds = new Set(
-            (result.data ?? []).map((row) => row.id as string),
+            (result.data ?? []).map((row: OverviewRow) => row.id as string),
         );
         for (const id of [...projectReviewIds, ...standaloneReviewIds])
             expect(returnedIds.has(id)).toBe(true);

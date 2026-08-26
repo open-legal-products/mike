@@ -22,7 +22,10 @@
     "test:e2e": "playwright test",
     "test:e2e:webkit": "playwright test --project=webkit",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "live:login": "node e2e-live/word-web-session.mjs --login",
+    "live:word": "node e2e-live/manual-session.mjs",
+    "live:stub": "node e2e-live/anthropic-stub.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2.1.16",

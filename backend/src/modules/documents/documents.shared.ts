@@ -8,6 +8,10 @@ import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
 
 export type Db = ReturnType<typeof createServerSupabase>;
 
+// pdfjs page counting is shared with the projects module — the single
+// implementation lives in lib/pdfjs.ts alongside the loader it uses.
+export { countPdfPages } from "../../lib/pdfjs";
+
 // Structural slice of Express.Multer.File — only these two fields are read.
 export type UploadedFile = { buffer: Buffer; originalname: string };
 
@@ -46,19 +50,3 @@ export async function deleteDocumentAndVersionFiles(
 // entries with it too); re-exported here so this module's importers keep the
 // same surface.
 export { downloadFilenameForVersion } from "../../lib/documentVersions";
-
-export async function countPdfPages(buf: ArrayBuffer): Promise<number | null> {
-    try {
-        const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
-        const pdf = await (
-            pdfjsLib as unknown as {
-                getDocument: (opts: unknown) => {
-                    promise: Promise<{ numPages: number }>;
-                };
-            }
-        ).getDocument({ data: new Uint8Array(buf) }).promise;
-        return pdf.numPages;
-    } catch {
-        return null;
-    }
-}

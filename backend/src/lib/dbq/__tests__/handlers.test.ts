@@ -1,29 +1,57 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { createServerSupabase } from "../../supabase";
+import type { AuditEventInput } from "../../audit";
 
-const insertAuditEvent = vi.fn(async () => {});
-const recordAudit = vi.fn(async () => {});
+// Every stub below carries the argument list of the function it replaces.
+// That is what makes `mock.calls[n][m]` a real argument rather than an
+// element of an untyped rest array — the assertions read those positions.
+type Db = ReturnType<typeof createServerSupabase>;
+
+const insertAuditEvent =
+    vi.fn<(db: Db, event: AuditEventInput) => Promise<void>>(async () => {});
+const recordAudit =
+    vi.fn<(db: Db, event: AuditEventInput) => Promise<void>>(async () => {});
 vi.mock("../../audit", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../audit")>();
     return {
         ...actual,
-        insertAuditEvent: (...a: unknown[]) => insertAuditEvent(...a),
-        recordAudit: (...a: unknown[]) => recordAudit(...a),
+        insertAuditEvent: (db: Db, event: AuditEventInput) =>
+            insertAuditEvent(db, event),
+        recordAudit: (db: Db, event: AuditEventInput) =>
+            recordAudit(db, event),
     };
 });
 
-const deleteUserAccountData = vi.fn(async () => {});
+const deleteUserAccountData =
+    vi.fn<
+        (db: Db, userId: string, userEmail?: string | null) => Promise<void>
+    >(async () => {});
 vi.mock("../../userDataCleanup", () => ({
-    deleteUserAccountData: (...a: unknown[]) => deleteUserAccountData(...a),
+    deleteUserAccountData: (
+        db: Db,
+        userId: string,
+        userEmail?: string | null,
+    ) => deleteUserAccountData(db, userId, userEmail),
 }));
 
-const buildUserAccountExport = vi.fn(async () => ({ hello: "world" }));
+const buildUserAccountExport =
+    vi.fn<
+        (
+            db: Db,
+            userId: string,
+            userEmail?: string | null,
+        ) => Promise<{ hello: string }>
+    >(async () => ({ hello: "world" }));
 vi.mock("../../userDataExport", async (importOriginal) => {
     const actual =
         await importOriginal<typeof import("../../userDataExport")>();
     return {
         ...actual,
-        buildUserAccountExport: (...a: unknown[]) =>
-            buildUserAccountExport(...a),
+        buildUserAccountExport: (
+            db: Db,
+            userId: string,
+            userEmail?: string | null,
+        ) => buildUserAccountExport(db, userId, userEmail),
     };
 });
 
@@ -67,14 +95,20 @@ vi.mock("../../documentVersions", async (importOriginal) => {
     };
 });
 
-const uploadFile = vi.fn(async () => {});
-const deleteFile = vi.fn(async () => {});
-const listFiles = vi.fn(async () => [] as string[]);
+const uploadFile =
+    vi.fn<
+        (key: string, content: ArrayBuffer, contentType: string) => Promise<void>
+    >(async () => {});
+const deleteFile = vi.fn<(key: string) => Promise<void>>(async () => {});
+const listFiles = vi.fn<(prefix: string) => Promise<string[]>>(
+    async () => [] as string[],
+);
 const downloadFile = vi.fn(async (..._a: unknown[]) => new Uint8Array([1, 2, 3]));
 vi.mock("../../storage", () => ({
-    uploadFile: (...a: unknown[]) => uploadFile(...a),
-    deleteFile: (...a: unknown[]) => deleteFile(...a),
-    listFiles: (...a: unknown[]) => listFiles(...a),
+    uploadFile: (key: string, content: ArrayBuffer, contentType: string) =>
+        uploadFile(key, content, contentType),
+    deleteFile: (key: string) => deleteFile(key),
+    listFiles: (prefix: string) => listFiles(prefix),
     downloadFile: (...a: unknown[]) => downloadFile(...a),
 }));
 
@@ -178,9 +212,7 @@ describe("handleChatTurnAudit", () => {
         );
         // chat.message + document.generated
         expect(insertAuditEvent).toHaveBeenCalledTimes(2);
-        const actions = insertAuditEvent.mock.calls.map(
-            (c) => (c[1] as { action: string }).action,
-        );
+        const actions = insertAuditEvent.mock.calls.map((c) => c[1].action);
         expect(actions).toEqual(["chat.message", "document.generated"]);
     });
 

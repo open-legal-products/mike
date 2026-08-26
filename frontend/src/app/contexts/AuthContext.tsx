@@ -5,6 +5,7 @@ import React, {
     useContext,
     useCallback,
     useEffect,
+    useMemo,
     useRef,
     useState,
     ReactNode,
@@ -190,7 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     }, [broadcastAuthState, fetchAndApplySession]);
 
-    const signOut = async () => {
+    const signOut = useCallback(async () => {
         try {
             await logout("local");
             setUser(null);
@@ -200,38 +201,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setAuthError("Unable to sign out. Please try again.");
             throw error;
         }
-    };
+    }, [broadcastAuthState]);
 
-    const updateEmail = async (email: string) => {
+    const updateEmail = useCallback(async (email: string) => {
         const { user: nextUser } = await updateAuthEmail(
             email,
             "/settings?emailChange=processed",
         );
         setUser(nextUser);
         return nextUser;
-    };
+    }, []);
 
-    const setPassword = async (password: string) => {
+    const setPassword = useCallback(async (password: string) => {
         const { user: nextUser } = await updateAuthPassword(password);
         setUser(nextUser);
-    };
+    }, []);
+
+    // A fresh object here re-renders every consumer of this context on every
+    // provider render, sign-in state change or not. Each callback above is
+    // itself memoized, so this only changes when user/authLoading/authError do.
+    const value = useMemo<AuthContextType>(
+        () => ({
+            user,
+            isAuthenticated: !!user,
+            authLoading,
+            authError,
+            signOut,
+            updateEmail,
+            setPassword,
+            refreshSession,
+            retrySession: refreshSession,
+        }),
+        [
+            user,
+            authLoading,
+            authError,
+            signOut,
+            updateEmail,
+            setPassword,
+            refreshSession,
+        ],
+    );
 
     return (
-        <AuthContext.Provider
-            value={{
-                user,
-                isAuthenticated: !!user,
-                authLoading,
-                authError,
-                signOut,
-                updateEmail,
-                setPassword,
-                refreshSession,
-                retrySession: refreshSession,
-            }}
-        >
-            {children}
-        </AuthContext.Provider>
+        <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
     );
 }
 

@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { StreamChatParams, StreamChatResult } from "../../llm/types";
 
+// The stub stands in for the real adapter, so it carries the real adapter's
+// signature: that is what lets the assertions below read `mock.calls[n][0]`
+// as a StreamChatParams instead of an untyped tuple.
 const { streamChatWithTools } = vi.hoisted(() => ({
-    streamChatWithTools: vi.fn(async () => ({ fullText: "" })),
+    streamChatWithTools: vi.fn<
+        (params: StreamChatParams) => Promise<StreamChatResult>
+    >(async () => ({ fullText: "" })),
 }));
 
 // Keep the real model catalog/constants but stub the adapter dispatch so no
 // provider SDK is touched; the assertion is which model reaches the adapter.
 vi.mock("../../llm", async () => ({
     ...(await vi.importActual<Record<string, unknown>>("../../llm/models")),
-    streamChatWithTools: (...args: unknown[]) => streamChatWithTools(...args),
+    streamChatWithTools: (params: StreamChatParams) =>
+        streamChatWithTools(params),
 }));
 
 vi.mock("../../mcpConnectors", () => ({
@@ -42,7 +49,9 @@ async function runStreamWithModel(
 ) {
     await runLLMStream({
         apiMessages: [{ role: "user", content: "hello" }],
-        docStore: {},
+        // docStore is a Map keyed by doc id; nothing in these cases resolves a
+        // document, so an empty one is enough — but it has to be a real Map.
+        docStore: new Map(),
         docIndex: {},
         userId: "user-1",
         db: db as never,
@@ -105,9 +114,13 @@ describe("runLLMStream router-model allowlist", () => {
         const error = await runStreamWithModel(
             routerModelsDb([]),
             "openrouter/pricy/frontier-model",
-        ).catch((err: unknown) => err as AssistantStreamError);
+        ).catch((err: unknown) => err);
 
         expect(error).toBeInstanceOf(AssistantStreamError);
+        // The assertion above already failed the test if this is not one, so
+        // the narrow is type-level only — but it is the narrow, not a cast,
+        // that makes `.events` readable.
+        if (!(error instanceof AssistantStreamError)) throw error;
         expect(error.events).toContainEqual(
             expect.objectContaining({
                 type: "error",
@@ -138,7 +151,11 @@ describe("runLLMStream router-model allowlist", () => {
                 message: "canceling statement due to statement timeout",
             }),
             "openrouter/allowed/model",
-        ).catch((err: unknown) => err as AssistantStreamError);
+        ).catch((err: unknown) => err);
+        // Same narrow as above: anything other than an AssistantStreamError
+        // fails this case either way, and the `instanceof` is what lets the
+        // events assertion see the class's shape.
+        if (!(error instanceof AssistantStreamError)) throw error;
         expect(error.events).toContainEqual(
             expect.objectContaining({ type: "error" }),
         );

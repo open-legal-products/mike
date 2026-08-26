@@ -10,7 +10,7 @@ describe("buildTabularReviewsOverviewRpcArgs", () => {
         expect(
             buildTabularReviewsOverviewRpcArgs({
                 userId: "user-1",
-                userEmail: "user@example.com",
+                userEmail: " User@Example.com ",
                 projectIdFilter: "project-1",
                 scope: "in-project",
                 pagination: { limit: 25, offset: 10 },
@@ -56,7 +56,7 @@ describe("buildTabularReviewIdsOverviewRpcArgs", () => {
         expect(
             buildTabularReviewIdsOverviewRpcArgs({
                 userId: "user-1",
-                userEmail: "user@example.com",
+                userEmail: " User@Example.com ",
                 projectIdFilter: "project-1",
                 scope: "in-project",
                 searchTerm: "merger",

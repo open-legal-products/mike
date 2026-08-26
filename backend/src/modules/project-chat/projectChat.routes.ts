@@ -16,6 +16,7 @@ import {
     buildCancelledAssistantMessage,
     extractCitations,
     isAbortError,
+    openAssistantSse,
     runLLMStream,
     stripTransientAssistantEvents,
     PROJECT_EXTRA_TOOLS,
@@ -111,18 +112,8 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     // has been persisted.
     let chatTitle = prep.prepared.chatTitle;
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    const write = (line: string) => res.write(line);
-    const streamAbort = new AbortController();
-    let streamFinished = false;
-    res.on("close", () => {
-        if (!streamFinished) streamAbort.abort();
-    });
+    const stream = openAssistantSse(res);
+    const write = stream.write;
 
     try {
         write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
@@ -155,7 +146,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
                           .eq("id", chatId);
                       if (error) throw error;
                       chatTitle = title;
-                      if (!streamAbort.signal.aborted) {
+                      if (!stream.signal.aborted) {
                           write(
                               `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
                           );
@@ -181,7 +172,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             includeResearchTools: legalResearchUs,
             model,
             apiKeys,
-            signal: streamAbort.signal,
+            signal: stream.signal,
             projectId,
             nonce,
             emitDone: false,
@@ -213,7 +204,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
                 .update({ title })
                 .eq("id", chatId);
             chatTitle = title;
-            if (shouldGenerateTitle && !streamAbort.signal.aborted) {
+            if (shouldGenerateTitle && !stream.signal.aborted) {
                 write(
                     `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
                 );
@@ -317,7 +308,6 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             /* ignore */
         }
     } finally {
-        streamFinished = true;
-        res.end();
+        stream.finish();
     }
 });

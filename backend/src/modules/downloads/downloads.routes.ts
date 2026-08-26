@@ -4,15 +4,15 @@ import { createServerSupabase } from "../../lib/supabase";
 import { buildContentDisposition, downloadFile } from "../../lib/storage";
 import { verifyDownload } from "../../lib/downloadTokens";
 import { ensureDocAccess } from "../../lib/access";
-import { contentTypeForDocumentType } from "../../lib/documentTypes";
+import {
+    contentTypeForDocumentType,
+    documentSuffix,
+} from "../../lib/documentTypes";
 
 export const downloadsRouter = Router();
 
 function contentTypeFor(filename: string): string {
-    const suffix = filename.includes(".")
-        ? filename.split(".").pop()?.toLowerCase()
-        : "";
-    return contentTypeForDocumentType(suffix);
+    return contentTypeForDocumentType(documentSuffix(filename));
 }
 
 // GET /download/:token

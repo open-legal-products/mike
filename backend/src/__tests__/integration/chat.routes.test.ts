@@ -278,7 +278,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("streams SSE with a chat_id event on the happy path", async () => {
-        const chatLib = await import("../../lib/chat");
+        const chatLib = await import("../../lib/chat/index.js");
         let reservationExistedBeforeStreaming = false;
         runLLMStream.mockImplementation(async () => {
             reservationExistedBeforeStreaming = !!findAssistantReservation();
@@ -364,7 +364,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("stores cloud Word chats only in the document-scoped Word tables", async () => {
-        const chatLib = await import("../../lib/chat");
+        const chatLib = await import("../../lib/chat/index.js");
         const res = await request(app)
             .post("/word-chat")
             .set("Authorization", "Bearer test")
@@ -692,7 +692,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("uses the streamed assistant message id when persisting a cancelled partial response", async () => {
-        const { AssistantStreamAbortError } = await import("../../lib/chat");
+        const { AssistantStreamAbortError } = await import("../../lib/chat/index.js");
         runLLMStream.mockRejectedValue(
             new AssistantStreamAbortError("partial", [
                 { type: "content", text: "partial" },
@@ -914,7 +914,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("makes document_context tool-readable without adding it to the system prompt", async () => {
-        const chatLib = await import("../../lib/chat");
+        const chatLib = await import("../../lib/chat/index.js");
         const res = await request(app)
             .post("/word-chat")
             .set("Authorization", "Bearer test")
@@ -949,8 +949,8 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("keeps CourtListener disabled for Word chats even when legal research is enabled", async () => {
-        const chatLib = await import("../../lib/chat");
-        const userSettings = await import("../../lib/userSettings");
+        const chatLib = await import("../../lib/chat/index.js");
+        const userSettings = await import("../../lib/userSettings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             title_model: "test-model",
             tabular_model: "test-model",

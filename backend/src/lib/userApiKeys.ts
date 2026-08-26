@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { createServerSupabase } from "./supabase";
+import { logError } from "./log";
 import type { UserApiKeys } from "./llm";
 
 type Db = ReturnType<typeof createServerSupabase>;
@@ -66,12 +67,23 @@ export function hasEnvApiKey(provider: ApiKeyProvider): boolean {
     return !!envApiKey(provider);
 }
 
+const KEY_SALT = "mike-user-api-keys-v1";
+// scryptSync is deliberately slow (~40ms); deriving it on every encrypt and
+// decrypt made key reads dominate request latency. The secret and salt are
+// fixed for the process lifetime, so cache the derived key per pair.
+const derivedKeys = new Map<string, Buffer>();
+
 function encryptionKey(): Buffer {
     const secret = process.env.USER_API_KEYS_ENCRYPTION_SECRET;
     if (!secret) {
         throw new Error("USER_API_KEYS_ENCRYPTION_SECRET is not configured");
     }
-    return crypto.scryptSync(secret, "mike-user-api-keys-v1", 32);
+    const cacheKey = `${KEY_SALT}:${secret}`;
+    const cached = derivedKeys.get(cacheKey);
+    if (cached) return cached;
+    const derived = crypto.scryptSync(secret, KEY_SALT, 32);
+    derivedKeys.set(cacheKey, derived);
+    return derived;
 }
 
 function encrypt(value: string): Omit<EncryptedKeyRow, "provider"> {
@@ -102,9 +114,9 @@ function decrypt(row: EncryptedKeyRow): string | null {
         ]);
         return decrypted.toString("utf8");
     } catch (err) {
-        console.error("[user-api-keys] failed to decrypt stored key", {
+        logError("user-api-keys", err, {
+            detail: "failed to decrypt stored key",
             provider: row.provider,
-            error: err instanceof Error ? err.message : String(err),
         });
         return null;
     }

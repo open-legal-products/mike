@@ -1,13 +1,10 @@
-import {
-  Router,
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
+import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
+import { asyncRoute, routerErrorHandler } from "../middleware/asyncRoute";
 import { createServerSupabase } from "../lib/supabase";
 import { ensureDefaultWorkflows } from "../lib/workflowCatalog";
 import { sendInternalError } from "../lib/httpError";
+import { resolveWorkflowAccess } from "../modules/workflows/workflows.service";
 
 export const quickActionsRouter = Router();
 
@@ -32,36 +29,45 @@ function isQuickActionSurface(value: unknown): value is QuickActionSurface {
   return value === "app" || value === "word";
 }
 
-function asyncRoute(
-  handler: (req: Request, res: Response) => Promise<unknown>,
-) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    void handler(req, res).catch(next);
-  };
-}
+type LinkedWorkflow = {
+  id: string;
+  user_id: string | null;
+  title: string;
+  type: string;
+};
 
-async function canAccessWorkflow(
+// Ownership and share rules live in the workflows service; quick actions only
+// add the constraint that the target must be an assistant workflow. `ok:false`
+// means the lookup itself failed, which must not be reported as "not found".
+type WorkflowAccessLookup =
+  | { ok: true; workflow: LinkedWorkflow | null }
+  | { ok: false };
+
+async function findLinkableWorkflow(
   workflowId: string,
   userId: string,
   userEmail: string | null | undefined,
   db: Db,
-) {
-  const { data: workflow } = await db
-    .from("workflows")
-    .select("id, user_id, title, type")
-    .eq("id", workflowId)
-    .maybeSingle();
-  if (!workflow || workflow.type !== "assistant") return null;
-  if (workflow.user_id === userId) return workflow;
-  const email = (userEmail ?? "").trim().toLowerCase();
-  if (!email) return null;
-  const { data: share } = await db
-    .from("workflow_shares")
-    .select("id")
-    .eq("workflow_id", workflowId)
-    .eq("shared_with_email", email)
-    .maybeSingle();
-  return share ? workflow : null;
+): Promise<WorkflowAccessLookup> {
+  try {
+    const access = await resolveWorkflowAccess(
+      db,
+      workflowId,
+      userId,
+      userEmail,
+    );
+    if (!access || access.workflow.type !== "assistant") {
+      return { ok: true, workflow: null };
+    }
+    const { id, user_id, title } = access.workflow;
+    return {
+      ok: true,
+      workflow: { id, user_id, title: title ?? "", type: "assistant" },
+    };
+  } catch (error) {
+    console.error("[quick-actions] failed to resolve workflow access", error);
+    return { ok: false };
+  }
 }
 
 async function withWorkflowDetails(
@@ -189,17 +195,28 @@ quickActionsRouter.post(
         detail: "surface must be either 'app' or 'word'",
       });
     }
-    if (
-      req.body?.sort_order !== undefined &&
-      Number.isInteger(req.body.sort_order) &&
-      !isValidSortOrder(req.body.sort_order)
-    ) {
+    // Reject any supplied sort_order that isn't a valid integer. Gating this
+    // on Number.isInteger first would let "3", 1.5 and NaN through to be
+    // silently coerced to 0 below.
+    const sortOrder = req.body?.sort_order;
+    if (sortOrder !== undefined && !isValidSortOrder(sortOrder)) {
       return void res.status(400).json({
         detail: `sort_order must be between 0 and ${MAX_SORT_ORDER}`,
       });
     }
     const db = createServerSupabase();
-    const workflow = await canAccessWorkflow(workflowId, userId, userEmail, db);
+    const access = await findLinkableWorkflow(
+      workflowId,
+      userId,
+      userEmail,
+      db,
+    );
+    if (!access.ok) {
+      return void res
+        .status(500)
+        .json({ detail: "Failed to look up workflow" });
+    }
+    const workflow = access.workflow;
     if (!workflow) {
       return void res.status(404).json({ detail: "Workflow not found" });
     }
@@ -216,9 +233,7 @@ quickActionsRouter.post(
         document_upload: req.body?.document_upload === true,
         surface,
         enabled: req.body?.enabled !== false,
-        sort_order: isValidSortOrder(req.body?.sort_order)
-          ? req.body.sort_order
-          : 0,
+        sort_order: sortOrder === undefined ? 0 : sortOrder,
       })
       .select("*")
       .single();
@@ -263,13 +278,16 @@ quickActionsRouter.patch(
     }
     if (typeof req.body?.enabled === "boolean")
       updates.enabled = req.body.enabled;
-    if (Number.isInteger(req.body?.sort_order)) {
-      if (!isValidSortOrder(req.body.sort_order)) {
+    // Same as the create path: validate whatever was supplied rather than only
+    // the values that already look like integers.
+    const sortOrder = req.body?.sort_order;
+    if (sortOrder !== undefined) {
+      if (!isValidSortOrder(sortOrder)) {
         return void res.status(400).json({
           detail: `sort_order must be between 0 and ${MAX_SORT_ORDER}`,
         });
       }
-      updates.sort_order = req.body.sort_order;
+      updates.sort_order = sortOrder;
     }
 
     const db = createServerSupabase();
@@ -278,13 +296,18 @@ quickActionsRouter.patch(
       if (!workflowId) {
         return void res.status(400).json({ detail: "workflow_id is required" });
       }
-      const workflow = await canAccessWorkflow(
+      const access = await findLinkableWorkflow(
         workflowId,
         userId,
         userEmail,
         db,
       );
-      if (!workflow) {
+      if (!access.ok) {
+        return void res
+          .status(500)
+          .json({ detail: "Failed to look up workflow" });
+      }
+      if (!access.workflow) {
         return void res.status(404).json({ detail: "Workflow not found" });
       }
       updates.workflow_id = workflowId;
@@ -321,20 +344,22 @@ quickActionsRouter.delete(
   asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
-    const { error } = await db
+    // Selecting the deleted rows separates "gone now" from "was never yours":
+    // without it a bad id (or another user's) also answered 204.
+    const { data, error } = await db
       .from("quick_actions")
       .delete()
       .eq("id", req.params.quickActionId)
-      .eq("user_id", userId);
+      .eq("user_id", userId)
+      .select("id");
     if (error) return void sendInternalError(res, error);
+    if (!data?.length) {
+      return void res.status(404).json({ detail: "Quick action not found" });
+    }
     res.status(204).send();
   }),
 );
 
 quickActionsRouter.use(
-  (err: unknown, _req: Request, res: Response, next: NextFunction) => {
-    if (res.headersSent) return next(err);
-    console.error("[quick-actions] unhandled route error", err);
-    res.status(500).json({ detail: "Failed to process quick action request" });
-  },
+  routerErrorHandler("[quick-actions]"),
 );

@@ -5,6 +5,16 @@ const url = process.env.SUPABASE_TEST_URL;
 const serviceKey = process.env.SUPABASE_TEST_SERVICE_ROLE_KEY;
 const maybeDescribe = url && serviceKey ? describe : describe.skip;
 
+/* supabase-js types an rpc() result's `data` as `any`, so the `.map()` /
+   `.every()` callbacks below get no inferred parameter type (and, under
+   noImplicitAny, no type check at all). Name the handful of overview columns
+   these assertions actually read. */
+type OverviewRow = {
+    id: string;
+    name: string;
+    is_owner: boolean;
+};
+
 maybeDescribe("Supabase projects-overview pagination", () => {
     let ownerId = "";
     let ownerEmail = "";
@@ -105,8 +115,8 @@ maybeDescribe("Supabase projects-overview pagination", () => {
         expect(firstPage.data).toHaveLength(20);
         expect(secondPage.data).toHaveLength(5);
 
-        const firstIds = (firstPage.data ?? []).map((row) => row.id);
-        const secondIds = (secondPage.data ?? []).map((row) => row.id);
+        const firstIds = (firstPage.data ?? []).map((row: OverviewRow) => row.id);
+        const secondIds = (secondPage.data ?? []).map((row: OverviewRow) => row.id);
         expect(new Set([...firstIds, ...secondIds]).size).toBe(25);
         expect([...firstIds, ...secondIds]).toEqual([...myProjectIds].sort());
     });
@@ -140,9 +150,9 @@ maybeDescribe("Supabase projects-overview pagination", () => {
         expect(mine.error).toBeNull();
         expect(shared.error).toBeNull();
 
-        const mineIds = new Set((mine.data ?? []).map((row) => row.id as string));
+        const mineIds = new Set((mine.data ?? []).map((row: OverviewRow) => row.id as string));
         const sharedIds = new Set(
-            (shared.data ?? []).map((row) => row.id as string),
+            (shared.data ?? []).map((row: OverviewRow) => row.id as string),
         );
 
         for (const id of myProjectIds) expect(mineIds.has(id)).toBe(true);
@@ -151,11 +161,11 @@ maybeDescribe("Supabase projects-overview pagination", () => {
         for (const id of sharedProjectIds) expect(sharedIds.has(id)).toBe(true);
         for (const id of myProjectIds) expect(sharedIds.has(id)).toBe(false);
 
-        expect((mine.data ?? []).every((row) => row.is_owner === true)).toBe(
+        expect((mine.data ?? []).every((row: OverviewRow) => row.is_owner === true)).toBe(
             true,
         );
         expect(
-            (shared.data ?? []).every((row) => row.is_owner === false),
+            (shared.data ?? []).every((row: OverviewRow) => row.is_owner === false),
         ).toBe(true);
     });
 
@@ -188,10 +198,10 @@ maybeDescribe("Supabase projects-overview pagination", () => {
         expect(byPractice.error).toBeNull();
         expect(byOwner.error).toBeNull();
         expect(
-            new Set((byPractice.data ?? []).map((row) => row.id as string)),
+            new Set((byPractice.data ?? []).map((row: OverviewRow) => row.id as string)),
         ).toEqual(new Set(sharedProjectIds));
         expect(
-            new Set((byOwner.data ?? []).map((row) => row.id as string)),
+            new Set((byOwner.data ?? []).map((row: OverviewRow) => row.id as string)),
         ).toEqual(new Set(sharedProjectIds));
     });
 
@@ -243,7 +253,7 @@ maybeDescribe("Supabase projects-overview pagination", () => {
         });
 
         expect(result.error).toBeNull();
-        const names = (result.data ?? []).map((row) => row.name as string);
+        const names = (result.data ?? []).map((row: OverviewRow) => row.name as string);
         expect(names).toEqual([...names].sort());
     });
 
@@ -288,7 +298,7 @@ maybeDescribe("Supabase projects-overview pagination", () => {
                 p_offset: offset,
             });
             expect(page.error).toBeNull();
-            collected.push(...(page.data ?? []).map((row) => row.id as string));
+            collected.push(...(page.data ?? []).map((row: OverviewRow) => row.id as string));
         }
 
         expect(new Set(collected).size).toBe(myProjectIds.length);
@@ -303,7 +313,7 @@ maybeDescribe("Supabase projects-overview pagination", () => {
 
         expect(result.error).toBeNull();
         const returnedIds = new Set(
-            (result.data ?? []).map((row) => row.id as string),
+            (result.data ?? []).map((row: OverviewRow) => row.id as string),
         );
         for (const id of [...myProjectIds, ...sharedProjectIds])
             expect(returnedIds.has(id)).toBe(true);

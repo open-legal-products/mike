@@ -32,3 +32,10 @@ export function createServerSupabase() {
   cachedAdminClient = { url, key, client };
   return client;
 }
+
+/**
+ * The service-role client type. Modules across the codebase declare this
+ * locally as `type Db = ReturnType<typeof createServerSupabase>`; new code can
+ * import it from here instead.
+ */
+export type Db = ReturnType<typeof createServerSupabase>;

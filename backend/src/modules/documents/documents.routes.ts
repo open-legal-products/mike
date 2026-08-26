@@ -4,10 +4,7 @@ import { createServerSupabase } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
 import { buildContentDisposition } from "../../lib/storage";
 import { singleFileUpload } from "../../lib/upload";
-import {
-    ALLOWED_DOCUMENT_TYPES,
-    ALLOWED_DOCUMENT_TYPES_LABEL,
-} from "../../lib/documentTypes";
+import { parseAllowedSuffix } from "../../lib/documentTypes";
 import {
     listSingleDocuments,
     getDocument,
@@ -69,22 +66,16 @@ documentsRouter.post(
             return void res.status(400).json({ detail: "file is required" });
 
         const filename = file.originalname;
-        const suffix = filename.includes(".")
-            ? filename.split(".").pop()!.toLowerCase()
-            : "";
-        if (!ALLOWED_DOCUMENT_TYPES.has(suffix))
-            return void res
-                .status(400)
-                .json({
-                    detail: `Unsupported file type: ${suffix}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-                });
+        const parsedSuffix = parseAllowedSuffix(filename);
+        if (!parsedSuffix.ok)
+            return void res.status(400).json({ detail: parsedSuffix.detail });
 
         const result = await createDocumentFromUpload(
             {
                 userId,
                 projectId: null,
                 filename,
-                suffix,
+                suffix: parsedSuffix.suffix,
                 content: file.buffer,
                 libraryKind: "file",
                 userEmail: res.locals.userEmail as string | undefined,
@@ -333,14 +324,11 @@ documentsRouter.post(
         if (!hasAccess)
             return void res.status(404).json({ detail: "Document not found" });
 
-        const suffix = file.originalname.includes(".")
-            ? file.originalname.split(".").pop()!.toLowerCase()
-            : "";
-        if (!ALLOWED_DOCUMENT_TYPES.has(suffix)) {
-            return void res.status(400).json({
-                detail: `Unsupported file type: ${suffix}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-            });
+        const parsedSuffix = parseAllowedSuffix(file.originalname);
+        if (!parsedSuffix.ok) {
+            return void res.status(400).json({ detail: parsedSuffix.detail });
         }
+        const suffix = parsedSuffix.suffix;
 
         const result = await addUploadedVersion(
             {
@@ -419,14 +407,11 @@ documentsRouter.put(
         }
         const target = targetResult.target;
 
-        const suffix = file.originalname.includes(".")
-            ? file.originalname.split(".").pop()!.toLowerCase()
-            : "";
-        if (!ALLOWED_DOCUMENT_TYPES.has(suffix)) {
-            return void res.status(400).json({
-                detail: `Unsupported file type: ${suffix}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-            });
+        const parsedSuffix = parseAllowedSuffix(file.originalname);
+        if (!parsedSuffix.ok) {
+            return void res.status(400).json({ detail: parsedSuffix.detail });
         }
+        const suffix = parsedSuffix.suffix;
         if (target.file_type && target.file_type !== suffix) {
             return void res.status(400).json({
                 detail: `Uploaded file type (${suffix}) does not match version type (${target.file_type}).`,

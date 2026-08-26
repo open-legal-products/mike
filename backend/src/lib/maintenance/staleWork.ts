@@ -30,6 +30,7 @@
 //   once per generation it touched.
 
 import { createServerSupabase } from "../supabase";
+import { logError } from "../log";
 import { getConversionQueue, conversionJobId } from "../queue/conversionQueue";
 import { getExtractionQueue, extractionJobId } from "../queue/extractionQueue";
 import { finalizeCell } from "../../modules/tabular/tabular.extractRow";
@@ -40,6 +41,10 @@ import { liveDbJobExists } from "../dbq/enqueue";
 type Db = ReturnType<typeof createServerSupabase>;
 
 const DEFAULT_DOC_STALE_MS = 30 * 60 * 1000;
+
+// Cap one sweep's working set: the query is unbounded otherwise, and each cell
+// costs a Redis lookup. Anything left over is picked up by the next sweep.
+const MAX_GENERATING_CELLS_PER_SWEEP = 500;
 
 function docStaleMs(): number {
     const raw = Number(process.env.STALE_DOC_PROCESSING_MS);
@@ -151,7 +156,8 @@ export async function sweepStaleGeneratingCells(
     const { data: cells, error } = await db
         .from("tabular_cells")
         .select("id, review_id, row_id, column_index, generation_id")
-        .eq("status", "generating");
+        .eq("status", "generating")
+        .limit(MAX_GENERATING_CELLS_PER_SWEEP);
     if (error) {
         console.error("[stale-sweep] cells query failed", error);
         return 0;
@@ -243,11 +249,11 @@ export async function runStaleWorkSweep(
     db: Db = createServerSupabase(),
 ): Promise<{ documents: number; cells: number }> {
     const documents = await sweepStaleProcessingDocuments(db).catch((err) => {
-        console.error("[stale-sweep] document sweep crashed", err);
+        logError("stale-sweep", err, { sweep: "documents" });
         return 0;
     });
     const cells = await sweepStaleGeneratingCells(db).catch((err) => {
-        console.error("[stale-sweep] cell sweep crashed", err);
+        logError("stale-sweep", err, { sweep: "cells" });
         return 0;
     });
     return { documents, cells };

@@ -18,7 +18,12 @@ function makeDb(events: Record<string, unknown>[], error?: { message: string }) 
             ilike: () => b,
             gte: () => b,
             lte: () => b,
+            // listAccessibleProjectIds (lib/access) scopes the shared-project
+            // lookup with .filter("shared_with","cs",...).neq(...); .contains
+            // stays for any caller still using the older encoding.
             contains: () => b,
+            filter: () => b,
+            neq: () => b,
             order: () => b,
             range: (from: number, to: number) => {
                 ranges.push([from, to]);
@@ -106,7 +111,12 @@ function makeProfileDb(
             ilike: () => b,
             gte: () => b,
             lte: () => b,
+            // listAccessibleProjectIds (lib/access) scopes the shared-project
+            // lookup with .filter("shared_with","cs",...).neq(...); .contains
+            // stays for any caller still using the older encoding.
             contains: () => b,
+            filter: () => b,
+            neq: () => b,
             order: () => b,
             in: () => {
                 profilesQueried = true;
@@ -162,7 +172,15 @@ describe("queryEvents display names", () => {
         ]);
         const { data } = await queryEvents(db, "u1", undefined, query, false);
         expect(wasProfileLookupRun()).toBe(false);
-        expect(data?.map((e) => e.user_display_name)).toEqual([null, null]);
+        // queryEvents short-circuits to the raw page only on the error/empty
+        // paths, so its return type is a union and only one member carries
+        // user_display_name. This fixture always yields rows, so narrow to the
+        // enriched member rather than reaching through the union.
+        const rows = data as
+            | { user_display_name: string | null }[]
+            | null
+            | undefined;
+        expect(rows?.map((e) => e.user_display_name)).toEqual([null, null]);
     });
 });
 

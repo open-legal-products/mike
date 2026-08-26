@@ -10,7 +10,7 @@ describe("buildWorkflowsOverviewRpcArgs", () => {
         expect(
             buildWorkflowsOverviewRpcArgs({
                 userId: "user-1",
-                userEmail: "user@example.com",
+                userEmail: " User@Example.com ",
                 type: "tabular",
                 scope: "owned",
                 pagination: { limit: 25, offset: 10 },
@@ -64,7 +64,7 @@ describe("buildWorkflowIdsOverviewRpcArgs", () => {
         expect(
             buildWorkflowIdsOverviewRpcArgs({
                 userId: "user-1",
-                userEmail: "user@example.com",
+                userEmail: " User@Example.com ",
                 type: "assistant",
                 scope: "shared",
                 searchTerm: "merger",

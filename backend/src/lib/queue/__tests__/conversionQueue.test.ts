@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import type { createServerSupabase } from "../../supabase";
+import type {
+    EnqueueDbJobInput,
+    EnqueueDbJobResult,
+} from "../../dbq/enqueue";
+
+type Db = ReturnType<typeof createServerSupabase>;
 
 // These suites pin the REDIS driver's BullMQ semantics; the Postgres-driver
 // routing (same identities, DB queue transport) is pinned separately below.
@@ -7,17 +14,29 @@ afterAll(() => {
     delete process.env.QUEUE_DRIVER;
 });
 
-const enqueueDbJob = vi.fn(async () => ({ id: "dbjob-1", deduped: false }));
+// Both stubs carry the signature of what they replace, so the recorded calls
+// below are real argument tuples instead of untyped rest arrays.
+const enqueueDbJob = vi.fn<
+    (db: Db, input: EnqueueDbJobInput) => Promise<EnqueueDbJobResult>
+>(async () => ({ id: "dbjob-1", deduped: false }));
 vi.mock("../../dbq/enqueue", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../dbq/enqueue")>();
     return {
         ...actual,
-        enqueueDbJob: (...a: unknown[]) => enqueueDbJob(...a),
+        enqueueDbJob: (db: Db, input: EnqueueDbJobInput) =>
+            enqueueDbJob(db, input),
     };
 });
-const rpc = vi.fn(async () => ({ data: 0, error: null }));
+const rpc = vi.fn<
+    (
+        fn: string,
+        params: Record<string, unknown>,
+    ) => Promise<{ data: unknown; error: { message: string } | null }>
+>(async () => ({ data: 0, error: null }));
 vi.mock("../../supabase", () => ({
-    createServerSupabase: () => ({ rpc: (...a: unknown[]) => rpc(...a) }),
+    createServerSupabase: () => ({
+        rpc: (fn: string, params: Record<string, unknown>) => rpc(fn, params),
+    }),
 }));
 
 vi.mock("../connection", () => ({
@@ -105,10 +124,7 @@ describe("enqueueConversion (postgres driver)", () => {
                 fileType: "docx",
             });
             expect(enqueueDbJob).toHaveBeenCalledTimes(1);
-            const [, input] = enqueueDbJob.mock.calls[0] as [
-                unknown,
-                Record<string, unknown>,
-            ];
+            const [, input] = enqueueDbJob.mock.calls[0];
             expect(input.kind).toBe("conversion.convert");
             // The BullMQ jobId doubles as the DB dedupe key, so double
             // submits collapse identically on either transport.

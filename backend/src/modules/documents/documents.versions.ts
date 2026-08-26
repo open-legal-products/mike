@@ -12,6 +12,7 @@ import { enqueueConversion } from "../../lib/queue/conversionQueue";
 import { contentSha256, loadActiveVersion } from "../../lib/documentVersions";
 import {
     contentTypeForDocumentType,
+    documentSuffix,
     shouldConvertToPdf,
 } from "../../lib/documentTypes";
 import {
@@ -152,9 +153,7 @@ export async function createVersionFromDocument(
         requestedFilename && requestedFilename.trim()
             ? requestedFilename.trim().slice(0, 200)
             : active.filename?.trim() || "Untitled document";
-    const suffix =
-        sourceType ||
-        (filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "");
+    const suffix = sourceType || documentSuffix(filename);
     const versionSlug = crypto.randomUUID().replace(/-/g, "");
     const key = versionStorageKey(userId, documentId, versionSlug, filename);
     const contentType = contentTypeForDocumentType(suffix);

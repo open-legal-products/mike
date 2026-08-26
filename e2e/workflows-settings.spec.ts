@@ -147,7 +147,9 @@ test.describe("Workflows", () => {
 
         const workflowTitle = `E2E Edit Workflow ${Date.now()}`;
         await createWorkflowAndOpenDetail(page, workflowTitle);
-        await page.waitForLoadState("networkidle");
+        /* No "networkidle" wait: the editor is dynamically imported, so network
+           quiet says nothing about whether it has mounted. The expect() below
+           waits on the editor itself, which is what this test types into. */
 
         /* Step 2: type into the WorkflowPromptEditor */
         // The editor is dynamically imported; wait until it is ready.

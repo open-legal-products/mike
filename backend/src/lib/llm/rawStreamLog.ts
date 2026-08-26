@@ -10,7 +10,15 @@ type RawStreamEntry = {
   payload: unknown;
 };
 
+// These logs contain the verbatim prompt and completion — privileged client
+// content — so they are a development-only aid. Both entry points hard-refuse
+// to run under NODE_ENV=production regardless of how the env is configured.
+function rawStreamLoggingAllowed(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
 function rawStreamLogDir(): string | null {
+  if (!rawStreamLoggingAllowed()) return null;
   return process.env.RAW_LLM_STREAM_LOG_DIR?.trim() || null;
 }
 
@@ -44,6 +52,7 @@ export function logRawLlmStream(args: {
   label: string;
   payload: unknown;
 }) {
+  if (!rawStreamLoggingAllowed()) return;
   if (process.env.LOG_RAW_LLM_STREAM !== "true") return;
 
   console.log(
@@ -56,6 +65,7 @@ export function createRawLlmStreamRecorder(args: {
   provider: string;
   model: string;
 }) {
+  if (!rawStreamLoggingAllowed()) return null;
   const dir = rawStreamLogDir();
   if (!dir) return null;
   const logDir = dir;

@@ -9,10 +9,9 @@ export const STANDARD_FONT_DATA_URL = (() => {
   }
 })();
 
-const isDev = process.env.NODE_ENV !== "production";
-export const devLog = (...args: Parameters<typeof console.log>) => {
-  if (isDev) console.log(...args);
-};
+// Re-exported so the chat modules that already import it from here keep
+// working; the definition lives in lib/log.ts.
+export { devLog } from "../log";
 
 // ---------------------------------------------------------------------------
 // Core types

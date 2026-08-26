@@ -73,6 +73,12 @@ export function PdfView({
     const quoteListRef = useRef<QuoteEntry[]>([]);
     const zoomRef = useRef(1.0);
     const currentPageRef = useRef(1);
+    // renderPDF wipes the container and rebuilds renderedPagesRef across many
+    // awaits, and several call sites can fire it again mid-flight (rapid zoom
+    // is the easy repro). Every run takes a generation number and bails at each
+    // await once a newer run has started, so two passes can't interleave their
+    // appends into the same container/ref.
+    const renderTaskRef = useRef<import("pdfjs-dist").RenderTask | null>(null);
 
     const quoteList: QuoteEntry[] = useMemo(() => {
         if (quotes?.length)
@@ -240,6 +246,12 @@ export function PdfView({
                 renderGenerationRef.current !== renderGeneration ||
                 containerRef.current !== container;
 
+            // Stop the in-flight page of any older run so it rejects with
+            // RenderingCancelledException instead of racing us to the canvas.
+            // The generation stamp alone only stops the loop between awaits;
+            // a page already inside page.render() keeps painting.
+            renderTaskRef.current?.cancel();
+            renderTaskRef.current = null;
             container.innerHTML = "";
             renderedPagesRef.current = [];
             const lib = await getPdfJs();
@@ -292,6 +304,7 @@ export function PdfView({
                 if (!ctx) continue;
 
                 const task = page.render({ canvasContext: ctx, viewport });
+                renderTaskRef.current = task;
                 try {
                     await task.promise;
                     if (isStale()) return;
@@ -304,7 +317,11 @@ export function PdfView({
                         console.error("PDF render error", e);
                     }
                     continue;
+                } finally {
+                    if (renderTaskRef.current === task)
+                        renderTaskRef.current = null;
                 }
+                if (isStale()) return;
 
                 const textLayerDiv = document.createElement("div");
                 textLayerDiv.className = "pdf-text-layer";
@@ -340,6 +357,7 @@ export function PdfView({
             let targetPage: number | null = null;
             if (list.length) {
                 targetPage = await applyHighlights(list);
+                if (isStale()) return;
                 if (targetPage === null) {
                     // Fallback: scroll to the first entry's page hint, even without a highlight
                     const hint = list.find((e) => e.page)?.page ?? null;

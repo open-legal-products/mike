@@ -1,6 +1,5 @@
-import fs from "fs/promises";
-import path from "path";
 import { downloadFile, listFiles } from "./storage";
+import { devLog } from "./log";
 import { createServerSupabase } from "./supabase";
 
 const COURTLISTENER_BASE = "https://www.courtlistener.com/api/rest/v4";
@@ -10,27 +9,9 @@ const COURTLISTENER_R2_OPINIONS_PREFIX = "courtlistener/opinions/by-cluster";
 
 type JsonRecord = Record<string, unknown>;
 type ServerSupabase = ReturnType<typeof createServerSupabase>;
-const isDev = process.env.NODE_ENV !== "production";
-const devLog = (...args: Parameters<typeof console.log>) => {
-    if (isDev) console.log(...args);
-};
 
 function courtlistenerBulkDataEnabled() {
     return process.env.COURTLISTENER_BULK_DATA_ENABLED === "true";
-}
-
-async function logRawOpinionPayload(opinionId: number, opinion: JsonRecord) {
-    if (process.env.NODE_ENV === "production") return;
-    const logsDir = path.resolve(
-        process.cwd(),
-        "logs",
-        "courtlistener-opinions",
-    );
-    await fs.mkdir(logsDir, { recursive: true });
-    await fs.writeFile(
-        path.join(logsDir, `courtlistener-opinion-${opinionId}.json`),
-        JSON.stringify(opinion, null, 2),
-    );
 }
 
 function courtlistenerHeaders(apiToken?: string | null): HeadersInit {
@@ -548,6 +529,18 @@ function buildCitationLinks(results: CitationLookupRow[]) {
     );
 }
 
+// /citation-lookup/ echoes back the citation as it appeared in the text we
+// posted, which can differ from our label in punctuation/spacing only. Key on a
+// punctuation-insensitive form so rows can be matched to the slot they answer.
+function citationMatchKey(value: string | null | undefined): string | null {
+    const normalized = (value ?? "")
+        .toLowerCase()
+        .replace(/[.,]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    return normalized || null;
+}
+
 function courtlistenerApiTokenAvailable(apiToken?: string | null) {
     return !!(apiToken?.trim() || process.env.COURTLISTENER_API_TOKEN?.trim());
 }
@@ -1022,14 +1015,37 @@ export async function verifyCourtlistenerCitations(args: {
                 citationsSubmitted: apiFallbackInputs.length,
                 apiToken: args.apiToken,
             });
-            const fallbackRows = [...apiFallback.results];
+            // The API returns one row per citation it DETECTS in the text, so
+            // the response is not positionally aligned with what we sent: a
+            // citation it cannot parse yields no row, one that expands into a
+            // parallel cite yields several. Match each slot by its own citation
+            // instead of shifting a shared queue.
+            const fallbackByCitation = new Map<string, CitationLookupRow[]>();
+            for (const row of apiFallback.results) {
+                const key = citationMatchKey(row.citation);
+                if (!key) continue;
+                const bucket = fallbackByCitation.get(key);
+                if (bucket) bucket.push(row);
+                else fallbackByCitation.set(key, [row]);
+            }
+            const usedFallbackRows = new Set<CitationLookupRow>();
             const mergedResults = bulk.results.flatMap((result) => {
                 if (result.status !== "not_found" && result.status !== "invalid") {
                     return [result];
                 }
-                return [fallbackRows.shift() ?? result];
+                const key = citationMatchKey(result.citation);
+                const replacement = key
+                    ? fallbackByCitation.get(key)?.shift()
+                    : undefined;
+                if (!replacement) return [result];
+                usedFallbackRows.add(replacement);
+                return [replacement];
             });
-            mergedResults.push(...fallbackRows);
+            // Anything the API found that no bulk slot claimed (unparseable
+            // input, extra citations detected in the text) is appended.
+            for (const row of apiFallback.results) {
+                if (!usedFallbackRows.has(row)) mergedResults.push(row);
+            }
             return {
                 citationsSubmitted: bulk.citationsSubmitted,
                 citationLinks: buildCitationLinks(mergedResults),

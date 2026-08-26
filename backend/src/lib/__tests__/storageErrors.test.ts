@@ -33,7 +33,7 @@ beforeAll(async () => {
   process.env.R2_ACCESS_KEY_ID = "test-access-key";
   process.env.R2_SECRET_ACCESS_KEY = "test-secret-key";
   vi.resetModules();
-  ({ downloadFile, getSignedUrl } = await import("../storage"));
+  ({ downloadFile, getSignedUrl } = await import("../storage.js"));
 });
 
 beforeEach(() => {

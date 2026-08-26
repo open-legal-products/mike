@@ -34,7 +34,6 @@ export type ProjectContextMenu = {
     showFolderActions: boolean;
 };
 
-export const NAME_COL_W = TABLE_PRIMARY_CELL_WIDTH_CLASS;
 export const DOC_NAME_COL_W =
     "w-[292px] sm:w-[332px] md:w-[392px] lg:w-[452px] xl:w-[532px] 2xl:w-[592px] shrink-0";
 

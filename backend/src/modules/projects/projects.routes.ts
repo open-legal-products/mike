@@ -8,10 +8,8 @@ import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
 import { singleFileUpload } from "../../lib/upload";
-import {
-  ALLOWED_DOCUMENT_TYPES,
-  ALLOWED_DOCUMENT_TYPES_LABEL,
-} from "../../lib/documentTypes";
+import { parseAllowedSuffix } from "../../lib/documentTypes";
+import { createDocumentFromUpload } from "../documents/documents.service";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { normalizeSearchTerm } from "../../lib/search";
 import { parseProjectSort } from "../../lib/sort";
@@ -33,7 +31,6 @@ import {
   assignOrCopyDocument,
   renameProjectDocument,
   ensureProjectUploadAccess,
-  processProjectDocumentUpload,
   listProjectChats,
   createProjectFolder,
   updateProjectFolder,
@@ -394,6 +391,8 @@ projectsRouter.patch("/:projectId/documents/:documentId", requireAuth, async (re
       return void res.status(404).json({ detail: "Project not found" });
     if (result.kind === "doc_not_found")
       return void res.status(404).json({ detail: "Document not found" });
+    if (result.kind === "db_error")
+      return void res.status(500).json({ detail: result.detail });
     return void res.status(400).json({ detail: result.detail });
   }
   res.json(result.doc);
@@ -431,25 +430,25 @@ projectsRouter.post(
     if (!file) return void res.status(400).json({ detail: "file is required" });
 
     const filename = file.originalname;
-    const suffix = filename.includes(".")
-      ? filename.split(".").pop()!.toLowerCase()
-      : "";
-    if (!ALLOWED_DOCUMENT_TYPES.has(suffix))
-      return void res
-        .status(400)
-        .json({
-          detail: `Unsupported file type: ${suffix}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-        });
+    const parsedSuffix = parseAllowedSuffix(filename);
+    if (!parsedSuffix.ok)
+      return void res.status(400).json({ detail: parsedSuffix.detail });
 
-    const result = await processProjectDocumentUpload(db, {
-      userId,
-      userEmail,
-      projectId,
-      folderId,
-      filename,
-      suffix,
-      content: file.buffer,
-    });
+    // Same pipeline as the library/assistant upload — only the audit surface
+    // differs.
+    const result = await createDocumentFromUpload(
+      {
+        userId,
+        userEmail,
+        projectId,
+        folderId,
+        filename,
+        suffix: parsedSuffix.suffix,
+        content: file.buffer,
+        surface: projectId ? "project" : "assistant",
+      },
+      db,
+    );
     if (!result.ok) {
       if (result.kind === "create_failed")
         return void res

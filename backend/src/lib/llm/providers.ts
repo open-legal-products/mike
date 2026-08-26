@@ -53,13 +53,27 @@ const ROUTER_KEY_ENV_HINTS: Record<RouterProvider, string> = {
   "opencode-go": "OPENCODE_API_KEY",
 };
 
+// Env aliases a provider also answers to. CLAUDE_API_KEY is accepted by
+// envApiKey("claude") in lib/userApiKeys.ts, which decides whether Settings
+// reports the key as configured — without the same alias here a deployment
+// that only sets CLAUDE_API_KEY showed a green key and then failed every
+// request with "not configured".
+const ENVIRONMENT_KEY_ALIASES: Record<string, string[]> = {
+  ANTHROPIC_API_KEY: ["CLAUDE_API_KEY"],
+};
+
 function requiredKey(
   label: string,
   environmentVariable: string,
   override?: string | null,
 ): string {
   const key =
-    override?.trim() || process.env[environmentVariable]?.trim() || "";
+    override?.trim() ||
+    process.env[environmentVariable]?.trim() ||
+    (ENVIRONMENT_KEY_ALIASES[environmentVariable] ?? [])
+      .map((alias) => process.env[alias]?.trim())
+      .find((value) => !!value) ||
+    "";
   if (!key) {
     throw new Error(
       `${label} API key is not configured. Set ${environmentVariable} or add a user ${label} key.`,

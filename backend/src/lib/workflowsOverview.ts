@@ -39,7 +39,7 @@ export function buildWorkflowsOverviewRpcArgs(params: {
 }): WorkflowsOverviewRpcArgs {
     return {
         p_user_id: params.userId,
-        p_user_email: params.userEmail ?? null,
+        p_user_email: params.userEmail?.trim().toLowerCase() || null,
         p_type: params.type ?? null,
         p_scope: params.scope ?? "all",
         p_limit: params.pagination?.limit ?? 20,
@@ -84,7 +84,7 @@ export function buildWorkflowIdsOverviewRpcArgs(params: {
 }): WorkflowIdsOverviewRpcArgs {
     return {
         p_user_id: params.userId,
-        p_user_email: params.userEmail ?? null,
+        p_user_email: params.userEmail?.trim().toLowerCase() || null,
         p_type: params.type ?? null,
         p_scope: params.scope ?? "all",
         p_search_term: params.searchTerm ?? null,

@@ -69,11 +69,10 @@ import {
     getWorkflowAddon,
     getWorkflowFilterOptions,
     getWorkflowReferenceUrl,
-    hideWorkflow,
     isMfaRequiredError,
+    listStandaloneDocuments,
     listChats,
     listDocumentVersions,
-    listHiddenWorkflows,
     listLibraryDocumentIds,
     listMcpConnectors,
     listProjectChats,
@@ -81,7 +80,6 @@ import {
     listProjectSummaries,
     listProjects,
     listProjectsPage,
-    listStandaloneDocuments,
     listSystemWorkflows,
     listTabularReviewIds,
     listTabularReviews,
@@ -125,7 +123,6 @@ import {
     streamTabularGeneration,
     streamTabularGenerationResume,
     syncUserPasswordSet,
-    unhideWorkflow,
     updateMcpConnector,
     updateProject,
     updateTabularReview,
@@ -133,7 +130,6 @@ import {
     updateUserProfile,
     updateWorkflow,
     updateQuickAction,
-    deleteQuickAction,
     importWorkflowAddon,
     listQuickActions,
     replaceWorkflowReferenceFile,
@@ -1561,8 +1557,8 @@ describe("tabular cell operations", () => {
 
 // ---------------------------------------------------------------------------
 // Multipart uploads. These bypass apiRequest (FormData must not get a JSON
-// content type) and therefore have their own, weaker error contract: a plain
-// Error carrying the raw response text instead of MikeApiError.
+// content type) and go through apiUploadRequest instead, which keeps the same
+// MikeApiError contract so codes like `mfa_verification_required` survive.
 // ---------------------------------------------------------------------------
 
 describe("multipart upload endpoints", () => {
@@ -1619,6 +1615,26 @@ describe("multipart upload endpoints", () => {
         await expect(uploadLibraryDocument("files", file)).rejects.toThrow(
             "The request could not be completed. Please try again.",
         );
+    });
+
+    it("keeps the MFA code on upload failures so the popup can open", async () => {
+        fetchMock.mockImplementation(() =>
+            Promise.resolve(
+                jsonResponse(
+                    {
+                        detail: "MFA verification required",
+                        code: "mfa_verification_required",
+                    },
+                    { status: 403 },
+                ),
+            ),
+        );
+
+        const error = await uploadStandaloneDocument(file).catch(
+            (e: unknown) => e,
+        );
+
+        expect(isMfaRequiredError(error)).toBe(true);
     });
 
     it("uploadDocumentVersion appends the filename field only when given", async () => {
@@ -1843,24 +1859,6 @@ describe("workflow endpoints", () => {
         expect(lastFetchCall().url).toBe("/api/workflows?type=assistant");
     });
 
-    it("hide/unhide/list use the hidden-workflows routes with matching methods", async () => {
-        fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-
-        await hideWorkflow("w1");
-        let { url, init } = lastFetchCall();
-        expect(url).toBe("/api/workflows/hidden");
-        expect(init.method).toBe("POST");
-        expect(JSON.parse(init.body as string)).toEqual({ workflow_id: "w1" });
-
-        await unhideWorkflow("w1");
-        ({ url, init } = lastFetchCall());
-        expect(url).toBe("/api/workflows/hidden/w1");
-        expect(init.method).toBe("DELETE");
-
-        fetchMock.mockResolvedValue(jsonResponse(["w2"]));
-        await expect(listHiddenWorkflows()).resolves.toEqual(["w2"]);
-        expect(lastFetchCall().url).toBe("/api/workflows/hidden");
-    });
 });
 
 // ---------------------------------------------------------------------------
@@ -2410,12 +2408,6 @@ describe("thin endpoint wrappers", () => {
                 enabled: false,
                 sort_order: 3,
             },
-        },
-        {
-            name: "deleteQuickAction",
-            call: () => deleteQuickAction("qa1"),
-            url: "/quick-actions/qa1",
-            method: "DELETE",
         },
         {
             name: "listWorkflowAddons",

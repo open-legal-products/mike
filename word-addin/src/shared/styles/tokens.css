@@ -66,11 +66,12 @@
 
 :root {
     --radius: 0.625rem;
-    --app-background: #fafafa;
+    --color-azure: 0, 136, 255;
+    --app-background: #f9fafb;
     --app-surface: #fdfdfe;
-    --app-surface-hover: #f5f6f8;
-    --app-surface-active: #eceef2;
-    --app-floating: rgba(253, 253, 254, 0.82);
+    --app-surface-hover: #f9fafb;
+    --app-surface-active: #eff0f3;
+    --app-floating: #fefefe;
     --background: oklch(0.985 0 0);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);

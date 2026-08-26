@@ -552,81 +552,20 @@ export async function generateDocx(
         };
       }
     }
-    const docId = crypto.randomUUID().replace(/-/g, "");
-    const safeTitle =
-      title
-        .replace(/[^a-zA-Z0-9 -]/g, "")
-        .trim()
-        .slice(0, 64) || "document";
-    const filename = `${safeTitle}.docx`;
-    const key = generatedDocKey(userId, docId, filename);
-
-    await uploadFile(
-      key,
-      buf.buffer as ArrayBuffer,
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    );
-    const downloadUrl = buildDownloadUrl(key, filename);
-
-    // Persist to DB so generated docs are first-class documents:
-    // openable in the DocPanel and editable via edit_document. In
-    // project chats we attach to the project so it appears in the
-    // sidebar; in the general chat we leave project_id null and it
-    // stays a standalone document.
-    const { data: docRow, error: docErr } = await db
-      .from("documents")
-      .insert({
-        project_id: options?.projectId ?? null,
-        user_id: userId,
-        status: "ready",
-      })
-      .select("id")
-      .single();
-    if (docErr || !docRow) {
-      return {
-        error: `Failed to record generated document: ${docErr?.message ?? "unknown"}`,
-      };
-    }
-    const documentId = docRow.id as string;
-
-    const { data: versionRow, error: verErr } = await db
-      .from("document_versions")
-      .insert({
-        document_id: documentId,
-        storage_path: key,
-        source: "generated",
-        version_number: 1,
-        filename: filename,
-        file_type: "docx",
-        size_bytes: buf.byteLength,
-        page_count: null,
-        content_sha256: contentSha256(buf),
-      })
-      .select("id")
-      .single();
-    if (verErr || !versionRow) {
-      return {
-        error: `Failed to record generated document version: ${verErr?.message ?? "unknown"}`,
-      };
-    }
-    const versionId = versionRow.id as string;
-
-    await db
-      .from("documents")
-      .update({
-        current_version_id: versionId,
-      })
-      .eq("id", documentId);
-
-    return {
-      filename,
-      download_url: downloadUrl,
-      document_id: documentId,
-      version_id: versionId,
-      version_number: 1,
-      storage_path: key,
-      message: `Document '${filename}' has been generated successfully.`,
-    };
+    // Shared with generate_xlsx/generate_pptx: upload, render the PDF
+    // rendition, and record the document + first version. Generated docs are
+    // first-class documents — openable in the DocPanel and editable via
+    // edit_document. In project chats we attach to the project so it appears
+    // in the sidebar; in the general chat project_id stays null and the
+    // document is standalone.
+    return persistGeneratedFile({
+      title,
+      extension: "docx",
+      buffer: buf,
+      userId,
+      db,
+      projectId: options?.projectId ?? null,
+    });
   } catch (e) {
     return { error: String(e) };
   }
@@ -985,7 +924,7 @@ ${slides
 
 async function persistGeneratedFile(params: {
   title: string;
-  extension: "xlsx" | "pptx";
+  extension: "docx" | "xlsx" | "pptx";
   buffer: Buffer;
   userId: string;
   db: ReturnType<typeof createServerSupabase>;

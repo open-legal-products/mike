@@ -28,7 +28,7 @@ export function buildTabularReviewsOverviewRpcArgs(params: {
 }): TabularReviewsOverviewRpcArgs {
     return {
         p_user_id: params.userId,
-        p_user_email: params.userEmail ?? null,
+        p_user_email: params.userEmail?.trim().toLowerCase() || null,
         p_project_id: params.projectIdFilter,
         p_scope: params.scope ?? "all",
         p_limit: params.pagination?.limit ?? 20,
@@ -64,7 +64,7 @@ export function buildTabularReviewIdsOverviewRpcArgs(params: {
 }): TabularReviewIdsOverviewRpcArgs {
     return {
         p_user_id: params.userId,
-        p_user_email: params.userEmail ?? null,
+        p_user_email: params.userEmail?.trim().toLowerCase() || null,
         p_project_id: params.projectIdFilter,
         p_scope: params.scope ?? "all",
         p_search_term: params.searchTerm ?? null,

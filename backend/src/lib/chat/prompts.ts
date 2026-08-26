@@ -108,5 +108,3 @@ export function buildSystemPrompt(includeResearchTools = true): string {
         ? `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${COURTLISTENER_SYSTEM_PROMPT}\n${SYSTEM_PROMPT_AFTER_RESEARCH}`
         : `${SYSTEM_PROMPT_BEFORE_RESEARCH}\n\n${SYSTEM_PROMPT_AFTER_RESEARCH}`;
 }
-
-export const SYSTEM_PROMPT = buildSystemPrompt(true);

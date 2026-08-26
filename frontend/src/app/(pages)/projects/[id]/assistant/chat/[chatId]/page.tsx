@@ -252,9 +252,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
     const [editScrollTarget, setEditScrollTarget] =
         useState<EditScrollTarget | null>(null);
-    const [reloadingDocIds, setReloadingDocIds] = useState<Set<string>>(
-        () => new Set(),
-    );
 
     const activeTab = tabs.find((t) => t.documentId === activeTabId) ?? null;
     const tabBarRef = useRef<HTMLDivElement | null>(null);
@@ -357,8 +354,19 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         ].join("|");
     }, [messages]);
 
+    // The signature string is never empty (it always carries its three
+    // section labels), so compare it against the last one we acted on
+    // instead of testing it for truthiness. The ref starts unset and is
+    // seeded on the first run, so the mount pass rides on the fetch above
+    // rather than firing a second identical GET.
+    const lastMutationSignatureRef = useRef<string | null>(null);
+
     useEffect(() => {
-        if (!projectMutationSignature) return;
+        if (lastMutationSignatureRef.current === projectMutationSignature)
+            return;
+        const isFirstRun = lastMutationSignatureRef.current === null;
+        lastMutationSignatureRef.current = projectMutationSignature;
+        if (isFirstRun) return;
         getProject(projectId)
             .then(setProject)
             .catch(() => {});
@@ -497,17 +505,18 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     function closeTab(docId: string) {
-        setTabs((prev) => {
-            const next = prev.filter((t) => t.documentId !== docId);
-            if (activeTabId === docId) {
-                const idx = prev.findIndex((t) => t.documentId === docId);
-                const fallback = next[idx] ?? next[idx - 1] ?? null;
-                setActiveTabId(fallback?.documentId ?? null);
-                setActiveQuotes(null);
-                setSelectedDocId(fallback?.documentId ?? null);
-            }
-            return next;
-        });
+        // Compute the next tabs and the fallback selection up front so the
+        // setTabs updater stays pure (StrictMode double-invokes updaters).
+        const idx = tabs.findIndex((t) => t.documentId === docId);
+        if (idx === -1) return;
+        const next = tabs.filter((t) => t.documentId !== docId);
+        setTabs(next);
+        if (activeTabId === docId) {
+            const fallback = next[idx] ?? next[idx - 1] ?? null;
+            setActiveTabId(fallback?.documentId ?? null);
+            setActiveQuotes(null);
+            setSelectedDocId(fallback?.documentId ?? null);
+        }
     }
 
     function switchTab(docId: string) {
@@ -564,20 +573,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         });
     };
 
-    const handleEditResolved = (_args: {
-        editId: string;
-        documentId: string;
-        status: "accepted" | "rejected";
-        versionId: string | null;
-        downloadUrl: string | null;
-    }) => {
-        // Re-render after accept/reject is disabled while we verify the
-        // client-side optimistic mutation works on its own. Re-enable by
-        // bumping versionId + refetchKey on the matching tab and marking
-        // it reloading like before.
-        void _args;
-    };
-
     const patchTab = (documentId: string, patch: Partial<DocTab>) => {
         setTabs((prev) =>
             prev.map((t) =>
@@ -596,15 +591,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     const handleTabScrollChange = (documentId: string, scrollTop: number) => {
         patchTab(documentId, { scrollTop });
-    };
-
-    const handleDocxReady = (documentId: string) => {
-        setReloadingDocIds((prev) => {
-            if (!prev.has(documentId)) return prev;
-            const next = new Set(prev);
-            next.delete(documentId);
-            return next;
-        });
     };
 
     const handleChatDrop = (e: React.DragEvent) => {
@@ -1237,9 +1223,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             ? editScrollTarget
                                             : null
                                     }
-                                    onReady={() =>
-                                        handleDocxReady(activeTab.documentId)
-                                    }
                                     warning={activeTab.warning ?? null}
                                     onWarningDismiss={() =>
                                         dismissTabWarning(activeTab.documentId)
@@ -1392,11 +1375,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                                 handleEditViewClick
                                             }
                                             onOpenDocument={handleOpenDocument}
-                                            onEditResolved={handleEditResolved}
                                             onEditError={handleEditError}
-                                            isDocReloading={(docId) =>
-                                                reloadingDocIds.has(docId)
-                                            }
                                         />
                                     ),
                                 );

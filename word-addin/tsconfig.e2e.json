@@ -1,8 +1,14 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["node", "@playwright/test", "office-runtime"]
+    "types": ["node", "@playwright/test", "office-runtime"],
+    // The live-testing launchers under e2e-live/ are plain ESM JavaScript run
+    // directly by Node, never bundled. Including them keeps `npm run
+    // typecheck:e2e` honest about syntax and imports; checkJs stays off
+    // because they are deliberately untyped scripts.
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": ["e2e/**/*.ts", "playwright.config.ts"],
+  "include": ["e2e/**/*.ts", "e2e-live/**/*.mjs", "playwright.config.ts"],
   "exclude": ["dist", "node_modules"]
 }

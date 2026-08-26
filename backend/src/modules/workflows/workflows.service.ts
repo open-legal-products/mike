@@ -25,9 +25,8 @@ import {
   type WorkflowScope,
 } from "../../lib/workflowsOverview";
 import {
-  ALLOWED_DOCUMENT_TYPES,
-  ALLOWED_DOCUMENT_TYPES_LABEL,
   contentTypeForDocumentType,
+  parseAllowedSuffix,
 } from "../../lib/documentTypes";
 import { contentSha256 } from "../../lib/documentVersions";
 import {
@@ -36,6 +35,9 @@ import {
   workflowReferenceKey,
 } from "../../lib/storage";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
+// One devLog, not a private copy per module. lib/chat/types has held the
+// canonical NODE_ENV-gated logger since the chat layer was split out.
+import { devLog } from "../../lib/chat/types";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
@@ -43,11 +45,6 @@ type Db = ReturnType<typeof createServerSupabase>;
 // object. The route logs it and answers with the opaque internal-error body
 // from lib/httpError, so driver messages never reach the client.
 export type ServiceFailure = { ok: false; error: unknown };
-
-const isDev = process.env.NODE_ENV !== "production";
-const devLog = (...args: Parameters<typeof console.log>) => {
-  if (isDev) console.log(...args);
-};
 
 export type WorkflowRecord = {
   id: string;
@@ -211,7 +208,10 @@ function metadataFromWorkflowRecord(
   };
 }
 
-function withDatabaseWorkflow(workflow: WorkflowRecord) {
+// Exported for the workflow-addons import route, whose 201 body must match
+// GET /workflows/:id. Hand-rebuilding that shape there had already drifted on
+// metadata.name, contributors, version and is_default.
+export function withDatabaseWorkflow(workflow: WorkflowRecord) {
   const {
     title: _title,
     type: _type,
@@ -309,7 +309,11 @@ function contributorFromName(name: unknown): WorkflowContributor {
   };
 }
 
-async function resolveWorkflowAccess(
+// Exported for the quick-actions route, which links a quick action to a
+// workflow and has to apply exactly this owner-or-share rule. Its private copy
+// had already drifted: it treated any lookup failure as "not found" and never
+// consulted workflow_shares.allow_edit.
+export async function resolveWorkflowAccess(
   db: Db,
   workflowId: string,
   userId: string,
@@ -938,12 +942,6 @@ export type ReferenceFileFailure =
   | { ok: false; kind: "storage_unconfigured" }
   | { ok: false; kind: "db_error"; error: unknown };
 
-function referenceFileType(file: UploadedReferenceFile): string {
-  return file.originalname.includes(".")
-    ? file.originalname.split(".").pop()!.toLowerCase()
-    : "";
-}
-
 export async function listReferenceFiles(
   db: Db,
   params: { workflowId: string; userId: string; userEmail: string | undefined },
@@ -984,14 +982,11 @@ export async function uploadReferenceFile(
     return { ok: false, kind: "tabular_unsupported" };
   }
   if (!file) return { ok: false, kind: "file_required" };
-  const fileType = referenceFileType(file);
-  if (!ALLOWED_DOCUMENT_TYPES.has(fileType)) {
-    return {
-      ok: false,
-      kind: "unsupported_type",
-      detail: `Unsupported file type: ${fileType}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-    };
+  const parsedType = parseAllowedSuffix(file.originalname);
+  if (!parsedType.ok) {
+    return { ok: false, kind: "unsupported_type", detail: parsedType.detail };
   }
+  const fileType = parsedType.suffix;
   const referenceId = crypto.randomUUID();
   const contentHash = contentSha256(file.buffer);
   const ownerId = access.workflow.user_id ?? userId;
@@ -1089,14 +1084,11 @@ export async function replaceReferenceFile(
     return { ok: false, kind: "tabular_unsupported" };
   }
   if (!file) return { ok: false, kind: "file_required" };
-  const fileType = referenceFileType(file);
-  if (!ALLOWED_DOCUMENT_TYPES.has(fileType)) {
-    return {
-      ok: false,
-      kind: "unsupported_type",
-      detail: `Unsupported file type: ${fileType}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-    };
+  const parsedType = parseAllowedSuffix(file.originalname);
+  if (!parsedType.ok) {
+    return { ok: false, kind: "unsupported_type", detail: parsedType.detail };
   }
+  const fileType = parsedType.suffix;
   const { data: current } = await db
     .from("workflow_reference_documents")
     .select("id, user_id, storage_path")

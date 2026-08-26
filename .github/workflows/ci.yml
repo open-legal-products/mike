@@ -48,6 +48,12 @@ jobs:
 
       - run: npm run build
 
+      # `npm run build` (tsc -p tsconfig.json) deliberately excludes the test
+      # files so they never reach dist/, which left them entirely unchecked.
+      # tsconfig.test.json re-includes them with noEmit, so a stale mock
+      # signature fails the build instead of silently passing at runtime.
+      - run: npm run typecheck:test
+
   frontend:
     name: Frontend build and tests
     runs-on: ubuntu-latest

@@ -1,31 +1,25 @@
 // Project document service functions: list, assign/copy an existing document
-// into a project, rename, and the upload processing pipeline.
+// into a project, and rename. Uploads go through the shared pipeline in
+// modules/documents/documents.upload.ts — this module used to carry a
+// drifted copy of it.
 
 import {
   attachActiveVersionPaths,
   attachLatestVersionNumbers,
   contentSha256,
 } from "../../lib/documentVersions";
-import { recordAudit } from "../../lib/audit";
 import {
   deleteFile,
   downloadFile,
   uploadFile,
   storageKey,
 } from "../../lib/storage";
-import { docxToPdf, convertedPdfKey } from "../../lib/convert";
-import { enqueueConversion } from "../../lib/queue/conversionQueue";
-import { enqueueDbJob } from "../../lib/dbq/enqueue";
+import { convertedPdfKey } from "../../lib/convert";
 import { checkProjectAccess } from "../../lib/access";
-import {
-  contentTypeForDocumentType,
-  requiresLibreOfficeTextExtraction,
-  shouldConvertToPdf,
-} from "../../lib/documentTypes";
+import { contentTypeForDocumentType } from "../../lib/documentTypes";
 import {
   type Db,
   attachDocumentOwnerLabels,
-  countPdfPages,
   loadProjectFolder,
   normalizeDocumentFilename,
 } from "./projects.shared";
@@ -318,6 +312,7 @@ export type RenameDocumentResult =
   | { ok: true; doc: Record<string, unknown> }
   | { ok: false; kind: "forbidden" }
   | { ok: false; kind: "doc_not_found" }
+  | { ok: false; kind: "db_error"; detail: string }
   | { ok: false; kind: "validation"; detail: string };
 
 export async function renameProjectDocument(
@@ -342,18 +337,18 @@ export async function renameProjectDocument(
     .eq("project_id", projectId)
     .single();
   if (!doc) return { ok: false, kind: "doc_not_found" };
+  // The name being renamed lives on the active version row, so a document
+  // without one has nothing to rename.
+  if (!doc.current_version_id) return { ok: false, kind: "doc_not_found" };
 
-  const active = doc.current_version_id
-    ? await db
-        .from("document_versions")
-        .select("filename")
-        .eq("id", doc.current_version_id)
-        .eq("document_id", documentId)
-        .single()
-    : null;
+  const active = await db
+    .from("document_versions")
+    .select("filename")
+    .eq("id", doc.current_version_id)
+    .eq("document_id", documentId)
+    .single();
   const currentName =
-    typeof active?.data?.filename === "string" &&
-    active.data.filename.trim()
+    typeof active.data?.filename === "string" && active.data.filename.trim()
       ? active.data.filename.trim()
       : "Untitled document";
   const filename = normalizeDocumentFilename(args.filename, currentName);
@@ -369,19 +364,25 @@ export async function renameProjectDocument(
     .single();
   if (error || !updated) return { ok: false, kind: "doc_not_found" };
 
-  if (doc.current_version_id) {
-    await db
-      .from("document_versions")
-      .update({ filename })
-      .eq("id", doc.current_version_id)
-      .eq("document_id", documentId);
-  }
+  // Read the stored name back instead of echoing the requested one — a failed
+  // version update used to be swallowed here and the response still claimed
+  // the rename had happened.
+  const { data: renamed, error: renameError } = await db
+    .from("document_versions")
+    .update({ filename })
+    .eq("id", doc.current_version_id)
+    .eq("document_id", documentId)
+    .select("filename")
+    .single();
+  if (renameError)
+    return { ok: false, kind: "db_error", detail: renameError.message };
+  if (!renamed) return { ok: false, kind: "doc_not_found" };
 
   return {
     ok: true,
     doc: {
       ...updated,
-      filename,
+      filename: renamed.filename,
     },
   };
 }
@@ -411,193 +412,4 @@ export async function ensureProjectUploadAccess(
     if (!folder) return { ok: false, kind: "folder_not_found" };
   }
   return { ok: true };
-}
-
-export type UploadDocumentResult =
-  | { ok: true; doc: unknown }
-  | { ok: false; kind: "create_failed" }
-  | { ok: false; kind: "processing_failed"; error: unknown };
-
-export async function processProjectDocumentUpload(
-  db: Db,
-  args: {
-    userId: string;
-    userEmail?: string;
-    projectId: string | null;
-    folderId?: string | null;
-    filename: string;
-    suffix: string;
-    content: Buffer;
-  },
-): Promise<UploadDocumentResult> {
-  const { userId, userEmail, projectId, filename, suffix, content } = args;
-  const folderId = args.folderId ?? null;
-
-  const { data: doc, error: insertErr } = await db
-    .from("documents")
-    .insert({
-      project_id: projectId,
-      user_id: userId,
-      status: "processing",
-      folder_id: folderId,
-    })
-    .select("*")
-    .single();
-
-  if (insertErr || !doc) return { ok: false, kind: "create_failed" };
-
-  try {
-    const docId = doc.id as string;
-    const key = storageKey(userId, docId, filename);
-    const contentType = contentTypeForDocumentType(suffix);
-    await uploadFile(
-      key,
-      content.buffer.slice(
-        content.byteOffset,
-        content.byteOffset + content.byteLength,
-      ) as ArrayBuffer,
-      contentType,
-    );
-
-    const rawBuf = content.buffer.slice(
-      content.byteOffset,
-      content.byteOffset + content.byteLength,
-    ) as ArrayBuffer;
-    const pageCount = suffix === "pdf" ? await countPdfPages(rawBuf) : null;
-
-    // When the job queue is enabled, defer Office → PDF conversion to the
-    // BullMQ worker instead of blocking the upload request on LibreOffice —
-    // the same deferral the single-document upload path makes.
-    const deferConversion =
-      shouldConvertToPdf(suffix) &&
-      process.env.ASYNC_DOCUMENT_CONVERSION === "true";
-
-    // Convert Office files → PDF for display. PDFs are their own rendition.
-    let pdfStoragePath: string | null = null;
-    if (!deferConversion && shouldConvertToPdf(suffix)) {
-      try {
-        const pdfBuf = await docxToPdf(content);
-        const pdfKey = convertedPdfKey(userId, docId);
-        await uploadFile(
-          pdfKey,
-          pdfBuf.buffer.slice(
-            pdfBuf.byteOffset,
-            pdfBuf.byteOffset + pdfBuf.byteLength,
-          ) as ArrayBuffer,
-          "application/pdf",
-        );
-        pdfStoragePath = pdfKey;
-      } catch (err) {
-        console.error(
-          "[upload] Office→PDF conversion failed",
-          { filename },
-          err,
-        );
-      }
-    } else if (suffix === "pdf") {
-      pdfStoragePath = key;
-    }
-
-    // Storage paths live on document_versions — create the V1 row and
-    // point documents.current_version_id at it.
-    const { data: versionRow, error: verErr } = await db
-      .from("document_versions")
-      .insert({
-        document_id: docId,
-        storage_path: key,
-        pdf_storage_path: pdfStoragePath,
-        source: "upload",
-        version_number: 1,
-        filename,
-        file_type: suffix,
-        size_bytes: content.byteLength,
-        page_count: pageCount,
-        content_sha256: contentSha256(content),
-      })
-      .select("id")
-      .single();
-    if (verErr || !versionRow) {
-      throw new Error(
-        `Failed to record upload version: ${verErr?.message ?? "unknown"}`,
-      );
-    }
-
-    await db
-      .from("documents")
-      .update({
-        current_version_id: versionRow.id,
-        // Deferred conversion leaves the doc "processing" until the worker
-        // produces the PDF and flips it to "ready".
-        status: deferConversion ? "processing" : "ready",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", docId);
-
-    if (deferConversion) {
-      await enqueueConversion({
-        documentId: docId,
-        versionId: versionRow.id as string,
-        userId,
-        storagePath: key,
-        fileType: suffix,
-      });
-    }
-
-    // Same precompute as the single-document upload path (documents.ts):
-    // .doc/.ppt are the only types read_document can read without an
-    // in-process parser, so their text is extracted once here rather than
-    // inside the first chat tool call. Best-effort — the read path re-queues.
-    if (requiresLibreOfficeTextExtraction(suffix)) {
-      try {
-        await enqueueDbJob(db, {
-          kind: "document.precompute_text",
-          payload: {
-            versionId: versionRow.id as string,
-            storagePath: key,
-            fileType: suffix,
-            userId,
-          },
-          dedupeKey: `precompute:${versionRow.id as string}`,
-          maxAttempts: 3,
-        });
-      } catch (err) {
-        console.error("[upload] precompute-text enqueue failed", err);
-      }
-    }
-
-    const { data: updated } = await db
-      .from("documents")
-      .select("*")
-      .eq("id", docId)
-      .single();
-    const responseDoc = updated
-        ? {
-            ...updated,
-            filename,
-            storage_path: key,
-            pdf_storage_path: pdfStoragePath,
-            file_type: suffix,
-            size_bytes: content.byteLength,
-            page_count: pageCount,
-            active_version_number: 1,
-        }
-      : updated;
-    // Audit the project upload. The library/assistant upload path
-    // (documents.ts) records this too; this handler is the project-scoped
-    // duplicate and was previously uninstrumented, so project uploads never
-    // appeared in history.
-    void recordAudit(db, {
-      userId,
-      userEmail,
-      action: "document.uploaded",
-      title: filename,
-      surface: projectId ? "project" : "assistant",
-      projectId,
-      documentId: (updated as { id?: string } | null)?.id ?? null,
-    });
-    return { ok: true, doc: responseDoc };
-  } catch (e) {
-    await db.from("documents").update({ status: "error" }).eq("id", doc.id);
-    return { ok: false, kind: "processing_failed", error: e };
-  }
 }

@@ -10,6 +10,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import { hasLlmKey, LLM_SKIP_REASON } from "./llm";
+import { selectClaudeModel } from "./helpers";
 
 /* ─── Helpers ────────────────────────────────────────────────────────────────── */
 
@@ -29,41 +30,6 @@ async function ensureSidebarOpen(page: Page) {
         await page.getByTitle("Open sidebar").first().click();
         await expect(historySection).toBeVisible({ timeout: 5_000 });
     }
-}
-
-/**
- * Select a Claude model in the chat input's ModelToggle so the first submit
- * actually creates a chat instead of opening the ApiKeyMissingModal.
- *
- * The specs that call this run only when ANTHROPIC_API_KEY is set in the
- * Playwright environment (test.skip(!hasLlmKey, ...) — e2e/llm.ts). The CI
- * stack exports the same secret to the backend, whose key resolution
- * (userApiKeys.ts envApiKey()) falls back to the ANTHROPIC_API_KEY env var, so
- * the "claude" provider reports as configured and ModelToggle shows the
- * Anthropic models as available. The default model, however, is
- * "gemini-3-flash-preview" (ModelToggle.DEFAULT_MODEL_ID), for which no key is
- * configured in CI; ChatInput.handleSubmit (ChatInput.tsx:116-119) then refuses
- * to send. ModelToggle renders a Radix DropdownMenu: the trigger is a button
- * whose title is "Choose model" (current model available) or "API key missing
- * for selected model" (current model not available — the default-Gemini case).
- * We open it, pick "Claude Sonnet 4.6" (the cheapest Anthropic entry in
- * ModelToggle.MODELS), and confirm the trigger now shows that label.
- */
-const CLAUDE_MODEL_LABEL = "Claude Sonnet 4.6";
-
-async function selectClaudeModel(page: Page) {
-    const trigger = page
-        .locator(
-            'button[title="Choose model"], button[title="API key missing for selected model"]',
-        )
-        .first();
-    await expect(trigger).toBeVisible({ timeout: 10_000 });
-    await trigger.click();
-    await page.getByRole("menuitem", { name: CLAUDE_MODEL_LABEL }).click();
-    // After selection the trigger label reflects the chosen model.
-    await expect(
-        page.getByRole("button", { name: CLAUDE_MODEL_LABEL }),
-    ).toBeVisible({ timeout: 5_000 });
 }
 
 /* ─── Test 1: cold-load existing chat ───────────────────────────────────────── */

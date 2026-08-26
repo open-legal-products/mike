@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { ConversionJobData } from "../../../queue/conversionQueue";
 
 // persistGeneratedFile (exercised through generatePpt) is where a generated
 // PPTX pays for LibreOffice. These tests pin the flag contract:
@@ -8,24 +9,35 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 //   - flag on + enqueue failure → degrade to "usable document, no rendition"
 //                 (the sync path's historical conversion-failure behavior)
 
-const uploadFile = vi.fn(async () => {});
+// Each stub carries the signature of the function it replaces, so the
+// assertions below can read `mock.calls[n][m]` as the real argument type
+// instead of an untyped tuple.
+const uploadFile =
+  vi.fn<(key: string, content: ArrayBuffer, contentType: string) => Promise<void>>(
+    async () => {},
+  );
 vi.mock("../../../storage", () => ({
-  uploadFile: (...a: unknown[]) => uploadFile(...a),
+  uploadFile: (key: string, content: ArrayBuffer, contentType: string) =>
+    uploadFile(key, content, contentType),
   downloadFile: vi.fn(async () => null),
   generatedDocKey: (userId: string, docId: string, filename: string) =>
     `generated/${userId}/${docId}/${filename}`,
 }));
 
-const docxToPdf = vi.fn(async () => Buffer.from("pdf-bytes"));
+const docxToPdf = vi.fn<(buffer: Buffer) => Promise<Buffer>>(async () =>
+  Buffer.from("pdf-bytes"),
+);
 vi.mock("../../../convert", () => ({
-  docxToPdf: (...a: unknown[]) => docxToPdf(...a),
+  docxToPdf: (buffer: Buffer) => docxToPdf(buffer),
   convertedPdfKey: (userId: string, docId: string) =>
     `converted-pdfs/${userId}/${docId}.pdf`,
 }));
 
-const enqueueConversion = vi.fn(async () => ({}));
+const enqueueConversion = vi.fn<(data: ConversionJobData) => Promise<unknown>>(
+  async () => ({}),
+);
 vi.mock("../../../queue/conversionQueue", () => ({
-  enqueueConversion: (...a: unknown[]) => enqueueConversion(...a),
+  enqueueConversion: (data: ConversionJobData) => enqueueConversion(data),
 }));
 
 vi.mock("../../../downloadTokens", () => ({
@@ -111,7 +123,7 @@ describe("generatePpt rendition path", () => {
     const version = db.inserts.find((i) => i.table === "document_versions");
     expect(version?.payload.pdf_storage_path).toBeNull();
     expect(enqueueConversion).toHaveBeenCalledTimes(1);
-    const job = enqueueConversion.mock.calls[0][0] as Record<string, unknown>;
+    const job = enqueueConversion.mock.calls[0][0];
     expect(job).toMatchObject({
       documentId: "doc-db-1",
       versionId: "ver-db-1",
@@ -138,7 +150,7 @@ describe("generatePpt rendition path", () => {
   it("never converts or enqueues for spreadsheets (xlsx is served raw)", async () => {
     process.env.ASYNC_DOCUMENT_CONVERSION = "true";
     const db = makeDb();
-    const { generateExcel } = await import("../documentOps");
+    const { generateExcel } = await import("../documentOps.js");
 
     const out = await generateExcel("Book", [], "user-1", db as never);
 

@@ -64,6 +64,7 @@ import type { TRTableHandle } from "./TRTable";
 import { TRChatPanel } from "./TRChatPanel";
 import { TabularReviewDetailsModal } from "./TabularReviewDetailsModal";
 import { exportTabularReviewToExcel } from "./exportToExcel";
+import { readSseFrames } from "@/app/lib/sse";
 import { useSidebar } from "@/app/contexts/SidebarContext";
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
@@ -387,43 +388,31 @@ export function TRView({ reviewId, projectId }: Props) {
     // Shared by the POST /generate stream and the GET resume stream, which
     // emit the identical frame shape.
     async function consumeGenerationStream(response: Response) {
-        if (!response.body) throw new Error("No body");
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let finished = false;
-
-        while (!finished) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-                if (!line.startsWith("data:")) continue;
-                const dataStr = line.slice(5).trim();
-                if (dataStr === "[DONE]") {
-                    finished = true;
-                    break;
+        for await (const frame of readSseFrames(response, {
+            signal: generationAbortRef.current?.signal,
+        })) {
+            try {
+                const data = frame as Record<string, unknown>;
+                if (data.type === "cell_update") {
+                    setCells((prev) =>
+                        prev.map((c) =>
+                            c.row_id === data.row_id &&
+                            c.column_index === data.column_index
+                                ? {
+                                      ...c,
+                                      content: data.content as TabularCell["content"],
+                                      status: data.status as TabularCell["status"],
+                                  }
+                                : c,
+                        ),
+                    );
                 }
-                try {
-                    const data = JSON.parse(dataStr);
-                    if (data.type === "cell_update") {
-                        setCells((prev) =>
-                            prev.map((c) =>
-                                c.row_id === data.row_id &&
-                                c.column_index === data.column_index
-                                    ? {
-                                          ...c,
-                                          content: data.content,
-                                          status: data.status,
-                                      }
-                                    : c,
-                            ),
-                        );
-                    }
-                } catch {}
+            } catch (err) {
+                console.warn(
+                    "[TabularReviewView] failed to apply cell_update:",
+                    frame,
+                    err,
+                );
             }
         }
     }

@@ -46,3 +46,20 @@ export async function loadPdfjs(): Promise<PdfjsLib> {
   const mod = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
   return mod as PdfjsLib;
 }
+
+/**
+ * Page count of a PDF's bytes, or `null` when the file can't be parsed.
+ *
+ * Upload/version pipelines record this alongside the stored file and treat a
+ * failure as "unknown", never as an error — so parse problems are swallowed.
+ */
+export async function countPdfPages(buf: ArrayBuffer): Promise<number | null> {
+  try {
+    const pdfjsLib = await loadPdfjs();
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) })
+      .promise;
+    return pdf.numPages;
+  } catch {
+    return null;
+  }
+}

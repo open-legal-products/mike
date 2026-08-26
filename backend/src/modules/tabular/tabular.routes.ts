@@ -270,6 +270,7 @@ tabularRouter.post("/", requireAuth, async (req, res) => {
 // POST /tabular-review/prompt (must come before /:reviewId routes)
 tabularRouter.post("/prompt", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
+    const db = createServerSupabase();
     const title =
         typeof req.body.title === "string" ? req.body.title.trim() : "";
     if (!title)
@@ -313,7 +314,12 @@ tabularRouter.post("/prompt", requireAuth, async (req, res) => {
         `format handling is applied separately and must not be duplicated inside the prompt text.`;
 
     try {
-        const { title_model, api_keys } = await getUserModelSettings(userId);
+        // Hand the request's client over, as every other call site does,
+        // instead of letting the helper build its own.
+        const { title_model, api_keys } = await getUserModelSettings(
+            userId,
+            db,
+        );
         const raw = await completeText({
             model: title_model,
             systemPrompt:
@@ -621,12 +627,20 @@ tabularRouter.delete("/:reviewId", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     const { reviewId } = req.params;
     const db = createServerSupabase();
-    const { error } = await db
+    // Select the deleted ids back: without them a delete that matched nothing
+    // (wrong id, or someone else's review) reported 204 "deleted".
+    const { data: deleted, error } = await db
         .from("tabular_reviews")
         .delete()
         .eq("id", reviewId)
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        // Selecting the deleted ids separates "gone now" from "was never
+        // yours": a collaborator deleting a shared review used to get 204 for
+        // a no-op, and the row stayed on their screen until a reload.
+        .select("id");
     if (error) return void sendInternalError(res, error);
+    if (!deleted || deleted.length === 0)
+        return void res.status(404).json({ detail: "Review not found" });
     res.status(204).send();
 });
 
@@ -1456,13 +1470,17 @@ tabularRouter.delete(
         const { chatId } = req.params;
         const db = createServerSupabase();
         // Owner-only delete — sibling collaborators shouldn't be able to wipe
-        // each other's threads.
-        const { error } = await db
+        // each other's threads. Selecting the deleted ids back distinguishes
+        // "not yours / not there" from a real delete, which a bare 204 hid.
+        const { data: deleted, error } = await db
             .from("tabular_review_chats")
             .delete()
             .eq("id", chatId)
-            .eq("user_id", userId);
+            .eq("user_id", userId)
+            .select("id");
         if (error) return void sendInternalError(res, error);
+        if (!deleted || deleted.length === 0)
+            return void res.status(404).json({ detail: "Chat not found" });
         res.status(204).send();
     },
 );
@@ -1479,13 +1497,17 @@ tabularRouter.patch(
         if (!title)
             return void res.status(400).json({ detail: "Title is required" });
         const db = createServerSupabase();
-        // Owner-only rename — mirrors the delete rule above.
-        const { error } = await db
+        // Owner-only rename — mirrors the delete rule above, including
+        // reporting 404 when the update matched no row.
+        const { data: renamed, error } = await db
             .from("tabular_review_chats")
             .update({ title: title.slice(0, 200) })
             .eq("id", chatId)
-            .eq("user_id", userId);
+            .eq("user_id", userId)
+            .select("id");
         if (error) return void sendInternalError(res, error);
+        if (!renamed || renamed.length === 0)
+            return void res.status(404).json({ detail: "Chat not found" });
         res.status(204).send();
     },
 );
@@ -1601,7 +1623,12 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
         ),
     };
 
-    const { tabular_model, api_keys } = await getUserModelSettings(userId, db);
+    // One settings load for the whole request: the title generation below
+    // used to repeat this query just for `title_model`.
+    const { tabular_model, title_model, api_keys } = await getUserModelSettings(
+        userId,
+        db,
+    );
     const missingKey = missingModelApiKey(tabular_model, api_keys);
     if (missingKey) {
         return void res.status(422).json({
@@ -1710,7 +1737,6 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
 
         // Generate title on first exchange
         if (chatId && isFirstExchange && !chatTitle && lastUser.content) {
-            const { title_model } = await getUserModelSettings(userId, db);
             const title = await generateChatTitle(
                 title_model,
                 lastUser.content,

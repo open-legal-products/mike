@@ -32,9 +32,10 @@ test.describe("unauthenticated", () => {
         await page.fill("#password", "definitely-wrong-password");
         await page.click('button[type="submit"]');
 
-        /* Wait for the client-side async signIn call to complete and for React
-           to set the `error` state and re-render the error element. */
-        await page.waitForLoadState("networkidle");
+        /* No "networkidle" wait here: the expect() below already retries until
+           React has set the `error` state and re-rendered, and it names the
+           element we actually care about, so a hang fails pointing at the
+           missing banner instead of at an inscrutable load state. */
 
         /* The login page conditionally renders:
                <div className="text-red-600 text-sm bg-red-50 p-3 rounded">
@@ -133,7 +134,10 @@ test.describe("logout (isolated user)", () => {
         await page.click('button[type="submit"]');
 
         await completeOnboardingIfRequired(page);
-        await page.waitForLoadState("networkidle");
+        await page.waitForURL(/\/assistant/, { timeout: 15_000 });
+        /* The sidebar's own expect() below is the real settle-wait — it
+           retries on the element this test goes on to click. networkidle
+           never fires against an app with SSE and polling in flight. */
 
     /* The AppSidebar renders a user-profile toggle button at the very bottom
        of the sidebar. The button wraps a circular div that shows the user's
@@ -157,11 +161,13 @@ test.describe("logout (isolated user)", () => {
     await accountSettingsItem.click();
 
     await expect(page).toHaveURL(/\/settings/, { timeout: 10_000 });
-    await page.waitForLoadState("networkidle");
 
     /* Sign out now lives in the account dropdown rather than the Settings
        page. Reopen the same sidebar menu after navigation and exercise the
-       relocated action. */
+       relocated action — waiting for the sidebar button to re-render after the
+       route change, which is what the "networkidle" wait here was standing in
+       for (badly: it can't tell a settled page from a stalled one). */
+    await expect(userMenuButton).toBeVisible({ timeout: 10_000 });
     await userMenuButton.click();
     const signOutButton = page.getByRole("button", {
         name: "Sign out",

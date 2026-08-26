@@ -1,0 +1,22 @@
+// Type-checks the test suites, which the build tsconfig deliberately excludes
+// (they must not land in dist/). Without this, `src/**/__tests__/**` and
+// `*.test.ts` were never seen by tsc at all: a broken mock signature or a
+// renamed export only showed up as a runtime failure — or, worse, silently
+// passed while asserting on a shape that no longer exists. `npm run
+// typecheck:test` runs this; CI runs it next to the build.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Checking only — the build tsconfig owns emit into dist/.
+    "noEmit": true,
+    // The mocks call vitest APIs and supertest; neither is in the build
+    // tsconfig's `types` allowlist (they are devDependencies, imported
+    // explicitly by the tests), so nothing extra is needed here beyond
+    // re-including the files themselves.
+    "types": ["node", "express", "cors", "multer"]
+  },
+  // No `exclude` override of the base's test filters — the whole point is to
+  // include what the base leaves out.
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

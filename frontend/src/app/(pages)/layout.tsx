@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PanelLeft } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -35,9 +35,11 @@ export default function MikeLayout({
         return true;
     });
 
+    // Persist the desktop preference — that is the value the restore path above
+    // reads back into isSidebarOpenDesktop on the next mount.
     useEffect(() => {
         if (typeof window !== "undefined" && window.innerWidth >= 768) {
-            localStorage.setItem("sidebarOpen", isSidebarOpen.toString());
+            localStorage.setItem("sidebarOpen", isSidebarOpenDesktop.toString());
         }
     }, [isSidebarOpenDesktop]);
 
@@ -69,6 +71,24 @@ export default function MikeLayout({
         [],
     );
 
+    const setSidebarOpen = useCallback((open: boolean) => {
+        const isSmall =
+            typeof window !== "undefined" && window.innerWidth < 768;
+        if (isSmall) {
+            if (!open) setIsSidebarOpen(false);
+            return;
+        }
+        setIsSidebarOpen(open);
+        setIsSidebarOpenDesktop(open);
+    }, []);
+
+    const pageChromeValue = useMemo(
+        () => ({ mobileActionsContainer }),
+        [mobileActionsContainer],
+    );
+
+    const sidebarValue = useMemo(() => ({ setSidebarOpen }), [setSidebarOpen]);
+
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
             router.push("/login");
@@ -83,22 +103,8 @@ export default function MikeLayout({
 
     return (
         <ChatHistoryProvider>
-            <PageChromeContext.Provider value={{ mobileActionsContainer }}>
-                <SidebarContext.Provider
-                    value={{
-                        setSidebarOpen: (open) => {
-                            const isSmall =
-                                typeof window !== "undefined" &&
-                                window.innerWidth < 768;
-                            if (isSmall) {
-                                if (!open) setIsSidebarOpen(false);
-                                return;
-                            }
-                            setIsSidebarOpen(open);
-                            setIsSidebarOpenDesktop(open);
-                        },
-                    }}
-                >
+            <PageChromeContext.Provider value={pageChromeValue}>
+                <SidebarContext.Provider value={sidebarValue}>
                     <div className="h-dvh flex flex-col bg-app-background">
                         <div className="flex-1 flex min-w-0 overflow-visible">
                             <AppSidebar

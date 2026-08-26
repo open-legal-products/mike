@@ -543,11 +543,16 @@ export async function updateLibraryFolder(
   }
   if ("parent_folder_id" in body) {
     if (body.parent_folder_id) {
+      // `visited` guards the walk against a pre-existing cycle among the
+      // ancestors (bad data, or a concurrent move): without it the loop
+      // never terminates and the request hangs.
+      const visited = new Set<string>();
       let cur: string | null = body.parent_folder_id;
       while (cur) {
-        if (cur === folderId) {
+        if (cur === folderId || visited.has(cur)) {
           return err(400, "Cannot move a folder into itself or a descendant");
         }
+        visited.add(cur);
         const parent = await loadLibraryFolder(db, userId, kind, cur);
         if (!parent) return err(404, "Parent folder not found");
         cur = parent.parent_folder_id ?? null;
@@ -687,17 +692,18 @@ export async function renameLibraryDocument(
       : docQuery.eq("library_kind", kind);
   const { data: doc } = await docQuery.single();
   if (!doc) return err(404, "Document not found");
+  // The name being renamed lives on the active version row, so a document
+  // without one has nothing to rename.
+  if (!doc.current_version_id) return err(404, "Document not found");
 
-  const active = doc.current_version_id
-    ? await db
-        .from("document_versions")
-        .select("filename")
-        .eq("id", doc.current_version_id)
-        .eq("document_id", documentId)
-        .single()
-    : null;
+  const active = await db
+    .from("document_versions")
+    .select("filename")
+    .eq("id", doc.current_version_id)
+    .eq("document_id", documentId)
+    .single();
   const currentName =
-    typeof active?.data?.filename === "string" && active.data.filename.trim()
+    typeof active.data?.filename === "string" && active.data.filename.trim()
       ? active.data.filename.trim()
       : "Untitled document";
   const filename = normalizeDocumentFilename(rawFilename, currentName);
@@ -718,13 +724,18 @@ export async function renameLibraryDocument(
     .single();
   if (error || !updated) return err(404, "Document not found");
 
-  if (doc.current_version_id) {
-    await db
-      .from("document_versions")
-      .update({ filename })
-      .eq("id", doc.current_version_id)
-      .eq("document_id", documentId);
-  }
+  // Read the stored name back instead of echoing the requested one — a failed
+  // version update used to be swallowed here and the response still claimed
+  // the rename had happened.
+  const { data: renamed, error: renameError } = await db
+    .from("document_versions")
+    .update({ filename })
+    .eq("id", doc.current_version_id)
+    .eq("document_id", documentId)
+    .select("filename")
+    .single();
+  if (renameError) return err(500, renameError.message);
+  if (!renamed) return err(404, "Document not found");
 
-  return ok(mapLibraryDocument({ ...updated, filename }));
+  return ok(mapLibraryDocument({ ...updated, filename: renamed.filename }));
 }

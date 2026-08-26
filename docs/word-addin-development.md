@@ -108,8 +108,8 @@ embedding the localhost task pane. For local Word-on-the-web testing, use the
 included persistent browser session:
 
 ```bash
-node e2e-live/word-web-session.mjs --login
-node e2e-live/manual-session.mjs
+npm run live:login
+npm run live:word
 ```
 
 The first command captures a Microsoft login; the second opens Word online and
@@ -201,7 +201,7 @@ The local Anthropic-protocol stub returns scripted streaming responses while
 the rest of the stack remains real:
 
 ```bash
-node e2e-live/anthropic-stub.mjs &
+npm run live:stub &
 (cd ../backend && ANTHROPIC_BASE_URL=http://127.0.0.1:4141 npm run dev)
 ```
 
@@ -215,8 +215,12 @@ compare:
 
 - `src/shared/styles/tokens.css` with `frontend/src/app/globals.css`;
 - `src/taskpane/lib/modelCatalog.ts` with the web model catalog; and
-- `src/shared/chat/ChatInput.tsx` and the shared UI primitives with their web
+- `src/shared/chat/ChatInput.tsx` and the vendored UI primitives with their web
   counterparts, retaining narrow-pane adaptations.
+
+Files with no add-in-specific behavior are not vendored at all: they are
+aliased straight at the web source (`@mike/*` in `webpack.config.js` and
+`tsconfig.json`), so there is nothing to keep in sync.
 
 ## Troubleshooting
 

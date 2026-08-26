@@ -259,8 +259,20 @@ export function usePaginatedProjects(options: {
         ownerById: Object.fromEntries(rows.map((row) => [row.id, row.user_id])),
             });
             setSelectedProjectIds(rows.map((row) => row.id));
+        } catch (error) {
+            // Call sites fire this with `void`, so without a catch a failed
+            // id fetch is an unhandled rejection and the checkbox just
+            // silently does nothing. Surface it the way loadMore does.
+            if (requestVersion === requestVersionRef.current) {
+                console.error("[projects] failed to select all matching", error);
+                setLoadMoreError(
+                    paginationError(error, "Unable to select all projects"),
+                );
+            }
         } finally {
-            setSelectingAllRequest(false);
+            if (requestVersion === requestVersionRef.current) {
+                setSelectingAllRequest(false);
+            }
         }
     }, [
         hasMore,

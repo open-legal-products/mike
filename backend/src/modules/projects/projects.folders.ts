@@ -75,9 +75,15 @@ export async function updateProjectFolder(
       const parent = await loadProjectFolder(db, projectId, body.parent_folder_id);
       if (!parent) return { ok: false, kind: "parent_not_found" };
 
+      // `visited` guards the walk against a pre-existing cycle among the
+      // ancestors (bad data, or a concurrent move): without it the loop
+      // never terminates and the request hangs.
+      const visited = new Set<string>();
       let cur: string | null = body.parent_folder_id;
       while (cur) {
-        if (cur === folderId) return { ok: false, kind: "cycle" };
+        if (cur === folderId || visited.has(cur))
+          return { ok: false, kind: "cycle" };
+        visited.add(cur);
         const p = await loadProjectFolder(db, projectId, cur);
         if (!p) return { ok: false, kind: "parent_not_found" };
         cur = p?.parent_folder_id ?? null;

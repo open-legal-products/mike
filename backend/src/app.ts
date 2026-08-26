@@ -300,4 +300,10 @@ app.get("/manifest-signing-key", (_req, res) => {
   }
 });
 
+// Terminal error handler. Routers that mount their own error middleware answer
+// first; anything they re-raise (or that escapes a router without one) lands
+// here instead of Express's default handler, which would leak the stack trace
+// in a non-production environment. Must stay last: Express 4 only reaches an
+// error handler registered after the middleware that failed, and asyncRoute is
+// what gets rejected promises here at all.
 app.use(handleUnhandledError);

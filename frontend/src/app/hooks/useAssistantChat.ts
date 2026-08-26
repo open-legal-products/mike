@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, streamProjectChat } from "@/app/lib/mikeApi";
+import { readSseFrames } from "@/app/lib/sse";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type {
@@ -88,7 +89,24 @@ export function useAssistantChat({
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Bumped once per turn. eventsRef and the message list are shared across
+  // turns, so a stream that has been superseded (a second handleChat, or an
+  // unmounted panel) must stop writing to them even if its loop is still
+  // draining.
+  const generationRef = useRef(0);
+
   const eventsRef = useRef<AssistantEvent[]>([]);
+
+  // Nothing else stops an in-flight turn when the chat goes away: without
+  // this the reader keeps the connection open and keeps calling setState on
+  // an unmounted hook.
+  useEffect(
+    () => () => {
+      generationRef.current += 1;
+      abortControllerRef.current?.abort();
+    },
+    [],
+  );
 
   const updateLatestAssistantMessage = (
     updater: (message: Message) => Message,
@@ -259,6 +277,11 @@ export function useAssistantChat({
   ): Promise<string | null> => {
     if (!message.content.trim()) return null;
 
+    // Supersede any turn still streaming — its loop appends into the same
+    // eventsRef this turn is about to reset.
+    abortControllerRef.current?.abort();
+    const gen = ++generationRef.current;
+
     setIsResponseLoading(true);
 
     const lastMessage = messages[messages.length - 1];
@@ -380,39 +403,20 @@ export function useAssistantChat({
         throw new Error(`Chat request failed with status ${response.status}`);
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response body");
+      for await (const frame of readSseFrames(response, {
+        signal: controller.signal,
+      })) {
+        // A newer turn (or an unmount) owns eventsRef now — stop writing.
+        if (generationRef.current !== gen) break;
 
-      const decoder = new TextDecoder();
-      let buffer = "";
+        const data = frame as Record<string, unknown>;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          // Flush any bytes still held by TextDecoder. A response is allowed
-          // to close without a final newline, so the remaining buffer must be
-          // parsed as the last SSE record instead of being discarded.
-          buffer += decoder.decode();
-        } else {
-          buffer += decoder.decode(value, { stream: true });
-        }
-        const lines = buffer.split("\n");
-        buffer = done ? "" : lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data:")) continue;
-
-          const dataStr = trimmed.slice(5).trim();
-          if (dataStr === "[DONE]") continue;
-
-          try {
-            const data = JSON.parse(dataStr);
-
+        try {
             if (data.type === "chat_id") {
-              streamedChatId = data.chatId;
-              setChatId(data.chatId);
-              setCurrentChatId(data.chatId);
+              const streamed = data.chatId as string;
+              streamedChatId = streamed;
+              setChatId(streamed);
+              setCurrentChatId(streamed);
               continue;
             }
 
@@ -1278,17 +1282,12 @@ export function useAssistantChat({
               }));
               continue;
             }
-          } catch (e) {
-            console.warn(
-              "[useAssistantChat] failed to parse SSE line:",
-              trimmed,
-              e,
-            );
-          }
+        } catch (e) {
+          console.warn("[useAssistantChat] failed to handle SSE event:", data, e);
         }
-
-        if (done) break;
       }
+
+      if (generationRef.current !== gen) return null;
 
       finalizeStreamingReasoning();
       setIsResponseLoading(false);
@@ -1314,6 +1313,10 @@ export function useAssistantChat({
 
       return streamedChatId || null;
     } catch (error: unknown) {
+      // A superseded turn — including the abort this hook fires on unmount —
+      // must not repaint the message list the new turn now owns.
+      if (generationRef.current !== gen) return null;
+
       if (error instanceof Error && error.name === "AbortError") {
         finalizeStreamingContent();
         finalizeStreamingReasoning();

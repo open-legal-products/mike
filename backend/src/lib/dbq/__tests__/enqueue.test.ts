@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const deleteFile = vi.fn(async () => {});
+// Typed with the real deleteFile's signature so the recorded calls are a
+// proper argument tuple rather than an untyped rest array.
+const deleteFile = vi.fn<(key: string) => Promise<void>>(async () => {});
 vi.mock("../../storage", () => ({
-    deleteFile: (...a: unknown[]) => deleteFile(...a),
+    deleteFile: (key: string) => deleteFile(key),
 }));
 
 import { enqueueDbJob, enqueueStorageCleanup } from "../enqueue";

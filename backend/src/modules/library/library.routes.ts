@@ -21,10 +21,7 @@ import { requireAuth } from "../../middleware/auth";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
 import { singleFileUpload } from "../../lib/upload";
-import {
-  ALLOWED_DOCUMENT_TYPES,
-  ALLOWED_DOCUMENT_TYPES_LABEL,
-} from "../../lib/documentTypes";
+import { parseAllowedSuffix } from "../../lib/documentTypes";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { normalizeSearchTerm } from "../../lib/search";
 import { createDocumentFromUpload } from "../documents/documents.service";
@@ -247,20 +244,16 @@ libraryRouter.post(
     if (!file) return void res.status(400).json({ detail: "file is required" });
 
     const filename = file.originalname;
-    const suffix = filename.includes(".")
-      ? filename.split(".").pop()!.toLowerCase()
-      : "";
-    if (!ALLOWED_DOCUMENT_TYPES.has(suffix))
-      return void res.status(400).json({
-        detail: `Unsupported file type: ${suffix}. Allowed: ${ALLOWED_DOCUMENT_TYPES_LABEL}`,
-      });
+    const parsedSuffix = parseAllowedSuffix(filename);
+    if (!parsedSuffix.ok)
+      return void res.status(400).json({ detail: parsedSuffix.detail });
 
     const result = await createDocumentFromUpload(
       {
         userId,
         projectId: null,
         filename,
-        suffix,
+        suffix: parsedSuffix.suffix,
         content: file.buffer,
         libraryKind: kind,
         libraryFolderId: folderId,

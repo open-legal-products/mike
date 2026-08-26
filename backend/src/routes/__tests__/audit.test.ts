@@ -4,8 +4,8 @@ import {
     escapeLikePattern,
     parseQuery,
     queryEvents,
-    accessibleProjectIds,
 } from "../audit";
+import { listAccessibleProjectIds } from "../../lib/access";
 
 // ---------------------------------------------------------------------------
 // csvCell — spreadsheet formula-injection escaping (F3)
@@ -116,13 +116,14 @@ describe("parseQuery", () => {
 });
 
 // ---------------------------------------------------------------------------
-// queryEvents / accessibleProjectIds — visibility scoping
+// queryEvents / listAccessibleProjectIds — visibility scoping
 // ---------------------------------------------------------------------------
 
 /**
  * Chainable Supabase mock. `projects` select responses are keyed by whether the
- * query used .eq (owned) or .contains (shared). The audit_events builder
- * records the .or / .eq filter it was given so tests can assert scoping.
+ * query used .eq (owned) or .filter (shared_with contains). The audit_events
+ * builder records the .or / .eq filter it was given so tests can assert
+ * scoping.
  */
 function makeDb(
     owned: string[],
@@ -146,10 +147,11 @@ function makeDb(
                 mode = "owned";
                 return b;
             },
-            contains: () => {
+            filter: () => {
                 mode = "shared";
                 return b;
             },
+            neq: () => b,
             then: (resolve: (v: { data: { id: string }[] }) => unknown) =>
                 Promise.resolve({
                     data: (mode === "owned" ? owned : shared).map((id) => ({
@@ -238,10 +240,10 @@ describe("queryEvents visibility scoping", () => {
     });
 
     it("de-duplicates owned and shared project ids", async () => {
-        const both = await accessibleProjectIds(
-            makeDb(["p1", "p2"], ["p2", "p3"]).db,
+        const both = await listAccessibleProjectIds(
             "u1",
             "u1@example.com",
+            makeDb(["p1", "p2"], ["p2", "p3"]).db,
         );
         expect([...both].sort()).toEqual(["p1", "p2", "p3"]);
     });

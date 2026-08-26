@@ -30,8 +30,20 @@ function encryptionSecret(): string {
     return secret;
 }
 
+const KEY_SALT = "mike-user-mcp-v1";
+// scryptSync is deliberately slow (~40ms); connector auth configs are
+// encrypted/decrypted on every tool call, so cache the derived key per
+// (secret, salt) pair instead of re-deriving it each time.
+const derivedKeys = new Map<string, Buffer>();
+
 function encryptionKey(): Buffer {
-    return crypto.scryptSync(encryptionSecret(), "mike-user-mcp-v1", 32);
+    const secret = encryptionSecret();
+    const cacheKey = `${KEY_SALT}:${secret}`;
+    const cached = derivedKeys.get(cacheKey);
+    if (cached) return cached;
+    const derived = crypto.scryptSync(secret, KEY_SALT, 32);
+    derivedKeys.set(cacheKey, derived);
+    return derived;
 }
 
 export function mcpOAuthCallbackUrl() {
@@ -397,10 +409,6 @@ export function base64Url(buffer: Buffer) {
         .replace(/\+/g, "-")
         .replace(/\//g, "_")
         .replace(/=+$/g, "");
-}
-
-function sha256Base64Url(value: string) {
-    return base64Url(crypto.createHash("sha256").update(value).digest());
 }
 
 export function stateHash(state: string) {

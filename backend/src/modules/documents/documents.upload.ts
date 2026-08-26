@@ -26,7 +26,15 @@ export async function createDocumentFromUpload(
         content: Buffer;
         libraryKind?: "file" | "template";
         libraryFolderId?: string | null;
+        // Project-tab folder (documents.folder_id), distinct from the library's
+        // own folder column above. Set by the project upload route, which used
+        // to run a forked copy of this function to get it.
+        folderId?: string | null;
         userEmail?: string;
+        // Which part of the product the upload came from — recorded on the
+        // audit event so project uploads show up under the project rather than
+        // the assistant. Defaults to the assistant/library surface.
+        surface?: "project" | "assistant";
     },
     db: Db,
 ): Promise<
@@ -47,6 +55,7 @@ export async function createDocumentFromUpload(
             status: "processing",
             library_kind: params.libraryKind ?? "file",
             library_folder_id: params.libraryFolderId ?? null,
+            folder_id: params.folderId ?? null,
         })
         .select("*")
         .single();
@@ -193,7 +202,11 @@ export async function createDocumentFromUpload(
                   filename,
                   storage_path: key,
                   pdf_storage_path: pdfStoragePath,
+                  // The library surface presents its library_folder_id under
+                  // the generic `folder_id` key; a project upload has a real
+                  // documents.folder_id, so prefer that when it is set.
                   folder_id:
+                      (updated.folder_id as string | null | undefined) ??
                       (updated.library_folder_id as string | null | undefined) ??
                       null,
                   file_type: suffix,
@@ -207,7 +220,8 @@ export async function createDocumentFromUpload(
             userEmail: params.userEmail,
             action: "document.uploaded",
             title: filename,
-            surface: "assistant",
+            surface: params.surface ?? "assistant",
+            projectId,
             documentId: (updated as { id?: string } | null)?.id ?? null,
         });
         return { ok: true, doc: responseDoc };
