@@ -1,0 +1,8 @@
+# Keeps the repo-root build context small now that the frontend image builds
+# from the repo root (see frontend/Dockerfile) instead of ./frontend.
+**/node_modules
+word-addin
+.git
+**/.next
+**/dist
+**/*.log
