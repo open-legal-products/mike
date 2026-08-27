@@ -1,3 +1,5 @@
+import { settleWithConcurrency } from "../lib/settleWithConcurrency";
+
 export type UploadSessionPurpose =
     | "document_create"
     | "document_version_create"
@@ -83,15 +85,25 @@ type UploadSessionResponse = {
 type UploadSessionTransport = {
     apiRequest<T>(path: string, init?: RequestInit): Promise<T>;
     fetchStorage: typeof fetch;
-    isUploadIncomplete(error: unknown): boolean;
+    shouldRetryControlRequest(error: unknown): boolean;
 };
 
 const DIRECT_UPLOAD_CONCURRENCY = 3;
-const UPLOAD_PROCESSING_POLL_MS = 750;
+const UPLOAD_PROCESSING_POLL_DELAYS_MS = [
+    750, 1_000, 1_500, 2_500, 4_000, 5_000,
+];
 const UPLOAD_PROCESSING_TIMEOUT_MS = 30 * 60 * 1000;
 const MAX_UPLOAD_SESSION_FILES = 50;
 const MAX_UPLOAD_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_UPLOAD_SESSION_BYTES = 2 * 1024 * 1024 * 1024;
+
+export function uploadProcessingPollDelayMs(pollCount: number): number {
+    const index = Math.min(
+        Math.max(0, Math.floor(pollCount)),
+        UPLOAD_PROCESSING_POLL_DELAYS_MS.length - 1,
+    );
+    return UPLOAD_PROCESSING_POLL_DELAYS_MS[index]!;
+}
 
 function delay(ms: number, signal?: AbortSignal) {
     return new Promise<void>((resolve, reject) => {
@@ -113,33 +125,9 @@ function delay(ms: number, signal?: AbortSignal) {
     });
 }
 
-async function settleWithConcurrency<T>(
-    values: T[],
-    worker: (value: T) => Promise<void>,
-): Promise<PromiseSettledResult<void>[]> {
-    const results = new Array<PromiseSettledResult<void>>(values.length);
-    let nextIndex = 0;
-    async function runWorker() {
-        while (nextIndex < values.length) {
-            const index = nextIndex++;
-            try {
-                await worker(values[index]!);
-                results[index] = { status: "fulfilled", value: undefined };
-            } catch (reason) {
-                results[index] = { status: "rejected", reason };
-            }
-        }
-    }
-    await Promise.all(
-        Array.from(
-            { length: Math.min(DIRECT_UPLOAD_CONCURRENCY, values.length) },
-            runWorker,
-        ),
-    );
-    return results;
-}
-
-function validateInputs(inputs: Array<UploadSessionInput & { clientId: string }>) {
+function validateInputs(
+    inputs: Array<UploadSessionInput & { clientId: string }>,
+) {
     if (inputs.length > MAX_UPLOAD_SESSION_FILES) {
         return {
             message: "You can upload at most 50 files at a time.",
@@ -191,7 +179,8 @@ export async function uploadFilesWithSessionCore<T>(args: {
         );
     }
 
-    const { apiRequest, fetchStorage, isUploadIncomplete } = args.transport;
+    const { apiRequest, fetchStorage, shouldRetryControlRequest } =
+        args.transport;
     const reportedProgress = new Map<string, string>();
     const reportProgress = (progress: UploadProgress<T>) => {
         const signature = `${progress.status}:${progress.errorCode ?? ""}:${progress.result ? "result" : ""}`;
@@ -214,27 +203,29 @@ export async function uploadFilesWithSessionCore<T>(args: {
                         : file.status === "verifying"
                           ? "uploaded"
                           : file.status,
-                result:
-                    file.status === "completed" ? (file.result as T) : null,
+                result: file.status === "completed" ? (file.result as T) : null,
                 errorCode: file.error_code,
             });
         }
     };
-    const created = await apiRequest<UploadSessionResponse>("/upload-sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            purpose: args.purpose,
-            destination: args.destination,
-            files: inputs.map((input) => ({
-                client_id: input.clientId,
-                filename: input.file.name,
-                size_bytes: input.file.size,
-                folder_id: input.folderId,
-            })),
-        }),
-        signal: args.signal,
-    });
+    const created = await apiRequest<UploadSessionResponse>(
+        "/upload-sessions",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                purpose: args.purpose,
+                destination: args.destination,
+                files: inputs.map((input) => ({
+                    client_id: input.clientId,
+                    filename: input.file.name,
+                    size_bytes: input.file.size,
+                    folder_id: input.folderId,
+                })),
+            }),
+            signal: args.signal,
+        },
+    );
     const sessionId = created.session.id;
     reportResponse(created);
     let descriptors = new Map(
@@ -243,10 +234,12 @@ export async function uploadFilesWithSessionCore<T>(args: {
     let refreshInFlight: Promise<void> | null = null;
     const refreshUrls = async () => {
         if (!refreshInFlight) {
-            refreshInFlight = apiRequest<{ files: UploadSessionFileResponse[] }>(
-                `/upload-sessions/${sessionId}/urls`,
-                { method: "POST", signal: args.signal },
-            )
+            refreshInFlight = apiRequest<{
+                files: UploadSessionFileResponse[];
+            }>(`/upload-sessions/${sessionId}/urls`, {
+                method: "POST",
+                signal: args.signal,
+            })
                 .then(({ files }) => {
                     descriptors = new Map(
                         files.map((file) => [file.client_id, file]),
@@ -262,10 +255,9 @@ export async function uploadFilesWithSessionCore<T>(args: {
         descriptor: UploadSessionFileResponse,
         failed: boolean,
     ) => {
-        let response: UploadSessionResponse | null = null;
         for (let attempt = 0; attempt < 3; attempt += 1) {
             try {
-                response = await apiRequest<UploadSessionResponse>(
+                const response = await apiRequest<UploadSessionResponse>(
                     `/upload-sessions/${sessionId}/files/${descriptor.id}/complete`,
                     {
                         method: "POST",
@@ -277,100 +269,117 @@ export async function uploadFilesWithSessionCore<T>(args: {
                 reportResponse(response);
                 return;
             } catch (error) {
-                if (!isUploadIncomplete(error) || attempt === 2) throw error;
+                if (
+                    args.signal?.aborted ||
+                    !shouldRetryControlRequest(error) ||
+                    attempt === 2
+                ) {
+                    throw error;
+                }
                 await delay(400 * (attempt + 1), args.signal);
             }
         }
-        if (!response) throw new Error("File completion failed");
     };
 
     try {
-        const directUploadFailures = new Set<string>();
-        await settleWithConcurrency(inputs, async (input) => {
-            reportProgress({
-                clientId: input.clientId,
-                filename: input.file.name,
-                status: "uploading",
-                result: null,
-                errorCode: null,
-            });
-            let lastError: unknown;
-            for (let attempt = 0; attempt < 3; attempt += 1) {
-                if (attempt > 0) await refreshUrls();
+        const transfers = await settleWithConcurrency(
+            inputs,
+            DIRECT_UPLOAD_CONCURRENCY,
+            async (input) => {
+                reportProgress({
+                    clientId: input.clientId,
+                    filename: input.file.name,
+                    status: "uploading",
+                    result: null,
+                    errorCode: null,
+                });
+                let lastError: unknown;
+                for (let attempt = 0; attempt < 3; attempt += 1) {
+                    if (attempt > 0) {
+                        try {
+                            await refreshUrls();
+                        } catch (error) {
+                            if (args.signal?.aborted) throw error;
+                            lastError = error;
+                            continue;
+                        }
+                    }
+                    const descriptor = descriptors.get(input.clientId);
+                    if (!descriptor?.upload) {
+                        lastError = new Error("Upload URL is unavailable");
+                        continue;
+                    }
+                    let response: Response;
+                    try {
+                        response = await fetchStorage(descriptor.upload.url, {
+                            method: descriptor.upload.method,
+                            headers: descriptor.upload.headers,
+                            body: input.file,
+                            signal: args.signal,
+                        });
+                    } catch (error) {
+                        lastError = error;
+                        continue;
+                    }
+                    if (response.ok) {
+                        reportProgress({
+                            clientId: input.clientId,
+                            filename: input.file.name,
+                            status: "uploaded",
+                            result: null,
+                            errorCode: null,
+                        });
+                        await completeFile(descriptor, false);
+                        return { status: "uploaded" as const };
+                    }
+                    lastError = new Error(
+                        `Object storage returned ${response.status}`,
+                    );
+                }
                 const descriptor = descriptors.get(input.clientId);
-                if (!descriptor?.upload) {
-                    throw new Error("Upload URL is unavailable");
+                if (descriptor) {
+                    await completeFile(descriptor, true);
                 }
-                let response: Response;
-                try {
-                    response = await fetchStorage(descriptor.upload.url, {
-                        method: descriptor.upload.method,
-                        headers: descriptor.upload.headers,
-                        body: input.file,
-                        signal: args.signal,
-                    });
-                } catch (error) {
-                    lastError = error;
-                    continue;
-                }
-                if (response.ok) {
-                    reportProgress({
-                        clientId: input.clientId,
-                        filename: input.file.name,
-                        status: "uploaded",
-                        result: null,
-                        errorCode: null,
-                    });
-                    await completeFile(descriptor, false);
-                    return;
-                }
-                lastError = new Error(
-                    `Object storage returned ${response.status}`,
-                );
-            }
-            directUploadFailures.add(input.clientId);
-            const descriptor = descriptors.get(input.clientId);
-            if (descriptor) {
-                await completeFile(descriptor, true).catch(() => undefined);
-            }
-            throw lastError ?? new Error("Direct upload failed");
-        });
-        const failedClientIds = [...directUploadFailures];
-        for (const input of inputs) {
-            if (!failedClientIds.includes(input.clientId)) continue;
-            reportProgress({
-                clientId: input.clientId,
-                filename: input.file.name,
-                status: "error",
-                result: null,
-                errorCode: "direct_upload_failed",
-            });
+                reportProgress({
+                    clientId: input.clientId,
+                    filename: input.file.name,
+                    status: "error",
+                    result: null,
+                    errorCode: "direct_upload_failed",
+                });
+                return {
+                    status: "error" as const,
+                    error: lastError ?? new Error("Direct upload failed"),
+                };
+            },
+        );
+        const unconfirmedTransfers = transfers
+            .map((transfer, index) => ({ transfer, input: inputs[index] }))
+            .filter(
+                (
+                    entry,
+                ): entry is {
+                    transfer: PromiseRejectedResult;
+                    input: (typeof inputs)[number];
+                } => entry.transfer.status === "rejected",
+            );
+        if (unconfirmedTransfers.length > 0) {
+            throw new UploadBatchError(
+                "One or more uploads were sent, but their status could not be confirmed.",
+                unconfirmedTransfers.map(({ input }) => ({
+                    clientId: input.clientId,
+                    filename: input.file.name,
+                    status: "error",
+                    result: null,
+                    errorCode: "upload_confirmation_failed",
+                })),
+            );
         }
 
-        let current: UploadSessionResponse | null = null;
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-            try {
-                current = await apiRequest<UploadSessionResponse>(
-                    `/upload-sessions/${sessionId}/complete`,
-                    {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            failed_client_ids: failedClientIds,
-                        }),
-                        signal: args.signal,
-                    },
-                );
-                reportResponse(current);
-                break;
-            } catch (error) {
-                if (!isUploadIncomplete(error) || attempt === 2) throw error;
-                await delay(400 * (attempt + 1), args.signal);
-            }
-        }
-        if (!current) throw new Error("Upload completion failed");
-
+        let current = created;
         const processingDeadline = Date.now() + UPLOAD_PROCESSING_TIMEOUT_MS;
+        let pollCount = 0;
+        let pollImmediately = true;
         while (
             !["completed", "error", "expired", "cancelled"].includes(
                 current.session.status,
@@ -388,11 +397,25 @@ export async function uploadFilesWithSessionCore<T>(args: {
                     })),
                 );
             }
-            await delay(UPLOAD_PROCESSING_POLL_MS, args.signal);
-            current = await apiRequest<UploadSessionResponse>(
-                `/upload-sessions/${sessionId}`,
-                { signal: args.signal },
-            );
+            if (!pollImmediately) {
+                await delay(
+                    uploadProcessingPollDelayMs(pollCount),
+                    args.signal,
+                );
+                pollCount += 1;
+            }
+            pollImmediately = false;
+            try {
+                current = await apiRequest<UploadSessionResponse>(
+                    `/upload-sessions/${sessionId}`,
+                    { signal: args.signal },
+                );
+            } catch (error) {
+                if (args.signal?.aborted || !shouldRetryControlRequest(error)) {
+                    throw error;
+                }
+                continue;
+            }
             reportResponse(current);
         }
 
@@ -408,9 +431,14 @@ export async function uploadFilesWithSessionCore<T>(args: {
                     : (current.session.error_code ?? "processing_failed")),
         }));
     } catch (error) {
-        await apiRequest(`/upload-sessions/${sessionId}`, {
-            method: "DELETE",
-        }).catch(() => undefined);
+        // An explicit caller abort means the batch is intentionally abandoned.
+        // For control-plane/network failures, preserve the session: some files may
+        // already be processing, and pending files have server-side TTL cleanup.
+        if (args.signal?.aborted) {
+            await apiRequest(`/upload-sessions/${sessionId}`, {
+                method: "DELETE",
+            }).catch(() => undefined);
+        }
         throw error;
     }
 }

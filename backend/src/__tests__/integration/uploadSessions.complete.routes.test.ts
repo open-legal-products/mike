@@ -27,7 +27,8 @@ vi.mock("../../middleware/auth", () => ({
 function queryFor(table: string) {
   let updatePayload: Record<string, unknown> | null = null;
   const predicates: Array<(row: Record<string, unknown>) => boolean> = [];
-  const matchingFiles = () => mocks.files.filter((row) => predicates.every((test) => test(row)));
+  const matchingFiles = () =>
+    mocks.files.filter((row) => predicates.every((test) => test(row)));
   const query = {
     select: vi.fn(() => query),
     update: vi.fn((payload: Record<string, unknown>) => {
@@ -138,9 +139,10 @@ describe("upload session completion", () => {
     ];
     mocks.copyFile.mockResolvedValue(undefined);
     mocks.deleteFile.mockResolvedValue(undefined);
-    mocks.getSignedUploadUrl.mockResolvedValue("https://upload.example/refreshed");
+    mocks.getSignedUploadUrl.mockResolvedValue(
+      "https://upload.example/refreshed",
+    );
     mocks.rpc.mockImplementation(async (name: string) =>
-      name === "queue_upload_session_processing" ||
       name === "queue_upload_session_file_processing"
         ? { data: "job-1", error: null }
         : { data: "pending_upload", error: null },
@@ -162,17 +164,19 @@ describe("upload session completion", () => {
       });
 
     const response = await request(app).post(
-      "/upload-sessions/22222222-2222-4222-8222-222222222222/complete",
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
     expect(response.status).toBe(200);
     expect(mocks.copyFile).toHaveBeenCalledWith("staging-key", "sealed-key");
     expect(mocks.deleteFile).toHaveBeenCalledWith("staging-key");
     expect(mocks.rpc).toHaveBeenCalledWith(
-      "queue_upload_session_processing",
-      expect.objectContaining({
+      "queue_upload_session_file_processing",
+      {
         target_session_id: "22222222-2222-4222-8222-222222222222",
-      }),
+        target_user_id: "11111111-1111-4111-8111-111111111111",
+        target_file_id: "33333333-3333-4333-8333-333333333333",
+      },
     );
     expect(response.body.files[0]).toMatchObject({
       status: "uploaded",
@@ -229,6 +233,16 @@ describe("upload session completion", () => {
     );
   });
 
+  it("does not expose session-wide completion", async () => {
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/complete",
+    );
+
+    expect(response.status).toBe(404);
+    expect(mocks.headFile).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+  });
+
   it("cancels a pending session and deletes both temporary object keys", async () => {
     const response = await request(app).delete(
       "/upload-sessions/22222222-2222-4222-8222-222222222222",
@@ -260,26 +274,30 @@ describe("upload session completion", () => {
     );
   });
 
-  it("returns 413 and removes an object larger than its reservation", async () => {
-    mocks.headFile
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        size: 5,
-        etag: "oversized-etag",
-        contentType: "application/pdf",
-      });
+  it("records and removes an object larger than its reservation", async () => {
+    mocks.headFile.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      size: 5,
+      etag: "oversized-etag",
+      contentType: "application/pdf",
+    });
 
     const response = await request(app).post(
-      "/upload-sessions/22222222-2222-4222-8222-222222222222/complete",
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
-    expect(response.status).toBe(413);
-    expect(response.body.code).toBe("uploaded_size_exceeded_reservation");
+    expect(response.status).toBe(200);
+    expect(response.body.files[0]).toMatchObject({
+      status: "error",
+      error_code: "size_mismatch",
+    });
     expect(mocks.deleteFile).toHaveBeenCalledWith("staging-key");
-    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith(
+      "queue_upload_session_file_processing",
+      expect.anything(),
+    );
   });
 
-  it("keeps verified files when the client reports another transfer failed", async () => {
+  it("keeps completed files when the client reports another transfer failed", async () => {
     mocks.session!.expected_file_count = 2;
     mocks.session!.expected_total_bytes = 8;
     mocks.files.push({
@@ -291,27 +309,18 @@ describe("upload session completion", () => {
       staging_storage_path: "failed-staging-key",
       sealed_storage_path: "failed-sealed-key",
     });
-    mocks.headFile
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        size: 4,
-        etag: "staged-etag",
-        contentType: "application/pdf",
-      })
-      .mockResolvedValueOnce({
-        size: 4,
-        etag: "sealed-etag",
-        contentType: "application/pdf",
-      });
+    mocks.files[0]!.status = "completed";
 
     const response = await request(app)
-      .post("/upload-sessions/22222222-2222-4222-8222-222222222222/complete")
-      .send({ failed_client_ids: ["client-2"] });
+      .post(
+        "/upload-sessions/22222222-2222-4222-8222-222222222222/files/55555555-5555-4555-8555-555555555555/complete",
+      )
+      .send({ failed: true });
 
     expect(response.status).toBe(200);
     expect(mocks.files).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ client_id: "client-1", status: "uploaded" }),
+        expect.objectContaining({ client_id: "client-1", status: "completed" }),
         expect.objectContaining({
           client_id: "client-2",
           status: "error",
@@ -320,7 +329,7 @@ describe("upload session completion", () => {
       ]),
     );
     expect(mocks.rpc).toHaveBeenCalledWith(
-      "queue_upload_session_processing",
+      "refresh_upload_session_status",
       expect.any(Object),
     );
   });
@@ -341,8 +350,10 @@ describe("upload session completion", () => {
     });
 
     const response = await request(app)
-      .post("/upload-sessions/22222222-2222-4222-8222-222222222222/complete")
-      .send({ failed_client_ids: ["client-2"] });
+      .post(
+        "/upload-sessions/22222222-2222-4222-8222-222222222222/files/55555555-5555-4555-8555-555555555555/complete",
+      )
+      .send({ failed: true });
 
     expect(response.status).toBe(200);
     expect(mocks.files).toEqual(
@@ -355,27 +366,28 @@ describe("upload session completion", () => {
       ]),
     );
     expect(mocks.rpc).toHaveBeenCalledWith(
-      "queue_upload_session_processing",
+      "refresh_upload_session_status",
       expect.any(Object),
     );
     expect(mocks.session!.status).not.toBe("error");
   });
 
-  it("rejects an uploaded object with the wrong content type", async () => {
-    mocks.headFile
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        size: 4,
-        etag: "staged-etag",
-        contentType: "text/plain",
-      });
+  it("records an uploaded object with the wrong content type", async () => {
+    mocks.headFile.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      size: 4,
+      etag: "staged-etag",
+      contentType: "text/plain",
+    });
 
     const response = await request(app).post(
-      "/upload-sessions/22222222-2222-4222-8222-222222222222/complete",
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
-    expect(response.status).toBe(415);
-    expect(response.body.code).toBe("uploaded_content_type_mismatch");
+    expect(response.status).toBe(200);
+    expect(response.body.files[0]).toMatchObject({
+      status: "error",
+      error_code: "content_type_mismatch",
+    });
     expect(mocks.deleteFile).toHaveBeenCalledWith("staging-key");
   });
 

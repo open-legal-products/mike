@@ -1,11 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  utimes,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   deleteFile: vi.fn(),
-  downloadFile: vi.fn(),
+  createFileReadStream: vi.fn(),
   copyFile: vi.fn(),
+  officeFileToPdf: vi.fn(),
   recordAudit: vi.fn(),
-  uploadFile: vi.fn(),
+  uploadFileFromPath: vi.fn(),
 }));
 
 vi.mock("../storage", async (importOriginal) => {
@@ -13,15 +25,21 @@ vi.mock("../storage", async (importOriginal) => {
   return {
     ...actual,
     deleteFile: mocks.deleteFile,
-    downloadFile: mocks.downloadFile,
+    createFileReadStream: mocks.createFileReadStream,
     copyFile: mocks.copyFile,
-    uploadFile: mocks.uploadFile,
+    uploadFileFromPath: mocks.uploadFileFromPath,
   };
+});
+
+vi.mock("../convert", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../convert")>();
+  return { ...actual, officeFileToPdf: mocks.officeFileToPdf };
 });
 
 vi.mock("../audit", () => ({ recordAudit: mocks.recordAudit }));
 
 import {
+  cleanupUploadProcessingTempFiles,
   cleanupUploadSessions,
   processUploadFile,
   processUploadJob,
@@ -117,19 +135,33 @@ const baseFile = {
 const baseSession = {
   id: "11111111-1111-4111-8111-111111111111",
   user_id: "44444444-4444-4444-8444-444444444444",
+  user_email: "owner@example.com",
   purpose: "document_create" as const,
   destination: { scope: "standalone" },
   status: "processing",
 };
 
 describe("upload processing", () => {
-  beforeEach(() => {
+  let processingTempRoot: string;
+
+  beforeEach(async () => {
     vi.clearAllMocks();
-    mocks.downloadFile.mockResolvedValue(new Uint8Array([1, 2, 3, 4]).buffer);
+    processingTempRoot = await mkdtemp(join(tmpdir(), "mike-upload-test-"));
+    process.env.UPLOAD_PROCESSING_TEMP_DIR = processingTempRoot;
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([Buffer.from([1, 2, 3, 4])]),
+    );
     mocks.copyFile.mockResolvedValue(undefined);
-    mocks.uploadFile.mockResolvedValue(undefined);
+    mocks.officeFileToPdf.mockResolvedValue("/tmp/converted.pdf");
+    mocks.uploadFileFromPath.mockResolvedValue(undefined);
     mocks.deleteFile.mockResolvedValue(undefined);
     mocks.recordAudit.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    expect(await readdir(processingTempRoot)).toEqual([]);
+    await rm(processingTempRoot, { recursive: true, force: true });
+    delete process.env.UPLOAD_PROCESSING_TEMP_DIR;
   });
 
   it("creates a document and V1 from a sealed object without an HTTP upload body", async () => {
@@ -147,7 +179,9 @@ describe("upload processing", () => {
       baseFile,
     );
 
-    expect(mocks.downloadFile).toHaveBeenCalledWith(baseFile.sealed_storage_path);
+    expect(mocks.createFileReadStream).toHaveBeenCalledWith(
+      baseFile.sealed_storage_path,
+    );
     expect(mocks.copyFile).toHaveBeenCalledWith(
       baseFile.sealed_storage_path,
       expect.stringContaining(baseFile.resource_id),
@@ -159,6 +193,7 @@ describe("upload processing", () => {
       expect.objectContaining({
         action: "document.uploaded",
         documentId: baseFile.resource_id,
+        userEmail: baseSession.user_email,
       }),
     );
     expect(result).toMatchObject({
@@ -166,6 +201,39 @@ describe("upload processing", () => {
       filename: "contract.pdf",
       active_version_number: 1,
     });
+  });
+
+  it("converts Office files from temporary paths and streams the PDF upload", async () => {
+    const officeFile = {
+      ...baseFile,
+      filename: "contract.docx",
+      file_type: "docx",
+      content_type:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+    const document = {
+      id: officeFile.resource_id,
+      user_id: baseSession.user_id,
+      folder_id: null,
+      library_folder_id: null,
+    };
+    const db = fakeDb({ documents: [{ data: document, error: null }] });
+    mocks.officeFileToPdf.mockImplementation(
+      async (inputPath: string, outputDirectory: string) => {
+        expect(inputPath).toBe(join(outputDirectory, "source.docx"));
+        expect(await readFile(inputPath)).toEqual(Buffer.from([1, 2, 3, 4]));
+        return join(outputDirectory, "source.pdf");
+      },
+    );
+
+    await processUploadFile(db as never, baseSession, officeFile);
+
+    expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
+    expect(mocks.uploadFileFromPath).toHaveBeenCalledWith(
+      expect.stringMatching(/^converted-pdfs\//),
+      expect.stringMatching(/source\.pdf$/),
+      "application/pdf",
+    );
   });
 
   it("creates an idempotent workflow reference using its reserved resource id", async () => {
@@ -274,16 +342,24 @@ describe("upload processing", () => {
   });
 
   it("rejects a sealed object whose size no longer matches the reservation", async () => {
-    mocks.downloadFile.mockResolvedValue(new Uint8Array([1, 2]).buffer);
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from([Buffer.from([1, 2])]),
+    );
 
     await expect(
       processUploadFile(fakeDb() as never, baseSession, baseFile),
     ).rejects.toThrow("sealed_upload_size_mismatch");
-    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
   });
 
   it("marks a failed created document and safely queues the job for retry", async () => {
-    mocks.downloadFile.mockResolvedValue(null);
+    mocks.createFileReadStream.mockImplementation(() =>
+      Readable.from(
+        (async function* () {
+          throw new Error("sealed object unavailable");
+        })(),
+      ),
+    );
     const db = scriptedDb([
       {
         data: {
@@ -351,7 +427,18 @@ describe("upload processing", () => {
     await expect(
       processUploadJob(db as never, "job-1", "worker-1"),
     ).rejects.toThrow("upload_job_lease_lost");
-    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+  });
+
+  it("removes stale temporary upload directories left by an interrupted worker", async () => {
+    const staleDirectory = join(processingTempRoot, "mike-upload-stale");
+    await mkdir(staleDirectory);
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(staleDirectory, twoHoursAgo, twoHoursAgo);
+
+    await cleanupUploadProcessingTempFiles();
+
+    expect(await readdir(processingTempRoot)).toEqual([]);
   });
 
   it("expires stale sessions, removes temporary objects, and deletes retained rows", async () => {

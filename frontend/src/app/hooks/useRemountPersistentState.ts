@@ -11,16 +11,32 @@ import {
 class StoreEntry<T> {
     private value: T;
     private readonly listeners = new Set<() => void>();
+    private evictionTimer: ReturnType<typeof setTimeout> | null = null;
 
-    constructor(initialValue: T) {
+    constructor(
+        initialValue: T,
+        private readonly evict: () => void,
+    ) {
         this.value = initialValue;
     }
 
     getSnapshot = () => this.value;
 
     subscribe = (listener: () => void) => {
+        if (this.evictionTimer) {
+            clearTimeout(this.evictionTimer);
+            this.evictionTimer = null;
+        }
         this.listeners.add(listener);
-        return () => this.listeners.delete(listener);
+        return () => {
+            this.listeners.delete(listener);
+            if (this.listeners.size === 0 && !this.evictionTimer) {
+                this.evictionTimer = setTimeout(
+                    this.evict,
+                    REMOUNT_PERSISTENCE_MS,
+                );
+            }
+        };
     };
 
     setValue = (update: SetStateAction<T>) => {
@@ -34,12 +50,18 @@ class StoreEntry<T> {
     };
 }
 
+export const REMOUNT_PERSISTENCE_MS = 30 * 60 * 1000;
+
 const entries = new Map<string, StoreEntry<unknown>>();
 
 function entryFor<T>(key: string, initialValue: T): StoreEntry<T> {
     const existing = entries.get(key);
     if (existing) return existing as StoreEntry<T>;
-    const created = new StoreEntry(initialValue);
+    const created = new StoreEntry(initialValue, () => {
+        if (entries.get(key) === created) {
+            entries.delete(key);
+        }
+    });
     entries.set(key, created as StoreEntry<unknown>);
     return created;
 }

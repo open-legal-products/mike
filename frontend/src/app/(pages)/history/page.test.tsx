@@ -220,7 +220,7 @@ describe("HistoryPage", () => {
     const rangeEnd = new Date();
     rangeEnd.setDate(rangeEnd.getDate() - 1);
     const rangeStart = new Date();
-    rangeStart.setDate(rangeStart.getDate() - 25);
+    rangeStart.setDate(rangeStart.getDate() - 29);
     const { from: selectedFrom, to: selectedTo } = expectedDateRange(
       rangeStart,
       rangeEnd,

@@ -1,6 +1,53 @@
 export const MULTI_DOCUMENT_DRAG_TYPE = "application/mike-docs";
 export const SINGLE_DOCUMENT_DRAG_TYPE = "application/mike-doc";
 
+type FolderNode = {
+    id: string;
+    parent_folder_id: string | null;
+};
+
+export function folderTreeIds(
+    folders: readonly FolderNode[],
+    rootIds: Iterable<string>,
+): Set<string> {
+    const childrenByParentId = new Map<string, string[]>();
+    for (const folder of folders) {
+        if (!folder.parent_folder_id) continue;
+        const children = childrenByParentId.get(folder.parent_folder_id) ?? [];
+        children.push(folder.id);
+        childrenByParentId.set(folder.parent_folder_id, children);
+    }
+
+    const result = new Set<string>();
+    const pending = [...rootIds];
+    while (pending.length > 0) {
+        const folderId = pending.pop();
+        if (!folderId || result.has(folderId)) continue;
+        result.add(folderId);
+        pending.push(...(childrenByParentId.get(folderId) ?? []));
+    }
+    return result;
+}
+
+export function folderSelectionRootIds(
+    folders: readonly FolderNode[],
+    selectedIds: ReadonlySet<string>,
+): string[] {
+    const parentById = new Map(
+        folders.map((folder) => [folder.id, folder.parent_folder_id]),
+    );
+    return [...selectedIds].filter((folderId) => {
+        const visited = new Set<string>([folderId]);
+        let parentId = parentById.get(folderId) ?? null;
+        while (parentId && !visited.has(parentId)) {
+            if (selectedIds.has(parentId)) return false;
+            visited.add(parentId);
+            parentId = parentById.get(parentId) ?? null;
+        }
+        return true;
+    });
+}
+
 export function collectionSelectAllState(
     visibleDocumentIds: readonly string[],
     visibleFolderIds: readonly string[],
@@ -20,19 +67,6 @@ export function collectionSelectAllState(
             visibleFolderIds.some((id) => selectedFolderIds.has(id)));
 
     return { allSelected, someSelected };
-}
-
-export function selectedDocumentRange(
-    visibleDocumentIds: readonly string[],
-    anchorId: string | null,
-    targetId: string,
-): string[] {
-    const anchorIndex = anchorId ? visibleDocumentIds.indexOf(anchorId) : -1;
-    const targetIndex = visibleDocumentIds.indexOf(targetId);
-    if (anchorIndex < 0 || targetIndex < 0) return [targetId];
-    const start = Math.min(anchorIndex, targetIndex);
-    const end = Math.max(anchorIndex, targetIndex);
-    return visibleDocumentIds.slice(start, end + 1);
 }
 
 export function writeDocumentDragPayload(

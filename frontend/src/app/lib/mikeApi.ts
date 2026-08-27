@@ -143,9 +143,12 @@ export async function uploadFilesWithSession<T>(args: {
         transport: {
             apiRequest,
             fetchStorage: (...fetchArgs) => fetch(...fetchArgs),
-            isUploadIncomplete: (error) =>
-                error instanceof MikeApiError &&
-                error.code === "upload_incomplete",
+            shouldRetryControlRequest: (error) =>
+                !(error instanceof MikeApiError) ||
+                error.status >= 500 ||
+                error.status === 429 ||
+                error.code === "upload_incomplete" ||
+                error.code === "upload_completion_in_progress",
         },
     });
 }

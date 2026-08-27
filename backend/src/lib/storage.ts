@@ -19,6 +19,9 @@ import {
 } from "@aws-sdk/client-s3";
 import * as S3Commands from "@aws-sdk/client-s3";
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
 
 const GetObjectCommand = (S3Commands as any).GetObjectCommand;
 
@@ -96,6 +99,31 @@ export async function uploadFile(
       ContentType: contentType,
     }),
   );
+}
+
+export async function uploadFileFromPath(
+  key: string,
+  filePath: string,
+  contentType: string,
+): Promise<void> {
+  requireStorageConfig();
+  const metadata = await stat(filePath);
+  const body = createReadStream(filePath);
+  try {
+    await getClient().send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: body,
+        ContentLength: metadata.size,
+        ContentType: contentType,
+      }),
+    );
+  } catch (error) {
+    throw new StorageOperationError("upload", { cause: error });
+  } finally {
+    if (!body.destroyed) body.destroy();
+  }
 }
 
 export async function getSignedUploadUrl(
@@ -203,6 +231,34 @@ export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
     });
     return null;
   }
+}
+
+/**
+ * Lazily stream an object from R2. The GET starts only when a consumer reads
+ * from the returned stream, allowing archive writers to apply backpressure
+ * without buffering whole files or opening every object concurrently.
+ */
+export function createFileReadStream(key: string): Readable {
+  return Readable.from(
+    (async function* () {
+      requireStorageConfig();
+      try {
+        const response = (await getClient().send(
+          new GetObjectCommand({ Bucket: BUCKET, Key: key }),
+        )) as any;
+        if (!response.Body) {
+          throw new StorageOperationError("download");
+        }
+        for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+          yield chunk;
+        }
+      } catch (error) {
+        console.error("[storage] createFileReadStream failed", { key, error });
+        if (error instanceof StorageOperationError) throw error;
+        throw new StorageOperationError("download", { cause: error });
+      }
+    })(),
+  );
 }
 
 export async function listFiles(prefix: string): Promise<string[]> {

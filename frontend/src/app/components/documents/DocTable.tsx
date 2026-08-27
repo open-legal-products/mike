@@ -65,13 +65,15 @@ import {
     resolvedDocumentUploadProgressEntries,
     MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD,
     resolveDocumentUploadRootFolder,
-    settleWithConcurrency,
     type DocumentUploadEntry,
     type DocumentUploadFolderPathResolution,
     type DocumentUploadProgressEntry,
 } from "@/app/lib/documentDirectoryUpload";
+import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
 import {
     collectionSelectAllState,
+    folderSelectionRootIds,
+    folderTreeIds as collectFolderTreeIds,
     MULTI_DOCUMENT_DRAG_TYPE,
     readDocumentDragPayload,
     SINGLE_DOCUMENT_DRAG_TYPE,
@@ -1939,19 +1941,59 @@ export function DocTable({
 
     const effectiveSort = sort ?? defaultSort;
 
-    const folderTreeIds = useCallback((folderId: string): Set<string> => {
-        const ids = new Set<string>([folderId]);
-        const visit = (parentId: string) => {
-            folders
-                .filter((folder) => folder.parent_folder_id === parentId)
-                .forEach((folder) => {
-                    ids.add(folder.id);
-                    visit(folder.id);
-                });
-        };
-        visit(folderId);
-        return ids;
+    const foldersByParentId = useMemo(() => {
+        const byParentId = new Map<string | null, DocTableFolder[]>();
+        for (const folder of folders) {
+            const parentId = folder.parent_folder_id ?? null;
+            byParentId.set(parentId, [
+                ...(byParentId.get(parentId) ?? []),
+                folder,
+            ]);
+        }
+        return byParentId;
     }, [folders]);
+    const uploadingFolderNamesByParentId = useMemo(() => {
+        const byParentId = new Map<string | null, Set<string>>();
+        for (const upload of collectionUploadProgress) {
+            const names = byParentId.get(upload.parentFolderId) ?? new Set();
+            for (const entry of upload.entries) {
+                if (entry.kind === "folder") names.add(entry.name);
+            }
+            byParentId.set(upload.parentFolderId, names);
+        }
+        return byParentId;
+    }, [collectionUploadProgress]);
+    const childFoldersForLevel = useCallback(
+        (parentId: string | null) => {
+            const nameMultiplier =
+                enableHeaderFilters &&
+                effectiveSort?.key === "name" &&
+                effectiveSort.direction === "desc"
+                    ? -1
+                    : 1;
+            const uploadingFolderNames =
+                uploadingFolderNamesByParentId.get(parentId);
+            return (foldersByParentId.get(parentId) ?? [])
+                .filter(
+                    (folder) => !uploadingFolderNames?.has(folder.name),
+                )
+                .sort(
+                    (left, right) =>
+                        left.name.localeCompare(right.name) * nameMultiplier,
+                );
+        },
+        [
+            effectiveSort,
+            enableHeaderFilters,
+            foldersByParentId,
+            uploadingFolderNamesByParentId,
+        ],
+    );
+
+    const folderTreeIds = useCallback(
+        (folderId: string) => collectFolderTreeIds(folders, [folderId]),
+        [folders],
+    );
 
     function clearSelectedFolderAncestors(
         folderId: string | null | undefined,
@@ -2013,17 +2055,6 @@ export function DocTable({
         const folderIds = rowKeys
             .filter((key) => key.startsWith("folder:"))
             .map((key) => key.slice("folder:".length));
-        const folderTreeIdSet = new Set(
-            folderIds.flatMap((folderId) => [...folderTreeIds(folderId)]),
-        );
-        const folderDocumentIds = docs
-            .filter(
-                (document) =>
-                    document.folder_id != null &&
-                    folderTreeIdSet.has(document.folder_id),
-            )
-            .map((document) => document.id);
-
         setSelectionCameFromSelectAll(false);
         setSelectedFolderIds((current) => {
             const next = new Set(current);
@@ -2035,7 +2066,7 @@ export function DocTable({
         });
         setSelectedDocIds((current) => {
             const next = new Set(current);
-            for (const id of [...documentIds, ...folderDocumentIds]) {
+            for (const id of documentIds) {
                 if (selected) next.add(id);
                 else next.delete(id);
             }
@@ -2097,7 +2128,7 @@ export function DocTable({
             return;
         }
         const visibleIds = new Set(visibleDocumentIds());
-        const selectedVisibleIds = selectedDocIds.filter((id) =>
+        const selectedVisibleIds = [...effectiveSelectedDocIdSet].filter((id) =>
             visibleIds.has(id),
         );
         const draggedIds = writeDocumentDragPayload(
@@ -2105,7 +2136,7 @@ export function DocTable({
             doc.id,
             selectedVisibleIds,
         );
-        if (!selectedDocIds.includes(doc.id)) {
+        if (!effectiveSelectedDocIdSet.has(doc.id)) {
             setSelectedFolderIds(new Set());
             setSelectionCameFromSelectAll(false);
             setSelectedDocIds(draggedIds);
@@ -2113,69 +2144,8 @@ export function DocTable({
         selectionAnchorKeyRef.current = `document:${doc.id}`;
     }
 
-    useEffect(() => {
-        if (selectedFolderIds.size === 0) return;
-
-        const selectedTreeIds = new Set(selectedFolderIds);
-        let addedDescendant = true;
-        while (addedDescendant) {
-            addedDescendant = false;
-            for (const folder of folders) {
-                if (
-                    folder.parent_folder_id &&
-                    selectedTreeIds.has(folder.parent_folder_id) &&
-                    !selectedTreeIds.has(folder.id)
-                ) {
-                    selectedTreeIds.add(folder.id);
-                    addedDescendant = true;
-                }
-            }
-        }
-
-        const selectedDocumentIds = documents
-            .filter(
-                (document) =>
-                    document.folder_id != null &&
-                    selectedTreeIds.has(document.folder_id),
-            )
-            .map((document) => document.id);
-        if (selectedDocumentIds.length === 0) return;
-
-        setSelectedDocIds((current) => {
-            const next = new Set(current);
-            let changed = false;
-            for (const id of selectedDocumentIds) {
-                if (next.has(id)) continue;
-                next.add(id);
-                changed = true;
-            }
-            return changed ? [...next] : current;
-        });
-    }, [documents, folders, selectedFolderIds]);
-
     function renderLevel(parentId: string | null, depth: number) {
-        const nameMultiplier =
-            enableHeaderFilters &&
-            effectiveSort?.key === "name" &&
-            effectiveSort.direction === "desc"
-                ? -1
-                : 1;
-        const uploadingFolderNames = new Set(
-            collectionUploadProgress.flatMap((upload) =>
-                upload.parentFolderId === parentId
-                    ? upload.entries
-                          .filter((entry) => entry.kind === "folder")
-                          .map((entry) => entry.name)
-                    : [],
-            ),
-        );
-        const childFolders = folders
-            .filter(
-                (folder) =>
-                    folder.parent_folder_id === parentId &&
-                    !uploadingFolderNames.has(folder.name),
-            )
-            .sort((a, b) => a.name.localeCompare(b.name) * nameMultiplier);
+        const childFolders = childFoldersForLevel(parentId);
         const allChildDocs = filteredDocs.filter(
             (d) => (d.folder_id ?? null) === parentId,
         );
@@ -2252,7 +2222,7 @@ export function DocTable({
                     const hasVersions = typeof versionNumber === "number" && versionNumber > 1;
                     const isVersionDragOver = dragOverVersionDocId === doc.id;
                     const isUploadingVersion = uploadingVersionDocIds.has(doc.id);
-                    const isSelected = selectedDocIds.includes(doc.id);
+                    const isSelected = effectiveSelectedDocIdSet.has(doc.id);
                     const isDeletingDoc = deletingDocIds.has(doc.id);
                     if (isDeletingDoc) {
                         return renderDocumentActivityRow({
@@ -2322,7 +2292,7 @@ export function DocTable({
                                                     ) : (
                                                         <input
                                                             type="checkbox"
-                                                            checked={selectedDocIds.includes(doc.id)}
+                                                            checked={effectiveSelectedDocIdSet.has(doc.id)}
                                                             onChange={(event) =>
                                                                 updateDocumentSelection(
                                                                     doc,
@@ -2515,12 +2485,12 @@ export function DocTable({
                         folderExplicitlySelected ||
                         (folderDocumentIds.length > 0 &&
                             folderDocumentIds.every((id) =>
-                                selectedDocIds.includes(id),
+                                effectiveSelectedDocIdSet.has(id),
                             ));
                     const someFolderDocumentsSelected =
                         !allFolderDocumentsSelected &&
                         folderDocumentIds.some((id) =>
-                            selectedDocIds.includes(id),
+                            effectiveSelectedDocIdSet.has(id),
                         );
                     return (
                         <div
@@ -2650,19 +2620,15 @@ export function DocTable({
                                                     }
                                                     return next;
                                                 });
-                                                setSelectedDocIds((current) => {
-                                                    const next = new Set(current);
-                                                    if (allFolderDocumentsSelected) {
+                                                if (allFolderDocumentsSelected) {
+                                                    setSelectedDocIds((current) => {
+                                                        const next = new Set(current);
                                                         folderDocumentIds.forEach((id) =>
                                                             next.delete(id),
                                                         );
-                                                    } else {
-                                                        folderDocumentIds.forEach((id) =>
-                                                            next.add(id),
-                                                        );
-                                                    }
-                                                    return [...next];
-                                                });
+                                                        return [...next];
+                                                    });
+                                                }
                                             }}
                                             onClick={(event) =>
                                                 event.stopPropagation()
@@ -2761,28 +2727,14 @@ export function DocTable({
         a.click();
     }, []);
 
-    const selectedFolderRootIds = useMemo(() => {
-        const selected = selectedFolderIds;
-        return [...selected].filter((folderId) => {
-            let parentId = folders.find((folder) => folder.id === folderId)
-                ?.parent_folder_id;
-            while (parentId) {
-                if (selected.has(parentId)) return false;
-                parentId = folders.find((folder) => folder.id === parentId)
-                    ?.parent_folder_id;
-            }
-            return true;
-        });
-    }, [folders, selectedFolderIds]);
+    const selectedFolderRootIds = useMemo(
+        () => folderSelectionRootIds(folders, selectedFolderIds),
+        [folders, selectedFolderIds],
+    );
 
     const selectedFolderTreeIds = useMemo(
-        () =>
-            new Set(
-                selectedFolderRootIds.flatMap((folderId) => [
-                    ...folderTreeIds(folderId),
-                ]),
-            ),
-        [folderTreeIds, selectedFolderRootIds],
+        () => collectFolderTreeIds(folders, selectedFolderRootIds),
+        [folders, selectedFolderRootIds],
     );
 
     const selectedFolderDocumentIds = useMemo(
@@ -2796,13 +2748,21 @@ export function DocTable({
                 .map((document) => document.id),
         [docs, selectedFolderTreeIds],
     );
+    const selectedFolderDocumentIdSet = useMemo(
+        () => new Set(selectedFolderDocumentIds),
+        [selectedFolderDocumentIds],
+    );
+    const effectiveSelectedDocIdSet = useMemo(
+        () => new Set([...selectedDocIds, ...selectedFolderDocumentIdSet]),
+        [selectedDocIds, selectedFolderDocumentIdSet],
+    );
 
     const selectedStandaloneDocIds = useMemo(
         () =>
             selectedDocIds.filter(
-                (id) => !selectedFolderDocumentIds.includes(id),
+                (id) => !selectedFolderDocumentIdSet.has(id),
             ),
-        [selectedDocIds, selectedFolderDocumentIds],
+        [selectedDocIds, selectedFolderDocumentIdSet],
     );
 
     const handleDownloadSelectedDocs = useCallback(async () => {
@@ -2930,14 +2890,15 @@ export function DocTable({
         const folderSnapshot = folders;
         const documentSnapshot = docs;
         const selectedTreeIds = selectedFolderTreeIds;
-        const selectedFolderDocIdSet = new Set(selectedFolderDocumentIds);
 
         if (selectedTreeIds.size > 0) {
             setFolders((current) =>
                 current.filter((folder) => !selectedTreeIds.has(folder.id)),
             );
             setDocuments((current) =>
-                current.filter((doc) => !selectedFolderDocIdSet.has(doc.id)),
+                current.filter(
+                    (doc) => !selectedFolderDocumentIdSet.has(doc.id),
+                ),
             );
         }
 
@@ -3033,7 +2994,7 @@ export function DocTable({
         folderTreeIds,
         folders,
         operations,
-        selectedFolderDocumentIds,
+        selectedFolderDocumentIdSet,
         selectedFolderRootIds,
         selectedFolderTreeIds,
         selectedStandaloneDocIds,
@@ -3106,20 +3067,22 @@ export function DocTable({
         }
     }
 
-    function clearDocumentSelection() {
+    function clearCollectionSelection() {
         setSelectedDocIds([]);
+        setSelectedFolderIds(new Set());
+        selectionAnchorKeyRef.current = null;
         setSelectionCameFromSelectAll(false);
         setConfirmDeleteAllOpen(false);
     }
 
     function handleTypeFilterChange(value: string | null) {
         setTypeFilter(value);
-        clearDocumentSelection();
+        clearCollectionSelection();
     }
 
     function handleSortChange(key: DocumentSortKey, direction: TableSortDirection | null) {
         setSort(direction ? { key, direction } : null);
-        clearDocumentSelection();
+        clearCollectionSelection();
     }
 
     const filteredDocs = useMemo(() => {
@@ -3245,22 +3208,8 @@ export function DocTable({
         const visibleFolderIds: string[] = [];
         const visitedFolderIds = new Set<string>();
         const visitLevel = (parentId: string | null) => {
-            const uploadingFolderNames = new Set(
-                collectionUploadProgress.flatMap((upload) =>
-                    upload.parentFolderId === parentId
-                        ? upload.entries
-                              .filter((entry) => entry.kind === "folder")
-                              .map((entry) => entry.name)
-                        : [],
-                ),
-            );
-
-            for (const folder of folders) {
-                if (
-                    folder.parent_folder_id !== parentId ||
-                    uploadingFolderNames.has(folder.name) ||
-                    visitedFolderIds.has(folder.id)
-                ) {
+            for (const folder of childFoldersForLevel(parentId)) {
+                if (visitedFolderIds.has(folder.id)) {
                     continue;
                 }
                 visitedFolderIds.add(folder.id);
@@ -3274,19 +3223,34 @@ export function DocTable({
         visitLevel(viewedFolderId);
         return visibleFolderIds;
     }, [
-        collectionUploadProgress,
+        childFoldersForLevel,
         expandedFolderIds,
-        folders,
         q,
         viewedFolderId,
     ]);
+    const selectAllFolderTreeIds = useMemo(
+        () => collectFolderTreeIds(folders, selectAllFolderIds),
+        [folders, selectAllFolderIds],
+    );
+    const selectAllDocumentIds = useCallback(
+        (documentIds: string[]) => {
+            const documentsById = new Map(
+                docs.map((document) => [document.id, document]),
+            );
+            return documentIds.filter((documentId) => {
+                const folderId = documentsById.get(documentId)?.folder_id;
+                return folderId == null || !selectAllFolderTreeIds.has(folderId);
+            });
+        },
+        [docs, selectAllFolderTreeIds],
+    );
     const {
         allSelected: allVisibleRowsSelected,
         someSelected: someVisibleRowsSelected,
     } = collectionSelectAllState(
         filteredDocs.map((document) => document.id),
         selectAllFolderIds,
-        selectedDocIds,
+        [...effectiveSelectedDocIdSet],
         selectedFolderIds,
     );
 
@@ -3299,7 +3263,11 @@ export function DocTable({
         }
 
         if (!onSelectAllMatching) {
-            setSelectedDocIds(filteredDocs.map((document) => document.id));
+            setSelectedDocIds(
+                selectAllDocumentIds(
+                    filteredDocs.map((document) => document.id),
+                ),
+            );
             setSelectedFolderIds(new Set(selectAllFolderIds));
             setSelectionCameFromSelectAll(true);
             return;
@@ -3312,7 +3280,7 @@ export function DocTable({
                 fileType: typeFilter,
                 sort,
             });
-            setSelectedDocIds(ids);
+            setSelectedDocIds(selectAllDocumentIds(ids));
             setSelectedFolderIds(new Set(selectAllFolderIds));
             setSelectionCameFromSelectAll(true);
         } catch (error) {
@@ -3331,6 +3299,7 @@ export function DocTable({
         filteredDocs,
         onSelectAllMatching,
         search,
+        selectAllDocumentIds,
         selectAllFolderIds,
         selectionCameFromSelectAll,
         sort,
@@ -3771,7 +3740,7 @@ export function DocTable({
                                                     typeof versionNumber === "number" && versionNumber > 1;
                                                 const isVersionDragOver = dragOverVersionDocId === doc.id;
                                                 const isUploadingVersion = uploadingVersionDocIds.has(doc.id);
-                                                const isSelected = selectedDocIds.includes(doc.id);
+                                                const isSelected = effectiveSelectedDocIdSet.has(doc.id);
                                                 const isDeletingDoc = deletingDocIds.has(doc.id);
                                                 if (isDeletingDoc) {
                                                     return renderDocumentActivityRow({
@@ -3832,7 +3801,7 @@ export function DocTable({
                                                                     ) : (
                                                                         <input
                                                                             type="checkbox"
-                                                                            checked={selectedDocIds.includes(doc.id)}
+                                                                            checked={effectiveSelectedDocIdSet.has(doc.id)}
                                                                             onChange={(event) =>
                                                                                 updateDocumentSelection(
                                                                                     doc,
@@ -4023,7 +3992,7 @@ export function DocTable({
                                     const menuDocVersionsOpen = menuDoc ? expandedVersionDocIds.has(menuDoc.id) : false;
                                     const menuAppliesToSelection =
                                         !!menuDoc &&
-                                        selectedDocIds.includes(menuDoc.id) &&
+                                        effectiveSelectedDocIdSet.has(menuDoc.id) &&
                                         selectedItemCount > 1;
                                     const menuFolderAppliesToSelection =
                                         !!contextMenu.folderId &&

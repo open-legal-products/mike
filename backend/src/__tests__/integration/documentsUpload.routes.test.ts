@@ -103,6 +103,21 @@ describe("POST /single-documents/download-zip — bounds", () => {
         expect(res.body.detail).toMatch(/document_ids or folder_ids is required/i);
     });
 
+    it("rejects more than 200 requested documents before database or storage work", async () => {
+        const res = await request(app)
+            .post("/single-documents/download-zip")
+            .set("Authorization", "Bearer test")
+            .send({
+                document_ids: Array.from(
+                    { length: 201 },
+                    (_, index) => `document-${index}`,
+                ),
+            });
+
+        expect(res.status).toBe(413);
+        expect(res.body.detail).toMatch(/at most 200 documents/i);
+    });
+
     it("returns 404 when none of the requested documents are accessible", async () => {
         // The documents lookup resolves to no rows (stubbed DB), so the
         // access filter leaves nothing to zip.

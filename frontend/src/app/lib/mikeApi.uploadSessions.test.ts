@@ -16,6 +16,7 @@ import {
     uploadReviewDocument,
     uploadWorkflowReferenceFile,
 } from "./mikeApi";
+import { uploadProcessingPollDelayMs } from "@/shared/api/uploadSessionClient";
 
 const fetchMock = vi.fn();
 const API_URL = "/api";
@@ -40,10 +41,24 @@ function json(body: unknown, status = 200) {
 
 function installSuccessfulSessionServer(options?: {
     storageUpload?: (url: string) => Promise<Response>;
+    fileCompletion?: (
+        url: string,
+        init: RequestInit,
+    ) => Promise<Response> | Response;
+    statusPollFailures?: number;
+    processingPollsBeforeComplete?: number;
 }) {
     const manifests: Manifest[] = [];
+    const states = new Map<
+        string,
+        {
+            status: "pending_upload" | "processing" | "completed" | "error";
+            error_code: string | null;
+        }
+    >();
     let activeStorageUploads = 0;
     let maximumStorageUploads = 0;
+    let statusRequestCount = 0;
     const uploadFiles = (manifest: Manifest) =>
         manifest.files.map((file) => ({
             id: file.client_id,
@@ -58,6 +73,59 @@ function installSuccessfulSessionServer(options?: {
                 headers: { "Content-Type": "application/pdf" },
             },
         }));
+    const sessionResponse = (finishProcessing = false) => {
+        const manifest = manifests.at(-1)!;
+        if (finishProcessing) {
+            for (const state of states.values()) {
+                if (state.status === "processing") state.status = "completed";
+            }
+        }
+        const files = manifest.files.map((file) => {
+            const state = states.get(file.client_id) ?? {
+                status: "pending_upload" as const,
+                error_code: null,
+            };
+            return {
+                id: file.client_id,
+                client_id: file.client_id,
+                filename: file.filename,
+                status: state.status,
+                error_code: state.error_code,
+                result:
+                    state.status === "completed"
+                        ? { id: `result-${file.filename}` }
+                        : null,
+            };
+        });
+        const hasPending = files.some((file) =>
+            ["pending_upload"].includes(file.status),
+        );
+        const hasProcessing = files.some(
+            (file) => file.status === "processing",
+        );
+        const hasCompleted = files.some((file) => file.status === "completed");
+        return {
+            session: {
+                id: "session-1",
+                status: hasPending
+                    ? "pending_upload"
+                    : hasProcessing
+                      ? "processing"
+                      : hasCompleted
+                        ? "completed"
+                        : "error",
+                error_code:
+                    !hasPending &&
+                    !hasProcessing &&
+                    hasCompleted &&
+                    files.some((file) => file.status === "error")
+                        ? "partial_failure"
+                        : null,
+                expires_at: "2099-01-01T00:00:00Z",
+            },
+            files,
+        };
+    };
 
     fetchMock.mockImplementation(
         async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -68,6 +136,12 @@ function installSuccessfulSessionServer(options?: {
             ) {
                 const manifest = JSON.parse(String(init.body)) as Manifest;
                 manifests.push(manifest);
+                for (const file of manifest.files) {
+                    states.set(file.client_id, {
+                        status: "pending_upload",
+                        error_code: null,
+                    });
+                }
                 return json(
                     {
                         session: {
@@ -106,55 +180,43 @@ function installSuccessfulSessionServer(options?: {
                 ),
             );
             if (fileCompletion && init?.method === "POST") {
+                if (options?.fileCompletion) {
+                    return await options.fileCompletion(url, init);
+                }
                 const completedClientId = decodeURIComponent(
                     fileCompletion[1]!,
                 );
-                const manifest = manifests.at(-1)!;
-                return json({
-                    session: {
-                        id: "session-1",
-                        status: "pending_upload",
-                        expires_at: "2099-01-01T00:00:00Z",
-                    },
-                    files: uploadFiles(manifest).map((file) => ({
-                        ...file,
-                        status:
-                            file.client_id === completedClientId
-                                ? "processing"
-                                : "pending_upload",
-                        upload: undefined,
-                    })),
+                const failed = JSON.parse(String(init.body ?? "{}")) as {
+                    failed?: boolean;
+                };
+                states.set(completedClientId, {
+                    status: failed.failed ? "error" : "processing",
+                    error_code: failed.failed ? "direct_upload_failed" : null,
                 });
+                return json(sessionResponse());
             }
-            if (url === `${API_URL}/upload-sessions/session-1/complete`) {
-                const manifest = manifests.at(-1)!;
-                const failedClientIds = new Set(
-                    JSON.parse(String(init?.body ?? "{}"))
-                        .failed_client_ids as string[] | undefined,
+            if (
+                url === `${API_URL}/upload-sessions/session-1` &&
+                !init?.method
+            ) {
+                statusRequestCount += 1;
+                const failedPolls = options?.statusPollFailures ?? 0;
+                if (statusRequestCount <= failedPolls) {
+                    return json(
+                        {
+                            code: "upload_session_poll_rate_limit",
+                            detail: "Try again shortly",
+                        },
+                        429,
+                    );
+                }
+                const completedPolls = statusRequestCount - failedPolls;
+                return json(
+                    sessionResponse(
+                        completedPolls >
+                            (options?.processingPollsBeforeComplete ?? 0),
+                    ),
                 );
-                const hasSuccess = manifest.files.some(
-                    (file) => !failedClientIds.has(file.client_id),
-                );
-                return json({
-                    session: {
-                        id: "session-1",
-                        status: hasSuccess ? "completed" : "error",
-                        expires_at: "2099-01-01T00:00:00Z",
-                    },
-                    files: manifest.files.map((file) => ({
-                        client_id: file.client_id,
-                        filename: file.filename,
-                        status: failedClientIds.has(file.client_id)
-                            ? "error"
-                            : "completed",
-                        error_code: failedClientIds.has(file.client_id)
-                            ? "direct_upload_failed"
-                            : null,
-                        result: failedClientIds.has(file.client_id)
-                            ? null
-                            : { id: `result-${file.filename}` },
-                    })),
-                });
             }
             if (
                 url.startsWith(`${API_URL}/tabular-review/`) &&
@@ -171,6 +233,7 @@ function installSuccessfulSessionServer(options?: {
     return {
         manifests,
         maximumStorageUploads: () => maximumStorageUploads,
+        statusRequestCount: () => statusRequestCount,
     };
 }
 
@@ -210,11 +273,13 @@ describe("direct upload sessions", () => {
         const firstFileCompletion = calls.findIndex((url) =>
             url.includes("/files/"),
         );
-        const batchCompletion = calls.findIndex((url) =>
-            url.endsWith("/session-1/complete"),
-        );
         expect(firstFileCompletion).toBeGreaterThan(-1);
-        expect(firstFileCompletion).toBeLessThan(batchCompletion);
+        expect(calls.some((url) => url.endsWith("/session-1/complete"))).toBe(
+            false,
+        );
+        expect(
+            calls.findIndex((url) => url.endsWith("/session-1")),
+        ).toBeGreaterThan(firstFileCompletion);
         expect(
             calls
                 .slice(0, firstFileCompletion)
@@ -276,14 +341,59 @@ describe("direct upload sessions", () => {
             ],
         });
 
-        expect(outcomes.filter((outcome) => outcome.status === "completed")).toHaveLength(1);
-        expect(outcomes.filter((outcome) => outcome.status === "error")).toMatchObject([
-            { errorCode: "direct_upload_failed" },
-        ]);
+        expect(
+            outcomes.filter((outcome) => outcome.status === "completed"),
+        ).toHaveLength(1);
+        expect(
+            outcomes.filter((outcome) => outcome.status === "error"),
+        ).toMatchObject([{ errorCode: "direct_upload_failed" }]);
         expect(attempts.get(failedUrl!)).toBe(3);
         expect(failedUploadMessage(outcomes)).toBe(
             "a.pdf could not be uploaded. Please try again.",
         );
+    });
+
+    it("surfaces unconfirmed per-file completion without bulk completion or cancellation", async () => {
+        let completionAttempts = 0;
+        installSuccessfulSessionServer({
+            fileCompletion: () => {
+                completionAttempts += 1;
+                return json(
+                    { code: "temporary_failure", detail: "Try again" },
+                    503,
+                );
+            },
+        });
+
+        const error = await uploadFilesWithSession({
+            purpose: "document_create",
+            destination: { scope: "standalone" },
+            files: [{ file: new File(["pdf"], "contract.pdf") }],
+        }).catch((caught: unknown) => caught);
+
+        expect(completionAttempts).toBe(3);
+        expect(error).toBeInstanceOf(UploadBatchError);
+        expect(error).toMatchObject({
+            outcomes: [
+                expect.objectContaining({
+                    filename: "contract.pdf",
+                    errorCode: "upload_confirmation_failed",
+                }),
+            ],
+        });
+        const calls = fetchMock.mock.calls.map(([url, init]) => ({
+            url: String(url),
+            method: (init as RequestInit | undefined)?.method,
+        }));
+        expect(
+            calls.some(({ url }) => url.endsWith("/session-1/complete")),
+        ).toBe(false);
+        expect(
+            calls.some(
+                ({ url, method }) =>
+                    url.endsWith("/session-1") && method === "DELETE",
+            ),
+        ).toBe(false);
     });
 
     it("rejects a 51-file batch before reserving a backend session", async () => {
@@ -400,7 +510,7 @@ describe("direct upload sessions", () => {
         },
     );
 
-    it("finalizes per-file failures without cancelling the whole session", async () => {
+    it("reports per-file failures without session-wide completion", async () => {
         const manifests: Manifest[] = [];
         fetchMock.mockImplementation(
             async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -460,12 +570,15 @@ describe("direct upload sessions", () => {
                     return new Response(null, { status: 503 });
                 }
                 if (
-                    url === `${API_URL}/upload-sessions/session-1/complete` &&
+                    url.includes(
+                        `${API_URL}/upload-sessions/session-1/files/`,
+                    ) &&
+                    url.endsWith("/complete") &&
                     init?.method === "POST"
                 ) {
                     const file = manifests[0].files[0];
                     expect(JSON.parse(String(init.body))).toEqual({
-                        failed_client_ids: [file.client_id],
+                        failed: true,
                     });
                     return json({
                         session: {
@@ -473,6 +586,28 @@ describe("direct upload sessions", () => {
                             status: "error",
                             error_code: "all_uploads_failed",
                             expires_at: "2099-01-01T00:00:00Z",
+                        },
+                        files: [
+                            {
+                                client_id: file.client_id,
+                                filename: file.filename,
+                                status: "error",
+                                error_code: "direct_upload_failed",
+                                result: null,
+                            },
+                        ],
+                    });
+                }
+                if (
+                    url === `${API_URL}/upload-sessions/session-1` &&
+                    !init?.method
+                ) {
+                    const file = manifests[0].files[0];
+                    return json({
+                        session: {
+                            id: "session-1",
+                            status: "error",
+                            error_code: "all_uploads_failed",
                         },
                         files: [
                             {
@@ -510,5 +645,41 @@ describe("direct upload sessions", () => {
             `${API_URL}/upload-sessions/session-1`,
             expect.objectContaining({ method: "DELETE" }),
         );
+    });
+});
+
+describe("upload session polling", () => {
+    it("backs off status checks and caps the interval at five seconds", () => {
+        expect(
+            Array.from({ length: 9 }, (_, index) =>
+                uploadProcessingPollDelayMs(index),
+            ),
+        ).toEqual([
+            750, 1_000, 1_500, 2_500, 4_000, 5_000, 5_000, 5_000, 5_000,
+        ]);
+    });
+
+    it("continues polling after a rate-limit response", async () => {
+        vi.useFakeTimers();
+        try {
+            const server = installSuccessfulSessionServer({
+                statusPollFailures: 1,
+                processingPollsBeforeComplete: 1,
+            });
+            const upload = uploadFilesWithSession({
+                purpose: "document_create",
+                destination: { scope: "standalone" },
+                files: [{ file: new File(["pdf"], "contract.pdf") }],
+            });
+
+            await vi.runAllTimersAsync();
+
+            await expect(upload).resolves.toMatchObject([
+                { filename: "contract.pdf", status: "completed" },
+            ]);
+            expect(server.statusRequestCount()).toBe(3);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

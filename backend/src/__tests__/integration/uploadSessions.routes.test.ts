@@ -73,6 +73,10 @@ describe("upload session routes", () => {
       headers: { "Content-Type": "application/pdf" },
     });
     expect(mocks.rpc).toHaveBeenCalledOnce();
+    expect(mocks.rpc).toHaveBeenCalledWith(
+      "create_upload_session",
+      expect.objectContaining({ target_hourly_session_limit: 50 }),
+    );
     expect(mocks.getSignedUploadUrl).toHaveBeenCalledTimes(2);
   });
 
@@ -82,6 +86,23 @@ describe("upload session routes", () => {
       .send(manifest(51));
 
     expect(response.status).toBe(400);
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(mocks.getSignedUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported file extensions before reserving a session", async () => {
+    const requestBody = manifest();
+    requestBody.files[0].filename = "notes.txt";
+
+    const response = await request(app)
+      .post("/upload-sessions")
+      .send(requestBody);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "invalid_upload_session",
+      detail: expect.stringContaining("Unsupported file type: txt"),
+    });
     expect(mocks.rpc).not.toHaveBeenCalled();
     expect(mocks.getSignedUploadUrl).not.toHaveBeenCalled();
   });

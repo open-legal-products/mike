@@ -521,6 +521,7 @@ create table if not exists public.upload_sessions (
   cleaned_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  user_email text,
   constraint upload_sessions_purpose_check check (
     purpose in (
       'document_create',
@@ -549,6 +550,30 @@ create table if not exists public.upload_sessions (
     )
   )
 );
+
+create or replace function public.capture_upload_session_user_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  select email
+    into new.user_email
+  from auth.users
+  where id = new.user_id;
+  return new;
+end;
+$$;
+
+drop trigger if exists capture_upload_session_user_email on public.upload_sessions;
+create trigger capture_upload_session_user_email
+  before insert on public.upload_sessions
+  for each row
+  execute function public.capture_upload_session_user_email();
+
+revoke all on function public.capture_upload_session_user_email()
+  from public, anon, authenticated;
 
 create index if not exists upload_sessions_user_created_idx
   on public.upload_sessions(user_id, created_at desc);
@@ -3133,7 +3158,8 @@ create or replace function public.create_upload_session(
   target_purpose text,
   target_destination jsonb,
   target_expires_at timestamptz,
-  target_files jsonb
+  target_files jsonb,
+  target_hourly_session_limit integer default 50
 )
 returns void
 language plpgsql
@@ -3151,6 +3177,9 @@ begin
   if target_expires_at <= now()
      or target_expires_at > now() + interval '30 minutes' then
     raise exception using errcode = '22023', message = 'invalid_upload_session_expiry';
+  end if;
+  if target_hourly_session_limit not between 1 and 1000000 then
+    raise exception using errcode = '22023', message = 'invalid_upload_session_rate_limit';
   end if;
 
   select count(*), coalesce(sum(file_row.expected_size_bytes), 0)
@@ -3233,7 +3262,7 @@ begin
   where user_id = target_user_id
     and created_at > now() - interval '1 hour';
 
-  if recent_session_count >= 50 then
+  if recent_session_count >= target_hourly_session_limit then
     raise exception using errcode = 'P0001', message = 'upload_session_rate_limit_exceeded';
   end if;
 
@@ -3430,59 +3459,6 @@ begin
 end;
 $$;
 
-create or replace function public.queue_upload_session_processing(
-  target_session_id uuid,
-  target_user_id uuid
-)
-returns uuid
-language plpgsql
-security definer
-set search_path = public, pg_temp
-as $$
-declare
-  pending_file_count integer;
-  processable_file_count integer;
-  processing_job_id uuid;
-begin
-  perform 1
-  from public.upload_sessions
-  where id = target_session_id and user_id = target_user_id
-  for update;
-  if not found then
-    raise exception using errcode = 'P0002', message = 'upload_session_not_found';
-  end if;
-
-  select
-    count(*) filter (where status in ('pending_upload', 'verifying')),
-    count(*) filter (where status in ('uploaded', 'processing', 'completed'))
-    into pending_file_count, processable_file_count
-  from public.upload_session_files
-  where session_id = target_session_id;
-
-  if pending_file_count > 0 then
-    raise exception using errcode = 'P0001', message = 'upload_session_incomplete';
-  end if;
-  if processable_file_count < 1 then
-    raise exception using errcode = 'P0001', message = 'upload_session_has_no_processable_files';
-  end if;
-
-  insert into public.upload_processing_jobs (session_id, file_id, user_id)
-  select target_session_id, file.id, target_user_id
-  from public.upload_session_files file
-  where file.session_id = target_session_id and file.status = 'uploaded'
-  on conflict (file_id) do nothing;
-
-  select id into processing_job_id
-  from public.upload_processing_jobs
-  where session_id = target_session_id
-  order by created_at
-  limit 1;
-
-  perform public.refresh_upload_session_status(target_session_id);
-  return processing_job_id;
-end;
-$$;
-
 create or replace function public.claim_upload_processing_job(
   target_worker_id text,
   target_lease_seconds integer default 600
@@ -3631,13 +3607,11 @@ revoke all on function public.renew_tabular_review_generation(uuid, uuid, intege
   from public, anon, authenticated;
 revoke all on function public.finish_tabular_review_generation(uuid, uuid)
   from public, anon, authenticated;
-revoke all on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb)
+revoke all on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb, integer)
   from public, anon, authenticated;
 revoke all on function public.refresh_upload_session_status(uuid)
   from public, anon, authenticated;
 revoke all on function public.queue_upload_session_file_processing(uuid, uuid, uuid)
-  from public, anon, authenticated;
-revoke all on function public.queue_upload_session_processing(uuid, uuid)
   from public, anon, authenticated;
 revoke all on function public.claim_upload_processing_job(text, integer)
   from public, anon, authenticated;
@@ -3674,16 +3648,13 @@ grant execute
   on function public.finish_tabular_review_generation(uuid, uuid)
   to service_role;
 grant execute
-  on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb)
+  on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb, integer)
   to service_role;
 grant execute
   on function public.refresh_upload_session_status(uuid)
   to service_role;
 grant execute
   on function public.queue_upload_session_file_processing(uuid, uuid, uuid)
-  to service_role;
-grant execute
-  on function public.queue_upload_session_processing(uuid, uuid)
   to service_role;
 grant execute
   on function public.claim_upload_processing_job(text, integer)

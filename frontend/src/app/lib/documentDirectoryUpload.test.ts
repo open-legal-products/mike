@@ -11,8 +11,8 @@ import {
     MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD,
     resolvedDocumentUploadProgressEntries,
     resolveDocumentUploadRootFolder,
-    settleWithConcurrency,
 } from "./documentDirectoryUpload";
+import { settleWithConcurrency } from "@/shared/lib/settleWithConcurrency";
 
 function folderFile(name: string, relativePath: string) {
     const file = new File([name], name);

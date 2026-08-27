@@ -1,12 +1,16 @@
 import { Router } from "express";
+import { pipeline } from "node:stream/promises";
+import type { Readable } from "node:stream";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import { sendInternalError } from "../lib/httpError";
 import {
   buildContentDisposition,
+  createFileReadStream,
   downloadFile,
   deleteFile,
   getSignedUrl,
+  headFile,
   uploadFile,
   versionStorageKey,
 } from "../lib/storage";
@@ -23,10 +27,12 @@ import {
   loadActiveVersion,
 } from "../lib/documentVersions";
 import { checkProjectAccess, ensureDocAccess } from "../lib/access";
+import { mapWithConcurrency } from "../lib/concurrency";
 import {
   contentTypeForDocumentType,
   shouldConvertToPdf,
 } from "../lib/documentTypes";
+import { uniqueArchiveFilename, zipExportLimitDetail } from "../lib/zipExport";
 
 export const documentsRouter = Router();
 const isDev = process.env.NODE_ENV !== "production";
@@ -197,12 +203,20 @@ documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
     return void res
       .status(400)
       .json({ detail: "document_ids or folder_ids is required" });
+  const requestedCountLimit = zipExportLimitDetail(documentIds.length, 0);
+  if (requestedCountLimit) {
+    return void res.status(413).json({ detail: requestedCountLimit });
+  }
   const db = createServerSupabase();
   type DownloadDocumentRow = {
     id: string;
     current_version_id?: string | null;
     user_id: string;
     project_id: string | null;
+    storage_path?: string | null;
+    filename?: string | null;
+    source?: string | null;
+    active_version_number?: number | null;
   };
   const rawDocsById = new Map<string, DownloadDocumentRow>();
 
@@ -311,6 +325,11 @@ documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
     }
   }
 
+  const resolvedCountLimit = zipExportLimitDetail(rawDocsById.size, 0);
+  if (resolvedCountLimit) {
+    return void res.status(413).json({ detail: resolvedCountLimit });
+  }
+
   // Filter to docs the user actually has access to (own + shared-project).
   const accessChecks = await Promise.all(
     [...rawDocsById.values()].map(async (d) => ({
@@ -325,34 +344,90 @@ documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
   );
   const docs = accessChecks
     .filter((x) => x.access.ok)
-    .map((x) => x.doc as { id: string });
+    .map((x) => x.doc);
   if (!docs || docs.length === 0)
     return void res.status(404).json({ detail: "No documents found" });
 
+  await attachActiveVersionPaths(db, docs);
+  const activeDocs = docs.filter(
+    (
+      doc,
+    ): doc is DownloadDocumentRow & {
+      storage_path: string;
+    } => typeof doc.storage_path === "string" && doc.storage_path.length > 0,
+  );
+  if (activeDocs.length === 0)
+    return void res.status(404).json({ detail: "No files available" });
+
+  let exportEntries: Array<{
+    doc: (typeof activeDocs)[number];
+    size: number;
+  }>;
+  try {
+    exportEntries = (
+      await mapWithConcurrency(activeDocs, 5, async (doc) => ({
+        doc,
+        metadata: await headFile(doc.storage_path),
+      }))
+    )
+      .filter(
+        (
+          entry,
+        ): entry is {
+          doc: (typeof activeDocs)[number];
+          metadata: NonNullable<Awaited<ReturnType<typeof headFile>>>;
+        } => entry.metadata != null,
+      )
+      .map(({ doc, metadata }) => ({ doc, size: metadata.size }));
+  } catch (error) {
+    return void sendInternalError(res, error);
+  }
+  if (exportEntries.length === 0)
+    return void res.status(404).json({ detail: "No files available" });
+
+  const sizeLimit = zipExportLimitDetail(
+    exportEntries.length,
+    exportEntries.reduce((total, entry) => total + entry.size, 0),
+  );
+  if (sizeLimit) {
+    return void res.status(413).json({ detail: sizeLimit });
+  }
+
   const JSZip = (await import("jszip")).default;
   const zip = new JSZip();
-
-  await Promise.all(
-    docs.map(async (doc) => {
-      const active = await loadActiveVersion(doc.id, db);
-      if (!active) return;
-      const raw = await downloadFile(active.storage_path);
-      if (!raw) return;
-      zip.file(
+  const usedNames = new Set<string>();
+  const fileStreams = exportEntries.map(({ doc }) => {
+    const stream = createFileReadStream(doc.storage_path);
+    zip.file(
+      uniqueArchiveFilename(
         downloadFilenameForVersion(
-          active.filename,
-          active.version_number,
-          active.source === "assistant_edit",
+          doc.filename,
+          doc.active_version_number ?? null,
+          doc.source === "assistant_edit",
         ),
-        Buffer.from(raw),
-      );
-    }),
-  );
+        usedNames,
+      ),
+      stream,
+      { compression: "STORE" },
+    );
+    return stream;
+  });
 
-  const content = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", 'attachment; filename="documents.zip"');
-  res.send(content);
+  const archiveStream = zip.generateNodeStream({
+    type: "nodebuffer",
+    streamFiles: true,
+    compression: "STORE",
+  }) as Readable;
+  try {
+    await pipeline(archiveStream, res);
+  } catch (error) {
+    for (const stream of fileStreams) stream.destroy();
+    if (!res.headersSent && !res.destroyed) {
+      return void sendInternalError(res, error);
+    }
+  }
 });
 
 // GET /single-documents/:documentId/url

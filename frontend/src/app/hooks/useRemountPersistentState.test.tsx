@@ -1,7 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { useRemountPersistentState } from "./useRemountPersistentState";
+import {
+    REMOUNT_PERSISTENCE_MS,
+    useRemountPersistentState,
+} from "./useRemountPersistentState";
 
 function TestState({ stateKey }: { stateKey: string }) {
     const [value, setValue] = useRemountPersistentState(stateKey, "idle");
@@ -9,6 +12,8 @@ function TestState({ stateKey }: { stateKey: string }) {
 }
 
 describe("useRemountPersistentState", () => {
+    afterEach(() => vi.useRealTimers());
+
     it("restores state when a component remounts with the same key", () => {
         const stateKey = `upload-test:${crypto.randomUUID()}`;
         const firstRender = render(<TestState stateKey={stateKey} />);
@@ -20,5 +25,18 @@ describe("useRemountPersistentState", () => {
         render(<TestState stateKey={stateKey} />);
 
         expect(screen.getByRole("button")).toHaveTextContent("uploading");
+    });
+
+    it("evicts inactive state after the remount grace period", () => {
+        vi.useFakeTimers();
+        const stateKey = `upload-test:${crypto.randomUUID()}`;
+        const firstRender = render(<TestState stateKey={stateKey} />);
+
+        fireEvent.click(screen.getByRole("button"));
+        firstRender.unmount();
+        act(() => vi.advanceTimersByTime(REMOUNT_PERSISTENCE_MS));
+
+        render(<TestState stateKey={stateKey} />);
+        expect(screen.getByRole("button")).toHaveTextContent("idle");
     });
 });

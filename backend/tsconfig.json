@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["node", "express", "cors", "multer"],
+    "types": ["node", "express", "cors"],
     "paths": {
       "@/*": ["./src/*"]
     }

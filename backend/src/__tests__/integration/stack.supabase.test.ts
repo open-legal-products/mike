@@ -160,6 +160,7 @@ maybeDescribe("Supabase stack — auth contract + RLS deny-all firewall", () => 
                 target_purpose: "document_create",
                 target_destination: { scope: "standalone" },
                 target_expires_at: new Date(Date.now() + 20 * 60_000).toISOString(),
+                target_hourly_session_limit: 50,
                 target_files: [
                     {
                         id: fileId,
@@ -180,11 +181,12 @@ maybeDescribe("Supabase stack — auth contract + RLS deny-all firewall", () => 
 
         const { data, error } = await admin
             .from("upload_sessions")
-            .select("id, status")
+            .select("id, status, user_email")
             .in("id", sessionIds);
         expect(error).toBeNull();
         expect(data).toHaveLength(3);
         expect(data?.every((session) => session.status === "pending_upload")).toBe(true);
+        expect(data?.every((session) => session.user_email === emailA)).toBe(true);
 
         await admin.from("upload_sessions").delete().in("id", sessionIds);
     });

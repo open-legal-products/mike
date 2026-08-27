@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateRuntimeConfiguration } from "../runtimeConfig";
+import {
+  uploadSessionRateLimitConfiguration,
+  validateRuntimeConfiguration,
+} from "../runtimeConfig";
 
 const validProduction = {
   NODE_ENV: "production",
@@ -42,5 +45,40 @@ describe("runtime authentication configuration", () => {
         SUPABASE_ANON_KEY: "legacy-anon-key",
       }),
     ).not.toThrow();
+  });
+});
+
+describe("upload-session rate-limit configuration", () => {
+  it("uses safe defaults when overrides are absent or invalid", () => {
+    expect(
+      uploadSessionRateLimitConfiguration({
+        RATE_LIMIT_UPLOAD_SESSION_MUTATION_MAX: "0",
+        RATE_LIMIT_UPLOAD_SESSION_POLL_MAX: "not-a-number",
+      }),
+    ).toEqual({
+      mutationWindowMinutes: 15,
+      mutationMax: 300,
+      pollingWindowMinutes: 15,
+      pollingMax: 3_000,
+      sessionCreationMaxPerHour: 50,
+    });
+  });
+
+  it("accepts positive environment overrides", () => {
+    expect(
+      uploadSessionRateLimitConfiguration({
+        RATE_LIMIT_UPLOAD_SESSION_MUTATION_WINDOW_MINUTES: "10",
+        RATE_LIMIT_UPLOAD_SESSION_MUTATION_MAX: "900",
+        RATE_LIMIT_UPLOAD_SESSION_POLL_WINDOW_MINUTES: "20",
+        RATE_LIMIT_UPLOAD_SESSION_POLL_MAX: "6000",
+        RATE_LIMIT_UPLOAD_SESSION_CREATE_MAX_PER_HOUR: "250",
+      }),
+    ).toEqual({
+      mutationWindowMinutes: 10,
+      mutationMax: 900,
+      pollingWindowMinutes: 20,
+      pollingMax: 6_000,
+      sessionCreationMaxPerHour: 250,
+    });
   });
 });

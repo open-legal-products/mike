@@ -1,6 +1,8 @@
 import JSZip from "jszip";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 let _convert:
   | ((buf: Buffer, ext: string, filter: undefined) => Promise<Buffer>)
@@ -131,6 +133,65 @@ export async function docxToPdf(buffer: Buffer): Promise<Buffer> {
   const convert = await getConvert();
   const normalized = await normalizeDocxZipPaths(buffer);
   return convert(normalized, ".pdf", undefined);
+}
+
+/**
+ * Convert an Office document from disk and leave the generated PDF on disk.
+ * This is the upload-worker path: it avoids loading either the source file or
+ * converted PDF into the Node.js process.
+ */
+export async function officeFileToPdf(
+  inputPath: string,
+  outputDirectory: string,
+): Promise<string> {
+  const binary = resolveSofficeBinaryPaths()[0];
+  if (!binary) {
+    throw new Error(
+      "LibreOffice/soffice binary was not found. Ensure Railway uses backend/nixpacks.toml or set SOFFICE_BINARY_PATH/LIBREOFFICE_BINARY_PATH.",
+    );
+  }
+
+  await fs.promises.mkdir(outputDirectory, { recursive: true });
+  const profileDirectory = path.join(outputDirectory, "libreoffice-profile");
+  await fs.promises.mkdir(profileDirectory, { recursive: true });
+  const profileUrl = pathToFileURL(profileDirectory).href;
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      binary,
+      [
+        `-env:UserInstallation=${profileUrl}`,
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        outputDirectory,
+        inputPath,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr = `${stderr}${String(chunk)}`.slice(-4_096);
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            `LibreOffice conversion failed with exit code ${code ?? "unknown"}${stderr ? `: ${stderr}` : ""}`,
+          ),
+        );
+    });
+  });
+
+  const outputPath = path.join(
+    outputDirectory,
+    `${path.parse(inputPath).name}.pdf`,
+  );
+  await fs.promises.access(outputPath, fs.constants.R_OK);
+  return outputPath;
 }
 
 export function convertedPdfKey(userId: string, docId: string): string {

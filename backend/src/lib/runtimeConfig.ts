@@ -6,6 +6,41 @@ function required(env: NodeJS.ProcessEnv, names: readonly string[]): string {
   return "";
 }
 
+export function envInt(
+  name: string,
+  fallback: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function uploadSessionRateLimitConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return {
+    mutationWindowMinutes: envInt(
+      "RATE_LIMIT_UPLOAD_SESSION_MUTATION_WINDOW_MINUTES",
+      15,
+      env,
+    ),
+    mutationMax: envInt("RATE_LIMIT_UPLOAD_SESSION_MUTATION_MAX", 300, env),
+    pollingWindowMinutes: envInt(
+      "RATE_LIMIT_UPLOAD_SESSION_POLL_WINDOW_MINUTES",
+      15,
+      env,
+    ),
+    pollingMax: envInt("RATE_LIMIT_UPLOAD_SESSION_POLL_MAX", 3_000, env),
+    sessionCreationMaxPerHour: envInt(
+      "RATE_LIMIT_UPLOAD_SESSION_CREATE_MAX_PER_HOUR",
+      50,
+      env,
+    ),
+  };
+}
+
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {
   try {
     const url = new URL(value);

@@ -113,6 +113,17 @@ jobs:
           AWS_ACCESS_KEY_ID=minioadmin \
           AWS_SECRET_ACCESS_KEY=minioadmin \
           AWS_DEFAULT_REGION=us-east-1 \
+            aws --endpoint-url http://localhost:9000 s3api put-bucket-cors \
+              --bucket mike \
+              --cors-configuration file://docker/storage-cors.json
+          AWS_ACCESS_KEY_ID=minioadmin \
+          AWS_SECRET_ACCESS_KEY=minioadmin \
+          AWS_DEFAULT_REGION=us-east-1 \
+            aws --endpoint-url http://localhost:9000 s3api get-bucket-cors \
+              --bucket mike
+          AWS_ACCESS_KEY_ID=minioadmin \
+          AWS_SECRET_ACCESS_KEY=minioadmin \
+          AWS_DEFAULT_REGION=us-east-1 \
             aws --endpoint-url http://localhost:9000 s3 ls s3://mike
 
       # Supabase (Auth + Postgres). This layout ships no supabase/ config dir
@@ -174,6 +185,9 @@ jobs:
             echo "RATE_LIMIT_UPLOAD_MAX=100000"
             echo "RATE_LIMIT_EXPORT_MAX=100000"
             echo "RATE_LIMIT_DATA_DELETE_MAX=100000"
+            echo "RATE_LIMIT_UPLOAD_SESSION_MUTATION_MAX=100000"
+            echo "RATE_LIMIT_UPLOAD_SESSION_POLL_MAX=100000"
+            echo "RATE_LIMIT_UPLOAD_SESSION_CREATE_MAX_PER_HOUR=100000"
             echo "RATE_LIMIT_AUTH_LOGIN_MAX=100000"
             echo "RATE_LIMIT_AUTH_ACCOUNT_MAX=100000"
             echo "RATE_LIMIT_AUTH_EMAIL_MAX=100000"

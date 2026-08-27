@@ -1,16 +1,22 @@
-import { hostname } from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
+import { join } from "node:path";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { pathToFileURL } from "node:url";
 
 import { recordAudit } from "./audit";
-import { convertedPdfKey, docxToPdf } from "./convert";
+import { convertedPdfKey, officeFileToPdf } from "./convert";
 import { shouldConvertToPdf } from "./documentTypes";
-import { contentSha256 } from "./documentVersions";
 import {
   copyFile,
+  createFileReadStream,
   deleteFile,
-  downloadFile,
+  StorageOperationError,
   storageKey,
-  uploadFile,
+  uploadFileFromPath,
   versionStorageKey,
   workflowReferenceKey,
 } from "./storage";
@@ -22,6 +28,7 @@ type Db = ReturnType<typeof createServerSupabase>;
 type UploadSessionRow = {
   id: string;
   user_id: string;
+  user_email: string | null;
   purpose:
     | "document_create"
     | "document_version_create"
@@ -60,39 +67,49 @@ export const UPLOAD_JOB_LEASE_SECONDS = 30 * 60;
 const UPLOAD_WORKER_POLL_MS = 1_000;
 const UPLOAD_WORKER_HEARTBEAT_MS = 60_000;
 const UPLOAD_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const UPLOAD_TEMP_RETENTION_MS = 2 * UPLOAD_JOB_LEASE_SECONDS * 1000;
 const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
   "content_type_mismatch",
 ]);
 
-function arrayBufferFromBuffer(buffer: Buffer): ArrayBuffer {
-  return buffer.buffer.slice(
-    buffer.byteOffset,
-    buffer.byteOffset + buffer.byteLength,
-  ) as ArrayBuffer;
-}
+type SealedFileArtifact = {
+  directory: string;
+  filePath: string;
+  size: number;
+  sha256: string;
+};
 
-async function countPdfPages(bytes: ArrayBuffer): Promise<number | null> {
+async function countPdfPages(filePath: string): Promise<number | null> {
+  let loadingTask:
+    | {
+        promise: Promise<{ numPages: number }>;
+        destroy?: () => Promise<void>;
+      }
+    | undefined;
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
-    const pdf = await (
+    loadingTask = (
       pdfjsLib as unknown as {
         getDocument: (options: unknown) => {
           promise: Promise<{ numPages: number }>;
+          destroy?: () => Promise<void>;
         };
       }
-    // pdf.js may transfer/detach the supplied buffer. Page counting must not
-    // consume the bytes that are subsequently hashed and persisted.
-    ).getDocument({ data: new Uint8Array(bytes.slice(0)) }).promise;
+    ).getDocument({ url: pathToFileURL(filePath).href });
+    const pdf = await loadingTask.promise;
     return pdf.numPages;
   } catch {
     return null;
+  } finally {
+    await loadingTask?.destroy?.().catch(() => {});
   }
 }
 
 async function buildPdfRendition(args: {
-  bytes: ArrayBuffer;
+  sourceFilePath: string;
+  workingDirectory: string;
   fileType: string;
   userId: string;
   documentId: string;
@@ -102,11 +119,14 @@ async function buildPdfRendition(args: {
   if (args.fileType === "pdf") return args.sourceStoragePath;
   if (!shouldConvertToPdf(args.fileType)) return null;
   try {
-    const pdf = await docxToPdf(Buffer.from(args.bytes));
+    const pdfPath = await officeFileToPdf(
+      args.sourceFilePath,
+      args.workingDirectory,
+    );
     const key = args.versionSlug
       ? `converted-pdfs/${args.userId}/${args.documentId}/${args.versionSlug}.pdf`
       : convertedPdfKey(args.userId, args.documentId);
-    await uploadFile(key, arrayBufferFromBuffer(pdf), "application/pdf");
+    await uploadFileFromPath(key, pdfPath, "application/pdf");
     return key;
   } catch (error) {
     console.error("[upload-worker] document conversion failed", {
@@ -118,20 +138,90 @@ async function buildPdfRendition(args: {
   }
 }
 
-async function requireSealedBytes(file: UploadFileRow): Promise<ArrayBuffer> {
-  const bytes = await downloadFile(file.sealed_storage_path);
-  if (!bytes) throw new Error("sealed_upload_not_found");
-  if (bytes.byteLength !== file.expected_size_bytes) {
-    throw new Error("sealed_upload_size_mismatch");
+async function removeTemporaryArtifact(directory: string): Promise<void> {
+  await rm(directory, { recursive: true, force: true }).catch((error) => {
+    console.error("[upload-worker] temporary file cleanup failed", {
+      directory,
+      error,
+    });
+  });
+}
+
+function uploadProcessingTempRoot(): string {
+  return process.env.UPLOAD_PROCESSING_TEMP_DIR?.trim() || tmpdir();
+}
+
+export async function cleanupUploadProcessingTempFiles(
+  now = Date.now(),
+): Promise<void> {
+  const root = uploadProcessingTempRoot();
+  await mkdir(root, { recursive: true });
+  const entries = await readdir(root, { withFileTypes: true });
+  await Promise.all(
+    entries
+      .filter(
+        (entry) => entry.isDirectory() && entry.name.startsWith("mike-upload-"),
+      )
+      .map(async (entry) => {
+        const directory = join(root, entry.name);
+        const metadata = await stat(directory).catch(() => null);
+        if (!metadata || now - metadata.mtimeMs < UPLOAD_TEMP_RETENTION_MS) {
+          return;
+        }
+        await removeTemporaryArtifact(directory);
+      }),
+  );
+}
+
+async function requireSealedFile(
+  file: UploadFileRow,
+): Promise<SealedFileArtifact> {
+  const temporaryRoot = uploadProcessingTempRoot();
+  await mkdir(temporaryRoot, { recursive: true });
+  const directory = await mkdtemp(join(temporaryRoot, "mike-upload-"));
+  const extension = /^[a-z0-9]{1,16}$/.test(file.file_type)
+    ? file.file_type
+    : "bin";
+  const filePath = join(directory, `source.${extension}`);
+  const hash = createHash("sha256");
+  let size = 0;
+  const meter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      size += chunk.byteLength;
+      hash.update(chunk);
+      callback(null, chunk);
+    },
+  });
+
+  try {
+    await pipeline(
+      createFileReadStream(file.sealed_storage_path),
+      meter,
+      createWriteStream(filePath, { flags: "wx" }),
+    );
+    if (size !== file.expected_size_bytes) {
+      throw new Error("sealed_upload_size_mismatch");
+    }
+    return {
+      directory,
+      filePath,
+      size,
+      sha256: hash.digest("hex"),
+    };
+  } catch (error) {
+    await removeTemporaryArtifact(directory);
+    if (error instanceof StorageOperationError) {
+      throw new Error("sealed_upload_not_found", { cause: error });
+    }
+    throw error;
   }
-  return bytes;
 }
 
 async function processCreatedDocument(
   db: Db,
   session: UploadSessionRow,
   file: UploadFileRow,
-  bytes: ArrayBuffer,
+  artifact: SealedFileArtifact,
 ) {
   const destination = session.destination;
   const scope = destination.scope as "standalone" | "project" | "library";
@@ -173,14 +263,15 @@ async function processCreatedDocument(
   const sourcePath = storageKey(session.user_id, documentId, file.filename);
   await copyFile(file.sealed_storage_path, sourcePath);
   const pdfPath = await buildPdfRendition({
-    bytes,
+    sourceFilePath: artifact.filePath,
+    workingDirectory: artifact.directory,
     fileType: file.file_type,
     userId: session.user_id,
     documentId,
     sourceStoragePath: sourcePath,
   });
   const pageCount =
-    file.file_type === "pdf" ? await countPdfPages(bytes) : null;
+    file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
 
   const { error: versionError } = await db.from("document_versions").upsert(
     {
@@ -192,9 +283,9 @@ async function processCreatedDocument(
       version_number: 1,
       filename: file.filename,
       file_type: file.file_type,
-      size_bytes: bytes.byteLength,
+      size_bytes: artifact.size,
       page_count: pageCount,
-      content_sha256: contentSha256(bytes),
+      content_sha256: artifact.sha256,
     },
     { onConflict: "id" },
   );
@@ -217,6 +308,7 @@ async function processCreatedDocument(
 
   await recordAudit(db, {
     userId: session.user_id,
+    userEmail: session.user_email,
     action: "document.uploaded",
     title: file.filename,
     surface: projectId ? "project" : "assistant",
@@ -234,7 +326,7 @@ async function processCreatedDocument(
         ? ((document.library_folder_id as string | null | undefined) ?? null)
         : ((document.folder_id as string | null | undefined) ?? null),
     file_type: file.file_type,
-    size_bytes: bytes.byteLength,
+    size_bytes: artifact.size,
     page_count: pageCount,
     active_version_number: 1,
   };
@@ -244,7 +336,7 @@ async function processNewDocumentVersion(
   db: Db,
   session: UploadSessionRow,
   file: UploadFileRow,
-  bytes: ArrayBuffer,
+  artifact: SealedFileArtifact,
 ) {
   const documentId = session.destination.document_id as string;
   const versionId = file.resource_id;
@@ -260,7 +352,8 @@ async function processNewDocumentVersion(
   );
   await copyFile(file.sealed_storage_path, sourcePath);
   const pdfPath = await buildPdfRendition({
-    bytes,
+    sourceFilePath: artifact.filePath,
+    workingDirectory: artifact.directory,
     fileType: file.file_type,
     userId: session.user_id,
     documentId,
@@ -268,7 +361,7 @@ async function processNewDocumentVersion(
     sourceStoragePath: sourcePath,
   });
   const pageCount =
-    file.file_type === "pdf" ? await countPdfPages(bytes) : null;
+    file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
 
   const { data: existing, error: existingError } = await db
     .from("document_versions")
@@ -304,9 +397,9 @@ async function processNewDocumentVersion(
         version_number: nextVersionNumber,
         filename: requestedFilename,
         file_type: file.file_type,
-        size_bytes: bytes.byteLength,
+        size_bytes: artifact.size,
         page_count: pageCount,
-        content_sha256: contentSha256(bytes),
+        content_sha256: artifact.sha256,
       })
       .select(
         "id, version_number, source, created_at, filename, file_type, size_bytes, page_count",
@@ -332,7 +425,7 @@ async function processReplacementDocumentVersion(
   db: Db,
   session: UploadSessionRow,
   file: UploadFileRow,
-  bytes: ArrayBuffer,
+  artifact: SealedFileArtifact,
 ) {
   const documentId = session.destination.document_id as string;
   const versionId = session.destination.version_id as string;
@@ -358,7 +451,8 @@ async function processReplacementDocumentVersion(
   );
   await copyFile(file.sealed_storage_path, sourcePath);
   const pdfPath = await buildPdfRendition({
-    bytes,
+    sourceFilePath: artifact.filePath,
+    workingDirectory: artifact.directory,
     fileType: file.file_type,
     userId: session.user_id,
     documentId,
@@ -366,7 +460,7 @@ async function processReplacementDocumentVersion(
     sourceStoragePath: sourcePath,
   });
   const pageCount =
-    file.file_type === "pdf" ? await countPdfPages(bytes) : null;
+    file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
   const { data: updated, error } = await db
     .from("document_versions")
     .update({
@@ -374,9 +468,9 @@ async function processReplacementDocumentVersion(
       pdf_storage_path: pdfPath,
       filename: file.filename,
       file_type: file.file_type,
-      size_bytes: bytes.byteLength,
+      size_bytes: artifact.size,
       page_count: pageCount,
-      content_sha256: contentSha256(bytes),
+      content_sha256: artifact.sha256,
       created_at: new Date().toISOString(),
     })
     .eq("id", versionId)
@@ -404,7 +498,7 @@ async function processWorkflowReference(
   db: Db,
   session: UploadSessionRow,
   file: UploadFileRow,
-  bytes: ArrayBuffer,
+  artifact: SealedFileArtifact,
 ) {
   const workflowId = session.destination.workflow_id as string;
   const replacing = session.purpose === "workflow_reference_replace";
@@ -420,7 +514,7 @@ async function processWorkflowReference(
     throw workflowError ?? new Error("workflow_not_found");
   }
   const ownerId = (workflow.user_id as string | null) ?? session.user_id;
-  const hash = contentSha256(bytes);
+  const hash = artifact.sha256;
   const sourcePath = workflowReferenceKey(
     ownerId,
     workflowId,
@@ -449,7 +543,7 @@ async function processWorkflowReference(
     filename: file.filename,
     file_type: file.file_type,
     storage_path: sourcePath,
-    size_bytes: bytes.byteLength,
+    size_bytes: artifact.size,
     content_hash: hash,
     updated_at: new Date().toISOString(),
   };
@@ -481,17 +575,26 @@ export async function processUploadFile(
   session: UploadSessionRow,
   file: UploadFileRow,
 ) {
-  const bytes = await requireSealedBytes(file);
-  switch (session.purpose) {
-    case "document_create":
-      return processCreatedDocument(db, session, file, bytes);
-    case "document_version_create":
-      return processNewDocumentVersion(db, session, file, bytes);
-    case "document_version_replace":
-      return processReplacementDocumentVersion(db, session, file, bytes);
-    case "workflow_reference_create":
-    case "workflow_reference_replace":
-      return processWorkflowReference(db, session, file, bytes);
+  const artifact = await requireSealedFile(file);
+  try {
+    switch (session.purpose) {
+      case "document_create":
+        return await processCreatedDocument(db, session, file, artifact);
+      case "document_version_create":
+        return await processNewDocumentVersion(db, session, file, artifact);
+      case "document_version_replace":
+        return await processReplacementDocumentVersion(
+          db,
+          session,
+          file,
+          artifact,
+        );
+      case "workflow_reference_create":
+      case "workflow_reference_replace":
+        return await processWorkflowReference(db, session, file, artifact);
+    }
+  } finally {
+    await removeTemporaryArtifact(artifact.directory);
   }
 }
 
@@ -542,9 +645,9 @@ async function removeFailedCreatedDocument(
 ): Promise<void> {
   if (session.purpose !== "document_create") return;
   await Promise.all([
-    deleteFile(storageKey(session.user_id, file.resource_id, file.filename)).catch(
-      () => {},
-    ),
+    deleteFile(
+      storageKey(session.user_id, file.resource_id, file.filename),
+    ).catch(() => {}),
     deleteFile(convertedPdfKey(session.user_id, file.resource_id)).catch(
       () => {},
     ),
@@ -575,7 +678,7 @@ export async function processUploadJob(
   const typedJob = job as UploadJobRow;
   const { data: session, error: sessionError } = await db
     .from("upload_sessions")
-    .select("id, user_id, purpose, destination, status")
+    .select("id, user_id, user_email, purpose, destination, status")
     .eq("id", typedJob.session_id)
     .single();
   if (sessionError || !session) {
@@ -904,7 +1007,10 @@ export function startUploadProcessingWorker() {
     try {
       const db = createServerSupabase();
       if (Date.now() - lastCleanupAt >= 60_000) {
-        await cleanupUploadSessions(db);
+        await Promise.all([
+          cleanupUploadSessions(db),
+          cleanupUploadProcessingTempFiles(),
+        ]);
         lastCleanupAt = Date.now();
       }
       const jobId = await claimNextUploadJob(db, workerId);

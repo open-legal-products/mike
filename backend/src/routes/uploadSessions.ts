@@ -9,7 +9,9 @@ import {
 } from "express";
 
 import { ensureDocAccess, checkProjectAccess } from "../lib/access";
+import { mapWithConcurrency } from "../lib/concurrency";
 import { sendInternalError } from "../lib/httpError";
+import { uploadSessionRateLimitConfiguration } from "../lib/runtimeConfig";
 import {
   copyFile,
   deleteFile,
@@ -32,9 +34,11 @@ import { requireAuth } from "../middleware/auth";
 
 export const uploadSessionsRouter = Router();
 
+const uploadRateLimits = uploadSessionRateLimitConfiguration();
+
 const uploadSessionMutationLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 300,
+  windowMs: uploadRateLimits.mutationWindowMinutes * 60 * 1000,
+  max: uploadRateLimits.mutationMax,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (_req, res) => String(res.locals.userId),
@@ -44,12 +48,12 @@ const uploadSessionMutationLimiter = rateLimit({
   },
 });
 
-// Two active sessions polling every 750ms use about 2,400 requests per
-// 15-minute window. Key by the authenticated user, not the caller-supplied
-// session id, so random path segments cannot create unlimited limiter buckets.
+// Key by the authenticated user, not the caller-supplied session id, so random
+// path segments cannot create unlimited limiter buckets. The client backs off
+// status polling, while this independent ceiling protects the API from abuse.
 const uploadSessionPollingLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 3_000,
+  windowMs: uploadRateLimits.pollingWindowMinutes * 60 * 1000,
+  max: uploadRateLimits.pollingMax,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (_req, res) => String(res.locals.userId),
@@ -60,14 +64,6 @@ const uploadSessionPollingLimiter = rateLimit({
 });
 
 const sessionIdSchema = z.string().uuid();
-const completionRequestSchema = z
-  .object({
-    failed_client_ids: z
-      .array(z.string().trim().min(1).max(128))
-      .max(50)
-      .default([]),
-  })
-  .strict();
 const fileCompletionRequestSchema = z
   .object({ failed: z.boolean().default(false) })
   .strict();
@@ -92,6 +88,7 @@ type AsyncRoute = (req: Request, res: Response) => Promise<unknown>;
 type UploadSessionRow = {
   id: string;
   user_id: string;
+  user_email: string | null;
   purpose: string;
   destination: Record<string, unknown>;
   expected_file_count: number;
@@ -381,25 +378,6 @@ async function signPendingFiles(
   );
 }
 
-async function mapWithConcurrency<T, R>(
-  values: T[],
-  concurrency: number,
-  worker: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(values.length);
-  let nextIndex = 0;
-  async function runWorker() {
-    while (nextIndex < values.length) {
-      const index = nextIndex++;
-      results[index] = await worker(values[index]);
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, runWorker),
-  );
-  return results;
-}
-
 async function verifyAndSealSessionFiles(
   db: Db,
   session: UploadSessionRow,
@@ -486,39 +464,6 @@ function verificationLeaseCutoff(): string {
   return new Date(
     Date.now() - UPLOAD_VERIFICATION_LEASE_SECONDS * 1000,
   ).toISOString();
-}
-
-async function releaseVerificationClaim(db: Db, sessionId: string) {
-  await db
-    .from("upload_sessions")
-    .update({ status: "pending_upload", updated_at: new Date().toISOString() })
-    .eq("id", sessionId)
-    .eq("status", "verifying");
-}
-
-async function recoverStaleVerification(
-  db: Db,
-  session: UploadSessionRow,
-  userId: string,
-): Promise<UploadSessionRow> {
-  if (
-    session.status !== "verifying" ||
-    new Date(session.updated_at).getTime() >
-      Date.now() - UPLOAD_VERIFICATION_LEASE_SECONDS * 1000
-  ) {
-    return session;
-  }
-  const { data, error } = await db
-    .from("upload_sessions")
-    .update({ status: "pending_upload", updated_at: new Date().toISOString() })
-    .eq("id", session.id)
-    .eq("user_id", userId)
-    .eq("status", "verifying")
-    .lte("updated_at", verificationLeaseCutoff())
-    .select("*")
-    .maybeSingle();
-  if (error) throw error;
-  return (data as UploadSessionRow | null) ?? session;
 }
 
 async function refreshSessionStatus(db: Db, sessionId: string): Promise<void> {
@@ -644,37 +589,6 @@ async function completeSessionFile(
   return "resolved";
 }
 
-async function markFailedTransfers(
-  db: Db,
-  sessionId: string,
-  files: UploadSessionFileRow[],
-  failedClientIds: Set<string>,
-): Promise<void> {
-  if (failedClientIds.size === 0) return;
-  const failedFiles = files.filter(
-    (file) =>
-      failedClientIds.has(file.client_id) &&
-      ["pending_upload", "verifying"].includes(file.status),
-  );
-  await mapWithConcurrency(failedFiles, 5, async (file) => {
-    await Promise.all([
-      deleteFile(file.staging_storage_path).catch(() => {}),
-      deleteFile(file.sealed_storage_path).catch(() => {}),
-    ]);
-  });
-  const { error } = await db
-    .from("upload_session_files")
-    .update({
-      status: "error",
-      error_code: "direct_upload_failed",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("session_id", sessionId)
-    .in("client_id", [...failedClientIds])
-    .in("status", ["pending_upload", "verifying"]);
-  if (error) throw error;
-}
-
 uploadSessionsRouter.post(
   "/",
   requireAuth,
@@ -714,6 +628,7 @@ uploadSessionsRouter.post(
       target_destination: manifest.destination,
       target_expires_at: expiresAt,
       target_files: manifest.files,
+      target_hourly_session_limit: uploadRateLimits.sessionCreationMaxPerHour,
     });
     if (error) {
       if (error.message?.includes("upload_session_rate_limit_exceeded")) {
@@ -898,215 +813,6 @@ uploadSessionsRouter.post(
         files: currentFiles.map(publicFile),
       });
     } catch (error) {
-      if (error instanceof StorageOperationError) {
-        return void sendInternalError(res, error, 503);
-      }
-      throw error;
-    }
-  }),
-);
-
-uploadSessionsRouter.post(
-  "/:sessionId/complete",
-  requireAuth,
-  uploadSessionMutationLimiter,
-  asyncRoute(async (req, res) => {
-    if (!storageEnabled) {
-      return void res.status(503).json({ detail: "Storage is not configured" });
-    }
-    const userId = res.locals.userId as string;
-    const db = createServerSupabase();
-    const parsedCompletion = completionRequestSchema.safeParse(req.body ?? {});
-    if (!parsedCompletion.success) {
-      return void res
-        .status(400)
-        .json({ detail: "Invalid completion request" });
-    }
-    let session = await loadOwnedSession(db, req.params.sessionId, userId);
-    if (!session) {
-      return void res.status(404).json({ detail: "Upload session not found" });
-    }
-    session = await recoverStaleVerification(db, session, userId);
-    if (
-      ["uploaded", "processing", "completed", "error"].includes(session.status)
-    ) {
-      const files = await loadSessionFiles(db, session.id);
-      const { data: jobs } = await db
-        .from("upload_processing_jobs")
-        .select("id, status")
-        .eq("session_id", session.id);
-      return void res.json({
-        session,
-        processing_jobs: jobs ?? [],
-        files: files.map(publicFile),
-      });
-    }
-    if (session.status !== "pending_upload") {
-      return void res
-        .status(409)
-        .json({ detail: "Upload session is not pending" });
-    }
-    if (new Date(session.expires_at).getTime() <= Date.now()) {
-      await db
-        .from("upload_sessions")
-        .update({ status: "expired", updated_at: new Date().toISOString() })
-        .eq("id", session.id)
-        .eq("status", "pending_upload");
-      return void res.status(410).json({ detail: "Upload session expired" });
-    }
-
-    const files = await loadSessionFiles(db, session.id);
-    const failedClientIds = new Set(parsedCompletion.data.failed_client_ids);
-    if (
-      failedClientIds.size !== parsedCompletion.data.failed_client_ids.length ||
-      [...failedClientIds].some(
-        (clientId) => !files.some((file) => file.client_id === clientId),
-      )
-    ) {
-      return void res.status(400).json({ detail: "Invalid failed file list" });
-    }
-
-    const { data: claimed, error: claimError } = await db
-      .from("upload_sessions")
-      .update({ status: "verifying", updated_at: new Date().toISOString() })
-      .eq("id", session.id)
-      .eq("user_id", userId)
-      .eq("status", "pending_upload")
-      .select("id")
-      .maybeSingle();
-    if (claimError) return void sendInternalError(res, claimError);
-    if (!claimed) {
-      return void res.status(409).json({
-        code: "upload_completion_in_progress",
-        detail: "This upload session is already being completed.",
-      });
-    }
-
-    try {
-      await markFailedTransfers(db, session.id, files, failedClientIds);
-      const filesToVerify = files.filter(
-        (file) =>
-          file.status === "pending_upload" &&
-          !failedClientIds.has(file.client_id),
-      );
-      const alreadyProcessable = files.some((file) =>
-        ["uploaded", "processing", "completed"].includes(file.status),
-      );
-      if (filesToVerify.length === 0 && !alreadyProcessable) {
-        const now = new Date().toISOString();
-        const { error } = await db
-          .from("upload_sessions")
-          .update({
-            status: "error",
-            error_code: "all_uploads_failed",
-            completed_at: now,
-            cleaned_at: now,
-            updated_at: now,
-          })
-          .eq("id", session.id)
-          .eq("user_id", userId)
-          .eq("status", "verifying");
-        if (error) throw error;
-        const updated = await loadOwnedSession(db, session.id, userId);
-        const currentFiles = await loadSessionFiles(db, session.id);
-        return void res.json({
-          session: updated,
-          processing_job: null,
-          files: currentFiles.map(publicFile),
-        });
-      }
-
-      await verifyAndSealSessionFiles(db, session, filesToVerify);
-      const currentFiles = await loadSessionFiles(db, session.id);
-      const unresolvedFiles = currentFiles.filter(
-        (file) => file.status === "pending_upload",
-      );
-
-      if (unresolvedFiles.length > 0) {
-        await releaseVerificationClaim(db, session.id);
-        return void res.status(409).json({
-          code: "upload_incomplete",
-          detail: "One or more files are missing.",
-          files: currentFiles.map(publicFile),
-        });
-      }
-
-      const processableFiles = currentFiles.filter(
-        (file) =>
-          file.status === "uploaded" ||
-          file.status === "processing" ||
-          file.status === "completed",
-      );
-      if (processableFiles.length === 0) {
-        const uploadedTooManyBytes = currentFiles.some(
-          (file) =>
-            file.error_code === "size_mismatch" &&
-            (file.observed_size_bytes ?? 0) > file.expected_size_bytes,
-        );
-        const contentTypeMismatch = currentFiles.some(
-          (file) => file.error_code === "content_type_mismatch",
-        );
-        const now = new Date().toISOString();
-        const { error } = await db
-          .from("upload_sessions")
-          .update({
-            status: "error",
-            error_code: uploadedTooManyBytes
-              ? "uploaded_size_exceeded_reservation"
-              : contentTypeMismatch
-                ? "uploaded_content_type_mismatch"
-                : "all_uploads_failed",
-            completed_at: now,
-            updated_at: now,
-          })
-          .eq("id", session.id)
-          .eq("status", "verifying");
-        if (error) throw error;
-        return void res
-          .status(uploadedTooManyBytes ? 413 : contentTypeMismatch ? 415 : 409)
-          .json({
-            code: uploadedTooManyBytes
-              ? "uploaded_size_exceeded_reservation"
-              : contentTypeMismatch
-                ? "uploaded_content_type_mismatch"
-                : "all_uploads_failed",
-            detail: uploadedTooManyBytes
-              ? "An uploaded file is larger than its reserved size."
-              : contentTypeMismatch
-                ? "An uploaded file does not match its reserved content type."
-                : "No files could be uploaded.",
-            files: currentFiles.map(publicFile),
-          });
-      }
-
-      const { data: jobId, error } = await db.rpc(
-        "queue_upload_session_processing",
-        {
-          target_session_id: session.id,
-          target_user_id: userId,
-        },
-      );
-      if (error) {
-        if (error.message?.includes("upload_session_incomplete")) {
-          await releaseVerificationClaim(db, session.id);
-          return void res.status(409).json({
-            code: "upload_incomplete",
-            detail: "One or more uploaded files could not be verified.",
-          });
-        }
-        throw error;
-      }
-      const updated = await loadOwnedSession(db, session.id, userId);
-      if (!updated) {
-        throw new Error("Queued upload session could not be reloaded");
-      }
-      res.json({
-        session: updated,
-        processing_job: { id: jobId, status: "queued" },
-        files: currentFiles.map(publicFile),
-      });
-    } catch (error) {
-      await releaseVerificationClaim(db, session.id);
       if (error instanceof StorageOperationError) {
         return void sendInternalError(res, error, 503);
       }

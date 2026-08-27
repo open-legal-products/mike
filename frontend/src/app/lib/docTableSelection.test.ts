@@ -1,12 +1,39 @@
 import { describe, expect, it, vi } from "vitest";
 import {
     collectionSelectAllState,
+    folderSelectionRootIds,
+    folderTreeIds,
     MULTI_DOCUMENT_DRAG_TYPE,
     readDocumentDragPayload,
-    selectedDocumentRange,
     SINGLE_DOCUMENT_DRAG_TYPE,
     writeDocumentDragPayload,
 } from "./docTableSelection";
+
+describe("DocTable folder selection", () => {
+    const folders = [
+        { id: "parent", parent_folder_id: null },
+        { id: "child", parent_folder_id: "parent" },
+        { id: "grandchild", parent_folder_id: "child" },
+        { id: "sibling", parent_folder_id: null },
+    ];
+
+    it("collects every descendant once", () => {
+        expect([...folderTreeIds(folders, ["parent"])]).toEqual([
+            "parent",
+            "child",
+            "grandchild",
+        ]);
+    });
+
+    it("keeps only top-most selected folders", () => {
+        expect(
+            folderSelectionRootIds(
+                folders,
+                new Set(["parent", "child", "sibling"]),
+            ),
+        ).toEqual(["parent", "sibling"]);
+    });
+});
 
 describe("DocTable select all state", () => {
     it("treats a folder-only view as fully selected", () => {
@@ -29,27 +56,6 @@ describe("DocTable select all state", () => {
                 new Set(),
             ),
         ).toEqual({ allSelected: false, someSelected: true });
-    });
-});
-
-describe("DocTable range selection", () => {
-    it("selects every visible row between the anchor and target", () => {
-        expect(
-            selectedDocumentRange(["a", "b", "c", "d"], "b", "d"),
-        ).toEqual(["b", "c", "d"]);
-        expect(
-            selectedDocumentRange(["a", "b", "c", "d"], "d", "b"),
-        ).toEqual(["b", "c", "d"]);
-    });
-
-    it("falls back to the clicked row when the anchor is not visible", () => {
-        expect(selectedDocumentRange(["a", "b"], "missing", "b")).toEqual([
-            "b",
-        ]);
-        expect(selectedDocumentRange(["a", "b"], null, "b")).toEqual(["b"]);
-        expect(selectedDocumentRange(["a", "b"], "a", "missing")).toEqual([
-            "missing",
-        ]);
     });
 });
 
