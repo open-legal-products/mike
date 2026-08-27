@@ -47,7 +47,7 @@ function getClient(): S3Client {
 
 function getUploadSigningClient(): S3Client {
   const endpoint =
-    process.env.R2_PUBLIC_ENDPOINT_URL ?? process.env.R2_ENDPOINT_URL!;
+    process.env.R2_PUBLIC_ENDPOINT_URL || process.env.R2_ENDPOINT_URL!;
   if (cachedUploadSigningClient?.endpoint === endpoint) {
     return cachedUploadSigningClient.client;
   }
