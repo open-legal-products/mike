@@ -175,8 +175,10 @@ begin
   if jsonb_typeof(target_files) <> 'array' then
     raise exception using errcode = '22023', message = 'invalid_upload_manifest';
   end if;
+  -- The API issues a 30-minute expiry. Permit one minute of clock skew between
+  -- the application host and Postgres while keeping the issued TTL unchanged.
   if target_expires_at <= now()
-     or target_expires_at > now() + interval '30 minutes' then
+     or target_expires_at > now() + interval '31 minutes' then
     raise exception using errcode = '22023', message = 'invalid_upload_session_expiry';
   end if;
   if target_hourly_session_limit not between 1 and 1000000 then
