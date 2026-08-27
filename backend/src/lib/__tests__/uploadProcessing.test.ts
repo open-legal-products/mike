@@ -529,10 +529,16 @@ describe("upload processing", () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => {
+        expect(
+          db.rpc.mock.calls.filter(
+            ([name]) => name === "claim_upload_processing_job",
+          ),
+        ).toHaveLength(16);
+      });
       const claimCalls = db.rpc.mock.calls.filter(
         ([name]) => name === "claim_upload_processing_job",
       );
-      expect(claimCalls).toHaveLength(16);
       expect(claimCalls).toEqual(
         expect.arrayContaining([
           [
