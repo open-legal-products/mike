@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { restoreOptimisticallyDeletedRows } from "./optimisticRows";
 
 describe("restoreOptimisticallyDeletedRows", () => {
+    it("returns current rows unchanged when every deletion succeeded", () => {
+        const current = [{ id: "remaining" }];
+
+        expect(restoreOptimisticallyDeletedRows(current, [], [])).toBe(current);
+    });
+
     it("restores only failed rows in their original order", () => {
         const snapshot = [
             { id: "a", value: 1 },

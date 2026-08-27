@@ -12,8 +12,12 @@ import {
     replaceWorkflowReferenceFile,
     uploadDocumentVersion,
     uploadFilesWithSession,
+    uploadLibraryDocument,
+    uploadLibraryDocuments,
     uploadProjectDocuments,
     uploadReviewDocument,
+    uploadStandaloneDocument,
+    uploadStandaloneDocuments,
     uploadWorkflowReferenceFile,
 } from "./mikeApi";
 import { uploadProcessingPollDelayMs } from "@/shared/api/uploadSessionClient";
@@ -440,6 +444,56 @@ describe("direct upload sessions", () => {
         });
     });
 
+    it("uses upload sessions for standalone and library convenience APIs", async () => {
+        const server = installSuccessfulSessionServer();
+        const progress = vi.fn();
+        const standaloneFile = new File(["standalone"], "standalone.pdf", {
+            type: "application/pdf",
+        });
+        const libraryFile = new File(["library"], "library.pdf", {
+            type: "application/pdf",
+        });
+
+        await expect(uploadStandaloneDocument(standaloneFile)).resolves.toEqual(
+            { id: "result-standalone.pdf" },
+        );
+        await uploadStandaloneDocuments([{ file: standaloneFile }], {
+            onProgress: progress,
+        });
+        await expect(
+            uploadLibraryDocument("files", libraryFile, "folder-1"),
+        ).resolves.toEqual({ id: "result-library.pdf" });
+        await uploadLibraryDocuments(
+            "templates",
+            [{ file: libraryFile, folderId: null }],
+            { onProgress: progress },
+        );
+
+        expect(server.manifests).toMatchObject([
+            { destination: { scope: "standalone" } },
+            { destination: { scope: "standalone" } },
+            {
+                destination: { scope: "library", library_kind: "file" },
+                files: [{ folder_id: "folder-1" }],
+            },
+            {
+                destination: { scope: "library", library_kind: "template" },
+                files: [{ folder_id: null }],
+            },
+        ]);
+        expect(progress).toHaveBeenCalled();
+    });
+
+    it("throws when a single-file convenience upload does not complete", async () => {
+        installSuccessfulSessionServer({
+            storageUpload: async () => new Response(null, { status: 503 }),
+        });
+
+        await expect(
+            uploadStandaloneDocument(new File(["pdf"], "failed.pdf")),
+        ).rejects.toThrow("The file could not be processed.");
+    });
+
     it("adds a session-uploaded document to a tabular review", async () => {
         installSuccessfulSessionServer();
         const uploaded = await uploadReviewDocument(
@@ -465,6 +519,27 @@ describe("direct upload sessions", () => {
         ).toMatchObject({
             document_ids: ["existing-document", "result-contract.pdf"],
         });
+    });
+
+    it("adds a standalone session upload to a new tabular review", async () => {
+        installSuccessfulSessionServer();
+
+        const uploaded = await uploadReviewDocument(
+            "review-1",
+            new File(["pdf"], "standalone.pdf", {
+                type: "application/pdf",
+            }),
+        );
+
+        expect(uploaded).toEqual({ id: "result-standalone.pdf" });
+        const patchCall = fetchMock.mock.calls.find(
+            ([url, init]) =>
+                String(url) === `${API_URL}/tabular-review/review-1` &&
+                (init as RequestInit).method === "PATCH",
+        );
+        expect(
+            JSON.parse(String((patchCall?.[1] as RequestInit).body)),
+        ).toMatchObject({ document_ids: ["result-standalone.pdf"] });
     });
 
     it.each([

@@ -33,6 +33,18 @@ describe("DocTable folder selection", () => {
             ),
         ).toEqual(["parent", "sibling"]);
     });
+
+    it("stops safely when malformed folder ancestry contains a cycle", () => {
+        const cyclicFolders = [
+            { id: "a", parent_folder_id: "b" },
+            { id: "b", parent_folder_id: "c" },
+            { id: "c", parent_folder_id: "a" },
+        ];
+
+        expect(folderSelectionRootIds(cyclicFolders, new Set(["a"]))).toEqual([
+            "a",
+        ]);
+    });
 });
 
 describe("DocTable select all state", () => {

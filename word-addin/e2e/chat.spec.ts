@@ -1100,7 +1100,7 @@ test("opens a left-aligned source menu and selects web files from the document m
     documents: [],
     folders: [],
   });
-  await addin.mockApiJson("POST", "**/single-documents", {
+  await addin.mockStandaloneDocumentUpload({
     id: "doc-uploaded",
     project_id: null,
     filename: "agreement.pdf",
@@ -1323,7 +1323,7 @@ test("uploads desktop files directly from the document source menu", async ({
   addin,
   page,
 }) => {
-  await addin.mockApiJson("POST", "**/single-documents", {
+  await addin.mockStandaloneDocumentUpload({
     id: "doc-local",
     project_id: null,
     filename: "local-contract.docx",

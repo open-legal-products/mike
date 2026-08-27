@@ -158,6 +158,8 @@ export interface Addin {
     status: number,
     message?: string,
   ): Promise<void>;
+  /** Mock a successful direct-upload session for one standalone document. */
+  mockStandaloneDocumentUpload(document: Record<string, unknown>): Promise<void>;
 }
 
 export const test = base.extend<{ addin: Addin }>({
@@ -702,6 +704,90 @@ export const test = base.extend<{ addin: Addin }>({
       async mockApiError(method, urlGlob, status, message) {
         await routeJson(method, urlGlob, status, {
           error: message ?? `${status} error`,
+        });
+      },
+
+      async mockStandaloneDocumentUpload(document) {
+        const sessionId = "e2e-upload-session";
+        let clientId = "e2e-upload-file";
+        let filename = String(document.filename ?? "document.pdf");
+
+        await page.route("**/upload-sessions", async (route, request) => {
+          if (request.method() !== "POST") return route.fallback();
+          const body = request.postDataJSON() as {
+            files?: Array<{ client_id?: string; filename?: string }>;
+          };
+          clientId = body.files?.[0]?.client_id ?? clientId;
+          filename = body.files?.[0]?.filename ?? filename;
+          return route.fulfill({
+            status: 201,
+            contentType: "application/json",
+            body: JSON.stringify({
+              session: { id: sessionId, status: "pending_upload" },
+              files: [
+                {
+                  id: clientId,
+                  client_id: clientId,
+                  filename,
+                  status: "pending_upload",
+                  error_code: null,
+                  result: null,
+                  upload: {
+                    method: "PUT",
+                    url: `https://storage.test/${clientId}`,
+                    headers: {},
+                  },
+                },
+              ],
+            }),
+          });
+        });
+        await page.route("https://storage.test/**", (route, request) => {
+          if (request.method() !== "PUT") return route.fallback();
+          return route.fulfill({ status: 200, body: "" });
+        });
+        await page.route(
+          `**/upload-sessions/${sessionId}/files/*/complete`,
+          (route, request) => {
+            if (request.method() !== "POST") return route.fallback();
+            return route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify({
+                session: { id: sessionId, status: "processing" },
+                files: [
+                  {
+                    id: clientId,
+                    client_id: clientId,
+                    filename,
+                    status: "processing",
+                    error_code: null,
+                    result: null,
+                  },
+                ],
+              }),
+            });
+          },
+        );
+        await page.route(`**/upload-sessions/${sessionId}`, (route, request) => {
+          if (request.method() !== "GET") return route.fallback();
+          return route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              session: { id: sessionId, status: "completed" },
+              files: [
+                {
+                  id: clientId,
+                  client_id: clientId,
+                  filename,
+                  status: "completed",
+                  error_code: null,
+                  result: document,
+                },
+              ],
+            }),
+          });
         });
       },
     };

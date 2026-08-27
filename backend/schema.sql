@@ -3517,6 +3517,9 @@ begin
     order by active.running_count, job.available_at, job.created_at
     for update of job skip locked
   loop
+    -- Serialize the count-and-claim decision for this user across every
+    -- backend replica. A hash collision only delays a claim until the next
+    -- poll; it cannot let a user exceed the cap.
     if not pg_try_advisory_xact_lock(
       hashtextextended(candidate.user_id::text, 8242026)
     ) then

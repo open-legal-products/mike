@@ -99,6 +99,7 @@ jobs:
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin \
+            -e MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000,https://localhost:3200 \
             minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
           for i in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/ready >/dev/null; then
@@ -110,17 +111,6 @@ jobs:
           AWS_SECRET_ACCESS_KEY=minioadmin \
           AWS_DEFAULT_REGION=us-east-1 \
             aws --endpoint-url http://localhost:9000 s3 mb s3://mike
-          AWS_ACCESS_KEY_ID=minioadmin \
-          AWS_SECRET_ACCESS_KEY=minioadmin \
-          AWS_DEFAULT_REGION=us-east-1 \
-            aws --endpoint-url http://localhost:9000 s3api put-bucket-cors \
-              --bucket mike \
-              --cors-configuration file://docker/storage-cors.json
-          AWS_ACCESS_KEY_ID=minioadmin \
-          AWS_SECRET_ACCESS_KEY=minioadmin \
-          AWS_DEFAULT_REGION=us-east-1 \
-            aws --endpoint-url http://localhost:9000 s3api get-bucket-cors \
-              --bucket mike
           AWS_ACCESS_KEY_ID=minioadmin \
           AWS_SECRET_ACCESS_KEY=minioadmin \
           AWS_DEFAULT_REGION=us-east-1 \

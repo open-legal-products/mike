@@ -1127,6 +1127,14 @@ describe("listWorkflows", () => {
 
         expect(lastFetchCall().url).toBe("/api/workflows?type=assistant");
     });
+
+    it("requests the unfiltered collection when type is omitted", async () => {
+        fetchMock.mockResolvedValue(jsonResponse([]));
+
+        await listWorkflows();
+
+        expect(lastFetchCall().url).toBe("/api/workflows");
+    });
 });
 
 describe("listWorkflowsPage", () => {
@@ -1244,6 +1252,16 @@ describe("getWorkflowFilterOptions", () => {
             "/api/workflows/filter-options?type=assistant&scope=shared",
         );
         expect(init.signal).toBe(controller.signal);
+    });
+
+    it("requests unfiltered facets when options are omitted", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ practices: [], languages: [], jurisdictions: [] }),
+        );
+
+        await getWorkflowFilterOptions();
+
+        expect(lastFetchCall().url).toBe("/api/workflows/filter-options");
     });
 });
 
@@ -1446,6 +1464,9 @@ describe("tabular review chats", () => {
             chatId: "c1",
         });
         expect(parseTabularChatSelectionKey("ordinary-chat-id")).toBeNull();
+        expect(
+            parseTabularChatSelectionKey("tabular-review-chat:r1:"),
+        ).toBeNull();
     });
 
     it("lists chats and fetches messages from the nested routes", async () => {
@@ -1601,6 +1622,12 @@ describe("query and payload defaults", () => {
         expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
             name: "Precedents",
             parent_folder_id: "parent-1",
+        });
+
+        await createLibraryFolder("files", "Root folder");
+        expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
+            name: "Root folder",
+            parent_folder_id: null,
         });
     });
 
