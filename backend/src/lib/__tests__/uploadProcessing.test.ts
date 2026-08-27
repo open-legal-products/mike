@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   officeFileToPdf: vi.fn(),
   recordAudit: vi.fn(),
   uploadFileFromPath: vi.fn(),
+  createServerSupabase: vi.fn(),
 }));
 
 vi.mock("../storage", async (importOriginal) => {
@@ -37,12 +38,16 @@ vi.mock("../convert", async (importOriginal) => {
 });
 
 vi.mock("../audit", () => ({ recordAudit: mocks.recordAudit }));
+vi.mock("../supabase", () => ({
+  createServerSupabase: mocks.createServerSupabase,
+}));
 
 import {
   cleanupUploadProcessingTempFiles,
   cleanupUploadSessions,
   processUploadFile,
   processUploadJob,
+  startUploadProcessingWorkers,
 } from "../uploadProcessing";
 
 type QueryResult = { data?: unknown; error?: unknown };
@@ -50,21 +55,53 @@ type QueryResult = { data?: unknown; error?: unknown };
 function fakeDb(singleResults: Record<string, QueryResult[]> = {}) {
   class Query {
     constructor(private readonly table: string) {}
-    select() { return this; }
-    insert() { return this; }
-    update() { return this; }
-    upsert() { return this; }
-    eq() { return this; }
-    is() { return this; }
-    in() { return this; }
-    order() { return this; }
-    limit() { return this; }
+    select() {
+      return this;
+    }
+    insert() {
+      return this;
+    }
+    update() {
+      return this;
+    }
+    upsert() {
+      return this;
+    }
+    delete() {
+      return this;
+    }
+    eq() {
+      return this;
+    }
+    is() {
+      return this;
+    }
+    in() {
+      return this;
+    }
+    not() {
+      return this;
+    }
+    lt() {
+      return this;
+    }
+    gte() {
+      return this;
+    }
+    order() {
+      return this;
+    }
+    limit() {
+      return this;
+    }
     single() {
       return Promise.resolve(
         singleResults[this.table]?.shift() ?? { data: null, error: null },
       );
     }
-    maybeSingle() { return this.single(); }
+    maybeSingle() {
+      return this.single();
+    }
     then(resolve: (result: QueryResult) => unknown) {
       return Promise.resolve({ data: null, error: null }).then(resolve);
     }
@@ -91,22 +128,62 @@ function scriptedDb(results: QueryResult[]) {
       this.call = { table };
       calls.push(this.call);
     }
-    select() { this.call.operation ??= "select"; return this; }
-    insert(payload: unknown) { this.call.operation = "insert"; this.call.payload = payload; return this; }
-    update(payload: unknown) { this.call.operation = "update"; this.call.payload = payload; return this; }
-    upsert(payload: unknown) { this.call.operation = "upsert"; this.call.payload = payload; return this; }
-    delete() { this.call.operation = "delete"; return this; }
-    eq() { return this; }
-    is() { return this; }
-    in() { return this; }
-    not() { return this; }
-    lt() { return this; }
-    gte() { return this; }
-    order() { return this; }
-    limit() { return this; }
-    single() { return next(); }
-    maybeSingle() { return next(); }
-    then(resolve: (result: QueryResult) => unknown) { return next().then(resolve); }
+    select() {
+      this.call.operation ??= "select";
+      return this;
+    }
+    insert(payload: unknown) {
+      this.call.operation = "insert";
+      this.call.payload = payload;
+      return this;
+    }
+    update(payload: unknown) {
+      this.call.operation = "update";
+      this.call.payload = payload;
+      return this;
+    }
+    upsert(payload: unknown) {
+      this.call.operation = "upsert";
+      this.call.payload = payload;
+      return this;
+    }
+    delete() {
+      this.call.operation = "delete";
+      return this;
+    }
+    eq() {
+      return this;
+    }
+    is() {
+      return this;
+    }
+    in() {
+      return this;
+    }
+    not() {
+      return this;
+    }
+    lt() {
+      return this;
+    }
+    gte() {
+      return this;
+    }
+    order() {
+      return this;
+    }
+    limit() {
+      return this;
+    }
+    single() {
+      return next();
+    }
+    maybeSingle() {
+      return next();
+    }
+    then(resolve: (result: QueryResult) => unknown) {
+      return next().then(resolve);
+    }
   }
 
   return {
@@ -173,11 +250,7 @@ describe("upload processing", () => {
     };
     const db = fakeDb({ documents: [{ data: document, error: null }] });
 
-    const result = await processUploadFile(
-      db as never,
-      baseSession,
-      baseFile,
-    );
+    const result = await processUploadFile(db as never, baseSession, baseFile);
 
     expect(mocks.createFileReadStream).toHaveBeenCalledWith(
       baseFile.sealed_storage_path,
@@ -244,7 +317,10 @@ describe("upload processing", () => {
     };
     const db = fakeDb({
       workflows: [
-        { data: { id: reference.workflow_id, user_id: baseSession.user_id }, error: null },
+        {
+          data: { id: reference.workflow_id, user_id: baseSession.user_id },
+          error: null,
+        },
       ],
       workflow_reference_documents: [{ data: reference, error: null }],
     });
@@ -439,6 +515,36 @@ describe("upload processing", () => {
     await cleanupUploadProcessingTempFiles();
 
     expect(await readdir(processingTempRoot)).toEqual([]);
+  });
+
+  it("starts the configured number of claim loops with the per-user cap", async () => {
+    vi.useFakeTimers();
+    const db = fakeDb();
+    db.rpc.mockResolvedValue({ data: null, error: null });
+    mocks.createServerSupabase.mockReturnValue(db);
+
+    const stop = startUploadProcessingWorkers({
+      concurrency: 16,
+      maxRunningPerUser: 4,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const claimCalls = db.rpc.mock.calls.filter(
+        ([name]) => name === "claim_upload_processing_job",
+      );
+      expect(claimCalls).toHaveLength(16);
+      expect(claimCalls).toEqual(
+        expect.arrayContaining([
+          [
+            "claim_upload_processing_job",
+            expect.objectContaining({ target_max_running_per_user: 4 }),
+          ],
+        ]),
+      );
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
   });
 
   it("expires stale sessions, removes temporary objects, and deletes retained rows", async () => {

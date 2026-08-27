@@ -1,7 +1,10 @@
 import { app } from "./app";
 import { manifestPublicKey } from "./lib/manifestSigning";
-import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
-import { startUploadProcessingWorker } from "./lib/uploadProcessing";
+import {
+  uploadProcessingConfiguration,
+  validateRuntimeConfiguration,
+} from "./lib/runtimeConfig";
+import { startUploadProcessingWorkers } from "./lib/uploadProcessing";
 
 const PORT = process.env.PORT ?? 3001;
 
@@ -22,5 +25,10 @@ try {
 
 app.listen(PORT, () => {
   console.log(`Mike backend running on port ${PORT}`);
-  startUploadProcessingWorker();
+  const uploadProcessing = uploadProcessingConfiguration();
+  startUploadProcessingWorkers(uploadProcessing);
+  console.log(
+    `Upload processing started with ${uploadProcessing.concurrency} workers ` +
+      `and a ${uploadProcessing.maxRunningPerUser}-job per-user cap`,
+  );
 });

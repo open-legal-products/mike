@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  uploadProcessingConfiguration,
   uploadSessionRateLimitConfiguration,
   validateRuntimeConfiguration,
 } from "../runtimeConfig";
@@ -79,6 +80,38 @@ describe("upload-session rate-limit configuration", () => {
       pollingWindowMinutes: 20,
       pollingMax: 6_000,
       sessionCreationMaxPerHour: 250,
+    });
+  });
+});
+
+describe("upload-processing configuration", () => {
+  it("uses a 16-job pool with at most four active jobs per user by default", () => {
+    expect(uploadProcessingConfiguration({})).toEqual({
+      concurrency: 16,
+      maxRunningPerUser: 4,
+    });
+  });
+
+  it("accepts positive overrides and keeps the per-user cap within the pool", () => {
+    expect(
+      uploadProcessingConfiguration({
+        UPLOAD_PROCESSING_CONCURRENCY: "8",
+        UPLOAD_PROCESSING_MAX_RUNNING_PER_USER: "20",
+      }),
+    ).toEqual({
+      concurrency: 8,
+      maxRunningPerUser: 8,
+    });
+  });
+
+  it("bounds accidental oversized pools", () => {
+    expect(
+      uploadProcessingConfiguration({
+        UPLOAD_PROCESSING_CONCURRENCY: "1000",
+      }),
+    ).toEqual({
+      concurrency: 64,
+      maxRunningPerUser: 4,
     });
   });
 });

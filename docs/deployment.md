@@ -140,11 +140,15 @@ expire after 30 minutes; individual signed URLs expire after 15 minutes and can
 be refreshed while the session is pending. These limits are enforced atomically
 in PostgreSQL, not only in the browser.
 
-The Express process also runs the durable upload-processing worker. It claims
-jobs with database leases, processes one sealed file at a time, retries a
-failed file up to three times, and cleans expired, cancelled, and terminally
-failed temporary objects. Terminal session metadata is retained for seven days
-so clients can inspect outcomes, then deleted in bounded cleanup batches.
+The Express process also runs a durable upload-processing pool. By default,
+each backend replica claims up to 16 jobs concurrently while PostgreSQL limits
+each user to four active jobs across all replicas. Override these defaults with
+`UPLOAD_PROCESSING_CONCURRENCY` and
+`UPLOAD_PROCESSING_MAX_RUNNING_PER_USER`. Workers claim jobs with database
+leases, retry a failed file up to three times, and clean expired, cancelled,
+and terminally failed temporary objects. Terminal session metadata is retained
+for seven days so clients can inspect outcomes, then deleted in bounded cleanup
+batches.
 Deployments must therefore run `backend/src/index.ts`
 (the normal `npm start` entry point), rather than importing the Express app
 without starting its worker.

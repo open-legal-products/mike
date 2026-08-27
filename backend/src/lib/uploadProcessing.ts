@@ -981,16 +981,24 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
   }
 }
 
-async function claimNextUploadJob(db: Db, workerId: string) {
+async function claimNextUploadJob(
+  db: Db,
+  workerId: string,
+  maxRunningPerUser: number,
+) {
   const { data, error } = await db.rpc("claim_upload_processing_job", {
     target_worker_id: workerId,
     target_lease_seconds: UPLOAD_JOB_LEASE_SECONDS,
+    target_max_running_per_user: maxRunningPerUser,
   });
   if (error) throw error;
   return typeof data === "string" && data ? data : null;
 }
 
-export function startUploadProcessingWorker() {
+function startUploadProcessingWorker(options: {
+  maxRunningPerUser: number;
+  runCleanup: boolean;
+}) {
   const workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
@@ -1006,14 +1014,18 @@ export function startUploadProcessingWorker() {
     if (stopped) return;
     try {
       const db = createServerSupabase();
-      if (Date.now() - lastCleanupAt >= 60_000) {
+      if (options.runCleanup && Date.now() - lastCleanupAt >= 60_000) {
         await Promise.all([
           cleanupUploadSessions(db),
           cleanupUploadProcessingTempFiles(),
         ]);
         lastCleanupAt = Date.now();
       }
-      const jobId = await claimNextUploadJob(db, workerId);
+      const jobId = await claimNextUploadJob(
+        db,
+        workerId,
+        options.maxRunningPerUser,
+      );
       if (!jobId) {
         schedule(UPLOAD_WORKER_POLL_MS);
         return;
@@ -1030,5 +1042,26 @@ export function startUploadProcessingWorker() {
   return () => {
     stopped = true;
     if (timer) clearTimeout(timer);
+  };
+}
+
+export function startUploadProcessingWorkers(options: {
+  concurrency: number;
+  maxRunningPerUser: number;
+}) {
+  const concurrency = Math.max(1, Math.floor(options.concurrency));
+  const maxRunningPerUser = Math.max(
+    1,
+    Math.min(concurrency, Math.floor(options.maxRunningPerUser)),
+  );
+  const stopWorkers = Array.from({ length: concurrency }, (_, index) =>
+    startUploadProcessingWorker({
+      maxRunningPerUser,
+      runCleanup: index === 0,
+    }),
+  );
+
+  return () => {
+    for (const stopWorker of stopWorkers) stopWorker();
   };
 }

@@ -41,6 +41,22 @@ export function uploadSessionRateLimitConfiguration(
   };
 }
 
+export function uploadProcessingConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  const concurrency = Math.min(
+    envInt("UPLOAD_PROCESSING_CONCURRENCY", 16, env),
+    64,
+  );
+  return {
+    concurrency,
+    maxRunningPerUser: Math.min(
+      envInt("UPLOAD_PROCESSING_MAX_RUNNING_PER_USER", 4, env),
+      concurrency,
+    ),
+  };
+}
+
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {
   try {
     const url = new URL(value);
