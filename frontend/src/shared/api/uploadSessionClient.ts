@@ -56,10 +56,12 @@ export function failedUploadMessage<T>(
 }
 
 type UploadSessionFileResponse = {
+    id: string;
     client_id: string;
     filename: string;
     status:
         | "pending_upload"
+        | "verifying"
         | "uploaded"
         | "processing"
         | "completed"
@@ -209,7 +211,9 @@ export async function uploadFilesWithSessionCore<T>(args: {
                 status:
                     file.status === "pending_upload"
                         ? "pending"
-                        : file.status,
+                        : file.status === "verifying"
+                          ? "uploaded"
+                          : file.status,
                 result:
                     file.status === "completed" ? (file.result as T) : null,
                 errorCode: file.error_code,
@@ -254,9 +258,35 @@ export async function uploadFilesWithSessionCore<T>(args: {
         }
         await refreshInFlight;
     };
+    const completeFile = async (
+        descriptor: UploadSessionFileResponse,
+        failed: boolean,
+    ) => {
+        let response: UploadSessionResponse | null = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+                response = await apiRequest<UploadSessionResponse>(
+                    `/upload-sessions/${sessionId}/files/${descriptor.id}/complete`,
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ failed }),
+                        signal: args.signal,
+                    },
+                );
+                reportResponse(response);
+                return;
+            } catch (error) {
+                if (!isUploadIncomplete(error) || attempt === 2) throw error;
+                await delay(400 * (attempt + 1), args.signal);
+            }
+        }
+        if (!response) throw new Error("File completion failed");
+    };
 
     try {
-        const uploaded = await settleWithConcurrency(inputs, async (input) => {
+        const directUploadFailures = new Set<string>();
+        await settleWithConcurrency(inputs, async (input) => {
             reportProgress({
                 clientId: input.clientId,
                 filename: input.file.name,
@@ -271,35 +301,41 @@ export async function uploadFilesWithSessionCore<T>(args: {
                 if (!descriptor?.upload) {
                     throw new Error("Upload URL is unavailable");
                 }
+                let response: Response;
                 try {
-                    const response = await fetchStorage(descriptor.upload.url, {
+                    response = await fetchStorage(descriptor.upload.url, {
                         method: descriptor.upload.method,
                         headers: descriptor.upload.headers,
                         body: input.file,
                         signal: args.signal,
                     });
-                    if (response.ok) {
-                        reportProgress({
-                            clientId: input.clientId,
-                            filename: input.file.name,
-                            status: "uploaded",
-                            result: null,
-                            errorCode: null,
-                        });
-                        return;
-                    }
-                    lastError = new Error(
-                        `Object storage returned ${response.status}`,
-                    );
                 } catch (error) {
                     lastError = error;
+                    continue;
                 }
+                if (response.ok) {
+                    reportProgress({
+                        clientId: input.clientId,
+                        filename: input.file.name,
+                        status: "uploaded",
+                        result: null,
+                        errorCode: null,
+                    });
+                    await completeFile(descriptor, false);
+                    return;
+                }
+                lastError = new Error(
+                    `Object storage returned ${response.status}`,
+                );
+            }
+            directUploadFailures.add(input.clientId);
+            const descriptor = descriptors.get(input.clientId);
+            if (descriptor) {
+                await completeFile(descriptor, true).catch(() => undefined);
             }
             throw lastError ?? new Error("Direct upload failed");
         });
-        const failedClientIds = inputs.flatMap((input, index) =>
-            uploaded[index]?.status === "rejected" ? [input.clientId] : [],
-        );
+        const failedClientIds = [...directUploadFailures];
         for (const input of inputs) {
             if (!failedClientIds.includes(input.clientId)) continue;
             reportProgress({

@@ -15,6 +15,7 @@ import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 import { usePaginatedWorkflows } from "@/app/hooks/usePaginatedWorkflows";
 import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import type { Workflow, WorkflowAddon } from "../shared/types";
 import { UseWorkflowModal } from "./UseWorkflowModal";
 import { NewWorkflowModal } from "./NewWorkflowModal";
@@ -40,6 +41,9 @@ import {
   SkeletonCheckbox,
   SkeletonLine,
   TABLE_CHECKBOX_CLASS,
+  rowActionSelectionIds,
+  selectedIdsAfterRangeClick,
+  selectedIdsAfterShiftClick,
   tableTreeCellStyle,
   TableBody,
   TableCell,
@@ -98,7 +102,6 @@ export function WorkflowList({
   const [addonsLoading, setAddonsLoading] = useState(true);
   const [selected, setSelected] = useState<Workflow | null>(null);
   const [newModalOpen, setNewModalOpen] = useState(false);
-  const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
   const [activeTab, setActiveTab] = useQueryParamTab(
     WORKFLOW_TAB_IDS,
     packKey ? "addons" : initialTab,
@@ -359,6 +362,10 @@ export function WorkflowList({
     const ids = pendingDeleteIds;
     if (ids.length === 0) return;
     setDeleteStatus("loading");
+    const snapshot = workflows;
+    setWorkflows((current) =>
+      current.filter((workflow) => !ids.includes(workflow.id)),
+    );
     const { deletedIds, failedIds } =
       await deleteTabularReviewsWithConcurrency(
         ids,
@@ -367,10 +374,10 @@ export function WorkflowList({
     setSelectedWorkflowIds((current) =>
       current.filter((id) => !deletedIds.includes(id)),
     );
-    setWorkflows((current) =>
-      current.filter((workflow) => !deletedIds.includes(workflow.id)),
-    );
     if (failedIds.length > 0) {
+      setWorkflows((current) =>
+        restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
+      );
       setActionError("Some selected workflows could not be deleted.");
     }
     setDeleteStatus("complete");
@@ -533,8 +540,14 @@ export function WorkflowList({
           loading={loading}
           error={workflowsError ? "Unable to load workflows." : ""}
           onOpen={setSelected}
-          onEdit={setEditingWorkflow}
+          onEdit={(workflow) => router.push(workflowDetailPath(workflow))}
           onDelete={(workflow) => requestWorkflowDeletion([workflow])}
+          onDeleteSelected={(ids) =>
+            requestWorkflowDeletion(
+              workflows.filter((workflow) => ids.includes(workflow.id)),
+              ids,
+            )
+          }
           onCreate={() => setNewModalOpen(true)}
           selectedIds={selectedWorkflowIds}
           onSelectedIdsChange={setSelectedWorkflowIds}
@@ -573,22 +586,6 @@ export function WorkflowList({
         }}
       />
 
-      <NewWorkflowModal
-        open={!!editingWorkflow}
-        onClose={() => setEditingWorkflow(null)}
-        onCreated={() => undefined}
-        editWorkflow={editingWorkflow ?? undefined}
-        onUpdated={(updated) => {
-          setWorkflows((current) =>
-            current.map((workflow) =>
-              workflow.id === updated.id
-                ? { ...workflow, ...updated }
-                : workflow,
-            ),
-          );
-          setEditingWorkflow(null);
-        }}
-      />
 
       <WorkflowAddonPreviewModal
         addon={selectedAddon}
@@ -626,6 +623,7 @@ function WorkflowTable({
   onOpen,
   onEdit,
   onDelete,
+  onDeleteSelected,
   onCreate,
   selectedIds,
   onSelectedIdsChange,
@@ -653,6 +651,7 @@ function WorkflowTable({
   onOpen: (workflow: Workflow) => void;
   onEdit: (workflow: Workflow) => void;
   onDelete: (workflow: Workflow) => void;
+  onDeleteSelected: (ids: string[]) => void;
   onCreate: () => void;
   selectedIds: string[];
   onSelectedIdsChange: (ids: string[]) => void;
@@ -674,6 +673,7 @@ function WorkflowTable({
   loadMoreError: boolean;
   onLoadMore: () => void;
 }) {
+  const rowSelectionAnchorIdRef = useRef<string | null>(null);
   const typeOptions = useMemo<TableFilterOption<string>[]>(
     () => [
       { value: "assistant", label: "Assistant" },
@@ -704,6 +704,7 @@ function WorkflowTable({
     !allSelected && selectableIds.some((id) => selectedIds.includes(id));
 
   function toggleAll() {
+    rowSelectionAnchorIdRef.current = null;
     if (allSelected) {
       onSelectedIdsChange([]);
       return;
@@ -712,6 +713,7 @@ function WorkflowTable({
   }
 
   function toggleOne(id: string) {
+    rowSelectionAnchorIdRef.current = id;
     onSelectedIdsChange(
       selectedIds.includes(id)
         ? selectedIds.filter((selectedId) => selectedId !== id)
@@ -720,6 +722,7 @@ function WorkflowTable({
   }
 
   function handleNameSortChange(direction: TableSortDirection | null) {
+    rowSelectionAnchorIdRef.current = null;
     onNameSortDirectionChange(direction);
     onSelectedIdsChange([]);
   }
@@ -728,6 +731,7 @@ function WorkflowTable({
     setter: (value: string | null) => void,
     value: string | null,
   ) {
+    rowSelectionAnchorIdRef.current = null;
     setter(value);
     onSelectedIdsChange([]);
   }
@@ -901,22 +905,71 @@ function WorkflowTable({
             const canManage = workflow.is_owner !== false;
             const canDelete = canManage;
             const isSelected = selectedIds.includes(workflow.id);
+            const actionIds = rowActionSelectionIds(workflow.id, selectedIds);
+            const appliesToSelection = actionIds.length > 1;
             return (
               <TableRow
                 key={workflow.id}
                 selected={isSelected}
-                onClick={() => onOpen(workflow)}
+                onClick={(event) => {
+                  if (event.shiftKey) {
+                    event.preventDefault();
+                    if (canManage) {
+                      const anchorId = rowSelectionAnchorIdRef.current;
+                      onSelectedIdsChange(
+                        selectedIdsAfterRangeClick(
+                          workflow.id,
+                          selectableIds,
+                          selectedIds,
+                          anchorId,
+                        ),
+                      );
+                      rowSelectionAnchorIdRef.current = workflow.id;
+                    }
+                    return;
+                  }
+                  if (event.ctrlKey || event.metaKey) {
+                    event.preventDefault();
+                    if (canManage) {
+                      onSelectedIdsChange(
+                        selectedIdsAfterShiftClick(workflow.id, selectedIds),
+                      );
+                      rowSelectionAnchorIdRef.current = workflow.id;
+                    }
+                    return;
+                  }
+                  onOpen(workflow);
+                }}
                 rightClickDropdown={
-                  canManage
-                    ? (close, menuProps) => (
+                  (close, menuProps) => (
                         <RowActionMenuItems
                           onClose={close}
                           surfaceProps={menuProps}
-                          onEditDetails={() => onEdit(workflow)}
-                          onDelete={() => onDelete(workflow)}
+                          onView={
+                            appliesToSelection
+                              ? undefined
+                              : () => onOpen(workflow)
+                          }
+                          onEditDetails={
+                            appliesToSelection || !canManage
+                              ? undefined
+                              : () => onEdit(workflow)
+                          }
+                          editDetailsLabel="Edit"
+                          onDelete={
+                            appliesToSelection
+                              ? () => onDeleteSelected(actionIds)
+                              : canManage
+                                ? () => onDelete(workflow)
+                                : undefined
+                          }
+                          deleteLabel={
+                            appliesToSelection
+                              ? `Delete ${actionIds.length} workflows`
+                              : undefined
+                          }
                         />
                       )
-                    : undefined
                 }
               >
                 <TablePrimaryCell
@@ -956,12 +1009,16 @@ function WorkflowTable({
                   className="flex w-8 shrink-0 justify-end"
                   onClick={(event) => event.stopPropagation()}
                 >
-                  {canManage && (
-                    <RowActions
-                      onEditDetails={() => onEdit(workflow)}
-                      onDelete={() => onDelete(workflow)}
-                    />
-                  )}
+                  <RowActions
+                    onView={() => onOpen(workflow)}
+                    onEditDetails={
+                      canManage ? () => onEdit(workflow) : undefined
+                    }
+                    editDetailsLabel="Edit"
+                    onDelete={
+                      canManage ? () => onDelete(workflow) : undefined
+                    }
+                  />
                 </div>
               </TableRow>
             );
@@ -1009,6 +1066,7 @@ function AddonTable({
   const [expandedPackKeys, setExpandedPackKeys] = useState<Set<string>>(
     () => new Set(),
   );
+  const rowSelectionAnchorIdRef = useRef<string | null>(null);
   const packs = useMemo(() => {
     const grouped = new Map<
       string,
@@ -1049,10 +1107,12 @@ function AddonTable({
     !allSelected && addonIds.some((id) => selectedIds.includes(id));
 
   function toggleAll() {
+    rowSelectionAnchorIdRef.current = null;
     onSelectedIdsChange(allSelected ? [] : addonIds);
   }
 
   function toggleOne(addonId: string) {
+    rowSelectionAnchorIdRef.current = addonId;
     onSelectedIdsChange(
       selectedIds.includes(addonId)
         ? selectedIds.filter((id) => id !== addonId)
@@ -1062,6 +1122,7 @@ function AddonTable({
 
   function togglePackSelection(packAddons: WorkflowAddon[]) {
     const packIds = packAddons.map((addon) => addon.id);
+    rowSelectionAnchorIdRef.current = packIds[0] ?? null;
     const packSelected = packIds.every((id) => selectedIds.includes(id));
     onSelectedIdsChange(
       packSelected
@@ -1086,7 +1147,31 @@ function AddonTable({
       <TableRow
         key={addon.id}
         selected={selectedIds.includes(addon.id)}
-        onClick={() => onOpen(addon)}
+        onClick={(event) => {
+          if (event.shiftKey) {
+            event.preventDefault();
+            const anchorId = rowSelectionAnchorIdRef.current;
+            onSelectedIdsChange(
+              selectedIdsAfterRangeClick(
+                addon.id,
+                addonIds,
+                selectedIds,
+                anchorId,
+              ),
+            );
+            rowSelectionAnchorIdRef.current = addon.id;
+            return;
+          }
+          if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            onSelectedIdsChange(
+              selectedIdsAfterShiftClick(addon.id, selectedIds),
+            );
+            rowSelectionAnchorIdRef.current = addon.id;
+            return;
+          }
+          onOpen(addon);
+        }}
       >
         <TablePrimaryCell
           style={nested ? tableTreeCellStyle(1) : undefined}
@@ -1216,7 +1301,38 @@ function AddonTable({
                     key={`${pack.key}:folder`}
                     selected={packSelected}
                     aria-expanded={expanded}
-                    onClick={() => onOpenPack(pack.key)}
+                    onClick={(event) => {
+                      const packIds = pack.addons.map((addon) => addon.id);
+                      const anchorId = packIds[0] ?? null;
+                      if (event.shiftKey) {
+                        event.preventDefault();
+                        onSelectedIdsChange([
+                          ...new Set([
+                            ...selectedIds,
+                            ...(anchorId
+                              ? selectedIdsAfterRangeClick(
+                                  anchorId,
+                                  addonIds,
+                                  [],
+                                  rowSelectionAnchorIdRef.current,
+                                )
+                              : []),
+                            ...packIds,
+                          ]),
+                        ]);
+                        rowSelectionAnchorIdRef.current = anchorId;
+                        return;
+                      }
+                      if (event.ctrlKey || event.metaKey) {
+                        event.preventDefault();
+                        onSelectedIdsChange([
+                          ...new Set([...selectedIds, ...packIds]),
+                        ]);
+                        rowSelectionAnchorIdRef.current = anchorId;
+                        return;
+                      }
+                      onOpenPack(pack.key);
+                    }}
                   >
                     <TablePrimaryCell
                       selected={packSelected}

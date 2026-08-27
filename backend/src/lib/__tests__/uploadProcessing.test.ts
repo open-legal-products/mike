@@ -54,6 +54,7 @@ function fakeDb(singleResults: Record<string, QueryResult[]> = {}) {
 
   return {
     from: vi.fn((table: string) => new Query(table)),
+    rpc: vi.fn().mockResolvedValue({ data: "processing", error: null }),
   };
 }
 
@@ -92,6 +93,7 @@ function scriptedDb(results: QueryResult[]) {
 
   return {
     from: vi.fn((table: string) => new Query(table)),
+    rpc: vi.fn().mockResolvedValue({ data: "processing", error: null }),
     calls,
     remaining: results,
   };
@@ -287,13 +289,14 @@ describe("upload processing", () => {
         data: {
           id: "job-1",
           session_id: baseSession.id,
+          file_id: baseFile.id,
           attempts: 1,
           locked_by: "worker-1",
         },
         error: null,
       },
       { data: baseSession, error: null },
-      { data: [baseFile], error: null },
+      { data: baseFile, error: null },
       { data: { id: "job-1" }, error: null },
       { error: null },
       { data: { id: "job-1" }, error: null },
@@ -318,6 +321,11 @@ describe("upload processing", () => {
           operation: "update",
           payload: expect.objectContaining({ status: "queued" }),
         }),
+        expect.objectContaining({
+          table: "upload_session_files",
+          operation: "update",
+          payload: expect.objectContaining({ status: "uploaded" }),
+        }),
       ]),
     );
     expect(db.remaining).toHaveLength(0);
@@ -329,13 +337,14 @@ describe("upload processing", () => {
         data: {
           id: "job-1",
           session_id: baseSession.id,
+          file_id: baseFile.id,
           attempts: 1,
           locked_by: "worker-1",
         },
         error: null,
       },
       { data: baseSession, error: null },
-      { data: [baseFile], error: null },
+      { data: baseFile, error: null },
       { data: null, error: null },
     ]);
 
@@ -350,7 +359,13 @@ describe("upload processing", () => {
       { error: null },
       { error: null },
       {
-        data: [{ id: "job-exhausted", session_id: "session-exhausted" }],
+        data: [
+          {
+            id: "job-exhausted",
+            session_id: "session-exhausted",
+            file_id: "file-exhausted",
+          },
+        ],
         error: null,
       },
       { error: null },

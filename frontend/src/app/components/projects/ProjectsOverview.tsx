@@ -10,6 +10,7 @@ import {
     deleteProject,
 } from "@/app/lib/mikeApi";
 import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { usePaginatedProjects } from "@/app/hooks/usePaginatedProjects";
 import { OwnerOnlyPopup } from "@/app/components/popups/OwnerOnlyPopup";
@@ -43,6 +44,9 @@ import {
     TablePrimaryCell,
     TableRow,
     TableScrollArea,
+    rowActionSelectionIds,
+    selectedIdsAfterRangeClick,
+    selectedIdsAfterShiftClick,
     type TableSortDirection,
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
@@ -115,6 +119,7 @@ export function ProjectsOverview() {
         owners: [],
     });
     const actionsRef = useRef<HTMLDivElement>(null);
+    const rowSelectionAnchorIdRef = useRef<string | null>(null);
     const { user, isAuthenticated, authLoading } = useAuth();
     const previewEmptyStates = searchParams.get("emptyStates") === "1";
     const debouncedSearch = useDebouncedValue(search, 250);
@@ -186,6 +191,7 @@ export function ProjectsOverview() {
         !allSelected && visibleProjects.some((p) => selectedIds.includes(p.id));
 
     function toggleAll() {
+        rowSelectionAnchorIdRef.current = null;
         if (allSelected) {
             setSelectedIds([]);
             setSelectionCameFromSelectAll(false);
@@ -196,12 +202,14 @@ export function ProjectsOverview() {
     }
 
     function toggleOne(id: string) {
+        rowSelectionAnchorIdRef.current = id;
         setSelectedIds((prev) =>
             prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
         );
     }
 
     function clearSelection() {
+        rowSelectionAnchorIdRef.current = null;
         setSelectedIds([]);
         setSelectionCameFromSelectAll(false);
         setConfirmDeleteAllOpen(false);
@@ -359,6 +367,21 @@ export function ProjectsOverview() {
         void handleDeleteSelected();
     }
 
+    async function handleDeleteProjectRow(project: Project) {
+        const snapshot = projects;
+        setProjects((current) =>
+            current.filter((candidate) => candidate.id !== project.id),
+        );
+        try {
+            await deleteProject(project.id);
+        } catch (error) {
+            setProjects((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, [project.id]),
+            );
+            throw error;
+        }
+    }
+
     async function handleDeleteSelected() {
         const ids = [...selectedIds];
         setActionsOpen(false);
@@ -376,11 +399,20 @@ export function ProjectsOverview() {
         });
         const blocked = ids.length - owned.length;
         setSelectedIds([]);
-        const { deletedIds } = await deleteTabularReviewsWithConcurrency(
+        const snapshot = projects;
+        setProjects((current) =>
+            current.filter((project) => !owned.includes(project.id)),
+        );
+        const { failedIds } = await deleteTabularReviewsWithConcurrency(
             owned,
             deleteProject,
         );
-        setProjects((prev) => prev.filter((p) => !deletedIds.includes(p.id)));
+        if (failedIds.length > 0) {
+            setProjects((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
+            );
+            setSelectedIds(failedIds);
+        }
         if (blocked > 0) {
             setOwnerOnlyAction(
                 `delete ${blocked} of the selected projects — only the project owner can delete a project`,
@@ -605,37 +637,90 @@ export function ProjectsOverview() {
                 ) : (
                     <TableBody>
                         {visibleProjects.map((project) => {
+                            const actionIds = rowActionSelectionIds(
+                                project.id,
+                                selectedIds,
+                            );
+                            const appliesToSelection = actionIds.length > 1;
+                            const canManage =
+                                project.is_owner ??
+                                (project.user_id === user?.id);
                             return (
                             <TableRow
                                 key={project.id}
                                 selected={selectedIds.includes(project.id)}
-                                rightClickDropdown={
-                                    (project.is_owner ??
-                                        project.user_id === user?.id)
-                                        ? (close, menuProps) => (
+                                rightClickDropdown={(close, menuProps) => (
                                               <RowActionMenuItems
                                                   onClose={close}
                                                   surfaceProps={menuProps}
-                                                  onEditDetails={() => {
-                                                      setDetailsProject(project);
-                                                  }}
-                                                  onDelete={async () => {
-                                                      await deleteProject(
-                                                          project.id,
-                                                      );
-                                                      setProjects((prev) =>
-                                                          prev.filter(
-                                                              (p) =>
-                                                                  p.id !==
-                                                                  project.id,
-                                                          ),
-                                                      );
-                                                  }}
+                                                  onView={
+                                                      appliesToSelection
+                                                          ? undefined
+                                                          : () =>
+                                                                router.push(
+                                                                    `/projects/${project.id}`,
+                                                                )
+                                                  }
+                                                  viewLabel="Open"
+                                                  onEditDetails={
+                                                      appliesToSelection ||
+                                                      !canManage
+                                                          ? undefined
+                                                          : () => {
+                                                                setDetailsProject(project);
+                                                            }
+                                                  }
+                                                  onDelete={
+                                                      appliesToSelection
+                                                          ? requestDeleteSelected
+                                                          : canManage
+                                                            ? () =>
+                                                                handleDeleteProjectRow(
+                                                                    project,
+                                                                )
+                                                            : undefined
+                                                  }
+                                                  deleteLabel={
+                                                      appliesToSelection
+                                                          ? `Delete ${actionIds.length} projects`
+                                                          : undefined
+                                                  }
                                               />
-                                          )
-                                        : undefined
-                                }
-                                onClick={() => {
+                                          )}
+                                onClick={(event) => {
+                                    if (event.shiftKey) {
+                                        event.preventDefault();
+                                        const anchorId =
+                                            rowSelectionAnchorIdRef.current;
+                                        setSelectionCameFromSelectAll(false);
+                                        setSelectedIds((current) =>
+                                            selectedIdsAfterRangeClick(
+                                                project.id,
+                                                visibleProjects.map(
+                                                    (visibleProject) =>
+                                                        visibleProject.id,
+                                                ),
+                                                current,
+                                                anchorId,
+                                            ),
+                                        );
+                                        rowSelectionAnchorIdRef.current =
+                                            project.id;
+                                        return;
+                                    }
+                                    if (event.ctrlKey || event.metaKey) {
+                                        event.preventDefault();
+                                        setSelectionCameFromSelectAll(false);
+                                        setSelectedIds((current) =>
+                                            selectedIdsAfterShiftClick(
+                                                project.id,
+                                                current,
+                                            ),
+                                        );
+                                        rowSelectionAnchorIdRef.current =
+                                            project.id;
+                                        return;
+                                    }
                                     router.push(`/projects/${project.id}`);
                                 }}
                             >
@@ -687,23 +772,31 @@ export function ProjectsOverview() {
                                     className="w-8 shrink-0 flex justify-end"
                                     onClick={(e) => e.stopPropagation()}
                                 >
-                                    {(project.is_owner ??
-                                        project.user_id === user?.id) && (
-                                        <RowActions
-                                            onEditDetails={() => {
-                                                setDetailsProject(project);
-                                            }}
-                                            onDelete={async () => {
-                                                await deleteProject(project.id);
-                                                setProjects((prev) =>
-                                                    prev.filter(
-                                                        (p) =>
-                                                            p.id !== project.id,
-                                                    ),
-                                                );
-                                            }}
+                                    <RowActions
+                                            onView={() =>
+                                                router.push(
+                                                    `/projects/${project.id}`,
+                                                )
+                                            }
+                                            viewLabel="Open"
+                                            onEditDetails={
+                                                canManage
+                                                    ? () => {
+                                                          setDetailsProject(
+                                                              project,
+                                                          );
+                                                      }
+                                                    : undefined
+                                            }
+                                            onDelete={
+                                                canManage
+                                                    ? () =>
+                                                          handleDeleteProjectRow(
+                                                              project,
+                                                          )
+                                                    : undefined
+                                            }
                                         />
-                                    )}
                                 </div>
                             </TableRow>
                             );

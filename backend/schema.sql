@@ -590,7 +590,7 @@ create table if not exists public.upload_session_files (
   constraint upload_session_files_observed_size_check
     check (observed_size_bytes is null or observed_size_bytes >= 0),
   constraint upload_session_files_status_check
-    check (status in ('pending_upload', 'uploaded', 'processing', 'completed', 'error')),
+    check (status in ('pending_upload', 'verifying', 'uploaded', 'processing', 'completed', 'error')),
   constraint upload_session_files_session_client_unique unique(session_id, client_id),
   constraint upload_session_files_session_resource_unique unique(session_id, resource_id),
   constraint upload_session_files_staging_path_unique unique(staging_storage_path),
@@ -602,7 +602,8 @@ create index if not exists upload_session_files_session_idx
 
 create table if not exists public.upload_processing_jobs (
   id uuid primary key default gen_random_uuid(),
-  session_id uuid not null unique references public.upload_sessions(id) on delete cascade,
+  session_id uuid not null references public.upload_sessions(id) on delete cascade,
+  file_id uuid not null unique references public.upload_session_files(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   status text not null default 'queued',
   attempts integer not null default 0,
@@ -621,6 +622,9 @@ create table if not exists public.upload_processing_jobs (
 create index if not exists upload_processing_jobs_ready_idx
   on public.upload_processing_jobs(status, available_at, created_at)
   where status = 'queued';
+
+create index if not exists upload_processing_jobs_session_idx
+  on public.upload_processing_jobs(session_id, created_at);
 
 alter table public.upload_sessions enable row level security;
 alter table public.upload_session_files enable row level security;
@@ -3139,7 +3143,6 @@ as $$
 declare
   manifest_file_count integer;
   manifest_total_bytes bigint;
-  active_session_count integer;
   recent_session_count integer;
 begin
   if jsonb_typeof(target_files) <> 'array' then
@@ -3246,19 +3249,6 @@ begin
     and status = 'verifying'
     and updated_at <= now() - interval '5 minutes';
 
-  select count(*)
-    into active_session_count
-  from public.upload_sessions
-  where user_id = target_user_id
-    and (
-      status in ('verifying', 'uploaded', 'processing')
-      or (status = 'pending_upload' and expires_at > now())
-    );
-
-  if active_session_count >= 2 then
-    raise exception using errcode = 'P0001', message = 'active_upload_session_limit_exceeded';
-  end if;
-
   insert into public.upload_sessions (
     id,
     user_id,
@@ -3317,9 +3307,80 @@ begin
 end;
 $$;
 
-create or replace function public.queue_upload_session_processing(
+create or replace function public.refresh_upload_session_status(
+  target_session_id uuid
+)
+returns text
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  session_row public.upload_sessions%rowtype;
+  pending_file_count integer;
+  active_file_count integer;
+  completed_file_count integer;
+  failed_file_count integer;
+  next_status text;
+  next_error_code text;
+  terminal_at timestamptz;
+begin
+  select *
+    into session_row
+  from public.upload_sessions
+  where id = target_session_id
+  for update;
+
+  if session_row.id is null then
+    raise exception using errcode = 'P0002', message = 'upload_session_not_found';
+  end if;
+  if session_row.status in ('cancelled', 'expired') then
+    return session_row.status;
+  end if;
+
+  select
+    count(*) filter (where status in ('pending_upload', 'verifying')),
+    count(*) filter (where status in ('uploaded', 'processing')),
+    count(*) filter (where status = 'completed'),
+    count(*) filter (where status = 'error')
+    into pending_file_count, active_file_count, completed_file_count, failed_file_count
+  from public.upload_session_files
+  where session_id = target_session_id;
+
+  if pending_file_count > 0 then
+    next_status := 'pending_upload';
+    next_error_code := null;
+    terminal_at := null;
+  elsif active_file_count > 0 then
+    next_status := 'processing';
+    next_error_code := null;
+    terminal_at := null;
+  elsif completed_file_count > 0 then
+    next_status := 'completed';
+    next_error_code := case when failed_file_count > 0 then 'partial_failure' else null end;
+    terminal_at := now();
+  else
+    next_status := 'error';
+    next_error_code := 'all_uploads_failed';
+    terminal_at := now();
+  end if;
+
+  update public.upload_sessions
+  set status = next_status,
+      error_code = next_error_code,
+      completed_at = terminal_at,
+      cleaned_at = case when terminal_at is not null then terminal_at else cleaned_at end,
+      updated_at = now()
+  where id = target_session_id;
+
+  return next_status;
+end;
+$$;
+
+create or replace function public.queue_upload_session_file_processing(
   target_session_id uuid,
-  target_user_id uuid
+  target_user_id uuid,
+  target_file_id uuid
 )
 returns uuid
 language plpgsql
@@ -3328,9 +3389,8 @@ set search_path = public, pg_temp
 as $$
 declare
   session_row public.upload_sessions%rowtype;
+  file_row public.upload_session_files%rowtype;
   processing_job_id uuid;
-  uploaded_file_count integer;
-  resolved_file_count integer;
 begin
   select *
     into session_row
@@ -3342,31 +3402,83 @@ begin
   if session_row.id is null then
     raise exception using errcode = 'P0002', message = 'upload_session_not_found';
   end if;
-  if session_row.status not in ('verifying', 'uploaded') then
-    raise exception using errcode = 'P0001', message = 'upload_session_not_pending';
+  if session_row.status in ('cancelled', 'expired') then
+    raise exception using errcode = 'P0001', message = 'upload_session_not_active';
   end if;
+
+  select *
+    into file_row
+  from public.upload_session_files
+  where id = target_file_id
+    and session_id = target_session_id
+  for update;
+
+  if file_row.id is null then
+    raise exception using errcode = 'P0002', message = 'upload_session_file_not_found';
+  end if;
+  if file_row.status not in ('uploaded', 'processing', 'completed') then
+    raise exception using errcode = 'P0001', message = 'upload_session_file_not_ready';
+  end if;
+
+  insert into public.upload_processing_jobs (session_id, file_id, user_id)
+  values (target_session_id, target_file_id, target_user_id)
+  on conflict (file_id) do update
+    set file_id = excluded.file_id
+  returning id into processing_job_id;
+
+  return processing_job_id;
+end;
+$$;
+
+create or replace function public.queue_upload_session_processing(
+  target_session_id uuid,
+  target_user_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  pending_file_count integer;
+  processable_file_count integer;
+  processing_job_id uuid;
+begin
+  perform 1
+  from public.upload_sessions
+  where id = target_session_id and user_id = target_user_id
+  for update;
+  if not found then
+    raise exception using errcode = 'P0002', message = 'upload_session_not_found';
+  end if;
+
   select
-    count(*) filter (where status = 'uploaded'),
-    count(*) filter (where status in ('uploaded', 'error'))
-    into uploaded_file_count, resolved_file_count
+    count(*) filter (where status in ('pending_upload', 'verifying')),
+    count(*) filter (where status in ('uploaded', 'processing', 'completed'))
+    into pending_file_count, processable_file_count
   from public.upload_session_files
   where session_id = target_session_id;
 
-  if uploaded_file_count < 1
-     or resolved_file_count <> session_row.expected_file_count then
+  if pending_file_count > 0 then
     raise exception using errcode = 'P0001', message = 'upload_session_incomplete';
   end if;
+  if processable_file_count < 1 then
+    raise exception using errcode = 'P0001', message = 'upload_session_has_no_processable_files';
+  end if;
 
-  update public.upload_sessions
-  set status = 'uploaded', updated_at = now()
-  where id = target_session_id;
+  insert into public.upload_processing_jobs (session_id, file_id, user_id)
+  select target_session_id, file.id, target_user_id
+  from public.upload_session_files file
+  where file.session_id = target_session_id and file.status = 'uploaded'
+  on conflict (file_id) do nothing;
 
-  insert into public.upload_processing_jobs (session_id, user_id)
-  values (target_session_id, target_user_id)
-  on conflict (session_id) do update
-    set session_id = excluded.session_id
-  returning id into processing_job_id;
+  select id into processing_job_id
+  from public.upload_processing_jobs
+  where session_id = target_session_id
+  order by created_at
+  limit 1;
 
+  perform public.refresh_upload_session_status(target_session_id);
   return processing_job_id;
 end;
 $$;
@@ -3383,14 +3495,15 @@ as $$
 declare
   claimed_job_id uuid;
   claimed_session_id uuid;
+  claimed_file_id uuid;
 begin
   if length(target_worker_id) not between 1 and 200
      or target_lease_seconds not between 60 and 3600 then
     raise exception using errcode = '22023', message = 'invalid_upload_worker_claim';
   end if;
 
-  select id, session_id
-    into claimed_job_id, claimed_session_id
+  select id, session_id, file_id
+    into claimed_job_id, claimed_session_id, claimed_file_id
   from public.upload_processing_jobs
   where attempts < 3
     and ((
@@ -3417,10 +3530,13 @@ begin
       updated_at = now()
   where id = claimed_job_id;
 
-  update public.upload_sessions
+  update public.upload_session_files
   set status = 'processing', error_code = null, updated_at = now()
-  where id = claimed_session_id
-    and status in ('uploaded', 'processing');
+  where id = claimed_file_id
+    and session_id = claimed_session_id
+    and (status = 'uploaded' or (status = 'error' and error_code = 'processing_failed'));
+
+  perform public.refresh_upload_session_status(claimed_session_id);
 
   return claimed_job_id;
 end;
@@ -3517,6 +3633,10 @@ revoke all on function public.finish_tabular_review_generation(uuid, uuid)
   from public, anon, authenticated;
 revoke all on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb)
   from public, anon, authenticated;
+revoke all on function public.refresh_upload_session_status(uuid)
+  from public, anon, authenticated;
+revoke all on function public.queue_upload_session_file_processing(uuid, uuid, uuid)
+  from public, anon, authenticated;
 revoke all on function public.queue_upload_session_processing(uuid, uuid)
   from public, anon, authenticated;
 revoke all on function public.claim_upload_processing_job(text, integer)
@@ -3555,6 +3675,12 @@ grant execute
   to service_role;
 grant execute
   on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb)
+  to service_role;
+grant execute
+  on function public.refresh_upload_session_status(uuid)
+  to service_role;
+grant execute
+  on function public.queue_upload_session_file_processing(uuid, uuid, uuid)
   to service_role;
 grant execute
   on function public.queue_upload_session_processing(uuid, uuid)

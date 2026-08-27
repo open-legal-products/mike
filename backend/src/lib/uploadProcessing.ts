@@ -50,6 +50,7 @@ type UploadFileRow = {
 type UploadJobRow = {
   id: string;
   session_id: string;
+  file_id: string;
   attempts: number;
   locked_by: string | null;
 };
@@ -509,6 +510,16 @@ async function heartbeatJob(db: Db, jobId: string, workerId: string) {
   if (error || !data) throw error ?? new Error("upload_job_lease_lost");
 }
 
+async function refreshUploadSessionStatus(
+  db: Db,
+  sessionId: string,
+): Promise<void> {
+  const { error } = await db.rpc("refresh_upload_session_status", {
+    target_session_id: sessionId,
+  });
+  if (error) throw error;
+}
+
 async function markCreatedDocumentFailed(
   db: Db,
   session: UploadSessionRow,
@@ -555,7 +566,7 @@ export async function processUploadJob(
 ): Promise<void> {
   const { data: job, error: jobError } = await db
     .from("upload_processing_jobs")
-    .select("id, session_id, attempts, locked_by")
+    .select("id, session_id, file_id, attempts, locked_by")
     .eq("id", jobId)
     .eq("status", "running")
     .eq("locked_by", workerId)
@@ -571,13 +582,16 @@ export async function processUploadJob(
     throw sessionError ?? new Error("upload_session_not_found");
   }
   const typedSession = session as UploadSessionRow;
-  const { data: fileRows, error: filesError } = await db
+  const { data: fileRow, error: filesError } = await db
     .from("upload_session_files")
     .select("*")
     .eq("session_id", typedSession.id)
-    .order("created_at", { ascending: true });
-  if (filesError) throw filesError;
-  const files = (fileRows ?? []) as UploadFileRow[];
+    .eq("id", typedJob.file_id)
+    .single();
+  if (filesError || !fileRow) {
+    throw filesError ?? new Error("upload_session_file_not_found");
+  }
+  const files = [fileRow as UploadFileRow];
   const terminalUploadFailureCount = files.filter(
     (file) =>
       file.status === "error" &&
@@ -690,11 +704,19 @@ export async function processUploadJob(
     if (retryError || !retried) {
       throw retryError ?? new Error("upload_job_lease_lost");
     }
-    const { error: sessionUpdateError } = await db
-      .from("upload_sessions")
-      .update({ status: "uploaded", error_code: null, updated_at: now })
-      .eq("id", typedSession.id);
-    if (sessionUpdateError) throw sessionUpdateError;
+    const { error: fileRetryError } = await db
+      .from("upload_session_files")
+      .update({
+        status: "uploaded",
+        error_code: null,
+        updated_at: now,
+      })
+      .eq("id", typedJob.file_id)
+      .eq("session_id", typedSession.id)
+      .eq("status", "error")
+      .eq("error_code", "processing_failed");
+    if (fileRetryError) throw fileRetryError;
+    await refreshUploadSessionStatus(db, typedSession.id);
     return;
   }
 
@@ -730,17 +752,7 @@ export async function processUploadJob(
   if (finishError || !finished) {
     throw finishError ?? new Error("upload_job_lease_lost");
   }
-  const { error: sessionFinishError } = await db
-    .from("upload_sessions")
-    .update({
-      status: "completed",
-      completed_at: now,
-      error_code: partialFailure ? "partial_failure" : null,
-      cleaned_at: now,
-      updated_at: now,
-    })
-    .eq("id", typedSession.id);
-  if (sessionFinishError) throw sessionFinishError;
+  await refreshUploadSessionStatus(db, typedSession.id);
 }
 
 export async function cleanupUploadSessions(db: Db): Promise<void> {
@@ -776,7 +788,7 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
   ).toISOString();
   const { data: exhaustedJobs, error: exhaustedError } = await db
     .from("upload_processing_jobs")
-    .select("id, session_id")
+    .select("id, session_id, file_id")
     .eq("status", "running")
     .gte("attempts", UPLOAD_JOB_MAX_ATTEMPTS)
     .lt("locked_at", staleLease)
@@ -795,16 +807,18 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
       .eq("id", job.id)
       .eq("status", "running");
     if (jobError) throw jobError;
-    const { error: sessionError } = await db
-      .from("upload_sessions")
+    const { error: fileError } = await db
+      .from("upload_session_files")
       .update({
         status: "error",
         error_code: "processing_failed",
         updated_at: nowIso,
       })
-      .eq("id", job.session_id)
+      .eq("id", job.file_id)
+      .eq("session_id", job.session_id)
       .eq("status", "processing");
-    if (sessionError) throw sessionError;
+    if (fileError) throw fileError;
+    await refreshUploadSessionStatus(db, job.session_id);
   }
 
   const { data: sessions, error: sessionsError } = await db
@@ -817,10 +831,15 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
   for (const session of sessions ?? []) {
     const { data: files, error: filesError } = await db
       .from("upload_session_files")
-      .select("staging_storage_path, sealed_storage_path")
+      .select("status, staging_storage_path, sealed_storage_path")
       .eq("session_id", session.id);
     if (filesError) throw filesError;
     for (const file of files ?? []) {
+      // A session can expire while an earlier file is already queued or being
+      // processed. Never remove its sealed source out from under the worker.
+      if (["uploaded", "processing", "completed"].includes(file.status)) {
+        continue;
+      }
       await Promise.all([
         file.staging_storage_path
           ? deleteFile(file.staging_storage_path).catch(() => {})

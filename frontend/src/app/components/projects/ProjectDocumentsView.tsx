@@ -391,7 +391,11 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 onLoadMoreDocuments={handleLoadMoreDocuments}
                 autoLoadOnScroll
                 enableHeaderFilters
-                defaultSort={{ key: "updated", direction: "desc" }}
+                defaultSort={
+                    folderId
+                        ? { key: "updated", direction: "desc" }
+                        : { key: "name", direction: "asc" }
+                }
                 renderAddDocumentsModal={(open, onClose, onSelect) =>
                     project ? (
                         <AddDocumentsModal

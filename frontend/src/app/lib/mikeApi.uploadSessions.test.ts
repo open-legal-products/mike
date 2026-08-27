@@ -46,6 +46,7 @@ function installSuccessfulSessionServer(options?: {
     let maximumStorageUploads = 0;
     const uploadFiles = (manifest: Manifest) =>
         manifest.files.map((file) => ({
+            id: file.client_id,
             client_id: file.client_id,
             filename: file.filename,
             status: "pending_upload",
@@ -98,6 +99,32 @@ function installSuccessfulSessionServer(options?: {
                 } finally {
                     activeStorageUploads -= 1;
                 }
+            }
+            const fileCompletion = url.match(
+                new RegExp(
+                    `^${API_URL}/upload-sessions/session-1/files/([^/]+)/complete$`,
+                ),
+            );
+            if (fileCompletion && init?.method === "POST") {
+                const completedClientId = decodeURIComponent(
+                    fileCompletion[1]!,
+                );
+                const manifest = manifests.at(-1)!;
+                return json({
+                    session: {
+                        id: "session-1",
+                        status: "pending_upload",
+                        expires_at: "2099-01-01T00:00:00Z",
+                    },
+                    files: uploadFiles(manifest).map((file) => ({
+                        ...file,
+                        status:
+                            file.client_id === completedClientId
+                                ? "processing"
+                                : "pending_upload",
+                        upload: undefined,
+                    })),
+                });
             }
             if (url === `${API_URL}/upload-sessions/session-1/complete`) {
                 const manifest = manifests.at(-1)!;
@@ -179,6 +206,20 @@ describe("direct upload sessions", () => {
         });
 
         expect(server.maximumStorageUploads()).toBe(3);
+        const calls = fetchMock.mock.calls.map(([url]) => String(url));
+        const firstFileCompletion = calls.findIndex((url) =>
+            url.includes("/files/"),
+        );
+        const batchCompletion = calls.findIndex((url) =>
+            url.endsWith("/session-1/complete"),
+        );
+        expect(firstFileCompletion).toBeGreaterThan(-1);
+        expect(firstFileCompletion).toBeLessThan(batchCompletion);
+        expect(
+            calls
+                .slice(0, firstFileCompletion)
+                .filter((url) => url.startsWith("https://storage.test/")),
+        ).toHaveLength(3);
         expect(outcomes).toHaveLength(7);
         expect(
             outcomes.every((outcome) => outcome.status === "completed"),
@@ -208,6 +249,7 @@ describe("direct upload sessions", () => {
             { filename: "contract.pdf", status: "pending" },
             { filename: "contract.pdf", status: "uploading" },
             { filename: "contract.pdf", status: "uploaded" },
+            { filename: "contract.pdf", status: "processing" },
             { filename: "contract.pdf", status: "completed" },
         ]);
     });

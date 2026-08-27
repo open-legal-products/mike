@@ -120,12 +120,19 @@ List exact trusted origins; do not use `*` for a production deployment. The
 signed URL authorizes only its generated object key and expires independently
 of the CORS cache. The backend still verifies the uploaded byte count and
 copies accepted bytes to a non-signed, sealed key before queuing processing.
+Each file is verified and queued as soon as its individual `PUT` completes;
+the remaining files in the same session may continue uploading while the
+worker creates documents or document versions from earlier files. The final
+session-completion request reconciles failures and any interrupted per-file
+completion calls rather than gating the start of processing.
 
 Upload sessions accept at most 50 supported files, 100 MB per file, and 2 GB
-in total. A user may keep two upload sessions open at once and create at most
-50 sessions per hour. Sessions expire after 30 minutes; individual signed URLs
-expire after 15 minutes and can be refreshed while the session is pending.
-These limits are enforced atomically in PostgreSQL, not only in the browser.
+in total. Users may run multiple independent upload sessions concurrently and
+may create at most 50 sessions per hour. Sessions that update the same mutable
+document version or workflow reference remain mutually exclusive. Sessions
+expire after 30 minutes; individual signed URLs expire after 15 minutes and can
+be refreshed while the session is pending. These limits are enforced atomically
+in PostgreSQL, not only in the browser.
 
 The Express process also runs the durable upload-processing worker. It claims
 jobs with database leases, processes one sealed file at a time, retries a

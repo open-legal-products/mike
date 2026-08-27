@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -146,6 +147,46 @@ maybeDescribe("Supabase stack — auth contract + RLS deny-all firewall", () => 
         const cross = await asUser(tokenB)
             .from("projects").select("id").eq("id", projectId);
         expect(cross.data ?? []).toHaveLength(0);
+    });
+
+    it("allows multiple independent upload sessions for one user", async () => {
+        const sessionIds = [randomUUID(), randomUUID(), randomUUID()];
+
+        for (const sessionId of sessionIds) {
+            const fileId = randomUUID();
+            const { error } = await admin.rpc("create_upload_session", {
+                target_session_id: sessionId,
+                target_user_id: userA,
+                target_purpose: "document_create",
+                target_destination: { scope: "standalone" },
+                target_expires_at: new Date(Date.now() + 20 * 60_000).toISOString(),
+                target_files: [
+                    {
+                        id: fileId,
+                        resource_id: randomUUID(),
+                        client_id: fileId,
+                        filename: "concurrent-upload.pdf",
+                        target_folder_id: null,
+                        file_type: "pdf",
+                        content_type: "application/pdf",
+                        expected_size_bytes: 1,
+                        staging_storage_path: `stack-test/${fileId}/staging`,
+                        sealed_storage_path: `stack-test/${fileId}/sealed`,
+                    },
+                ],
+            });
+            expect(error).toBeNull();
+        }
+
+        const { data, error } = await admin
+            .from("upload_sessions")
+            .select("id, status")
+            .in("id", sessionIds);
+        expect(error).toBeNull();
+        expect(data).toHaveLength(3);
+        expect(data?.every((session) => session.status === "pending_upload")).toBe(true);
+
+        await admin.from("upload_sessions").delete().in("id", sessionIds);
     });
 
     it("deleting a default workflow removes its Quick Action but preserves its installation marker", async () => {

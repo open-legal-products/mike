@@ -22,7 +22,7 @@ import {
   contentSha256,
   loadActiveVersion,
 } from "../lib/documentVersions";
-import { ensureDocAccess } from "../lib/access";
+import { checkProjectAccess, ensureDocAccess } from "../lib/access";
 import {
   contentTypeForDocumentType,
   shouldConvertToPdf,
@@ -33,6 +33,27 @@ const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
   if (isDev) console.log(...args);
 };
+
+export function collectFolderDescendantIds(
+  roots: Array<{ id: unknown }>,
+  allFolders: Array<{ id: unknown; parent_folder_id: unknown }>,
+) {
+  const selected = new Set(roots.map((folder) => String(folder.id)));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const folder of allFolders) {
+      const id = String(folder.id);
+      const parentId = folder.parent_folder_id
+        ? String(folder.parent_folder_id)
+        : null;
+      if (!parentId || !selected.has(parentId) || selected.has(id)) continue;
+      selected.add(id);
+      changed = true;
+    }
+  }
+  return [...selected];
+}
 
 async function deleteDocumentAndVersionFiles(
   db: ReturnType<typeof createServerSupabase>,
@@ -161,21 +182,138 @@ documentsRouter.get("/:documentId/display", requireAuth, async (req, res) => {
 documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
   const userEmail = res.locals.userEmail as string | undefined;
-  const { document_ids } = req.body as { document_ids?: string[] };
+  const { document_ids, folder_ids } = req.body as {
+    document_ids?: string[];
+    folder_ids?: string[];
+  };
+  const documentIds = Array.isArray(document_ids)
+    ? [...new Set(document_ids.filter((id) => typeof id === "string"))]
+    : [];
+  const folderIds = Array.isArray(folder_ids)
+    ? [...new Set(folder_ids.filter((id) => typeof id === "string"))]
+    : [];
 
-  if (!Array.isArray(document_ids) || document_ids.length === 0)
-    return void res.status(400).json({ detail: "document_ids is required" });
-
+  if (documentIds.length === 0 && folderIds.length === 0)
+    return void res
+      .status(400)
+      .json({ detail: "document_ids or folder_ids is required" });
   const db = createServerSupabase();
-  const { data: rawDocs, error } = await db
-    .from("documents")
-    .select("id, current_version_id, user_id, project_id")
-    .in("id", document_ids);
+  type DownloadDocumentRow = {
+    id: string;
+    current_version_id?: string | null;
+    user_id: string;
+    project_id: string | null;
+  };
+  const rawDocsById = new Map<string, DownloadDocumentRow>();
 
-  if (error) return void sendInternalError(res, error);
+  if (documentIds.length > 0) {
+    const { data, error } = await db
+      .from("documents")
+      .select("id, current_version_id, user_id, project_id")
+      .in("id", documentIds);
+    if (error) return void sendInternalError(res, error);
+    for (const doc of data ?? [])
+      rawDocsById.set(doc.id as string, doc as DownloadDocumentRow);
+  }
+
+  if (folderIds.length > 0) {
+    const [projectRootsResult, libraryRootsResult] = await Promise.all([
+      db
+        .from("project_subfolders")
+        .select("id, project_id, parent_folder_id")
+        .in("id", folderIds),
+      db
+        .from("library_folders")
+        .select("id, user_id, library_kind, parent_folder_id")
+        .in("id", folderIds)
+        .eq("user_id", userId),
+    ]);
+    if (projectRootsResult.error)
+      return void sendInternalError(res, projectRootsResult.error);
+    if (libraryRootsResult.error)
+      return void sendInternalError(res, libraryRootsResult.error);
+
+    const projectRoots = projectRootsResult.data ?? [];
+    const projectIds = [
+      ...new Set(projectRoots.map((folder) => folder.project_id as string)),
+    ];
+    const accessibleProjectIds = (
+      await Promise.all(
+        projectIds.map(async (projectId) => ({
+          projectId,
+          access: await checkProjectAccess(
+            projectId,
+            userId,
+            userEmail,
+            db,
+          ),
+        })),
+      )
+    )
+      .filter((result) => result.access.ok)
+      .map((result) => result.projectId);
+
+    const accessibleProjectRoots = projectRoots.filter((folder) =>
+      accessibleProjectIds.includes(folder.project_id as string),
+    );
+    const libraryRoots = libraryRootsResult.data ?? [];
+    const libraryKinds = [
+      ...new Set(libraryRoots.map((folder) => folder.library_kind as string)),
+    ];
+
+    const [projectFoldersResult, libraryFoldersResult] = await Promise.all([
+      accessibleProjectIds.length > 0
+        ? db
+            .from("project_subfolders")
+            .select("id, project_id, parent_folder_id")
+            .in("project_id", accessibleProjectIds)
+        : Promise.resolve({ data: [], error: null }),
+      libraryKinds.length > 0
+        ? db
+            .from("library_folders")
+            .select("id, user_id, library_kind, parent_folder_id")
+            .eq("user_id", userId)
+            .in("library_kind", libraryKinds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (projectFoldersResult.error)
+      return void sendInternalError(res, projectFoldersResult.error);
+    if (libraryFoldersResult.error)
+      return void sendInternalError(res, libraryFoldersResult.error);
+
+    const projectFolderIds = collectFolderDescendantIds(
+      accessibleProjectRoots,
+      projectFoldersResult.data ?? [],
+    );
+    const libraryFolderIds = collectFolderDescendantIds(
+      libraryRoots,
+      libraryFoldersResult.data ?? [],
+    );
+
+    const folderDocumentResults = await Promise.all([
+      projectFolderIds.length > 0
+        ? db
+            .from("documents")
+            .select("id, current_version_id, user_id, project_id")
+            .in("folder_id", projectFolderIds)
+        : Promise.resolve({ data: [], error: null }),
+      libraryFolderIds.length > 0
+        ? db
+            .from("documents")
+            .select("id, current_version_id, user_id, project_id")
+            .in("library_folder_id", libraryFolderIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    for (const result of folderDocumentResults) {
+      if (result.error) return void sendInternalError(res, result.error);
+      for (const doc of result.data ?? [])
+        rawDocsById.set(doc.id as string, doc as DownloadDocumentRow);
+    }
+  }
+
   // Filter to docs the user actually has access to (own + shared-project).
   const accessChecks = await Promise.all(
-    (rawDocs ?? []).map(async (d) => ({
+    [...rawDocsById.values()].map(async (d) => ({
       doc: d,
       access: await ensureDocAccess(
         d as { user_id: string; project_id: string | null },

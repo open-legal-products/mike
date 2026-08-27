@@ -36,6 +36,49 @@ export function closeRowActionMenus() {
     document.dispatchEvent(new Event(CLOSE_ROW_ACTIONS_EVENT));
 }
 
+export function rowActionSelectionIds(
+    rowId: string,
+    selectedIds: readonly string[],
+): string[] {
+    return selectedIds.includes(rowId) ? [...selectedIds] : [rowId];
+}
+
+export function selectedIdsAfterShiftClick<T>(
+    rowId: T,
+    selectedIds: readonly T[],
+): T[] {
+    return selectedIds.includes(rowId)
+        ? [...selectedIds]
+        : [...selectedIds, rowId];
+}
+
+export function selectionRangeIds<T>(
+    orderedIds: readonly T[],
+    anchorId: T | null,
+    targetId: T,
+): T[] {
+    const anchorIndex = anchorId === null ? -1 : orderedIds.indexOf(anchorId);
+    const targetIndex = orderedIds.indexOf(targetId);
+    if (anchorIndex < 0 || targetIndex < 0) return [targetId];
+    const start = Math.min(anchorIndex, targetIndex);
+    const end = Math.max(anchorIndex, targetIndex);
+    return orderedIds.slice(start, end + 1);
+}
+
+export function selectedIdsAfterRangeClick<T>(
+    targetId: T,
+    orderedIds: readonly T[],
+    selectedIds: readonly T[],
+    anchorId: T | null,
+): T[] {
+    return [
+        ...new Set([
+            ...selectedIds,
+            ...selectionRangeIds(orderedIds, anchorId, targetId),
+        ]),
+    ];
+}
+
 function canPortalToDocument() {
     return typeof document !== "undefined";
 }

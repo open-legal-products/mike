@@ -6,8 +6,73 @@ import {
     TableFilters,
     TableScrollArea,
     TablePrimaryCell,
+    rowActionSelectionIds,
+    selectionRangeIds,
+    selectedIdsAfterRangeClick,
+    selectedIdsAfterShiftClick,
     tableTreeCellStyle,
 } from "./TablePrimitive";
+
+describe("table row actions", () => {
+    it("targets the full selection when the context row is selected", () => {
+        expect(rowActionSelectionIds("row-2", ["row-1", "row-2"])).toEqual([
+            "row-1",
+            "row-2",
+        ]);
+    });
+    it("targets only an unselected context row", () => {
+        expect(rowActionSelectionIds("row-3", ["row-1", "row-2"])).toEqual([
+            "row-3",
+        ]);
+    });
+
+    it("adds a shift-clicked row without clearing the selection", () => {
+        expect(
+            selectedIdsAfterShiftClick("row-3", ["row-1", "row-2"]),
+        ).toEqual(["row-1", "row-2", "row-3"]);
+        expect(
+            selectedIdsAfterShiftClick("row-2", ["row-1", "row-2"]),
+        ).toEqual(["row-1", "row-2"]);
+    });
+
+    it("adds the inclusive range between shift-clicked rows", () => {
+        expect(
+            selectedIdsAfterRangeClick(
+                "row-4",
+                ["row-1", "row-2", "row-3", "row-4"],
+                ["row-1"],
+                "row-2",
+            ),
+        ).toEqual(["row-1", "row-2", "row-3", "row-4"]);
+        expect(
+            selectedIdsAfterRangeClick(
+                "row-2",
+                ["row-1", "row-2"],
+                [],
+                null,
+            ),
+        ).toEqual(["row-2"]);
+    });
+
+    it("ranges across interleaved file and folder row keys", () => {
+        expect(
+            selectionRangeIds(
+                [
+                    "document:file-1",
+                    "folder:folder-1",
+                    "document:file-2",
+                    "folder:folder-2",
+                ],
+                "folder:folder-1",
+                "folder:folder-2",
+            ),
+        ).toEqual([
+            "folder:folder-1",
+            "document:file-2",
+            "folder:folder-2",
+        ]);
+    });
+});
 
 describe("table filters", () => {
     it("marks the current option with the shared dropdown selected state", async () => {

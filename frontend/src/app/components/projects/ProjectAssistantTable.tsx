@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import {
+    useMemo,
+    useRef,
+    useState,
+    type Dispatch,
+    type SetStateAction,
+} from "react";
 import {
     RowActionMenuItems,
     RowActions,
@@ -19,6 +25,9 @@ import {
     TablePrimaryCell,
     TableRow,
     TableScrollArea,
+    rowActionSelectionIds,
+    selectedIdsAfterRangeClick,
+    selectedIdsAfterShiftClick,
     type TableSortDirection,
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
@@ -50,6 +59,7 @@ export function ProjectAssistantTable({
     onCreateChat,
     onOpenChat,
     onDeleteChat,
+    onDeleteSelectedChats,
     onOwnerOnlyAction,
     submitChatRename,
     setSelectedChatIds,
@@ -68,6 +78,7 @@ export function ProjectAssistantTable({
     onCreateChat: () => void;
     onOpenChat: (chatId: string) => void;
     onDeleteChat: (chat: Chat) => Promise<void> | void;
+    onDeleteSelectedChats: () => Promise<void> | void;
     onOwnerOnlyAction: (action: string) => void;
     submitChatRename: (chatId: string) => Promise<void> | void;
     setSelectedChatIds: Dispatch<SetStateAction<string[]>>;
@@ -80,8 +91,10 @@ export function ProjectAssistantTable({
         key: ProjectChatSortKey;
         direction: TableSortDirection;
     } | null>(null);
+    const rowSelectionAnchorIdRef = useRef<string | null>(null);
 
     function clearSelection() {
+        rowSelectionAnchorIdRef.current = null;
         setSelectedChatIds([]);
     }
 
@@ -192,6 +205,7 @@ export function ProjectAssistantTable({
                                             someVisibleChatsSelected;
                                 }}
                                 onChange={() => {
+                                    rowSelectionAnchorIdRef.current = null;
                                     if (allVisibleChatsSelected)
                                         setSelectedChatIds([]);
                                     else
@@ -243,7 +257,13 @@ export function ProjectAssistantTable({
                 </TableEmptyState>
             ) : (
                 <TableBody>
-                    {visibleChats.map((chat) => (
+                    {visibleChats.map((chat) => {
+                        const actionIds = rowActionSelectionIds(
+                            chat.id,
+                            selectedChatIds,
+                        );
+                        const appliesToSelection = actionIds.length > 1;
+                        return (
                         <TableRow
                             key={chat.id}
                             selected={selectedChatIds.includes(chat.id)}
@@ -251,24 +271,70 @@ export function ProjectAssistantTable({
                                 <RowActionMenuItems
                                     onClose={close}
                                     surfaceProps={menuProps}
-                                    onRename={() => {
-                                        if (
-                                            currentUserId &&
-                                            chat.user_id !== currentUserId
-                                        ) {
-                                            onOwnerOnlyAction("rename this chat");
-                                            return;
-                                        }
-                                        setRenameChatValue(
-                                            chat.title ?? "Untitled Chat",
-                                        );
-                                        setRenamingChatId(chat.id);
-                                    }}
-                                    onDelete={() => onDeleteChat(chat)}
+                                    onView={
+                                        appliesToSelection
+                                            ? undefined
+                                            : () => onOpenChat(chat.id)
+                                    }
+                                    onRename={
+                                        appliesToSelection
+                                            ? undefined
+                                            : () => {
+                                                  if (
+                                                      currentUserId &&
+                                                      chat.user_id !== currentUserId
+                                                  ) {
+                                                      onOwnerOnlyAction("rename this chat");
+                                                      return;
+                                                  }
+                                                  setRenameChatValue(
+                                                      chat.title ?? "Untitled Chat",
+                                                  );
+                                                  setRenamingChatId(chat.id);
+                                              }
+                                    }
+                                    onDelete={() =>
+                                        appliesToSelection
+                                            ? onDeleteSelectedChats()
+                                            : onDeleteChat(chat)
+                                    }
+                                    deleteLabel={
+                                        appliesToSelection
+                                            ? `Delete ${actionIds.length} chats`
+                                            : undefined
+                                    }
                                 />
                             )}
-                            onClick={() => {
+                            onClick={(event) => {
                                 if (renamingChatId === chat.id) return;
+                                if (event.shiftKey) {
+                                    event.preventDefault();
+                                    const anchorId =
+                                        rowSelectionAnchorIdRef.current;
+                                    setSelectedChatIds((current) =>
+                                        selectedIdsAfterRangeClick(
+                                            chat.id,
+                                            visibleChats.map(
+                                                (visibleChat) => visibleChat.id,
+                                            ),
+                                            current,
+                                            anchorId,
+                                        ),
+                                    );
+                                    rowSelectionAnchorIdRef.current = chat.id;
+                                    return;
+                                }
+                                if (event.ctrlKey || event.metaKey) {
+                                    event.preventDefault();
+                                    setSelectedChatIds((current) =>
+                                        selectedIdsAfterShiftClick(
+                                            chat.id,
+                                            current,
+                                        ),
+                                    );
+                                    rowSelectionAnchorIdRef.current = chat.id;
+                                    return;
+                                }
                                 onOpenChat(chat.id);
                             }}
                             className="pr-8 md:pr-8"
@@ -276,11 +342,13 @@ export function ProjectAssistantTable({
                             <TablePrimaryCell
                                 selected={selectedChatIds.includes(chat.id)}
                                 onSelectionChange={() =>
-                                    setSelectedChatIds((prev) =>
-                                        prev.includes(chat.id)
+                                    setSelectedChatIds((prev) => {
+                                        rowSelectionAnchorIdRef.current =
+                                            chat.id;
+                                        return prev.includes(chat.id)
                                             ? prev.filter((x) => x !== chat.id)
-                                            : [...prev, chat.id],
-                                    )
+                                            : [...prev, chat.id];
+                                    })
                                 }
                                 label={chat.title ?? "Untitled Chat"}
                                 editing={renamingChatId === chat.id}
@@ -302,6 +370,7 @@ export function ProjectAssistantTable({
                                 onClick={(e) => e.stopPropagation()}
                             >
                                 <RowActions
+                                    onView={() => onOpenChat(chat.id)}
                                     onRename={() => {
                                         if (
                                             currentUserId &&
@@ -319,7 +388,8 @@ export function ProjectAssistantTable({
                                 />
                             </div>
                         </TableRow>
-                    ))}
+                        );
+                    })}
                 </TableBody>
             )}
         </TableScrollArea>

@@ -319,6 +319,15 @@ export function DocVersionHistory({
                         >
                             {!isDeleted && (
                                 <RowActions
+                                    onView={
+                                        onOpenVersion
+                                            ? () =>
+                                                  onOpenVersion(
+                                                      v.id,
+                                                      displayLabel,
+                                                  )
+                                            : undefined
+                                    }
                                     onRename={
                                         onRenameVersion
                                             ? () => {

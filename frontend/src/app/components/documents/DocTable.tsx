@@ -48,6 +48,7 @@ import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { UploadOverlay } from "@/app/components/assistant/UploadOverlay";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
 import {
     formatUnsupportedDocumentWarning,
@@ -70,9 +71,9 @@ import {
     type DocumentUploadProgressEntry,
 } from "@/app/lib/documentDirectoryUpload";
 import {
+    collectionSelectAllState,
     MULTI_DOCUMENT_DRAG_TYPE,
     readDocumentDragPayload,
-    selectedDocumentRange,
     SINGLE_DOCUMENT_DRAG_TYPE,
     writeDocumentDragPayload,
 } from "@/app/lib/docTableSelection";
@@ -97,6 +98,7 @@ import {
 } from "@/app/components/ui/liquid-surface";
 import {
     TABLE_CHECKBOX_CLASS,
+    selectionRangeIds,
     TableFilters,
     TableHeaderCell,
     TableHeaderRow,
@@ -317,6 +319,19 @@ function ProjectTableLoading({ stickyCellBg }: { stickyCellBg: string }) {
     );
 }
 
+function UploadingTrailingLabel() {
+    return (
+        <span role="status" aria-label="Uploading">
+            <span aria-hidden="true">Uploading</span>
+            <span aria-hidden="true" className="uploading-ellipsis">
+                <span className="uploading-ellipsis-one">.</span>
+                <span className="uploading-ellipsis-two">..</span>
+                <span className="uploading-ellipsis-three">...</span>
+            </span>
+        </span>
+    );
+}
+
 export function DocTable({
     scopeKey,
     documents,
@@ -375,7 +390,7 @@ export function DocTable({
     const documentUploadInputRef = useRef<HTMLInputElement>(null);
     const directoryUploadInputRef = useRef<HTMLInputElement>(null);
     const tableRootRef = useRef<HTMLDivElement>(null);
-    const selectionAnchorIdRef = useRef<string | null>(null);
+    const selectionAnchorKeyRef = useRef<string | null>(null);
     const autoLoadTriggeredRef = useRef(false);
     const loadingRef = useRef(loading);
     const renderAddDocumentsModalRef = useRef(renderAddDocumentsModal);
@@ -608,7 +623,8 @@ export function DocTable({
     const [uploadingVersionDocIds, setUploadingVersionDocIds] = useState<Set<string>>(() => new Set());
     const [versionUploadTargetDoc, setVersionUploadTargetDoc] = useState<Document | null>(null);
     const [collectionUploadProgress, setCollectionUploadProgress] =
-        useRemountPersistentState<{
+        useRemountPersistentState<Array<{
+            uploadId: string;
             parentFolderId: string | null;
             entries: DocumentUploadProgressEntry[];
             files: Array<{
@@ -616,7 +632,7 @@ export function DocTable({
                 entry: DocumentUploadEntry;
                 status: UploadProgressStatus;
             }>;
-        } | null>(`document-upload:${scopeKey}`, null);
+        }>>(`document-upload:${scopeKey}`, []);
     const [folderUploadConflict, setFolderUploadConflict] = useState<{
         folderName: string;
         suggestedName: string;
@@ -669,7 +685,7 @@ export function DocTable({
         setSelectionCameFromSelectAll(false);
         setConfirmDeleteAllOpen(false);
         setContextMenu(null);
-        selectionAnchorIdRef.current = null;
+        selectionAnchorKeyRef.current = null;
         setTypeFilter(null);
         setSort(null);
     }, [scopeKey]);
@@ -942,13 +958,14 @@ export function DocTable({
         const pending = pendingDeleteFolder;
         if (!pending || pendingDeleteFolderStatus === "deleting") return;
         setPendingDeleteFolderStatus("deleting");
+        const folderSnapshot = folders;
+        const documentSnapshot = documents;
+        const toDelete = new Set(pending.folderIds);
+        setFolders((prev) => prev.filter((f) => !toDelete.has(f.id)));
+        setDocuments((prev) => prev.filter((d) => !d.folder_id || !toDelete.has(d.folder_id)));
 
         try {
             await operations.deleteFolder(pending.folder.id);
-            const toDelete = new Set(pending.folderIds);
-
-            setFolders((prev) => prev.filter((f) => !toDelete.has(f.id)));
-            setDocuments((prev) => prev.filter((d) => !d.folder_id || !toDelete.has(d.folder_id)));
             const currentFolderId = viewedFolderIdRef.current;
             if (currentFolderId && toDelete.has(currentFolderId)) {
                 updateViewedFolder(pending.folder.parent_folder_id ?? null);
@@ -988,6 +1005,20 @@ export function DocTable({
             }, 650);
         } catch (err) {
             console.error("delete folder failed", err);
+            setFolders((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current,
+                    folderSnapshot,
+                    pending.folderIds,
+                ),
+            );
+            setDocuments((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current,
+                    documentSnapshot,
+                    pending.documentIds,
+                ),
+            );
             setPendingDeleteFolderStatus("idle");
             setCollectionActionWarning("Folder could not be deleted. Please try again.");
         }
@@ -1120,7 +1151,7 @@ export function DocTable({
     }
 
     async function handleRemoveDoc(docId: string) {
-        const doc = documents.find((d) => d.id === docId);
+        const doc = docs.find((d) => d.id === docId);
         // Backend only lets the doc creator delete. Warn the requester
         // instead of letting the request 404 silently.
         if (doc && user?.id && doc.user_id && doc.user_id !== user.id) {
@@ -1128,9 +1159,15 @@ export function DocTable({
             return;
         }
         setDeletingDocIds((prev) => new Set([...prev, docId]));
+        const snapshot = docs;
+        setDocuments((prev) => prev.filter((d) => d.id !== docId));
         try {
             await deleteDocument(docId);
-            setDocuments((prev) => prev.filter((d) => d.id !== docId));
+        } catch (error) {
+            setDocuments((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, [docId]),
+            );
+            throw error;
         } finally {
             setDeletingDocIds((prev) => {
                 const next = new Set(prev);
@@ -1259,6 +1296,7 @@ export function DocTable({
             entry,
             status: "pending" as UploadProgressStatus,
         }));
+        const uploadId = crypto.randomUUID();
         const clientIdByFile = new Map(
             progressFiles.map((progress) => [
                 progress.entry.file,
@@ -1268,19 +1306,23 @@ export function DocTable({
         const resolvedRootFolderNames = new Map<string, string>();
         const updateCollectionUploadProgress = () => {
             setCollectionUploadProgress((current) => {
-                const belongsToCurrentUpload = current?.files.some(
-                    (file) => file.clientId === progressFiles[0]?.clientId,
+                const existing = current.find(
+                    (upload) => upload.uploadId === uploadId,
                 );
-                return {
+                const nextUpload = {
+                    uploadId,
                     parentFolderId: baseFolderId,
                     entries: resolvedDocumentUploadProgressEntries(
                         supportedEntries,
                         resolvedRootFolderNames,
                     ),
-                    files: belongsToCurrentUpload && current
-                        ? current.files
-                        : progressFiles,
+                    files: existing?.files ?? progressFiles,
                 };
+                return existing
+                    ? current.map((upload) =>
+                          upload.uploadId === uploadId ? nextUpload : upload,
+                      )
+                    : [...current, nextUpload];
             });
         };
         updateCollectionUploadProgress();
@@ -1398,20 +1440,22 @@ export function DocTable({
                     {
                         onProgress: (progress) => {
                             setCollectionUploadProgress((current) =>
-                                current
-                                    ? {
-                                          ...current,
-                                          files: current.files.map((file) =>
-                                              file.clientId ===
-                                              progress.clientId
-                                                  ? {
-                                                        ...file,
-                                                        status: progress.status,
-                                                    }
-                                                  : file,
-                                          ),
-                                      }
-                                    : current,
+                                current.map((upload) =>
+                                    upload.uploadId === uploadId
+                                        ? {
+                                              ...upload,
+                                              files: upload.files.map((file) =>
+                                                  file.clientId ===
+                                                  progress.clientId
+                                                      ? {
+                                                            ...file,
+                                                            status: progress.status,
+                                                        }
+                                                      : file,
+                                              ),
+                                          }
+                                        : upload,
+                                ),
                             );
                             if (
                                 progress.status === "completed" &&
@@ -1458,7 +1502,9 @@ export function DocTable({
                       : "This folder could not be uploaded. Please try again.",
             );
         } finally {
-            setCollectionUploadProgress(null);
+            setCollectionUploadProgress((current) =>
+                current.filter((upload) => upload.uploadId !== uploadId),
+            );
         }
     }
 
@@ -1790,7 +1836,7 @@ export function DocTable({
         fileType: string | null;
         depth: number;
         statusLabel: string;
-        nameTrailingLabel?: string;
+        nameTrailingLabel?: ReactNode;
         entryKind?: "file" | "folder";
     }) {
         return (
@@ -1844,51 +1890,56 @@ export function DocTable({
         depth: number,
         parentFolderId: string | null,
     ) {
-        if (collectionUploadProgress?.parentFolderId !== parentFolderId) {
-            return null;
-        }
-        const activeDirectFiles = collectionUploadProgress.files.filter(
-            (file) =>
-                documentUploadFolderSegments(file.entry).length === 0 &&
-                file.status !== "completed" &&
-                file.status !== "error",
+        const visibleUploads = collectionUploadProgress.filter(
+            (upload) => upload.parentFolderId === parentFolderId,
         );
-        const directRows = activeDirectFiles.map((file) =>
-            renderDocumentActivityRow({
-                key: `uploading-file-${file.clientId}`,
-                filename: file.entry.file.name,
-                fileType: null,
-                depth,
-                statusLabel: "",
-                nameTrailingLabel: "Uploading",
-            }),
-        );
-        const folderRows = collectionUploadProgress.entries
-            .filter((entry) => entry.kind === "folder")
-            .map((entry, index) => {
-                const folderFiles = collectionUploadProgress.files.filter(
+        const directRows = visibleUploads.flatMap((upload) =>
+            upload.files
+                .filter(
                     (file) =>
-                        documentUploadFolderSegments(file.entry)[0] ===
-                        entry.sourceName,
-                );
-                return renderDocumentActivityRow({
-                    key: `uploading-folder-${entry.name}-${index}`,
-                    filename: entry.name,
-                    fileType: null,
-                    depth,
-                    statusLabel: "",
-                    nameTrailingLabel: folderUploadProgressLabel(
-                        folderFiles.map((file) => file.status),
-                    ),
-                    entryKind: "folder",
-                });
-            });
+                        documentUploadFolderSegments(file.entry).length === 0 &&
+                        file.status !== "completed" &&
+                        file.status !== "error",
+                )
+                .map((file) =>
+                    renderDocumentActivityRow({
+                        key: `uploading-file-${upload.uploadId}-${file.clientId}`,
+                        filename: file.entry.file.name,
+                        fileType: null,
+                        depth,
+                        statusLabel: "",
+                        nameTrailingLabel: <UploadingTrailingLabel />,
+                    }),
+                ),
+        );
+        const folderRows = visibleUploads.flatMap((upload) =>
+            upload.entries
+                .filter((entry) => entry.kind === "folder")
+                .map((entry, index) => {
+                    const folderFiles = upload.files.filter(
+                        (file) =>
+                            documentUploadFolderSegments(file.entry)[0] ===
+                            entry.sourceName,
+                    );
+                    return renderDocumentActivityRow({
+                        key: `uploading-folder-${upload.uploadId}-${entry.name}-${index}`,
+                        filename: entry.name,
+                        fileType: null,
+                        depth,
+                        statusLabel: "",
+                        nameTrailingLabel: folderUploadProgressLabel(
+                            folderFiles.map((file) => file.status),
+                        ),
+                        entryKind: "folder",
+                    });
+                }),
+        );
         return [...directRows, ...folderRows];
     }
 
     const effectiveSort = sort ?? defaultSort;
 
-    function folderTreeIds(folderId: string): Set<string> {
+    const folderTreeIds = useCallback((folderId: string): Set<string> => {
         const ids = new Set<string>([folderId]);
         const visit = (parentId: string) => {
             folders
@@ -1900,7 +1951,7 @@ export function DocTable({
         };
         visit(folderId);
         return ids;
-    }
+    }, [folders]);
 
     function clearSelectedFolderAncestors(
         folderId: string | null | undefined,
@@ -1931,36 +1982,92 @@ export function DocTable({
         ).filter((id): id is string => !!id);
     }
 
+    function visibleCollectionRowKeys(): string[] {
+        const rows = Array.from(
+            tableRootRef.current?.querySelectorAll<HTMLElement>(
+                "[data-collection-row-key]",
+            ) ?? [],
+        );
+        rows.sort((left, right) => {
+            const topDifference =
+                left.getBoundingClientRect().top -
+                right.getBoundingClientRect().top;
+            if (topDifference !== 0) return topDifference;
+            return left.compareDocumentPosition(right) &
+                Node.DOCUMENT_POSITION_PRECEDING
+                ? 1
+                : -1;
+        });
+        return rows
+            .map((row) => row.dataset.collectionRowKey)
+            .filter((key): key is string => !!key);
+    }
+
+    function updateCollectionRowSelection(
+        rowKeys: readonly string[],
+        selected: boolean,
+    ) {
+        const documentIds = rowKeys
+            .filter((key) => key.startsWith("document:"))
+            .map((key) => key.slice("document:".length));
+        const folderIds = rowKeys
+            .filter((key) => key.startsWith("folder:"))
+            .map((key) => key.slice("folder:".length));
+        const folderTreeIdSet = new Set(
+            folderIds.flatMap((folderId) => [...folderTreeIds(folderId)]),
+        );
+        const folderDocumentIds = docs
+            .filter(
+                (document) =>
+                    document.folder_id != null &&
+                    folderTreeIdSet.has(document.folder_id),
+            )
+            .map((document) => document.id);
+
+        setSelectionCameFromSelectAll(false);
+        setSelectedFolderIds((current) => {
+            const next = new Set(current);
+            for (const id of folderIds) {
+                if (selected) next.add(id);
+                else next.delete(id);
+            }
+            return next;
+        });
+        setSelectedDocIds((current) => {
+            const next = new Set(current);
+            for (const id of [...documentIds, ...folderDocumentIds]) {
+                if (selected) next.add(id);
+                else next.delete(id);
+            }
+            return [...next];
+        });
+    }
+
     function updateDocumentSelection(
         doc: Document,
         selected: boolean,
         shiftKey: boolean,
     ) {
-        const ids = shiftKey
-            ? selectedDocumentRange(
-                  visibleDocumentIds(),
-                  selectionAnchorIdRef.current,
-                  doc.id,
+        const targetKey = `document:${doc.id}`;
+        const rowKeys = shiftKey
+            ? selectionRangeIds(
+                  visibleCollectionRowKeys(),
+                  selectionAnchorKeyRef.current,
+                  targetKey,
               )
-            : [doc.id];
+            : [targetKey];
         if (!selected) {
-            for (const id of ids) {
+            for (const key of rowKeys) {
+                if (!key.startsWith("document:")) continue;
+                const id = key.slice("document:".length);
                 clearSelectedFolderAncestors(
                     documents.find((candidate) => candidate.id === id)
                         ?.folder_id,
                 );
             }
         }
-        setSelectionCameFromSelectAll(false);
-        setSelectedDocIds((current) => {
-            const next = new Set(current);
-            for (const id of ids) {
-                if (selected) next.add(id);
-                else next.delete(id);
-            }
-            return [...next];
-        });
-        selectionAnchorIdRef.current = doc.id;
+        updateCollectionRowSelection(rowKeys, selected);
+        selectionAnchorKeyRef.current = targetKey;
     }
 
     function handleDocumentRowClick(
@@ -1972,7 +2079,11 @@ export function DocTable({
             updateDocumentSelection(doc, true, true);
             return;
         }
-        selectionAnchorIdRef.current = doc.id;
+        if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            updateDocumentSelection(doc, true, false);
+            return;
+        }
         setViewingDocVersion(null);
         setViewingDoc(doc);
     }
@@ -1999,7 +2110,7 @@ export function DocTable({
             setSelectionCameFromSelectAll(false);
             setSelectedDocIds(draggedIds);
         }
-        selectionAnchorIdRef.current = doc.id;
+        selectionAnchorKeyRef.current = `document:${doc.id}`;
     }
 
     useEffect(() => {
@@ -2050,11 +2161,13 @@ export function DocTable({
                 ? -1
                 : 1;
         const uploadingFolderNames = new Set(
-            collectionUploadProgress?.parentFolderId === parentId
-                ? collectionUploadProgress.entries
-                      .filter((entry) => entry.kind === "folder")
-                      .map((entry) => entry.name)
-                : [],
+            collectionUploadProgress.flatMap((upload) =>
+                upload.parentFolderId === parentId
+                    ? upload.entries
+                          .filter((entry) => entry.kind === "folder")
+                          .map((entry) => entry.name)
+                    : [],
+            ),
         );
         const childFolders = folders
             .filter(
@@ -2161,6 +2274,7 @@ export function DocTable({
                             <div
                                 data-document-row
                                 data-document-id={doc.id}
+                                data-collection-row-key={`document:${doc.id}`}
                                 draggable={renamingDocumentId !== doc.id}
                                 onDragStart={(event) =>
                                     handleDocumentDragStart(event, doc)
@@ -2304,6 +2418,10 @@ export function DocTable({
                                             <div className="w-8 shrink-0 flex justify-end">
                                                 {!isProcessing && (
                                                     <RowActions
+                                                        onView={() => {
+                                                            setViewingDocVersion(null);
+                                                            setViewingDoc(doc);
+                                                        }}
                                                         onRename={() => {
                                                             setRenameDocumentValue(docName);
                                                             setRenamingDocumentId(doc.id);
@@ -2413,6 +2531,9 @@ export function DocTable({
                             }}
                         >
                             <div
+                                data-folder-row
+                                data-folder-id={folder.id}
+                                data-collection-row-key={`folder:${folder.id}`}
                                 draggable={!isRenaming}
                                 onDragStart={(e) => {
                                     if (isRenaming) {
@@ -2465,7 +2586,30 @@ export function DocTable({
                                     }
                                     await handleDropOnFolder(folder.id, e.dataTransfer);
                                 }}
-                                onClick={() => openFolderView(folder.id)}
+                                onClick={(event) => {
+                                    if (
+                                        !event.shiftKey &&
+                                        !event.ctrlKey &&
+                                        !event.metaKey
+                                    ) {
+                                        openFolderView(folder.id);
+                                        return;
+                                    }
+                                    event.preventDefault();
+                                    const targetKey = `folder:${folder.id}`;
+                                    const selectedRowKeys = event.shiftKey
+                                        ? selectionRangeIds(
+                                              visibleCollectionRowKeys(),
+                                              selectionAnchorKeyRef.current,
+                                              targetKey,
+                                          )
+                                        : [targetKey];
+                                    updateCollectionRowSelection(
+                                        selectedRowKeys,
+                                        true,
+                                    );
+                                    selectionAnchorKeyRef.current = targetKey;
+                                }}
                                 onContextMenu={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
@@ -2477,10 +2621,10 @@ export function DocTable({
                                         showFolderActions: true,
                                     });
                                 }}
-                                className={`group flex h-10 min-w-max items-center pr-3 ${LIQUID_GLASS_HOVER_CLASS} cursor-pointer transition-colors ${isRenaming ? "" : "select-none"} ${dragOverFolderId === folder.id ? "bg-blue-50 ring-1 ring-inset ring-blue-200" : ""}`}
+                                className={`group flex h-10 min-w-max items-center pr-3 ${folderExplicitlySelected ? LIQUID_GLASS_SELECTED_CLASS : LIQUID_GLASS_HOVER_CLASS} cursor-pointer transition-colors ${isRenaming ? "" : "select-none"} ${dragOverFolderId === folder.id ? "bg-blue-50 ring-1 ring-inset ring-blue-200" : ""}`}
                             >
                                 <div
-                                    className={`sticky left-0 z-[60] ${DOC_NAME_COL_W} py-2 pl-3 pr-2 ${dragOverFolderId === folder.id ? "bg-blue-50" : stickyCellBg} transition-colors ${dragOverFolderId === folder.id ? "" : LIQUID_GLASS_GROUP_HOVER_CLASS}`}
+                                    className={`sticky left-0 z-[60] ${DOC_NAME_COL_W} py-2 pl-3 pr-2 ${dragOverFolderId === folder.id ? "bg-blue-50" : folderExplicitlySelected ? LIQUID_GLASS_SELECTED_CLASS : stickyCellBg} transition-colors ${dragOverFolderId === folder.id || folderExplicitlySelected ? "" : LIQUID_GLASS_GROUP_HOVER_CLASS}`}
                                     style={treeNameCellStyle(depth)}
                                 >
                                     <div className="flex items-center">
@@ -2494,6 +2638,8 @@ export function DocTable({
                                                 }
                                             }}
                                             onChange={() => {
+                                                selectionAnchorKeyRef.current =
+                                                    `folder:${folder.id}`;
                                                 setSelectionCameFromSelectAll(false);
                                                 setSelectedFolderIds((current) => {
                                                     const next = new Set(current);
@@ -2582,6 +2728,8 @@ export function DocTable({
                                 </div>
                                 <div className="w-8 shrink-0 flex justify-end" onClick={(e) => e.stopPropagation()}>
                                     <RowActions
+                                        onView={() => openFolderView(folder.id)}
+                                        viewLabel="Open"
                                         onRename={() => {
                                             setRenameFolderValue(folder.name);
                                             setRenamingFolderId(folder.id);
@@ -2613,39 +2761,98 @@ export function DocTable({
         a.click();
     }, []);
 
+    const selectedFolderRootIds = useMemo(() => {
+        const selected = selectedFolderIds;
+        return [...selected].filter((folderId) => {
+            let parentId = folders.find((folder) => folder.id === folderId)
+                ?.parent_folder_id;
+            while (parentId) {
+                if (selected.has(parentId)) return false;
+                parentId = folders.find((folder) => folder.id === parentId)
+                    ?.parent_folder_id;
+            }
+            return true;
+        });
+    }, [folders, selectedFolderIds]);
+
+    const selectedFolderTreeIds = useMemo(
+        () =>
+            new Set(
+                selectedFolderRootIds.flatMap((folderId) => [
+                    ...folderTreeIds(folderId),
+                ]),
+            ),
+        [folderTreeIds, selectedFolderRootIds],
+    );
+
+    const selectedFolderDocumentIds = useMemo(
+        () =>
+            docs
+                .filter(
+                    (document) =>
+                        document.folder_id != null &&
+                        selectedFolderTreeIds.has(document.folder_id),
+                )
+                .map((document) => document.id),
+        [docs, selectedFolderTreeIds],
+    );
+
+    const selectedStandaloneDocIds = useMemo(
+        () =>
+            selectedDocIds.filter(
+                (id) => !selectedFolderDocumentIds.includes(id),
+            ),
+        [selectedDocIds, selectedFolderDocumentIds],
+    );
+
     const handleDownloadSelectedDocs = useCallback(async () => {
-        const ids = [...selectedDocIds];
-        if (ids.length === 1) {
-            await downloadDoc(ids[0]);
-            return;
+        try {
+            if (
+                selectedStandaloneDocIds.length === 1 &&
+                selectedFolderRootIds.length === 0
+            ) {
+                await downloadDoc(selectedStandaloneDocIds[0]);
+                return;
+            }
+            const blob = await downloadDocumentsZip(
+                selectedStandaloneDocIds,
+                selectedFolderRootIds,
+            );
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = "documents.zip";
+            a.click();
+            URL.revokeObjectURL(a.href);
+        } catch (error) {
+            setCollectionActionWarning(
+                userFacingApiError(
+                    error,
+                    "The selected files and folders could not be downloaded.",
+                ),
+            );
         }
-        const blob = await downloadDocumentsZip(ids);
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "documents.zip";
-        a.click();
-        URL.revokeObjectURL(a.href);
-    }, [downloadDoc, selectedDocIds]);
+    }, [downloadDoc, selectedFolderRootIds, selectedStandaloneDocIds]);
 
     const handleRemoveSelectedFromFolder = useCallback(async () => {
-        const ids = selectedDocIds.filter((id) => docs.find((d) => d.id === id)?.folder_id != null);
+        const ids = selectedStandaloneDocIds.filter(
+            (id) => docs.find((d) => d.id === id)?.folder_id != null,
+        );
         if (ids.length === 0) return;
         setSelectedFolderIds(new Set());
         setDocuments((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, folder_id: null } : d)));
         await Promise.all(ids.map((id) => operations.moveDocument(id, null).catch(() => {})));
-    }, [docs, operations, selectedDocIds, setDocuments]);
+    }, [docs, operations, selectedStandaloneDocIds, setDocuments]);
 
-    const handleDeleteSelectedDocs = useCallback(async () => {
-        const ids = [...selectedDocIds];
+    const deleteDocumentIds = useCallback(async (ids: string[]) => {
         const owned = ids.filter((id) => {
             const doc = documents.find((candidate) => candidate.id === id);
             return !doc || !doc.user_id || !user?.id || doc.user_id === user.id;
         });
         const blocked = ids.length - owned.length;
-        setConfirmDeleteAllOpen(false);
-        setSelectionCameFromSelectAll(false);
-        setSelectedDocIds([]);
-        setSelectedFolderIds(new Set());
+        const snapshot = docs;
+        setDocuments((current) =>
+            current.filter((doc) => !owned.includes(doc.id)),
+        );
         let deletedIds: string[] = [];
         if (operations.bulkDeleteDocuments) {
             try {
@@ -2674,8 +2881,14 @@ export function DocTable({
             });
             deletedIds = (await Promise.all(workers)).flat();
         }
-        const failedCount = owned.length - deletedIds.length;
-        setDocuments((prev) => prev.filter((doc) => !deletedIds.includes(doc.id)));
+        const failedIds = owned.filter((id) => !deletedIds.includes(id));
+        const failedCount = failedIds.length;
+        if (failedIds.length > 0) {
+            setDocuments((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
+            );
+            setSelectedDocIds(failedIds);
+        }
         if (deletedIds.length > 0) {
             setExpandedVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -2689,8 +2902,13 @@ export function DocTable({
             });
         }
         if (failedCount > 0) {
-            setCollectionActionWarning(
-                `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted. Please try again.`,
+            setCollectionActionWarning((current) =>
+                [
+                    current,
+                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted. Please try again.`,
+                ]
+                    .filter(Boolean)
+                    .join(" "),
             );
         }
         if (blocked > 0) {
@@ -2701,15 +2919,132 @@ export function DocTable({
         if (deletedIds.length > 0 && operations.bulkDeleteDocuments) {
             await operations.refreshCollection();
         }
-    }, [documents, operations, selectedDocIds, setDocuments, setOwnerOnlyAction, user?.id]);
+    }, [docs, documents, operations, setDocuments, setOwnerOnlyAction, user?.id]);
 
-    const requestDeleteSelectedDocs = useCallback(async () => {
-        if (selectionCameFromSelectAll) {
-            setConfirmDeleteAllOpen(true);
-            return;
+    const handleDeleteSelectedItems = useCallback(async () => {
+        setConfirmDeleteAllOpen(false);
+        setSelectionCameFromSelectAll(false);
+        setSelectedDocIds([]);
+        setSelectedFolderIds(new Set());
+
+        const folderSnapshot = folders;
+        const documentSnapshot = docs;
+        const selectedTreeIds = selectedFolderTreeIds;
+        const selectedFolderDocIdSet = new Set(selectedFolderDocumentIds);
+
+        if (selectedTreeIds.size > 0) {
+            setFolders((current) =>
+                current.filter((folder) => !selectedTreeIds.has(folder.id)),
+            );
+            setDocuments((current) =>
+                current.filter((doc) => !selectedFolderDocIdSet.has(doc.id)),
+            );
         }
-        await handleDeleteSelectedDocs();
-    }, [handleDeleteSelectedDocs, selectionCameFromSelectAll]);
+
+        const folderResults = await Promise.all(
+            selectedFolderRootIds.map(async (folderId) => {
+                try {
+                    await operations.deleteFolder(folderId);
+                    return { folderId, deleted: true };
+                } catch (error) {
+                    console.error("delete selected folder failed", error);
+                    return { folderId, deleted: false };
+                }
+            }),
+        );
+        const failedFolderRootIds = folderResults
+            .filter((result) => !result.deleted)
+            .map((result) => result.folderId);
+        const failedFolderTreeIds = new Set(
+            failedFolderRootIds.flatMap((folderId) => [
+                ...folderTreeIds(folderId),
+            ]),
+        );
+        const failedFolderDocumentIds = documentSnapshot
+            .filter(
+                (document) =>
+                    document.folder_id != null &&
+                    failedFolderTreeIds.has(document.folder_id),
+            )
+            .map((document) => document.id);
+
+        if (failedFolderTreeIds.size > 0) {
+            setFolders((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current,
+                    folderSnapshot,
+                    [...failedFolderTreeIds],
+                ),
+            );
+            setDocuments((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current,
+                    documentSnapshot,
+                    failedFolderDocumentIds,
+                ),
+            );
+            setSelectedFolderIds(new Set(failedFolderRootIds));
+            setCollectionActionWarning(
+                `${failedFolderRootIds.length} ${failedFolderRootIds.length === 1 ? "folder" : "folders"} could not be deleted. Please try again.`,
+            );
+        }
+
+        const deletedFolderTreeIds = new Set(
+            [...selectedTreeIds].filter(
+                (folderId) => !failedFolderTreeIds.has(folderId),
+            ),
+        );
+        if (deletedFolderTreeIds.size > 0) {
+            const deletedFolderDocumentIds = documentSnapshot
+                .filter(
+                    (document) =>
+                        document.folder_id != null &&
+                        deletedFolderTreeIds.has(document.folder_id),
+                )
+                .map((document) => document.id);
+            const currentFolderId = viewedFolderIdRef.current;
+            if (currentFolderId && deletedFolderTreeIds.has(currentFolderId)) {
+                updateViewedFolder(null);
+            }
+            setExpandedFolderIds((current) => {
+                const next = new Set(current);
+                for (const id of deletedFolderTreeIds) next.delete(id);
+                return next;
+            });
+            setExpandedVersionDocIds((current) => {
+                const next = new Set(current);
+                for (const id of deletedFolderDocumentIds) next.delete(id);
+                return next;
+            });
+            setVersionsByDocId((current) => {
+                const next = new Map(current);
+                for (const id of deletedFolderDocumentIds) next.delete(id);
+                return next;
+            });
+        }
+
+        await deleteDocumentIds(selectedStandaloneDocIds);
+        if (folderResults.some((result) => result.deleted)) {
+            await operations.refreshCollection();
+        }
+    }, [
+        deleteDocumentIds,
+        docs,
+        folderTreeIds,
+        folders,
+        operations,
+        selectedFolderDocumentIds,
+        selectedFolderRootIds,
+        selectedFolderTreeIds,
+        selectedStandaloneDocIds,
+        setDocuments,
+        setFolders,
+        updateViewedFolder,
+    ]);
+
+    const requestDeleteSelectedItems = useCallback(() => {
+        setConfirmDeleteAllOpen(true);
+    }, []);
 
     const sidePanelDoc = viewingDoc ? (docs.find((doc) => doc.id === viewingDoc.id) ?? viewingDoc) : null;
     const versionUploadAccept = ".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt";
@@ -2819,8 +3154,11 @@ export function DocTable({
         });
     }, [docs, effectiveSort, enableHeaderFilters, q, serverQueryActive, typeFilter]);
     const hasVisibleCollectionUpload =
-        collectionUploadProgress?.parentFolderId === viewedFolderId &&
-        collectionUploadProgress.entries.length > 0;
+        collectionUploadProgress.some(
+            (upload) =>
+                upload.parentFolderId === viewedFolderId &&
+                upload.entries.length > 0,
+        );
     const viewedFolderIsEmpty =
         !!viewedFolder &&
         !loadingChildFolderIds.has(viewedFolder.id) &&
@@ -2901,11 +3239,59 @@ export function DocTable({
         />
     ) : null;
 
-    const allDocsSelected = filteredDocs.length > 0 && filteredDocs.every((d) => selectedDocIds.includes(d.id));
-    const someDocsSelected = !allDocsSelected && filteredDocs.some((d) => selectedDocIds.includes(d.id));
+    const selectAllFolderIds = useMemo(() => {
+        if (q) return [];
+
+        const visibleFolderIds: string[] = [];
+        const visitedFolderIds = new Set<string>();
+        const visitLevel = (parentId: string | null) => {
+            const uploadingFolderNames = new Set(
+                collectionUploadProgress.flatMap((upload) =>
+                    upload.parentFolderId === parentId
+                        ? upload.entries
+                              .filter((entry) => entry.kind === "folder")
+                              .map((entry) => entry.name)
+                        : [],
+                ),
+            );
+
+            for (const folder of folders) {
+                if (
+                    folder.parent_folder_id !== parentId ||
+                    uploadingFolderNames.has(folder.name) ||
+                    visitedFolderIds.has(folder.id)
+                ) {
+                    continue;
+                }
+                visitedFolderIds.add(folder.id);
+                visibleFolderIds.push(folder.id);
+                if (expandedFolderIds.has(folder.id)) {
+                    visitLevel(folder.id);
+                }
+            }
+        };
+
+        visitLevel(viewedFolderId);
+        return visibleFolderIds;
+    }, [
+        collectionUploadProgress,
+        expandedFolderIds,
+        folders,
+        q,
+        viewedFolderId,
+    ]);
+    const {
+        allSelected: allVisibleRowsSelected,
+        someSelected: someVisibleRowsSelected,
+    } = collectionSelectAllState(
+        filteredDocs.map((document) => document.id),
+        selectAllFolderIds,
+        selectedDocIds,
+        selectedFolderIds,
+    );
 
     const handleToggleAllDocuments = useCallback(async () => {
-        if (allDocsSelected || selectionCameFromSelectAll) {
+        if (allVisibleRowsSelected || selectionCameFromSelectAll) {
             setSelectedDocIds([]);
             setSelectedFolderIds(new Set());
             setSelectionCameFromSelectAll(false);
@@ -2914,6 +3300,7 @@ export function DocTable({
 
         if (!onSelectAllMatching) {
             setSelectedDocIds(filteredDocs.map((document) => document.id));
+            setSelectedFolderIds(new Set(selectAllFolderIds));
             setSelectionCameFromSelectAll(true);
             return;
         }
@@ -2926,6 +3313,7 @@ export function DocTable({
                 sort,
             });
             setSelectedDocIds(ids);
+            setSelectedFolderIds(new Set(selectAllFolderIds));
             setSelectionCameFromSelectAll(true);
         } catch (error) {
             console.error("Select all matching documents failed", error);
@@ -2938,18 +3326,38 @@ export function DocTable({
         } finally {
             setSelectingAllDocuments(false);
         }
-    }, [allDocsSelected, filteredDocs, onSelectAllMatching, search, selectionCameFromSelectAll, sort, typeFilter]);
+    }, [
+        allVisibleRowsSelected,
+        filteredDocs,
+        onSelectAllMatching,
+        search,
+        selectAllFolderIds,
+        selectionCameFromSelectAll,
+        sort,
+        typeFilter,
+    ]);
 
+    const selectedItemCount =
+        selectedFolderIds.size + selectedStandaloneDocIds.length;
     const selectionActions = useMemo<DocTableSelectionActions | null>(() => {
-        if (selectedDocIds.length === 0) return null;
+        if (selectedItemCount === 0) return null;
         return {
-            selectedCount: selectedDocIds.length,
-            hasDocumentsInFolders: selectedDocIds.some((id) => docs.find((d) => d.id === id)?.folder_id != null),
+            selectedCount: selectedItemCount,
+            hasDocumentsInFolders: selectedStandaloneDocIds.some(
+                (id) => docs.find((d) => d.id === id)?.folder_id != null,
+            ),
             onDownload: handleDownloadSelectedDocs,
             onRemoveFromFolder: handleRemoveSelectedFromFolder,
-            onDelete: requestDeleteSelectedDocs,
+            onDelete: async () => requestDeleteSelectedItems(),
         };
-    }, [docs, handleDownloadSelectedDocs, handleRemoveSelectedFromFolder, requestDeleteSelectedDocs, selectedDocIds]);
+    }, [
+        docs,
+        handleDownloadSelectedDocs,
+        handleRemoveSelectedFromFolder,
+        requestDeleteSelectedItems,
+        selectedItemCount,
+        selectedStandaloneDocIds,
+    ]);
 
     useEffect(() => {
         onSelectionActionsChange?.(selectionActions);
@@ -3009,6 +3417,16 @@ export function DocTable({
             )}
         </div>
     ) : undefined;
+    const selectedDeleteSummary = [
+        selectedFolderIds.size > 0
+            ? `${selectedFolderIds.size} ${selectedFolderIds.size === 1 ? "folder" : "folders"}`
+            : null,
+        selectedStandaloneDocIds.length > 0
+            ? `${selectedStandaloneDocIds.length} ${selectedStandaloneDocIds.length === 1 ? "file" : "files"}`
+            : null,
+    ]
+        .filter(Boolean)
+        .join(" and ");
 
     return (
         <div
@@ -3079,13 +3497,33 @@ export function DocTable({
                 onConfirm={() => finishFolderUploadConflict("rename")}
             />
             <ConfirmPopup
-                open={confirmDeleteAllOpen && selectedDocIds.length > 0}
-                title="Delete all selected files?"
-                message={`This will permanently delete every selected file you own, including selected files not currently shown in the table. Files owned by others will be skipped. ${selectedDocIds.length} files are selected.`}
+                open={confirmDeleteAllOpen && !!selectionActions}
+                title="Delete selected items?"
+                message={
+                    <div className="space-y-2">
+                        <p>
+                            This will permanently delete{" "}
+                            <span className="font-medium text-gray-950">
+                                {selectedDeleteSummary}
+                            </span>
+                            .
+                        </p>
+                        {selectedFolderIds.size > 0 && (
+                            <p>
+                                All nested folders and files contained in the
+                                selected folders will also be deleted.
+                            </p>
+                        )}
+                        <p>
+                            Files owned by others will be skipped. This action
+                            cannot be undone.
+                        </p>
+                    </div>
+                }
                 confirmLabel="Delete"
                 cancelLabel="Cancel"
                 onCancel={() => setConfirmDeleteAllOpen(false)}
-                onConfirm={() => void handleDeleteSelectedDocs()}
+                onConfirm={() => void handleDeleteSelectedItems()}
             />
             <ConfirmPopup
                 open={!!pendingVersionDrop}
@@ -3152,13 +3590,21 @@ export function DocTable({
                             <TableStickyCell header widthClassName={DOC_NAME_COL_W} bgClassName={stickyCellBg}>
                                 <input
                                     type="checkbox"
-                                    checked={selectionCameFromSelectAll || allDocsSelected}
+                                    checked={
+                                        selectionCameFromSelectAll ||
+                                        allVisibleRowsSelected
+                                    }
                                     disabled={selectingAllDocuments}
                                     ref={(el) => {
-                                        if (el) el.indeterminate = someDocsSelected;
+                                        if (el) {
+                                            el.indeterminate =
+                                                !selectionCameFromSelectAll &&
+                                                someVisibleRowsSelected;
+                                        }
                                     }}
                                     onChange={() => void handleToggleAllDocuments()}
                                     className={TABLE_CHECKBOX_CLASS}
+                                    aria-label="Select all files and folders"
                                 />
                                 <span className="mr-1">Name</span>
                                 {nameFilterButton}
@@ -3341,6 +3787,7 @@ export function DocTable({
                                                         <div
                                                             data-document-row
                                                             data-document-id={doc.id}
+                                                            data-collection-row-key={`document:${doc.id}`}
                                                             draggable={renamingDocumentId !== doc.id}
                                                             onDragStart={(event) =>
                                                                 handleDocumentDragStart(
@@ -3487,6 +3934,10 @@ export function DocTable({
                                                             <div className="w-8 shrink-0 flex justify-end">
                                                                 {!isProcessing && (
                                                                     <RowActions
+                                                                        onView={() => {
+                                                                            setViewingDocVersion(null);
+                                                                            setViewingDoc(doc);
+                                                                        }}
                                                                         onRename={() => {
                                                                             setRenameDocumentValue(docName);
                                                                             setRenamingDocumentId(doc.id);
@@ -3570,6 +4021,16 @@ export function DocTable({
                                     const menuDocHasVersions =
                                         typeof menuDocVersionNumber === "number" && menuDocVersionNumber > 1;
                                     const menuDocVersionsOpen = menuDoc ? expandedVersionDocIds.has(menuDoc.id) : false;
+                                    const menuAppliesToSelection =
+                                        !!menuDoc &&
+                                        selectedDocIds.includes(menuDoc.id) &&
+                                        selectedItemCount > 1;
+                                    const menuFolderAppliesToSelection =
+                                        !!contextMenu.folderId &&
+                                        selectedFolderIds.has(
+                                            contextMenu.folderId,
+                                        ) &&
+                                        selectedItemCount > 1;
                                     const surfaceProps: RowActionMenuSurfaceProps = {
                                         className: "fixed z-[120]",
                                         style: {
@@ -3585,32 +4046,87 @@ export function DocTable({
                                                 ref={contextMenuRef}
                                                 surfaceProps={surfaceProps}
                                                 onClose={() => setContextMenu(null)}
-                                                onRename={() => {
-                                                    setRenameDocumentValue(menuDoc.filename);
-                                                    setRenamingDocumentId(menuDoc.id);
-                                                }}
+                                                onView={
+                                                    menuAppliesToSelection
+                                                        ? undefined
+                                                        : () => {
+                                                              setViewingDocVersion(null);
+                                                              setViewingDoc(menuDoc);
+                                                          }
+                                                }
+                                                onRename={
+                                                    menuAppliesToSelection
+                                                        ? undefined
+                                                        : () => {
+                                                              setRenameDocumentValue(menuDoc.filename);
+                                                              setRenamingDocumentId(menuDoc.id);
+                                                          }
+                                                }
                                                 renameLabel="Rename document"
-                                                onDownload={() => downloadDoc(menuDoc.id)}
+                                                onDownload={() =>
+                                                    menuAppliesToSelection
+                                                        ? handleDownloadSelectedDocs()
+                                                        : downloadDoc(menuDoc.id)
+                                                }
                                                 onShowAllVersions={
-                                                    menuDocHasVersions && !menuDocVersionsOpen
+                                                    !menuAppliesToSelection &&
+                                                    menuDocHasVersions &&
+                                                    !menuDocVersionsOpen
                                                         ? () => void toggleVersions(menuDoc.id)
                                                         : undefined
                                                 }
-                                                onUploadNewVersion={() => void handleUploadNewVersion(menuDoc)}
+                                                onUploadNewVersion={
+                                                    menuAppliesToSelection
+                                                        ? undefined
+                                                        : () => void handleUploadNewVersion(menuDoc)
+                                                }
                                                 onRemoveFromFolder={
-                                                    menuDoc.folder_id
-                                                        ? () => void handleRemoveDocFromFolder(menuDoc.id)
+                                                    menuAppliesToSelection
+                                                        ? selectedStandaloneDocIds.some(
+                                                              (id) => docs.find((doc) => doc.id === id)?.folder_id,
+                                                          )
+                                                            ? () => void handleRemoveSelectedFromFolder()
+                                                            : undefined
+                                                        : menuDoc.folder_id
+                                                          ? () => void handleRemoveDocFromFolder(menuDoc.id)
                                                         : undefined
                                                 }
-                                                onDelete={() => requestRemoveDoc(menuDoc)}
-                                                deleteDisabled={isSharedDocument(menuDoc)}
+                                                onDelete={() =>
+                                                    menuAppliesToSelection
+                                                        ? requestDeleteSelectedItems()
+                                                        : requestRemoveDoc(menuDoc)
+                                                }
+                                                deleteLabel={
+                                                    menuAppliesToSelection
+                                                        ? `Delete ${selectedItemCount} items`
+                                                        : undefined
+                                                }
+                                                deleteDisabled={
+                                                    !menuAppliesToSelection && isSharedDocument(menuDoc)
+                                                }
                                             />
                                         ) : (
                                             <RowActionMenuItems
                                                 ref={contextMenuRef}
                                                 surfaceProps={surfaceProps}
                                                 onClose={() => setContextMenu(null)}
-                                                onNewSubfolder={() => {
+                                                onView={
+                                                    !menuFolderAppliesToSelection &&
+                                                    contextMenu.showFolderActions &&
+                                                    contextMenu.folderId
+                                                        ? () =>
+                                                              openFolderView(
+                                                                  contextMenu.folderId!,
+                                                              )
+                                                        : undefined
+                                                }
+                                                viewLabel="Open"
+                                                onDownload={
+                                                    menuFolderAppliesToSelection
+                                                        ? handleDownloadSelectedDocs
+                                                        : undefined
+                                                }
+                                                onNewSubfolder={menuFolderAppliesToSelection ? undefined : () => {
                                                     setCreatingFolderIn(contextMenu.folderId);
                                                     setNewFolderName("");
                                                     if (contextMenu.folderId) {
@@ -3628,6 +4144,7 @@ export function DocTable({
                                                         : "New subfolder"
                                                 }
                                                 onRename={
+                                                    !menuFolderAppliesToSelection &&
                                                     contextMenu.showFolderActions && contextMenu.folderId
                                                         ? () => {
                                                               const f = folders.find(
@@ -3640,11 +4157,17 @@ export function DocTable({
                                                 }
                                                 renameLabel="Rename folder"
                                                 onDelete={
-                                                    contextMenu.showFolderActions && contextMenu.folderId
+                                                    menuFolderAppliesToSelection
+                                                        ? requestDeleteSelectedItems
+                                                        : contextMenu.showFolderActions && contextMenu.folderId
                                                         ? () => requestDeleteFolder(contextMenu.folderId!)
                                                         : undefined
                                                 }
-                                                deleteLabel="Delete folder"
+                                                deleteLabel={
+                                                    menuFolderAppliesToSelection
+                                                        ? `Delete ${selectedItemCount} items`
+                                                        : "Delete folder"
+                                                }
                                             />
                                         ),
                                         document.body,

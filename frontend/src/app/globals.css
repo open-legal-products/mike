@@ -553,3 +553,66 @@
         box-shadow: 0 0 0 2px rgba(59, 130, 246, 0);
     }
 }
+
+.uploading-ellipsis {
+    display: inline-grid;
+    width: 1.5em;
+}
+
+.uploading-ellipsis-one,
+.uploading-ellipsis-two,
+.uploading-ellipsis-three {
+    grid-area: 1 / 1;
+}
+
+.uploading-ellipsis-one {
+    animation: uploadingEllipsisOne 1.2s steps(1, end) infinite;
+}
+
+.uploading-ellipsis-two {
+    animation: uploadingEllipsisTwo 1.2s steps(1, end) infinite;
+}
+
+.uploading-ellipsis-three {
+    animation: uploadingEllipsisThree 1.2s steps(1, end) infinite;
+}
+
+@keyframes uploadingEllipsisOne {
+    0%, 32% {
+        opacity: 1;
+    }
+    33%, 100% {
+        opacity: 0;
+    }
+}
+
+@keyframes uploadingEllipsisTwo {
+    0%, 32%, 66%, 100% {
+        opacity: 0;
+    }
+    33%, 65% {
+        opacity: 1;
+    }
+}
+
+@keyframes uploadingEllipsisThree {
+    0%, 65% {
+        opacity: 0;
+    }
+    66%, 100% {
+        opacity: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .uploading-ellipsis-one,
+    .uploading-ellipsis-two,
+    .uploading-ellipsis-three {
+        animation: none;
+    }
+
+    .uploading-ellipsis-one,
+    .uploading-ellipsis-two {
+        opacity: 0;
+    }
+}

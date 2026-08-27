@@ -100,7 +100,7 @@ describe("POST /single-documents/download-zip — bounds", () => {
             .send({ document_ids: [] });
 
         expect(res.status).toBe(400);
-        expect(res.body.detail).toMatch(/document_ids is required/i);
+        expect(res.body.detail).toMatch(/document_ids or folder_ids is required/i);
     });
 
     it("returns 404 when none of the requested documents are accessible", async () => {
@@ -110,6 +110,16 @@ describe("POST /single-documents/download-zip — bounds", () => {
             .post("/single-documents/download-zip")
             .set("Authorization", "Bearer test")
             .send({ document_ids: ["d-other-user"] });
+
+        expect(res.status).toBe(404);
+        expect(res.body.detail).toBe("No documents found");
+    });
+
+    it("accepts folder-only downloads without requiring loaded document ids", async () => {
+        const res = await request(app)
+            .post("/single-documents/download-zip")
+            .set("Authorization", "Bearer test")
+            .send({ folder_ids: ["folder-not-accessible"] });
 
         expect(res.status).toBe(404);
         expect(res.body.detail).toBe("No documents found");

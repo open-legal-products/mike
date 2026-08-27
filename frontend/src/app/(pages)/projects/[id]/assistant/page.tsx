@@ -4,6 +4,8 @@ import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { deleteChat, renameChat } from "@/app/lib/mikeApi";
+import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { ProjectAssistantTable } from "@/app/components/projects/ProjectAssistantTable";
 import {
     ProjectSectionToolbar,
@@ -107,8 +109,19 @@ export default function ProjectAssistantPage({ params }: Props) {
             setOwnerOnlyAction("delete this chat");
             return;
         }
-        await deleteChat(chat.id);
         setProjectChats((prev) => (prev ?? []).filter((c) => c.id !== chat.id));
+        try {
+            await deleteChat(chat.id);
+        } catch (error) {
+            setProjectChats((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current ?? [],
+                    chats,
+                    [chat.id],
+                ),
+            );
+            throw error;
+        }
     }
 
     const handleDeleteSelectedChats = useCallback(async () => {
@@ -120,10 +133,23 @@ export default function ProjectAssistantPage({ params }: Props) {
         });
         const blocked = ids.length - owned.length;
         setSelectedChatIds([]);
-        await Promise.all(owned.map((id) => deleteChat(id).catch(() => {})));
         setProjectChats((prev) =>
             (prev ?? []).filter((chat) => !owned.includes(chat.id)),
         );
+        const { failedIds } = await deleteTabularReviewsWithConcurrency(
+            owned,
+            deleteChat,
+        );
+        if (failedIds.length > 0) {
+            setProjectChats((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current ?? [],
+                    chats,
+                    failedIds,
+                ),
+            );
+            setSelectedChatIds(failedIds);
+        }
         if (blocked > 0) {
             setOwnerOnlyAction(
                 `delete ${blocked} of the selected chats - only the chat creator can delete a chat`,
@@ -160,6 +186,7 @@ export default function ProjectAssistantPage({ params }: Props) {
                     )
                 }
                 onDeleteChat={handleDeleteChatRow}
+                onDeleteSelectedChats={handleDeleteSelectedChats}
                 onOwnerOnlyAction={setOwnerOnlyAction}
                 submitChatRename={submitChatRename}
                 setSelectedChatIds={setSelectedChatIds}

@@ -21,6 +21,7 @@ import {
     TablePrimaryCell,
     TableRow,
     TableScrollArea,
+    rowActionSelectionIds,
     type TableSortDirection,
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
@@ -49,6 +50,7 @@ export function ProjectReviewsTable({
     onOpenReview,
     onOpenDetails,
     onDeleteReview,
+    onDeleteSelectedReviews,
     onOwnerOnlyAction,
     setSelectedReviewIds,
     onToggleAll,
@@ -74,6 +76,7 @@ export function ProjectReviewsTable({
     onOpenReview: (reviewId: string) => void;
     onOpenDetails: (review: TabularReview) => void;
     onDeleteReview: (review: TabularReview) => Promise<void> | void;
+    onDeleteSelectedReviews: () => Promise<void> | void;
     onOwnerOnlyAction: (action: string) => void;
     setSelectedReviewIds: Dispatch<SetStateAction<string[]>>;
     onToggleAll: () => void;
@@ -272,6 +275,11 @@ export function ProjectReviewsTable({
                 <TableBody>
                     {visibleReviews.map((review) => {
                         const deleting = deletingReviewIds.has(review.id);
+                        const actionIds = rowActionSelectionIds(
+                            review.id,
+                            selectedReviewIds,
+                        );
+                        const appliesToSelection = actionIds.length > 1;
                         return (
                             <TableRow
                                 key={review.id}
@@ -287,21 +295,41 @@ export function ProjectReviewsTable({
                                               <RowActionMenuItems
                                                   onClose={close}
                                                   surfaceProps={menuProps}
-                                                  onEditDetails={() => {
-                                                      if (
-                                                          currentUserId &&
-                                                          review.user_id !==
-                                                              currentUserId
-                                                      ) {
-                                                          onOwnerOnlyAction(
-                                                              "edit tabular review details",
-                                                          );
-                                                          return;
-                                                      }
-                                                      onOpenDetails(review);
-                                                  }}
+                                                  onView={
+                                                      appliesToSelection
+                                                          ? undefined
+                                                          : () =>
+                                                                onOpenReview(
+                                                                    review.id,
+                                                                )
+                                                  }
+                                                  viewLabel="Open"
+                                                  onEditDetails={
+                                                      appliesToSelection
+                                                          ? undefined
+                                                          : () => {
+                                                                if (
+                                                                    currentUserId &&
+                                                                    review.user_id !==
+                                                                        currentUserId
+                                                                ) {
+                                                                    onOwnerOnlyAction(
+                                                                        "edit tabular review details",
+                                                                    );
+                                                                    return;
+                                                                }
+                                                                onOpenDetails(review);
+                                                            }
+                                                  }
                                                   onDelete={() =>
-                                                      onDeleteReview(review)
+                                                      appliesToSelection
+                                                          ? onDeleteSelectedReviews()
+                                                          : onDeleteReview(review)
+                                                  }
+                                                  deleteLabel={
+                                                      appliesToSelection
+                                                          ? `Delete ${actionIds.length} reviews`
+                                                          : undefined
                                                   }
                                               />
                                           )
@@ -356,6 +384,10 @@ export function ProjectReviewsTable({
                                     onClick={(e) => e.stopPropagation()}
                                 >
                                     <RowActions
+                                        onView={() =>
+                                            onOpenReview(review.id)
+                                        }
+                                        viewLabel="Open"
                                         onEditDetails={() => {
                                             if (
                                                 currentUserId &&

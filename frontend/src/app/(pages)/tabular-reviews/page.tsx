@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, Loader2 } from "lucide-react";
 import {
@@ -38,6 +39,7 @@ import {
     TablePrimaryCell,
     TableRow,
     TableScrollArea,
+    rowActionSelectionIds,
     type TableSortDirection,
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
@@ -305,25 +307,21 @@ export default function TabularReviewsPage() {
         });
         const blocked = ids.length - owned.length;
         setSelectedIds([]);
-        setDeletingReviewIds((current) => {
-            const next = new Set(current);
-            for (const id of owned) next.add(id);
-            return next;
-        });
-        const { deletedIds, failedIds } =
+        const snapshot = reviews;
+        setReviews((current) =>
+            current.filter((review) => !owned.includes(review.id)),
+        );
+        const { failedIds } =
             await deleteTabularReviewsWithConcurrency(
                 owned,
                 deleteTabularReview,
             );
-        setDeletingReviewIds((current) => {
-            const next = new Set(current);
-            for (const id of owned) next.delete(id);
-            return next;
-        });
         setSelectedIds(failedIds);
-        setReviews((prev) =>
-            prev.filter((review) => !deletedIds.includes(review.id)),
-        );
+        if (failedIds.length > 0) {
+            setReviews((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
+            );
+        }
         const notices = [
             blocked > 0
                 ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only the review creator can delete them.`
@@ -340,12 +338,18 @@ export default function TabularReviewsPage() {
             setOwnerOnlyAction("delete this tabular review");
             return;
         }
+        const snapshot = reviews;
         setDeletingReviewIds((current) => new Set(current).add(review.id));
+        setReviews((current) =>
+            current.filter((candidate) => candidate.id !== review.id),
+        );
         try {
             await deleteTabularReview(review.id);
-            setReviews((prev) =>
-                prev.filter((current) => current.id !== review.id),
+        } catch (error) {
+            setReviews((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, [review.id]),
             );
+            throw error;
         } finally {
             setDeletingReviewIds((current) => {
                 const next = new Set(current);
@@ -607,6 +611,11 @@ export default function TabularReviewsPage() {
                                 ? projectNameById.get(review.project_id)
                                 : null;
                             const deleting = deletingReviewIds.has(review.id);
+                            const actionIds = rowActionSelectionIds(
+                                review.id,
+                                selectedIds,
+                            );
+                            const appliesToSelection = actionIds.length > 1;
                             return (
                                 <TableRow
                                     key={review.id}
@@ -622,15 +631,37 @@ export default function TabularReviewsPage() {
                                                   <RowActionMenuItems
                                                       onClose={close}
                                                       surfaceProps={menuProps}
-                                                      onEditDetails={() => {
-                                                          requestReviewDetails(
-                                                              review,
-                                                          );
-                                                      }}
+                                                      onView={
+                                                          appliesToSelection
+                                                              ? undefined
+                                                              : () =>
+                                                                    router.push(
+                                                                        review.project_id
+                                                                            ? `/projects/${review.project_id}/tabular-reviews/${review.id}`
+                                                                            : `/tabular-reviews/${review.id}`,
+                                                                    )
+                                                      }
+                                                      viewLabel="Open"
+                                                      onEditDetails={
+                                                          appliesToSelection
+                                                              ? undefined
+                                                              : () => {
+                                                                    requestReviewDetails(
+                                                                        review,
+                                                                    );
+                                                                }
+                                                      }
                                                       onDelete={() =>
-                                                          handleDeleteReviewRow(
-                                                              review,
-                                                          )
+                                                          appliesToSelection
+                                                              ? requestDeleteSelected()
+                                                              : handleDeleteReviewRow(
+                                                                    review,
+                                                                )
+                                                      }
+                                                      deleteLabel={
+                                                          appliesToSelection
+                                                              ? `Delete ${actionIds.length} reviews`
+                                                              : undefined
                                                       }
                                                   />
                                               )
@@ -700,6 +731,14 @@ export default function TabularReviewsPage() {
                                         onClick={(e) => e.stopPropagation()}
                                     >
                                         <RowActions
+                                            onView={() =>
+                                                router.push(
+                                                    review.project_id
+                                                        ? `/projects/${review.project_id}/tabular-reviews/${review.id}`
+                                                        : `/tabular-reviews/${review.id}`,
+                                                )
+                                            }
+                                            viewLabel="Open"
                                             onEditDetails={() => {
                                                 requestReviewDetails(review);
                                             }}

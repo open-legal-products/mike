@@ -516,6 +516,18 @@ describe("downloadDocumentsZip", () => {
         expect(url).toBe("/api/single-documents/download-zip");
         expect(JSON.parse(init.body as string)).toEqual({
             document_ids: ["d1", "d2"],
+            folder_ids: [],
+        });
+    });
+
+    it("POSTs folder ids for recursive downloads", async () => {
+        fetchMock.mockResolvedValue(new Response("zip", { status: 200 }));
+
+        await downloadDocumentsZip(["d1"], ["folder-1"]);
+
+        expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
+            document_ids: ["d1"],
+            folder_ids: ["folder-1"],
         });
     });
 

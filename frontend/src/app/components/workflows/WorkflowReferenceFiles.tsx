@@ -192,6 +192,22 @@ export const WorkflowReferenceFiles = forwardRef<
     }
   }
 
+  async function view(file: WorkflowReferenceDocument) {
+    setBusyId(file.id);
+    try {
+      const resolved = await getWorkflowReferenceUrl(workflowId, file.id);
+      const anchor = document.createElement("a");
+      anchor.href = resolved.url;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.click();
+    } catch (caught) {
+      setError(userFacingApiError(caught, "File could not be opened."));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function confirmRemove() {
     const file = pendingDeleteFile;
     if (!file) return;
@@ -308,6 +324,7 @@ export const WorkflowReferenceFiles = forwardRef<
                   onClick={(event) => event.stopPropagation()}
                 >
                   <RowActions
+                    onView={() => void view(file)}
                     onDownload={() => void download(file)}
                     onUploadNewVersion={
                       readOnly

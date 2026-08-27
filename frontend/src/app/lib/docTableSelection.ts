@@ -1,6 +1,27 @@
 export const MULTI_DOCUMENT_DRAG_TYPE = "application/mike-docs";
 export const SINGLE_DOCUMENT_DRAG_TYPE = "application/mike-doc";
 
+export function collectionSelectAllState(
+    visibleDocumentIds: readonly string[],
+    visibleFolderIds: readonly string[],
+    selectedDocumentIds: readonly string[],
+    selectedFolderIds: ReadonlySet<string>,
+): { allSelected: boolean; someSelected: boolean } {
+    const selectedDocumentIdSet = new Set(selectedDocumentIds);
+    const hasVisibleRows =
+        visibleDocumentIds.length > 0 || visibleFolderIds.length > 0;
+    const allSelected =
+        hasVisibleRows &&
+        visibleDocumentIds.every((id) => selectedDocumentIdSet.has(id)) &&
+        visibleFolderIds.every((id) => selectedFolderIds.has(id));
+    const someSelected =
+        !allSelected &&
+        (visibleDocumentIds.some((id) => selectedDocumentIdSet.has(id)) ||
+            visibleFolderIds.some((id) => selectedFolderIds.has(id)));
+
+    return { allSelected, someSelected };
+}
+
 export function selectedDocumentRange(
     visibleDocumentIds: readonly string[],
     anchorId: string | null,

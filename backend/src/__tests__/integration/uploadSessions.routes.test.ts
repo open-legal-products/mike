@@ -100,20 +100,6 @@ describe("upload session routes", () => {
     expect(mocks.getSignedUploadUrl).not.toHaveBeenCalled();
   });
 
-  it("maps the atomic active-session guard to a retryable client response", async () => {
-    mocks.rpc.mockResolvedValue({
-      error: { message: "active_upload_session_limit_exceeded" },
-    });
-
-    const response = await request(app)
-      .post("/upload-sessions")
-      .send(manifest());
-
-    expect(response.status).toBe(429);
-    expect(response.body.code).toBe("active_upload_session_limit_exceeded");
-    expect(mocks.getSignedUploadUrl).not.toHaveBeenCalled();
-  });
-
   it("blocks a concurrent upload that targets the same mutable item", async () => {
     mocks.rpc.mockResolvedValue({ error: { message: "upload_target_busy" } });
 

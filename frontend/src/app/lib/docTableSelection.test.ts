@@ -1,11 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+    collectionSelectAllState,
     MULTI_DOCUMENT_DRAG_TYPE,
     readDocumentDragPayload,
     selectedDocumentRange,
     SINGLE_DOCUMENT_DRAG_TYPE,
     writeDocumentDragPayload,
 } from "./docTableSelection";
+
+describe("DocTable select all state", () => {
+    it("treats a folder-only view as fully selected", () => {
+        expect(
+            collectionSelectAllState(
+                [],
+                ["folder-a", "folder-b"],
+                [],
+                new Set(["folder-a", "folder-b"]),
+            ),
+        ).toEqual({ allSelected: true, someSelected: false });
+    });
+
+    it("treats a mixed file and folder selection as partial", () => {
+        expect(
+            collectionSelectAllState(
+                ["document-a"],
+                ["folder-a"],
+                ["document-a"],
+                new Set(),
+            ),
+        ).toEqual({ allSelected: false, someSelected: true });
+    });
+});
 
 describe("DocTable range selection", () => {
     it("selects every visible row between the anchor and target", () => {

@@ -21,6 +21,7 @@ import {
     usePaginatedTabularReviews,
 } from "@/app/hooks/usePaginatedTabularReviews";
 import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 
 interface Props {
     params: Promise<{ id: string }>;
@@ -156,10 +157,18 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
             setOwnerOnlyAction("delete this tabular review");
             return;
         }
+        const snapshot = reviews;
         setDeletingReviewIds((current) => new Set(current).add(review.id));
+        setReviews((current) =>
+            current.filter((candidate) => candidate.id !== review.id),
+        );
         try {
             await deleteTabularReview(review.id);
-            setReviews((prev) => prev.filter((r) => r.id !== review.id));
+        } catch (error) {
+            setReviews((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, [review.id]),
+            );
+            throw error;
         } finally {
             setDeletingReviewIds((current) => {
                 const next = new Set(current);
@@ -179,25 +188,21 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         });
         const blocked = ids.length - owned.length;
         setSelectedReviewIds([]);
-        setDeletingReviewIds((current) => {
-            const next = new Set(current);
-            for (const id of owned) next.add(id);
-            return next;
-        });
-        const { deletedIds, failedIds } =
+        const snapshot = reviews;
+        setReviews((current) =>
+            current.filter((review) => !owned.includes(review.id)),
+        );
+        const { failedIds } =
             await deleteTabularReviewsWithConcurrency(
                 owned,
                 deleteTabularReview,
             );
-        setDeletingReviewIds((current) => {
-            const next = new Set(current);
-            for (const id of owned) next.delete(id);
-            return next;
-        });
         setSelectedReviewIds(failedIds);
-        setReviews((prev) =>
-            prev.filter((review) => !deletedIds.includes(review.id)),
-        );
+        if (failedIds.length > 0) {
+            setReviews((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
+            );
+        }
         const notices = [
             blocked > 0
                 ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only the review creator can delete them.`
@@ -209,6 +214,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         if (notices.length > 0) setBulkDeleteNotice(notices.join(" "));
     }, [
         getReviewOwnerId,
+        reviews,
         selectedReviewIds,
         setReviews,
         setSelectedReviewIds,
@@ -259,6 +265,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 }
                 onOpenDetails={handleOpenDetails}
                 onDeleteReview={handleDeleteReviewRow}
+                onDeleteSelectedReviews={handleDeleteSelectedReviews}
                 onOwnerOnlyAction={setOwnerOnlyAction}
                 setSelectedReviewIds={setSelectedReviewIds}
             />

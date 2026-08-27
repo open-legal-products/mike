@@ -68,10 +68,20 @@ const completionRequestSchema = z
       .default([]),
   })
   .strict();
+const fileCompletionRequestSchema = z
+  .object({ failed: z.boolean().default(false) })
+  .strict();
 
 uploadSessionsRouter.param("sessionId", (_req, res, next, value) => {
   if (!sessionIdSchema.safeParse(value).success) {
     return void res.status(404).json({ detail: "Upload session not found" });
+  }
+  next();
+});
+
+uploadSessionsRouter.param("fileId", (_req, res, next, value) => {
+  if (!sessionIdSchema.safeParse(value).success) {
+    return void res.status(404).json({ detail: "Upload file not found" });
   }
   next();
 });
@@ -414,7 +424,18 @@ async function verifyAndSealSessionFiles(
     }
 
     const staged = await headFile(file.staging_storage_path);
-    if (!staged) return false;
+    if (!staged) {
+      const { error } = await db
+        .from("upload_session_files")
+        .update({
+          status: "pending_upload",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", file.id)
+        .eq("session_id", session.id);
+      if (error) throw error;
+      return false;
+    }
     if (
       staged.size !== file.expected_size_bytes ||
       (staged.contentType && staged.contentType !== file.content_type)
@@ -461,18 +482,18 @@ async function verifyAndSealSessionFiles(
   });
 }
 
+function verificationLeaseCutoff(): string {
+  return new Date(
+    Date.now() - UPLOAD_VERIFICATION_LEASE_SECONDS * 1000,
+  ).toISOString();
+}
+
 async function releaseVerificationClaim(db: Db, sessionId: string) {
   await db
     .from("upload_sessions")
     .update({ status: "pending_upload", updated_at: new Date().toISOString() })
     .eq("id", sessionId)
     .eq("status", "verifying");
-}
-
-function verificationLeaseCutoff(): string {
-  return new Date(
-    Date.now() - UPLOAD_VERIFICATION_LEASE_SECONDS * 1000,
-  ).toISOString();
 }
 
 async function recoverStaleVerification(
@@ -500,6 +521,129 @@ async function recoverStaleVerification(
   return (data as UploadSessionRow | null) ?? session;
 }
 
+async function refreshSessionStatus(db: Db, sessionId: string): Promise<void> {
+  const { error } = await db.rpc("refresh_upload_session_status", {
+    target_session_id: sessionId,
+  });
+  if (error) throw error;
+}
+
+async function queueFileProcessing(
+  db: Db,
+  sessionId: string,
+  userId: string,
+  fileId: string,
+): Promise<string> {
+  const { data, error } = await db.rpc("queue_upload_session_file_processing", {
+    target_session_id: sessionId,
+    target_user_id: userId,
+    target_file_id: fileId,
+  });
+  if (error) throw error;
+  if (typeof data !== "string" || !data) {
+    throw new Error("Upload processing job was not created");
+  }
+  return data;
+}
+
+type FileCompletionResult = "resolved" | "incomplete" | "in_progress";
+
+async function completeSessionFile(
+  db: Db,
+  session: UploadSessionRow,
+  file: UploadSessionFileRow,
+  userId: string,
+  failed: boolean,
+): Promise<FileCompletionResult> {
+  if (failed) {
+    if (file.status === "verifying") {
+      const { data: recovered, error } = await db
+        .from("upload_session_files")
+        .update({
+          status: "pending_upload",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", file.id)
+        .eq("session_id", session.id)
+        .eq("status", "verifying")
+        .lte("updated_at", verificationLeaseCutoff())
+        .select("id")
+        .maybeSingle();
+      if (error) throw error;
+      if (!recovered) return "in_progress";
+    }
+    if (file.status === "pending_upload" || file.status === "verifying") {
+      await Promise.all([
+        deleteFile(file.staging_storage_path).catch(() => {}),
+        deleteFile(file.sealed_storage_path).catch(() => {}),
+      ]);
+      const { error } = await db
+        .from("upload_session_files")
+        .update({
+          status: "error",
+          error_code: "direct_upload_failed",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", file.id)
+        .eq("session_id", session.id)
+        .in("status", ["pending_upload", "verifying"]);
+      if (error) throw error;
+    }
+    await refreshSessionStatus(db, session.id);
+    return "resolved";
+  }
+
+  if (file.status === "uploaded") {
+    await queueFileProcessing(db, session.id, userId, file.id);
+    await refreshSessionStatus(db, session.id);
+    return "resolved";
+  }
+  if (["processing", "completed", "error"].includes(file.status)) {
+    await refreshSessionStatus(db, session.id);
+    return "resolved";
+  }
+  if (file.status === "verifying") {
+    const { data: recovered, error } = await db
+      .from("upload_session_files")
+      .update({
+        status: "pending_upload",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", file.id)
+      .eq("session_id", session.id)
+      .eq("status", "verifying")
+      .lte("updated_at", verificationLeaseCutoff())
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    if (!recovered) return "in_progress";
+  }
+
+  const { data: claimed, error: claimError } = await db
+    .from("upload_session_files")
+    .update({ status: "verifying", updated_at: new Date().toISOString() })
+    .eq("id", file.id)
+    .eq("session_id", session.id)
+    .eq("status", "pending_upload")
+    .select("*")
+    .maybeSingle();
+  if (claimError) throw claimError;
+  if (!claimed) return "in_progress";
+
+  const [verified] = await verifyAndSealSessionFiles(db, session, [
+    claimed as UploadSessionFileRow,
+  ]);
+  if (!verified) {
+    await refreshSessionStatus(db, session.id);
+    const currentFiles = await loadSessionFiles(db, session.id);
+    const current = currentFiles.find((candidate) => candidate.id === file.id);
+    return current?.status === "error" ? "resolved" : "incomplete";
+  }
+  await queueFileProcessing(db, session.id, userId, file.id);
+  await refreshSessionStatus(db, session.id);
+  return "resolved";
+}
+
 async function markFailedTransfers(
   db: Db,
   sessionId: string,
@@ -507,7 +651,11 @@ async function markFailedTransfers(
   failedClientIds: Set<string>,
 ): Promise<void> {
   if (failedClientIds.size === 0) return;
-  const failedFiles = files.filter((file) => failedClientIds.has(file.client_id));
+  const failedFiles = files.filter(
+    (file) =>
+      failedClientIds.has(file.client_id) &&
+      ["pending_upload", "verifying"].includes(file.status),
+  );
   await mapWithConcurrency(failedFiles, 5, async (file) => {
     await Promise.all([
       deleteFile(file.staging_storage_path).catch(() => {}),
@@ -522,7 +670,8 @@ async function markFailedTransfers(
       updated_at: new Date().toISOString(),
     })
     .eq("session_id", sessionId)
-    .in("client_id", [...failedClientIds]);
+    .in("client_id", [...failedClientIds])
+    .in("status", ["pending_upload", "verifying"]);
   if (error) throw error;
 }
 
@@ -571,13 +720,6 @@ uploadSessionsRouter.post(
         return void res.status(429).json({
           code: "upload_session_rate_limit_exceeded",
           detail: "Too many upload sessions. Please try again later.",
-        });
-      }
-      if (error.message?.includes("active_upload_session_limit_exceeded")) {
-        return void res.status(429).json({
-          code: "active_upload_session_limit_exceeded",
-          detail:
-            "Finish or cancel an existing upload before starting another.",
         });
       }
       if (error.message?.includes("upload_target_busy")) {
@@ -670,7 +812,9 @@ uploadSessionsRouter.post(
     }
 
     const files = await loadSessionFiles(db, session.id);
-    const pendingFiles = files.filter((file) => file.status !== "uploaded");
+    const pendingFiles = files.filter((file) =>
+      ["pending_upload", "verifying"].includes(file.status),
+    );
     if (pendingFiles.length) {
       const { error } = await db
         .from("upload_session_files")
@@ -680,12 +824,85 @@ uploadSessionsRouter.post(
           updated_at: new Date().toISOString(),
         })
         .eq("session_id", session.id)
-        .neq("status", "uploaded");
+        .in("status", ["pending_upload", "verifying"]);
       if (error) return void sendInternalError(res, error);
     }
     res.json({
       files: await signPendingFiles(pendingFiles, session.expires_at),
     });
+  }),
+);
+
+uploadSessionsRouter.post(
+  "/:sessionId/files/:fileId/complete",
+  requireAuth,
+  uploadSessionMutationLimiter,
+  asyncRoute(async (req, res) => {
+    if (!storageEnabled) {
+      return void res.status(503).json({ detail: "Storage is not configured" });
+    }
+    const parsed = fileCompletionRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return void res
+        .status(400)
+        .json({ detail: "Invalid completion request" });
+    }
+    const userId = res.locals.userId as string;
+    const db = createServerSupabase();
+    const session = await loadOwnedSession(db, req.params.sessionId, userId);
+    if (!session) {
+      return void res.status(404).json({ detail: "Upload session not found" });
+    }
+    if (["cancelled", "expired"].includes(session.status)) {
+      return void res
+        .status(409)
+        .json({ detail: "Upload session is not active" });
+    }
+    if (
+      session.status === "pending_upload" &&
+      new Date(session.expires_at).getTime() <= Date.now()
+    ) {
+      await db
+        .from("upload_sessions")
+        .update({ status: "expired", updated_at: new Date().toISOString() })
+        .eq("id", session.id)
+        .eq("status", "pending_upload");
+      return void res.status(410).json({ detail: "Upload session expired" });
+    }
+    const files = await loadSessionFiles(db, session.id);
+    const file = files.find((candidate) => candidate.id === req.params.fileId);
+    if (!file) {
+      return void res.status(404).json({ detail: "Upload file not found" });
+    }
+
+    try {
+      const result = await completeSessionFile(
+        db,
+        session,
+        file,
+        userId,
+        parsed.data.failed,
+      );
+      const updated = await loadOwnedSession(db, session.id, userId);
+      const currentFiles = await loadSessionFiles(db, session.id);
+      if (result === "incomplete") {
+        return void res.status(409).json({
+          code: "upload_incomplete",
+          detail: "The uploaded file is not available yet.",
+          session: updated,
+          files: currentFiles.map(publicFile),
+        });
+      }
+      res.status(result === "in_progress" ? 202 : 200).json({
+        session: updated,
+        files: currentFiles.map(publicFile),
+      });
+    } catch (error) {
+      if (error instanceof StorageOperationError) {
+        return void sendInternalError(res, error, 503);
+      }
+      throw error;
+    }
   }),
 );
 
@@ -701,7 +918,9 @@ uploadSessionsRouter.post(
     const db = createServerSupabase();
     const parsedCompletion = completionRequestSchema.safeParse(req.body ?? {});
     if (!parsedCompletion.success) {
-      return void res.status(400).json({ detail: "Invalid completion request" });
+      return void res
+        .status(400)
+        .json({ detail: "Invalid completion request" });
     }
     let session = await loadOwnedSession(db, req.params.sessionId, userId);
     if (!session) {
@@ -709,19 +928,16 @@ uploadSessionsRouter.post(
     }
     session = await recoverStaleVerification(db, session, userId);
     if (
-      ["uploaded", "processing", "completed", "error"].includes(
-        session.status,
-      )
+      ["uploaded", "processing", "completed", "error"].includes(session.status)
     ) {
       const files = await loadSessionFiles(db, session.id);
-      const { data: job } = await db
+      const { data: jobs } = await db
         .from("upload_processing_jobs")
         .select("id, status")
-        .eq("session_id", session.id)
-        .maybeSingle();
+        .eq("session_id", session.id);
       return void res.json({
         session,
-        processing_job: job ?? null,
+        processing_jobs: jobs ?? [],
         files: files.map(publicFile),
       });
     }
@@ -769,9 +985,14 @@ uploadSessionsRouter.post(
     try {
       await markFailedTransfers(db, session.id, files, failedClientIds);
       const filesToVerify = files.filter(
-        (file) => !failedClientIds.has(file.client_id),
+        (file) =>
+          file.status === "pending_upload" &&
+          !failedClientIds.has(file.client_id),
       );
-      if (filesToVerify.length === 0) {
+      const alreadyProcessable = files.some((file) =>
+        ["uploaded", "processing", "completed"].includes(file.status),
+      );
+      if (filesToVerify.length === 0 && !alreadyProcessable) {
         const now = new Date().toISOString();
         const { error } = await db
           .from("upload_sessions")
@@ -810,10 +1031,13 @@ uploadSessionsRouter.post(
         });
       }
 
-      const uploadedFiles = currentFiles.filter(
-        (file) => file.status === "uploaded",
+      const processableFiles = currentFiles.filter(
+        (file) =>
+          file.status === "uploaded" ||
+          file.status === "processing" ||
+          file.status === "completed",
       );
-      if (uploadedFiles.length === 0) {
+      if (processableFiles.length === 0) {
         const uploadedTooManyBytes = currentFiles.some(
           (file) =>
             file.error_code === "size_mismatch" &&
@@ -911,6 +1135,16 @@ uploadSessionsRouter.delete(
         .status(409)
         .json({ detail: "Upload session cannot be cancelled" });
     }
+    const files = await loadSessionFiles(db, session.id);
+    if (
+      files.some((file) =>
+        ["uploaded", "processing", "completed"].includes(file.status),
+      )
+    ) {
+      return void res.status(409).json({
+        detail: "Files already being processed cannot be cancelled",
+      });
+    }
     const now = new Date().toISOString();
     let cancellationQuery = db
       .from("upload_sessions")
@@ -935,7 +1169,6 @@ uploadSessionsRouter.delete(
       });
     }
 
-    const files = await loadSessionFiles(db, session.id);
     await mapWithConcurrency(files, 5, async (file) => {
       await Promise.all([
         deleteFile(file.staging_storage_path).catch(() => {}),
