@@ -18,6 +18,116 @@ type PdfTextItem = {
   height?: number;
 };
 
+type PdfFormAnnotation = {
+  fieldName?: unknown;
+  fieldValue?: unknown;
+  password?: boolean;
+  fieldFlags?: unknown;
+  radioButton?: boolean;
+  buttonValue?: unknown;
+  rect?: unknown;
+};
+
+type ExtractedFormField = {
+  text: string;
+  rect: [number, number, number, number] | null;
+};
+
+// PDF field flags are one-based in the specification; bit 14 marks a text
+// field whose value must not be exposed as ordinary document text.
+const PDF_FIELD_FLAG_PASSWORD = 1 << 13;
+
+function formValueText(value: unknown): string | null {
+  if (typeof value === "string") {
+    const text = value.replaceAll(/\s+/g, " ").trim();
+    return text || null;
+  }
+  if (
+    Array.isArray(value) &&
+    value.every((entry): entry is string => typeof entry === "string")
+  ) {
+    const entries = value
+      .map((entry) => entry.replaceAll(/\s+/g, " ").trim())
+      .filter(Boolean);
+    return entries.length ? entries.join(", ") : null;
+  }
+  return null;
+}
+
+function formFieldRect(rect: unknown): [number, number, number, number] | null {
+  if (
+    !Array.isArray(rect) ||
+    rect.length !== 4 ||
+    !rect.every(
+      (coordinate) =>
+        typeof coordinate === "number" && Number.isFinite(coordinate),
+    )
+  ) {
+    return null;
+  }
+  const [rawX1, rawY1, rawX2, rawY2] = rect as number[];
+  const x1 = Math.min(rawX1, rawX2);
+  const y1 = Math.min(rawY1, rawY2);
+  const x2 = Math.max(rawX1, rawX2);
+  const y2 = Math.max(rawY1, rawY2);
+  return x1 === x2 || y1 === y2 ? null : [x1, y1, x2, y2];
+}
+
+function extractFormFields(
+  annotations: PdfFormAnnotation[],
+): ExtractedFormField[] {
+  const fields: ExtractedFormField[] = [];
+  const seen = new Set<string>();
+
+  for (const annotation of annotations) {
+    const fieldName =
+      typeof annotation.fieldName === "string"
+        ? annotation.fieldName.trim()
+        : "";
+    const isPassword =
+      annotation.password === true ||
+      (typeof annotation.fieldFlags === "number" &&
+        (annotation.fieldFlags & PDF_FIELD_FLAG_PASSWORD) !== 0);
+    if (!fieldName || isPassword) continue;
+
+    // Every widget in a radio group carries the group's selected fieldValue.
+    // Only the widget representing that selected value should be emitted.
+    if (
+      annotation.radioButton === true &&
+      (typeof annotation.fieldValue !== "string" ||
+        annotation.buttonValue !== annotation.fieldValue)
+    ) {
+      continue;
+    }
+
+    const fieldValue = formValueText(annotation.fieldValue);
+    if (fieldValue === null) continue;
+
+    const key = JSON.stringify([fieldName, fieldValue]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fields.push({
+      text: `${fieldName}: ${fieldValue}`,
+      rect: formFieldRect(annotation.rect),
+    });
+  }
+
+  return fields;
+}
+
+function positionedFormItem(field: ExtractedFormField): PdfTextItem | null {
+  if (!field.rect) return null;
+  const [x1, y1, x2, y2] = field.rect;
+  const height = Math.max(8, Math.min(16, (y2 - y1) * 0.7));
+  const text = `[${field.text}]`;
+  return {
+    str: text,
+    transform: [1, 0, 0, height, x1, (y1 + y2) / 2],
+    width: text.length * height * 0.5,
+    height,
+  };
+}
+
 /**
  * Rebuild a page's text from positioned pdfjs items, preserving the visual
  * layout: lines are reconstructed from y-coordinates, words
@@ -134,6 +244,7 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
               getTextContent: () => Promise<{
                 items: PdfTextItem[];
               }>;
+              getAnnotations: () => Promise<PdfFormAnnotation[]>;
             }>;
           }>;
         };
@@ -146,7 +257,26 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      parts.push(`[Page ${i}]\n${layoutPageText(textContent.items)}`);
+      let fields: ExtractedFormField[] = [];
+      try {
+        fields = extractFormFields(await page.getAnnotations());
+      } catch {
+        // Keep the page's content-stream text if its annotations are malformed.
+      }
+      const positionedFields = fields
+        .map(positionedFormItem)
+        .filter((item): item is PdfTextItem => item !== null);
+      let pageText = `[Page ${i}]\n${layoutPageText([
+        ...textContent.items,
+        ...positionedFields,
+      ])}`;
+      const unpositionedFields = fields.filter((field) => !field.rect);
+      if (unpositionedFields.length) {
+        pageText += `\n[Page ${i} form fields]\n${unpositionedFields
+          .map((field) => field.text)
+          .join("\n")}`;
+      }
+      parts.push(pageText);
     }
     return parts.join("\n\n");
   } catch {

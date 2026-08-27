@@ -8,6 +8,19 @@ type FakeItem = {
   hasEOL?: boolean;
 };
 
+type FakeAnnotation = {
+  fieldName?: unknown;
+  fieldValue?: unknown;
+  password?: boolean;
+  fieldFlags?: unknown;
+  radioButton?: boolean;
+  checkBox?: boolean;
+  buttonValue?: unknown;
+  rect?: unknown;
+};
+
+type FakeAnnotationResult = FakeAnnotation[] | Error;
+
 // Positioned pdfjs text items: transform [a, b, c, d, x, y], y grows upward.
 function item(str: string, x: number, y: number, hasEOL = false): FakeItem {
   return {
@@ -19,15 +32,24 @@ function item(str: string, x: number, y: number, hasEOL = false): FakeItem {
   };
 }
 
-function fakePdf(pages: FakeItem[][]) {
+function fakePdf(
+  pages: FakeItem[][],
+  annotations: FakeAnnotationResult[] = [],
+) {
   return {
     getDocument: () => ({
       promise: Promise.resolve({
         numPages: pages.length,
-        getPage: (n: number) =>
-          Promise.resolve({
+        getPage: (n: number) => {
+          const pageAnnotations = annotations[n - 1] ?? [];
+          return Promise.resolve({
             getTextContent: () => Promise.resolve({ items: pages[n - 1] }),
-          }),
+            getAnnotations: () =>
+              pageAnnotations instanceof Error
+                ? Promise.reject(pageAnnotations)
+                : Promise.resolve(pageAnnotations),
+          });
+        },
       }),
     }),
   };
@@ -42,9 +64,12 @@ vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
 
 import { extractPdfText } from "./pdfText";
 
-function withPdf(pages: FakeItem[][]) {
+function withPdf(
+  pages: FakeItem[][],
+  annotations: FakeAnnotationResult[] = [],
+) {
   (globalThis as { __fakePdf?: ReturnType<typeof fakePdf> }).__fakePdf =
-    fakePdf(pages);
+    fakePdf(pages, annotations);
 }
 
 describe("extractPdfText layout reconstruction", () => {
@@ -151,6 +176,154 @@ describe("extractPdfText layout reconstruction", () => {
 
     const text = await extractPdfText(new ArrayBuffer(8));
     expect(text).toBe("[Page 1]\npage one\n\n[Page 2]\npage two");
+  });
+
+  it("appends non-empty form values without changing page text layout", async () => {
+    withPdf(
+      [[item("Case", 72, 700), item("No.:", 102, 700)]],
+      [
+        [
+          {
+            fieldName: "CaseNumber",
+            fieldValue: "24CV-1234",
+            rect: [140, 690, 250, 710],
+          },
+          { fieldName: "EmptyField", fieldValue: "" },
+          { fieldName: undefined, fieldValue: "ignored" },
+        ],
+      ],
+    );
+
+    await expect(extractPdfText(new ArrayBuffer(8))).resolves.toBe(
+      "[Page 1]\nCase No.: [CaseNumber: 24CV-1234]",
+    );
+  });
+
+  it("orders positioned form fields between surrounding page text", async () => {
+    withPdf(
+      [[item("Before", 72, 720), item("After", 72, 660)]],
+      [
+        [
+          {
+            fieldName: "Answer",
+            fieldValue: "In context",
+            rect: [72, 680, 220, 700],
+          },
+        ],
+      ],
+    );
+
+    const text = await extractPdfText(new ArrayBuffer(8));
+    expect(text.indexOf("Before")).toBeLessThan(text.indexOf("[Answer"));
+    expect(text.indexOf("[Answer")).toBeLessThan(text.indexOf("After"));
+    expect(text).not.toContain("form fields");
+  });
+
+  it("does not expose password field values", async () => {
+    withPdf(
+      [[]],
+      [
+        [
+          { fieldName: "Username", fieldValue: "alice" },
+          {
+            fieldName: "AccountPassword",
+            fieldValue: "secret123",
+            fieldFlags: 1 << 13,
+          },
+          {
+            fieldName: "LegacyPasswordShape",
+            fieldValue: "secret456",
+            password: true,
+          },
+        ],
+      ],
+    );
+
+    const text = await extractPdfText(new ArrayBuffer(8));
+    expect(text).toContain("Username: alice");
+    expect(text).not.toContain("AccountPassword");
+    expect(text).not.toContain("secret123");
+    expect(text).not.toContain("LegacyPasswordShape");
+    expect(text).not.toContain("secret456");
+  });
+
+  it("emits only the selected radio widget and deduplicates it", async () => {
+    withPdf(
+      [[]],
+      [
+        [
+          {
+            fieldName: "Plan",
+            fieldValue: "Premium",
+            radioButton: true,
+            buttonValue: "Basic",
+          },
+          {
+            fieldName: "Plan",
+            fieldValue: "Premium",
+            radioButton: true,
+            buttonValue: "Premium",
+          },
+          {
+            fieldName: "Plan",
+            fieldValue: "Premium",
+            radioButton: true,
+            buttonValue: "Premium",
+          },
+          {
+            fieldName: "Plan",
+            fieldValue: "Premium",
+            radioButton: true,
+            buttonValue: "Enterprise",
+          },
+        ],
+      ],
+    );
+
+    const text = await extractPdfText(new ArrayBuffer(8));
+    expect(text.match(/Plan: Premium/g)).toHaveLength(1);
+  });
+
+  it("keeps checkbox values and deduplicates repeated widgets", async () => {
+    withPdf(
+      [[]],
+      [
+        [
+          { fieldName: "Accepted", fieldValue: "Yes", checkBox: true },
+          { fieldName: "Accepted", fieldValue: "Yes", checkBox: true },
+          { fieldName: "Declined", fieldValue: "Off", checkBox: true },
+        ],
+      ],
+    );
+
+    await expect(extractPdfText(new ArrayBuffer(8))).resolves.toContain(
+      "[Page 1 form fields]\nAccepted: Yes\nDeclined: Off",
+    );
+  });
+
+  it("formats multi-select values and skips unsupported value shapes", async () => {
+    withPdf(
+      [[]],
+      [
+        [
+          { fieldName: "Topics", fieldValue: ["Contracts", "Privacy"] },
+          { fieldName: "Unsupported", fieldValue: { value: "hidden" } },
+        ],
+      ],
+    );
+
+    const text = await extractPdfText(new ArrayBuffer(8));
+    expect(text).toContain("Topics: Contracts, Privacy");
+    expect(text).not.toContain("Unsupported");
+    expect(text).not.toContain("[object Object]");
+  });
+
+  it("keeps page text when reading annotations fails", async () => {
+    withPdf([[item("Visible text", 72, 700)]], [new Error("boom")]);
+
+    await expect(extractPdfText(new ArrayBuffer(8))).resolves.toBe(
+      "[Page 1]\nVisible text",
+    );
   });
 
   it("returns an empty string when pdfjs cannot read the buffer", async () => {
