@@ -1186,7 +1186,18 @@ export function DocTable({
         }
         const versionCount = versionsByDocId.get(doc.id)?.versions.length ?? currentVersionNumber(doc) ?? 1;
         if (versionCount <= 1) {
-            void handleRemoveDoc(doc.id);
+            // No confirmation dialog owns this failure, so surface it here
+            // instead of letting the rethrow become an unhandled rejection and
+            // the row reappear with no explanation.
+            void handleRemoveDoc(doc.id).catch((error) => {
+                console.error("delete document failed", error);
+                setCollectionActionWarning(
+                    userFacingApiError(
+                        error,
+                        "This file could not be deleted. Please try again.",
+                    ),
+                );
+            });
             return;
         }
         setPendingDeleteStatus("idle");
@@ -1499,9 +1510,10 @@ export function DocTable({
             setCollectionActionWarning(
                 err instanceof UploadBatchError
                     ? failedUploadMessage(err.outcomes)
-                    : err instanceof Error
-                      ? err.message
-                      : "This folder could not be uploaded. Please try again.",
+                    : userFacingApiError(
+                          err,
+                          "This folder could not be uploaded. Please try again.",
+                      ),
             );
         } finally {
             setCollectionUploadProgress((current) =>
@@ -1995,24 +2007,71 @@ export function DocTable({
         [folders],
     );
 
-    function clearSelectedFolderAncestors(
-        folderId: string | null | undefined,
-    ) {
-        if (!folderId) return;
+    /**
+     * Document ids implied by a set of selected folders — the same derivation
+     * `selectedFolderDocumentIds` uses for the rendered checkmarks.
+     */
+    function documentIdsImpliedByFolders(
+        folderIds: ReadonlySet<string>,
+    ): Set<string> {
+        if (folderIds.size === 0) return new Set();
+        const treeIds = collectFolderTreeIds(
+            folders,
+            folderSelectionRootIds(folders, folderIds),
+        );
+        return new Set(
+            docs
+                .filter(
+                    (candidate) =>
+                        candidate.folder_id != null &&
+                        treeIds.has(candidate.folder_id),
+                )
+                .map((candidate) => candidate.id),
+        );
+    }
+
+    /**
+     * Drop the folder selection that made `documentIds` look selected.
+     *
+     * A checked folder selects its documents by derivation, so those documents
+     * are not in `selectedDocIds`. Clearing the folder alone would therefore
+     * uncheck every sibling as well. Materialize the documents the cleared
+     * folders implied into `selectedDocIds` first, so only the documents the
+     * user actually deselected lose their checkmark.
+     */
+    function clearSelectedFolderAncestors(documentIds: readonly string[]) {
         const ancestorIds = new Set<string>();
-        let currentId: string | null = folderId;
-        while (currentId) {
-            ancestorIds.add(currentId);
-            currentId =
-                folders.find((folder) => folder.id === currentId)
-                    ?.parent_folder_id ?? null;
+        for (const documentId of documentIds) {
+            let currentId: string | null =
+                docs.find((candidate) => candidate.id === documentId)
+                    ?.folder_id ?? null;
+            while (currentId && !ancestorIds.has(currentId)) {
+                ancestorIds.add(currentId);
+                currentId =
+                    folders.find((folder) => folder.id === currentId)
+                        ?.parent_folder_id ?? null;
+            }
         }
-        setSelectedFolderIds((prev) => {
-            if (![...ancestorIds].some((id) => prev.has(id))) return prev;
-            const next = new Set(prev);
-            for (const id of ancestorIds) next.delete(id);
-            return next;
-        });
+        if (ancestorIds.size === 0) return;
+
+        const nextFolderIds = new Set(selectedFolderIds);
+        let cleared = false;
+        for (const id of ancestorIds) {
+            if (nextFolderIds.delete(id)) cleared = true;
+        }
+        if (!cleared) return;
+
+        const stillImplied = documentIdsImpliedByFolders(nextFolderIds);
+        const materialized = [
+            ...documentIdsImpliedByFolders(selectedFolderIds),
+        ].filter((id) => !stillImplied.has(id));
+
+        setSelectedFolderIds(nextFolderIds);
+        if (materialized.length > 0) {
+            setSelectedDocIds((current) => [
+                ...new Set([...current, ...materialized]),
+            ]);
+        }
     }
 
     function visibleDocumentIds(): string[] {
@@ -2088,14 +2147,11 @@ export function DocTable({
               )
             : [targetKey];
         if (!selected) {
-            for (const key of rowKeys) {
-                if (!key.startsWith("document:")) continue;
-                const id = key.slice("document:".length);
-                clearSelectedFolderAncestors(
-                    documents.find((candidate) => candidate.id === id)
-                        ?.folder_id,
-                );
-            }
+            clearSelectedFolderAncestors(
+                rowKeys
+                    .filter((key) => key.startsWith("document:"))
+                    .map((key) => key.slice("document:".length)),
+            );
         }
         updateCollectionRowSelection(rowKeys, selected);
         selectionAnchorKeyRef.current = targetKey;
@@ -2303,7 +2359,8 @@ export function DocTable({
                                                                 )
                                                             }
                                                             onClick={(e) => e.stopPropagation()}
-                                                            className="mr-3 h-2.5 w-2.5 shrink-0 rounded border-gray-200 cursor-pointer accent-black"
+                                                            aria-label={`Select ${doc.filename}`}
+                                                            className={TABLE_CHECKBOX_CLASS}
                                                         />
                                                     )}
                                                     <span className="mr-2 shrink-0">
@@ -3232,23 +3289,65 @@ export function DocTable({
         () => collectFolderTreeIds(folders, selectAllFolderIds),
         [folders, selectAllFolderIds],
     );
-    const selectAllDocumentIds = useCallback(
-        (documentIds: string[]) => {
-            const documentsById = new Map(
-                docs.map((document) => [document.id, document]),
+    /**
+     * Folder subtree the current view is responsible for, or `null` when the
+     * view spans the whole collection (the root level, and search, which
+     * renders one flat list across every folder).
+     */
+    const viewedFolderTreeIds = useMemo(
+        () =>
+            !q && viewedFolderId
+                ? collectFolderTreeIds(folders, [viewedFolderId])
+                : null,
+        [folders, q, viewedFolderId],
+    );
+    /**
+     * Documents the header "select all" may reach. Folder rows are already
+     * scoped to the viewed level by `selectAllFolderIds`; without the same
+     * scope here, select-all inside a subfolder would silently pull in every
+     * document in the collection and feed it to the bulk actions.
+     */
+    const viewScopedDocumentIds = useCallback(
+        (documentIds: readonly string[]) => {
+            if (!viewedFolderTreeIds) return [...documentIds];
+            const folderIdByDocumentId = new Map(
+                docs.map((document) => [document.id, document.folder_id ?? null]),
             );
             return documentIds.filter((documentId) => {
-                const folderId = documentsById.get(documentId)?.folder_id;
+                // An id with no loaded row cannot be placed in the viewed
+                // folder, so leave it out rather than selecting a document
+                // this view never showed.
+                const folderId = folderIdByDocumentId.get(documentId) ?? null;
+                return !!folderId && viewedFolderTreeIds.has(folderId);
+            });
+        },
+        [docs, viewedFolderTreeIds],
+    );
+    const visibleSelectableDocumentIds = useMemo(
+        () => viewScopedDocumentIds(filteredDocs.map((document) => document.id)),
+        [filteredDocs, viewScopedDocumentIds],
+    );
+    /**
+     * The document half of "select all": in view scope, minus the documents
+     * already covered by a selected folder row.
+     */
+    const selectAllDocumentIds = useCallback(
+        (documentIds: readonly string[]) => {
+            const folderIdByDocumentId = new Map(
+                docs.map((document) => [document.id, document.folder_id ?? null]),
+            );
+            return viewScopedDocumentIds(documentIds).filter((documentId) => {
+                const folderId = folderIdByDocumentId.get(documentId) ?? null;
                 return folderId == null || !selectAllFolderTreeIds.has(folderId);
             });
         },
-        [docs, selectAllFolderTreeIds],
+        [docs, selectAllFolderTreeIds, viewScopedDocumentIds],
     );
     const {
         allSelected: allVisibleRowsSelected,
         someSelected: someVisibleRowsSelected,
     } = collectionSelectAllState(
-        filteredDocs.map((document) => document.id),
+        visibleSelectableDocumentIds,
         selectAllFolderIds,
         [...effectiveSelectedDocIdSet],
         selectedFolderIds,
@@ -3262,7 +3361,11 @@ export function DocTable({
             return;
         }
 
-        if (!onSelectAllMatching) {
+        // Inside a folder the "all matching" endpoint cannot help: it answers
+        // for the whole collection and takes no folder scope, so every id it
+        // returns outside this subtree would have to be discarded anyway.
+        // Select from the rows this level has loaded instead.
+        if (!onSelectAllMatching || viewedFolderTreeIds) {
             setSelectedDocIds(
                 selectAllDocumentIds(
                     filteredDocs.map((document) => document.id),
@@ -3304,6 +3407,7 @@ export function DocTable({
         selectionCameFromSelectAll,
         sort,
         typeFilter,
+        viewedFolderTreeIds,
     ]);
 
     const selectedItemCount =
@@ -3812,7 +3916,8 @@ export function DocTable({
                                                                                 )
                                                                             }
                                                                             onClick={(e) => e.stopPropagation()}
-                                                                            className="mr-3 h-2.5 w-2.5 shrink-0 rounded border-gray-200 cursor-pointer accent-black"
+                                                                            aria-label={`Select ${docName}`}
+                                                                            className={TABLE_CHECKBOX_CLASS}
                                                                         />
                                                                     )}
                                                                     <span className="mr-2 shrink-0">
