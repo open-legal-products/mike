@@ -74,6 +74,12 @@
       ],
       "@mike/workflow-slash-command-ui": [
         "../frontend/src/shared/ui/WorkflowSlashCommandUI.tsx"
+      ],
+      "@mike/upload-session-client": [
+        "../frontend/src/shared/api/uploadSessionClient.ts"
+      ],
+      "@mike/secure-uuid": [
+        "../frontend/src/shared/lib/secureUuid.ts"
       ]
     },
     "jsx": "react-jsx",

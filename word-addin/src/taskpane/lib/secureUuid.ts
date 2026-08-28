@@ -1,26 +1,6 @@
 /**
- * Generate a UUID with Web Crypto. Older Office WebViews may not expose
- * randomUUID(), so retain a secure getRandomValues() compatibility path.
+ * Re-export of the shared implementation. The upload-session client mints
+ * client ids from `@mike/secure-uuid`; keeping one implementation means the
+ * add-in and the web app cannot drift on the WebView fallback path.
  */
-export function createSecureUuid(): string {
-  const cryptoApi = globalThis.crypto;
-  if (typeof cryptoApi.randomUUID === "function") {
-    return cryptoApi.randomUUID();
-  }
-
-  const bytes = new Uint8Array(16);
-  cryptoApi.getRandomValues(bytes);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-
-  const hex = Array.from(bytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  );
-  return [
-    hex.slice(0, 4).join(""),
-    hex.slice(4, 6).join(""),
-    hex.slice(6, 8).join(""),
-    hex.slice(8, 10).join(""),
-    hex.slice(10).join(""),
-  ].join("-");
-}
+export { createSecureUuid } from "@mike/secure-uuid";

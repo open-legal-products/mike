@@ -8,19 +8,21 @@ import type {
 import { describeNetworkFailure } from "../lib/networkError";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
 import {
+  createControlRequestRetryPolicy,
+  firstUploadResult,
   uploadFilesWithSessionCore,
   type UploadOutcome,
   type UploadProgress,
-} from "../../../../frontend/src/shared/api/uploadSessionClient";
+} from "@mike/upload-session-client";
 
 export {
   UploadBatchError,
   failedUploadMessage,
-} from "../../../../frontend/src/shared/api/uploadSessionClient";
+} from "@mike/upload-session-client";
 export type {
   UploadOutcome,
   UploadProgress,
-} from "../../../../frontend/src/shared/api/uploadSessionClient";
+} from "@mike/upload-session-client";
 
 type AuthHeaderProvider = () => Promise<Record<string, string>>;
 
@@ -168,6 +170,15 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+/**
+ * Options every add-in upload entry point accepts, matching the web client so
+ * a pane can follow progress and cancel a batch it no longer needs.
+ */
+export type UploadRequestOptions<T> = {
+  onProgress?: (progress: UploadProgress<T>) => void;
+  signal?: AbortSignal;
+};
+
 async function uploadSessionFiles<T>(args: {
   purpose:
     | "document_create"
@@ -176,31 +187,24 @@ async function uploadSessionFiles<T>(args: {
   destination: Record<string, unknown>;
   files: File[];
   onProgress?: (progress: UploadProgress<T>) => void;
+  signal?: AbortSignal;
 }): Promise<UploadOutcome<T>[]> {
   return uploadFilesWithSessionCore<T>({
     purpose: args.purpose,
     destination: args.destination,
     files: args.files.map((file) => ({ file })),
     onProgress: args.onProgress,
+    signal: args.signal,
     transport: {
       apiRequest,
       fetchStorage: (...fetchArgs) => clientConfig.fetchImpl(...fetchArgs),
-      shouldRetryControlRequest: (error) =>
-        !(error instanceof MikeApiError) ||
-        error.status >= 500 ||
-        error.status === 429 ||
-        error.code === "upload_incomplete" ||
-        error.code === "upload_completion_in_progress",
+      shouldRetryControlRequest: createControlRequestRetryPolicy((error) =>
+        error instanceof MikeApiError
+          ? { status: error.status, code: error.code }
+          : null,
+      ),
     },
   });
-}
-
-function firstUploadResult<T>(outcomes: UploadOutcome<T>[]): T {
-  const first = outcomes[0];
-  if (!first || first.status !== "completed" || !first.result) {
-    throw new Error("The file could not be processed. Please try again.");
-  }
-  return first.result;
 }
 
 export async function listProjects(pagination?: {
@@ -288,19 +292,23 @@ export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
   return apiRequest<ApiKeyStatus>("/user/api-keys");
 }
 
-export async function uploadStandaloneDocument(file: File): Promise<Document> {
-  return firstUploadResult(await uploadStandaloneDocuments([file]));
+export async function uploadStandaloneDocument(
+  file: File,
+  options?: UploadRequestOptions<Document>,
+): Promise<Document> {
+  return firstUploadResult(await uploadStandaloneDocuments([file], options));
 }
 
 export async function uploadStandaloneDocuments(
   files: File[],
-  options?: { onProgress?: (progress: UploadProgress<Document>) => void },
+  options?: UploadRequestOptions<Document>,
 ): Promise<UploadOutcome<Document>[]> {
   return uploadSessionFiles<Document>({
     purpose: "document_create",
     destination: { scope: "standalone" },
     files,
     onProgress: options?.onProgress,
+    signal: options?.signal,
   });
 }
 
@@ -542,20 +550,24 @@ export async function listWorkflowReferenceFiles(
 export async function uploadWorkflowReferenceFile(
   workflowId: string,
   file: File,
+  options?: UploadRequestOptions<WorkflowReferenceDocument>,
 ): Promise<WorkflowReferenceDocument> {
   return firstUploadResult(
-    await uploadWorkflowReferenceFiles(workflowId, [file]),
+    await uploadWorkflowReferenceFiles(workflowId, [file], options),
   );
 }
 
 export async function uploadWorkflowReferenceFiles(
   workflowId: string,
   files: File[],
+  options?: UploadRequestOptions<WorkflowReferenceDocument>,
 ): Promise<UploadOutcome<WorkflowReferenceDocument>[]> {
   return uploadSessionFiles<WorkflowReferenceDocument>({
     purpose: "workflow_reference_create",
     destination: { workflow_id: workflowId },
     files,
+    onProgress: options?.onProgress,
+    signal: options?.signal,
   });
 }
 
@@ -563,6 +575,7 @@ export async function replaceWorkflowReferenceFile(
   workflowId: string,
   referenceId: string,
   file: File,
+  options?: UploadRequestOptions<WorkflowReferenceDocument>,
 ): Promise<WorkflowReferenceDocument> {
   return firstUploadResult(
     await uploadSessionFiles<WorkflowReferenceDocument>({
@@ -572,6 +585,8 @@ export async function replaceWorkflowReferenceFile(
         reference_id: referenceId,
       },
       files: [file],
+      onProgress: options?.onProgress,
+      signal: options?.signal,
     }),
   );
 }

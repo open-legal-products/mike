@@ -14,7 +14,10 @@ import {
   getUserProfile,
   listWorkflows,
   uploadStandaloneDocuments,
+  UploadBatchError,
   type ApiKeyStatus,
+  type UploadOutcome,
+  type UploadProgress,
 } from "../../api/mikeApi";
 import { useSelectedModel } from "../../hooks/useSelectedModel";
 import type { Document, Workflow } from "../../types";
@@ -305,35 +308,64 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       setDocumentUploadError(
         unsupported.length > 0 ? "Unsupported files were skipped." : null,
       );
-      try {
-        const outcomes = await uploadStandaloneDocuments(supported);
-        const uploaded = outcomes.flatMap((outcome) =>
+      // Documents that finished are kept even when the batch as a whole did
+      // not: attach them as they land, and again from whatever accounting the
+      // upload returns (or carries on an UploadBatchError).
+      const attachDocuments = (documents: Document[]): void => {
+        if (documents.length === 0) return;
+        if (!mountedRef.current || generation !== uploadGenerationRef.current) {
+          return;
+        }
+        setAttachedDocuments((current) => {
+          const existing = new Set(current.map((document) => document.id));
+          return [
+            ...current,
+            ...documents.filter((document) => !existing.has(document.id)),
+          ];
+        });
+      };
+      const completedDocuments = (
+        outcomes: UploadOutcome<Document>[],
+      ): Document[] =>
+        outcomes.flatMap((outcome) =>
           outcome.status === "completed" && outcome.result
             ? [outcome.result]
             : [],
         );
 
+      try {
+        const outcomes = await uploadStandaloneDocuments(supported, {
+          onProgress: (progress: UploadProgress<Document>) => {
+            if (progress.status === "completed" && progress.result) {
+              attachDocuments([progress.result]);
+            }
+          },
+        });
+
         if (!mountedRef.current || generation !== uploadGenerationRef.current) {
           return;
         }
-        if (uploaded.length > 0) {
-          setAttachedDocuments((current) => {
-            const existing = new Set(current.map((document) => document.id));
-            return [
-              ...current,
-              ...uploaded.filter((document) => !existing.has(document.id)),
-            ];
-          });
-        }
+        attachDocuments(completedDocuments(outcomes));
         if (outcomes.some((outcome) => outcome.status === "error")) {
           setDocumentUploadError(failedUploadMessage(outcomes));
         }
       } catch (reason) {
-        setDocumentUploadError(
-          reason instanceof Error
-            ? reason.message
-            : "Documents could not be uploaded. Please try again.",
-        );
+        if (!mountedRef.current || generation !== uploadGenerationRef.current) {
+          return;
+        }
+        if (reason instanceof UploadBatchError) {
+          const outcomes = reason.outcomes as UploadOutcome<Document>[];
+          attachDocuments(completedDocuments(outcomes));
+          setDocumentUploadError(
+            failedUploadMessage(outcomes, reason.message),
+          );
+        } else {
+          setDocumentUploadError(
+            reason instanceof Error
+              ? reason.message
+              : "Documents could not be uploaded. Please try again.",
+          );
+        }
       } finally {
         if (
           mountedRef.current &&

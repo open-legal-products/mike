@@ -4,8 +4,9 @@ const fs = require("fs");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 const webpack = require("webpack");
 
-const frontendSharedUi = (filename) =>
-  path.resolve(__dirname, "..", "frontend", "src", "shared", "ui", filename);
+const frontendShared = (...segments) =>
+  path.resolve(__dirname, "..", "frontend", "src", "shared", ...segments);
+const frontendSharedUi = (filename) => frontendShared("ui", filename);
 
 module.exports = async (_env, options) => {
   const isDev = options.mode !== "production";
@@ -176,6 +177,13 @@ module.exports = async (_env, options) => {
         "@mike/workflow-slash-command-ui": frontendSharedUi(
           "WorkflowSlashCommandUI.tsx",
         ),
+        // Non-UI shared modules: the upload-session client and the UUID helper
+        // it mints client ids with.
+        "@mike/upload-session-client": frontendShared(
+          "api",
+          "uploadSessionClient.ts",
+        ),
+        "@mike/secure-uuid": frontendShared("lib", "secureUuid.ts"),
       },
     },
     module: {
