@@ -21,6 +21,7 @@ import {
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 
 interface Props {
     open: boolean;
@@ -39,6 +40,16 @@ interface Props {
     projectDocumentsOnly?: boolean;
     tabs?: readonly DirectoryTab[];
     disabledDocumentIds?: ReadonlySet<string>;
+    /**
+     * Stable identity of the surface that owns in-flight uploads, used to key
+     * the state that survives a remount. Defaults to the modal's own
+     * identifying props; pass one when a screen mounts more than one picker,
+     * or when two screens would otherwise share the default. Never derive this
+     * from display text: renaming the project or review mid-upload would move
+     * the key and strand the running upload in an orphaned store entry, so the
+     * finished documents never reach the selection.
+     */
+    uploadStateId?: string;
 }
 
 const DIRECTORY_PAGE_SIZE = 40;
@@ -56,8 +67,16 @@ export function AddDocumentsModal({
     projectDocumentsOnly = false,
     tabs,
     disabledDocumentIds,
+    uploadStateId,
 }: Props) {
-    const uploadStateKey = `add-documents-upload:${projectId ?? "standalone"}:${projectDocumentsOnly ? "project" : "all"}:${breadcrumb.join("/")}`;
+    const uploadSurfaceId =
+        uploadStateId ??
+        [
+            projectId ?? "standalone",
+            projectDocumentsOnly ? "project" : "all",
+            initialTab,
+        ].join(":");
+    const uploadStateKey = `add-documents-upload:${uploadSurfaceId}`;
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
     const [uploading, setUploading] = useRemountPersistentState(
         `${uploadStateKey}:active`,
@@ -303,9 +322,10 @@ export function AddDocumentsModal({
             setUploadWarning(
                 err instanceof UploadBatchError
                     ? failedUploadMessage(err.outcomes)
-                    : err instanceof Error
-                    ? err.message
-                    : "Documents could not be uploaded. Please try again.",
+                    : userFacingApiError(
+                          err,
+                          "Documents could not be uploaded. Please try again.",
+                      ),
             );
         } finally {
             setUploading(false);

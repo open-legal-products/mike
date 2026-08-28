@@ -66,6 +66,7 @@ import {
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
@@ -371,9 +372,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 setUploadWarning(
                     error instanceof UploadBatchError
                         ? failedUploadMessage(error.outcomes)
-                        : error instanceof Error
-                          ? error.message
-                          : "Documents could not be uploaded. Please try again.",
+                        : userFacingApiError(
+                              error,
+                              "Documents could not be uploaded. Please try again.",
+                          ),
                 );
             } finally {
                 setUploadingFiles([]);
@@ -778,6 +780,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 externalUploadedDocuments={droppedDocuments}
                 initialTab={docSelectorInitialTab}
                 projectId={projectId}
+                uploadStateId={`assistant-chat:${projectId ?? "standalone"}`}
                 breadcrumb={
                     selectedWorkflow
                         ? ["Assistant", selectedWorkflow.title, "Add Documents"]

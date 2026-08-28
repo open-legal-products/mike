@@ -545,6 +545,7 @@ export function AskInputPopup({
                     );
                 }}
                 breadcrumb={["Assistant", "Add Documents"]}
+                uploadStateId="assistant-ask-input"
                 initialSelectedDocuments={
                     docSelectorTarget
                         ? docsForItem(docSelectorTarget.inputId)

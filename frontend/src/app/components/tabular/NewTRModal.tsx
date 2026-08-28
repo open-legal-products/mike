@@ -4,11 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import type { Document, Folder, Project, Workflow } from "../shared/types";
 import {
+    UploadBatchError,
+    failedUploadMessage,
     getProject,
     listWorkflows,
     uploadProjectDocuments,
     uploadStandaloneDocuments,
 } from "@/app/lib/mikeApi";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 import { FileDirectory } from "../shared/FileDirectory";
 import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
@@ -83,6 +86,7 @@ export function NewTRModal({
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
     const [groupBySubfolder, setGroupBySubfolder] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [uploadError, setUploadError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Workflow templates
@@ -166,6 +170,7 @@ export function NewTRModal({
         setSelectedDocuments([]);
         setGroupBySubfolder(false);
         setSelectedWorkflowId(null);
+        setUploadError(null);
         onClose();
     }
 
@@ -223,6 +228,7 @@ export function NewTRModal({
         const files = Array.from(e.target.files ?? []);
         if (!files.length) return;
         setUploading(true);
+        setUploadError(null);
         try {
             const uploadProjectId = isProjectMode
                 ? projectId
@@ -254,8 +260,22 @@ export function NewTRModal({
                         !prev.some((selected) => selected.id === document.id),
                 ),
             ]);
+            // Files that never became documents cannot be attached to the
+            // review, so say which ones instead of leaving the picker looking
+            // as though the upload simply produced nothing.
+            if (uploaded.length < outcomes.length) {
+                setUploadError(failedUploadMessage(outcomes));
+            }
         } catch (err) {
             console.error("Upload failed:", err);
+            setUploadError(
+                err instanceof UploadBatchError
+                    ? failedUploadMessage(err.outcomes)
+                    : userFacingApiError(
+                          err,
+                          "The selected files could not be uploaded. Please try again.",
+                      ),
+            );
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
@@ -486,6 +506,14 @@ export function NewTRModal({
                                 showTabs={!isProjectMode && !underProject}
                                 tabs={TABULAR_DIRECTORY_TABS}
                             />
+                        )}
+                        {uploadError && (
+                            <p
+                                role="alert"
+                                className="mt-3 text-sm text-red-500"
+                            >
+                                {uploadError}
+                            </p>
                         )}
                     </div>
                 )}

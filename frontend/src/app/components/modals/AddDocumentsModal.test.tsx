@@ -3,13 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
     uploadStandaloneDocuments: vi.fn(),
+    uploadProjectDocuments: vi.fn(),
 }));
 
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     addDocumentToProject: vi.fn(),
     getProject: vi.fn(),
-    uploadProjectDocuments: vi.fn(),
+    uploadProjectDocuments: apiMocks.uploadProjectDocuments,
     uploadStandaloneDocuments: apiMocks.uploadStandaloneDocuments,
 }));
 
@@ -165,6 +166,7 @@ describe("AddDocumentsModal upload progress", () => {
             onClose: vi.fn(),
             onSelect: vi.fn(),
             breadcrumb: ["Remount test", crypto.randomUUID()],
+            uploadStateId: crypto.randomUUID(),
         };
         const firstRender = render(<AddDocumentsModal {...props} />);
         const input = firstRender.container.querySelector('input[type="file"]');
@@ -201,5 +203,57 @@ describe("AddDocumentsModal upload progress", () => {
                 "survives.pdf",
             );
         });
+    });
+
+    it("keeps in-flight upload state when the breadcrumb text changes", async () => {
+        apiMocks.uploadProjectDocuments.mockImplementation(
+            () => new Promise(() => {}),
+        );
+
+        // A rename mid-upload rewrites the breadcrumb. The persistence key must
+        // not move with it, or the running upload is stranded in an orphaned
+        // store entry and its documents never reach the selection.
+        const projectId = crypto.randomUUID();
+        const firstRender = render(
+            <AddDocumentsModal
+                open
+                onClose={vi.fn()}
+                onSelect={vi.fn()}
+                projectId={projectId}
+                breadcrumb={["Projects", "Original name", "Add Documents"]}
+            />,
+        );
+        fireEvent.change(
+            firstRender.container.querySelector('input[type="file"]')!,
+            {
+                target: {
+                    files: [
+                        new File(["one"], "renamed.pdf", {
+                            type: "application/pdf",
+                        }),
+                    ],
+                },
+            },
+        );
+        await waitFor(() => {
+            expect(screen.getByTestId("loading-files")).toHaveTextContent(
+                "renamed.pdf",
+            );
+        });
+
+        firstRender.unmount();
+        render(
+            <AddDocumentsModal
+                open
+                onClose={vi.fn()}
+                onSelect={vi.fn()}
+                projectId={projectId}
+                breadcrumb={["Projects", "Renamed project", "Add Documents"]}
+            />,
+        );
+
+        expect(screen.getByTestId("loading-files")).toHaveTextContent(
+            "renamed.pdf",
+        );
     });
 });
