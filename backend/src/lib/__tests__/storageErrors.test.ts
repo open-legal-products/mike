@@ -65,7 +65,7 @@ describe("storage error logging", () => {
     mocks.getSignedUrl.mockResolvedValue("https://signed.example.test");
 
     await expect(
-      getSignedUploadUrl("documents/u1/d1/source.pdf", "application/pdf"),
+      getSignedUploadUrl("documents/u1/d1/source.pdf", "application/pdf", 1_234),
     ).resolves.toBe("https://signed.example.test");
 
     expect(mocks.clientConfigs.at(-1)).toMatchObject({

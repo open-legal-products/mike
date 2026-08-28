@@ -30,12 +30,23 @@ let cachedUploadSigningClient:
   | { endpoint: string; client: S3Client }
   | undefined;
 
+// The SDK defaults to computing a CRC32 checksum for every PutObject. When a
+// request is only presigned, that checksum is computed over the *empty*
+// signable body and hoisted into the query string, so a checksum-validating
+// store rejects the browser's real body. Only send a checksum where the S3
+// operation actually requires one.
+const CHECKSUM_DEFAULTS = {
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
+} as const;
+
 function getClient(): S3Client {
   if (!cachedClient) {
     cachedClient = new S3Client({
       region: "auto",
       endpoint: process.env.R2_ENDPOINT_URL!,
       forcePathStyle: true,
+      ...CHECKSUM_DEFAULTS,
       credentials: {
         accessKeyId: process.env.R2_ACCESS_KEY_ID!,
         secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
@@ -55,6 +66,7 @@ function getUploadSigningClient(): S3Client {
     region: "auto",
     endpoint,
     forcePathStyle: true,
+    ...CHECKSUM_DEFAULTS,
     credentials: {
       accessKeyId: process.env.R2_ACCESS_KEY_ID!,
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
@@ -126,9 +138,16 @@ export async function uploadFileFromPath(
   }
 }
 
+/**
+ * Presign a single direct browser `PUT`. The declared content type and byte
+ * count are part of the signature, so the URL cannot be replayed with a
+ * different body: the browser sets `Content-Length` from the body itself, and
+ * any other size fails signature validation at the store.
+ */
 export async function getSignedUploadUrl(
   key: string,
   contentType: string,
+  expectedSizeBytes: number,
   expiresIn = 900,
 ): Promise<string | null> {
   if (!storageEnabled) return null;
@@ -140,8 +159,12 @@ export async function getSignedUploadUrl(
         Bucket: BUCKET,
         Key: key,
         ContentType: contentType,
+        ContentLength: expectedSizeBytes,
       }),
-      { expiresIn },
+      {
+        expiresIn,
+        signableHeaders: new Set(["content-type", "content-length"]),
+      },
     );
   } catch (error) {
     console.error("[storage] getSignedUploadUrl failed", { key, error });
