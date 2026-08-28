@@ -1,0 +1,8 @@
+== AFTER FIX: M3 — expires_at slides forward on per-file completion ==
+at creation:       2026-08-28 20:05:42.586+00
+after complete m3-check-0.pdf: 2026-08-28 20:05:46.849377+00
+after complete m3-check-1.pdf: 2026-08-28 20:05:51.142915+00
+after complete m3-check-2.pdf: 2026-08-28 20:05:55.499571+00
+(each successful completion pushed the deadline to now()+30min, capped at created_at+4h —
+ before the fix expires_at was written once at creation and never moved, so a batch slower
+ than 30 minutes was destroyed mid-upload; see before-m3.webm)

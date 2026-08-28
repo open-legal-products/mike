@@ -1,0 +1,32 @@
+== M5: refresh_upload_session_status stamps cleaned_at on terminal error; sweeper predicate then never matches ==
+update public.upload_session_files set status='error', error_code='processing_failed' where id='22222222-2222-2222-2222-222222222222';
+UPDATE 1
+select public.refresh_upload_session_status('11111111-1111-1111-1111-111111111111');
+ refresh_upload_session_status 
+-------------------------------
+ error
+(1 row)
+
+select status, error_code, cleaned_at is not null as cleaned_at_stamped from public.upload_sessions where id='11111111-1111-1111-1111-111111111111';
+ status |     error_code     | cleaned_at_stamped 
+--------+--------------------+--------------------
+ error  | all_uploads_failed | t
+(1 row)
+
+select count(*) as sessions_the_sweeper_will_ever_see from public.upload_sessions
+ where status in ('expired','cancelled','error') and cleaned_at is null
+   and id='11111111-1111-1111-1111-111111111111';
+ sessions_the_sweeper_will_ever_see 
+------------------------------------
+                                  0
+(1 row)
+
+
+== m1: advisory lock key collision with install_missing_default_workflows ==
+select hashtextextended('64e507f5-b3f3-49e3-a191-b383d307c65b'::uuid::text, 0) as upload_session_create_lock,
+       hashtextextended('64e507f5-b3f3-49e3-a191-b383d307c65b', 0)             as install_default_workflows_lock;
+ upload_session_create_lock | install_default_workflows_lock 
+----------------------------+--------------------------------
+        9175889265663207281 |            9175889265663207281
+(1 row)
+

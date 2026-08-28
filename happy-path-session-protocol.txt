@@ -1,0 +1,12 @@
+logged in
+project 516c072c-9ab7-4f34-ac75-b7eaa1f10389
+folder 56fc82ca-e3b0-4766-a0ef-cbe5b6436063
+session ac2fdb4c-723c-4c07-8b2f-6f96760169d2 pending_upload
+completed NDA-alpha.pdf; session now pending_upload
+completed NDA-beta.pdf; session now pending_upload
+completed NDA-gamma.pdf; session now pending_upload
+completed root-notes.pdf; session now pending_upload
+completed root-summary.pdf; session now processing
+terminal: completed NDA-beta.pdf=completed, NDA-gamma.pdf=completed, root-summary.pdf=completed, root-notes.pdf=completed, NDA-alpha.pdf=completed
+PROJECT_ID=516c072c-9ab7-4f34-ac75-b7eaa1f10389
+FOLDER_ID=56fc82ca-e3b0-4766-a0ef-cbe5b6436063

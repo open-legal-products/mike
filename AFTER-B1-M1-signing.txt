@@ -1,0 +1,13 @@
+== AFTER B1: presigned URL parameters (real getSignedUploadUrl) ==
+  X-Amz-SignedHeaders = content-length;content-type;host
+  x-amz-checksum-crc32 = null
+  x-amz-sdk-checksum-algorithm = null
+
+== AFTER M1: PUT exactly the declared 1 KB as application/pdf ==
+  MinIO response: 200 OK
+
+== AFTER M1: PUT 5 MB instead of the declared 1 KB ==
+  MinIO response: 403 Forbidden  (REJECTED — size now bound to the signature)
+
+== AFTER M1: PUT declared size but as text/plain ==
+  MinIO response: 403 Forbidden  (REJECTED — content type now bound to the signature)

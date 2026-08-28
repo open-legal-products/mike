@@ -1,0 +1,10 @@
+$ # Deployment procedure per docs/deployment.md: recorded version = 20260827_03 (current main HEAD)
+$ # "apply each newer file ... in filename order" — which files does that select on this branch?
+$ ls migrations/ | awk '$0 > "20260827_03"'
+20260827_03_remove_minimal_reasoning.sql
+20260828_01_upload_worker_concurrency.sql
+
+$ # NOTE: 20260824_01_upload_sessions.sql (the table-creating migration) is NOT selected — it sorts OLDER.
+$ psql ... -f migrations/20260828_01_upload_worker_concurrency.sql
+psql:migrations/20260828_01_upload_worker_concurrency.sql:6: ERROR:  relation "public.upload_processing_jobs" does not exist
+exit code: 3

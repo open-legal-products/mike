@@ -1,0 +1,74 @@
+== M6 lock-order deadlock replication: two concurrent PostgREST-style transactions ==
+== A mimics queue_upload_session_file_processing (locks S->F->J); B mimics claim_upload_processing_job (locks J->F->S) ==
+--- session A output ---
+BEGIN
+          step          
+------------------------
+ A: locking session (S)
+(1 row)
+
+                  id                  
+--------------------------------------
+ 11111111-1111-1111-1111-111111111111
+(1 row)
+
+        step         
+---------------------
+ A: locking file (F)
+(1 row)
+
+                  id                  
+--------------------------------------
+ 22222222-2222-2222-2222-222222222222
+(1 row)
+
+ pg_sleep 
+----------
+ 
+(1 row)
+
+              step               
+---------------------------------
+ A: upsert job (J conflict lock)
+(1 row)
+
+psql:/tmp/dl_a.sql:9: ERROR:  deadlock detected
+DETAIL:  Process 45314 waits for ShareLock on transaction 4651; blocked by process 45315.
+Process 45315 waits for ShareLock on transaction 4650; blocked by process 45314.
+HINT:  See server log for query details.
+CONTEXT:  while locking tuple (0,3) in relation "upload_processing_jobs"
+ROLLBACK
+--- session B output ---
+BEGIN
+        step        
+--------------------
+ B: locking job (J)
+(1 row)
+
+                  id                  
+--------------------------------------
+ 33333333-3333-3333-3333-333333333333
+(1 row)
+
+ pg_sleep 
+----------
+ 
+(1 row)
+
+         step         
+----------------------
+ B: updating file (F)
+(1 row)
+
+UPDATE 1
+                   step                   
+------------------------------------------
+ B: refresh session status (S for update)
+(1 row)
+
+ refresh_upload_session_status 
+-------------------------------
+ processing
+(1 row)
+
+COMMIT

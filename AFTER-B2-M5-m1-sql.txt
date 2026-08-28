@@ -1,0 +1,29 @@
+== AFTER FIX: B2 — deployment at recorded version 20260827_03 now selects the (single, consolidated) upload migration ==
+20260828_01_upload_worker_concurrency.sql
+20260828_02_upload_sessions.sql
+
+== AFTER FIX: M5 — errored session keeps cleaned_at NULL; the object sweeper can see it ==
+UPDATE 1
+UPDATE 1
+ refresh_upload_session_status 
+-------------------------------
+ error
+(1 row)
+
+ status |     error_code     | cleaned_at_null 
+--------+--------------------+-----------------
+ error  | all_uploads_failed | t
+(1 row)
+
+ sessions_visible_to_sweeper 
+-----------------------------
+                           1
+(1 row)
+
+
+== AFTER FIX: m1 — upload-session advisory key no longer collides with install_missing_default_workflows ==
+ upload_session_lock |   workflows_lock    
+---------------------+---------------------
+ 3379250525201821463 | 9175889265663207281
+(1 row)
+

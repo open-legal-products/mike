@@ -1,0 +1,3 @@
+== M12: idle claim-RPC load from ONE API replica (default config, zero uploads in flight) ==
+backend log at boot: 'Upload processing started with 16 workers and a 4-job per-user cap'
+claim_upload_processing_job calls in a 10s idle window: 161  (~16/sec continuous)

@@ -1,0 +1,3 @@
+== AFTER FIX: M12 — idle claim-RPC load, default config ==
+backend log at boot: 'Upload processing started with 4 workers and a 4-job per-user cap'
+claim_upload_processing_job calls in a 10s idle window: 40  (was 161 before the fix)

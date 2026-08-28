@@ -1,0 +1,4 @@
+== AFTER FIX: M6 — 150 concurrent iterations of the real queue RPC vs the real claim RPC on the same file/job ==
+queue-side errors:  0 deadlocks, 0 error lines total
+claim-side errors:  0 deadlocks, 0 error lines total
+(before the fix, the same statement interleaving deadlocked deterministically — see M6-deadlock-replication.txt)

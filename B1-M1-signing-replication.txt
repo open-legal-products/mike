@@ -1,0 +1,15 @@
+== B1: parameters baked into every presigned upload URL ==
+  X-Amz-SignedHeaders = host
+  x-amz-checksum-crc32 = AAAAAA==
+  x-amz-sdk-checksum-algorithm = CRC32
+  (x-amz-checksum-crc32 AAAAAA== is the CRC32 of ZERO bytes — signed into the URL,
+   so the browser cannot strip it. A checksum-validating store rejects any non-empty PUT.)
+
+== PUT 1 KB of real bytes with that URL against local MinIO ==
+  MinIO response: 200 OK  (ACCEPTED — MinIO ignores the declared checksum; this is why CI is green)
+
+== M1: declared size/type are not bound to the signature ==
+  Session manifest declares this file as 1 KB application/pdf. Now PUT 5 MB of text/plain:
+  MinIO response: 200 OK  (ACCEPTED — 5 MB of the wrong content type landed under a URL signed for a 1 KB PDF)
+
+== Object now in storage (HEAD): size=? content-type=application/xml ==
