@@ -7,7 +7,9 @@ import { isPanelDocument } from "@/app/components/shared/types";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import {
     UploadBatchError,
+    createControlRequestRetryPolicy,
     failedUploadMessage,
+    firstUploadResult,
     uploadFilesWithSessionCore,
     type UploadOutcome,
     type UploadProgress,
@@ -131,6 +133,16 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     return (await response.json()) as T;
 }
 
+/**
+ * Every upload entry point takes the same options bag so a caller can watch
+ * progress and cancel the batch (an unmounting screen, a "stop" control)
+ * without reaching past the API layer.
+ */
+export type UploadRequestOptions<T> = {
+    onProgress?: (progress: UploadProgress<T>) => void;
+    signal?: AbortSignal;
+};
+
 export async function uploadFilesWithSession<T>(args: {
     purpose: UploadSessionPurpose;
     destination: Record<string, unknown>;
@@ -143,22 +155,14 @@ export async function uploadFilesWithSession<T>(args: {
         transport: {
             apiRequest,
             fetchStorage: (...fetchArgs) => fetch(...fetchArgs),
-            shouldRetryControlRequest: (error) =>
-                !(error instanceof MikeApiError) ||
-                error.status >= 500 ||
-                error.status === 429 ||
-                error.code === "upload_incomplete" ||
-                error.code === "upload_completion_in_progress",
+            shouldRetryControlRequest: createControlRequestRetryPolicy(
+                (error) =>
+                    error instanceof MikeApiError
+                        ? { status: error.status, code: error.code }
+                        : null,
+            ),
         },
     });
-}
-
-function firstUploadResult<T>(outcomes: UploadOutcome<T>[]): T {
-    const first = outcomes[0];
-    if (!first || first.status !== "completed" || !first.result) {
-        throw new UploadBatchError("The file could not be processed.", outcomes);
-    }
-    return first.result;
 }
 
 async function apiBlobRequest(path: string): Promise<{
@@ -1112,16 +1116,17 @@ export async function uploadLibraryDocument(
     kind: LibraryKind,
     file: File,
     folderId?: string | null,
+    options?: UploadRequestOptions<Document>,
 ): Promise<Document> {
     return firstUploadResult(
-        await uploadLibraryDocuments(kind, [{ file, folderId }]),
+        await uploadLibraryDocuments(kind, [{ file, folderId }], options),
     );
 }
 
 export async function uploadLibraryDocuments(
     kind: LibraryKind,
     files: UploadSessionInput[],
-    options?: { onProgress?: (progress: UploadProgress<Document>) => void },
+    options?: UploadRequestOptions<Document>,
 ): Promise<UploadOutcome<Document>[]> {
     return uploadFilesWithSession<Document>({
         purpose: "document_create",
@@ -1131,6 +1136,7 @@ export async function uploadLibraryDocuments(
         },
         files,
         onProgress: options?.onProgress,
+        signal: options?.signal,
     });
 }
 
@@ -1263,12 +1269,15 @@ export async function uploadDocumentVersion(
     documentId: string,
     file: File,
     filename?: string,
+    options?: UploadRequestOptions<DocumentVersion>,
 ): Promise<DocumentVersion> {
     return firstUploadResult(
         await uploadFilesWithSession<DocumentVersion>({
             purpose: "document_version_create",
             destination: { document_id: documentId, filename },
             files: [{ file }],
+            onProgress: options?.onProgress,
+            signal: options?.signal,
         }),
     );
 }
@@ -1278,6 +1287,7 @@ export async function replaceDocumentVersionFile(
     versionId: string,
     file: File,
     filename?: string,
+    options?: UploadRequestOptions<DocumentVersion>,
 ): Promise<DocumentVersion> {
     const uploadedFile = filename
         ? new File([file], filename, {
@@ -1290,6 +1300,8 @@ export async function replaceDocumentVersionFile(
             purpose: "document_version_replace",
             destination: { document_id: documentId, version_id: versionId },
             files: [{ file: uploadedFile }],
+            onProgress: options?.onProgress,
+            signal: options?.signal,
         }),
     );
 }
@@ -1343,38 +1355,44 @@ export async function uploadProjectDocument(
     projectId: string,
     file: File,
     folderId?: string | null,
+    options?: UploadRequestOptions<Document>,
 ): Promise<Document> {
     return firstUploadResult(
-        await uploadProjectDocuments(projectId, [{ file, folderId }]),
+        await uploadProjectDocuments(projectId, [{ file, folderId }], options),
     );
 }
 
 export async function uploadProjectDocuments(
     projectId: string,
     files: UploadSessionInput[],
-    options?: { onProgress?: (progress: UploadProgress<Document>) => void },
+    options?: UploadRequestOptions<Document>,
 ): Promise<UploadOutcome<Document>[]> {
     return uploadFilesWithSession<Document>({
         purpose: "document_create",
         destination: { scope: "project", project_id: projectId },
         files,
         onProgress: options?.onProgress,
+        signal: options?.signal,
     });
 }
 
-export async function uploadStandaloneDocument(file: File): Promise<Document> {
-    return firstUploadResult(await uploadStandaloneDocuments([{ file }]));
+export async function uploadStandaloneDocument(
+    file: File,
+    options?: UploadRequestOptions<Document>,
+): Promise<Document> {
+    return firstUploadResult(await uploadStandaloneDocuments([{ file }], options));
 }
 
 export async function uploadStandaloneDocuments(
     files: UploadSessionInput[],
-    options?: { onProgress?: (progress: UploadProgress<Document>) => void },
+    options?: UploadRequestOptions<Document>,
 ): Promise<UploadOutcome<Document>[]> {
     return uploadFilesWithSession<Document>({
         purpose: "document_create",
         destination: { scope: "standalone" },
         files,
         onProgress: options?.onProgress,
+        signal: options?.signal,
     });
 }
 
@@ -2294,20 +2312,24 @@ export async function listWorkflowReferenceFiles(
 export async function uploadWorkflowReferenceFile(
     workflowId: string,
     file: File,
+    options?: UploadRequestOptions<WorkflowReferenceDocument>,
 ): Promise<WorkflowReferenceDocument> {
     return firstUploadResult(
-        await uploadWorkflowReferenceFiles(workflowId, [{ file }]),
+        await uploadWorkflowReferenceFiles(workflowId, [{ file }], options),
     );
 }
 
 export async function uploadWorkflowReferenceFiles(
     workflowId: string,
     files: UploadSessionInput[],
+    options?: UploadRequestOptions<WorkflowReferenceDocument>,
 ): Promise<UploadOutcome<WorkflowReferenceDocument>[]> {
     return uploadFilesWithSession<WorkflowReferenceDocument>({
         purpose: "workflow_reference_create",
         destination: { workflow_id: workflowId },
         files,
+        onProgress: options?.onProgress,
+        signal: options?.signal,
     });
 }
 
@@ -2315,6 +2337,7 @@ export async function replaceWorkflowReferenceFile(
     workflowId: string,
     referenceId: string,
     file: File,
+    options?: UploadRequestOptions<WorkflowReferenceDocument>,
 ): Promise<WorkflowReferenceDocument> {
     return firstUploadResult(
         await uploadFilesWithSession<WorkflowReferenceDocument>({
@@ -2324,6 +2347,8 @@ export async function replaceWorkflowReferenceFile(
                 reference_id: referenceId,
             },
             files: [{ file }],
+            onProgress: options?.onProgress,
+            signal: options?.signal,
         }),
     );
 }
