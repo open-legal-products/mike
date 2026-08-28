@@ -17,6 +17,15 @@ export function envInt(
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+// The hourly session ceiling is passed straight into a PostgreSQL integer
+// argument, so an oversized override would turn every session create into a
+// numeric-overflow failure rather than a looser limit.
+const MAX_UPLOAD_SESSIONS_PER_HOUR = 1_000_000;
+
 export function uploadSessionRateLimitConfiguration(
   env: NodeJS.ProcessEnv = process.env,
 ) {
@@ -33,10 +42,10 @@ export function uploadSessionRateLimitConfiguration(
       env,
     ),
     pollingMax: envInt("RATE_LIMIT_UPLOAD_SESSION_POLL_MAX", 3_000, env),
-    sessionCreationMaxPerHour: envInt(
-      "RATE_LIMIT_UPLOAD_SESSION_CREATE_MAX_PER_HOUR",
-      50,
-      env,
+    sessionCreationMaxPerHour: clamp(
+      envInt("RATE_LIMIT_UPLOAD_SESSION_CREATE_MAX_PER_HOUR", 50, env),
+      1,
+      MAX_UPLOAD_SESSIONS_PER_HOUR,
     ),
   };
 }
@@ -45,7 +54,7 @@ export function uploadProcessingConfiguration(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const concurrency = Math.min(
-    envInt("UPLOAD_PROCESSING_CONCURRENCY", 16, env),
+    envInt("UPLOAD_PROCESSING_CONCURRENCY", 4, env),
     64,
   );
   return {
@@ -55,6 +64,34 @@ export function uploadProcessingConfiguration(
       concurrency,
     ),
   };
+}
+
+/**
+ * Hard deadline for one LibreOffice conversion. A wedged `soffice` child would
+ * otherwise hold its worker slot for the life of the process.
+ */
+export function uploadConversionTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return clamp(
+    envInt("UPLOAD_CONVERT_TIMEOUT_MS", 120_000, env),
+    10_000,
+    600_000,
+  );
+}
+
+/**
+ * Wall-clock budget for one upload job. Past this point the worker stops
+ * renewing its lease so another worker can steal and retry the job.
+ */
+export function uploadJobWallClockMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return clamp(
+    envInt("UPLOAD_JOB_WALL_CLOCK_MS", 15 * 60_000, env),
+    60_000,
+    60 * 60_000,
+  );
 }
 
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {

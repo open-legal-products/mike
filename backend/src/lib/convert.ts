@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { uploadConversionTimeoutMs } from "./runtimeConfig";
+
 let _convert:
   | ((buf: Buffer, ext: string, filter: undefined) => Promise<Buffer>)
   | null = null;
@@ -156,35 +158,61 @@ export async function officeFileToPdf(
   await fs.promises.mkdir(profileDirectory, { recursive: true });
   const profileUrl = pathToFileURL(profileDirectory).href;
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      binary,
-      [
-        `-env:UserInstallation=${profileUrl}`,
-        "--headless",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        outputDirectory,
-        inputPath,
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${String(chunk)}`.slice(-4_096);
+  const timeoutMs = uploadConversionTimeoutMs();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        binary,
+        [
+          `-env:UserInstallation=${profileUrl}`,
+          "--headless",
+          "--convert-to",
+          "pdf",
+          "--outdir",
+          outputDirectory,
+          inputPath,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      let stderr = "";
+      let timedOut = false;
+      // LibreOffice can wedge on a malformed document and never exit, which
+      // would hold this worker slot for the life of the process.
+      const deadline = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, timeoutMs);
+      deadline.unref();
+      child.stderr.on("data", (chunk) => {
+        stderr = `${stderr}${String(chunk)}`.slice(-4_096);
+      });
+      child.once("error", (error) => {
+        clearTimeout(deadline);
+        reject(error);
+      });
+      child.once("close", (code) => {
+        clearTimeout(deadline);
+        if (timedOut) {
+          reject(
+            new Error(`LibreOffice conversion timed out after ${timeoutMs}ms`),
+          );
+        } else if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(
+              `LibreOffice conversion failed with exit code ${code ?? "unknown"}${stderr ? `: ${stderr}` : ""}`,
+            ),
+          );
+        }
+      });
     });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) resolve();
-      else
-        reject(
-          new Error(
-            `LibreOffice conversion failed with exit code ${code ?? "unknown"}${stderr ? `: ${stderr}` : ""}`,
-          ),
-        );
-    });
-  });
+  } finally {
+    // A killed child leaves lock files behind in its user profile.
+    await fs.promises
+      .rm(profileDirectory, { recursive: true, force: true })
+      .catch(() => {});
+  }
 
   const outputPath = path.join(
     outputDirectory,

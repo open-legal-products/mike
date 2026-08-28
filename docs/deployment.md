@@ -136,17 +136,24 @@ polling, and hourly creation limits can be overridden with the
 `backend/.env.example`; missing or invalid values use the documented defaults.
 Sessions that update the same mutable
 document version or workflow reference remain mutually exclusive. Sessions
-expire after 30 minutes; individual signed URLs expire after 15 minutes and can
+expire after 30 minutes, extended by a further 30 minutes each time a file
+completes so a slow batch is not destroyed mid-upload, up to four hours from
+creation; individual signed URLs expire after 15 minutes and can
 be refreshed while the session is pending. These limits are enforced atomically
 in PostgreSQL, not only in the browser.
 
 The Express process also runs a durable upload-processing pool. By default,
-each backend replica claims up to 16 jobs concurrently while PostgreSQL limits
+each backend replica claims up to 4 jobs concurrently while PostgreSQL limits
 each user to four active jobs across all replicas. Override these defaults with
-`UPLOAD_PROCESSING_CONCURRENCY` and
-`UPLOAD_PROCESSING_MAX_RUNNING_PER_USER`. Workers claim jobs with database
-leases, retry a failed file up to three times, and clean expired, cancelled,
-and terminally failed temporary objects. Terminal session metadata is retained
+`UPLOAD_PROCESSING_CONCURRENCY` (capped at 64) and
+`UPLOAD_PROCESSING_MAX_RUNNING_PER_USER`; every claim loop polls the database,
+so raising the pool raises idle query load in proportion. Workers claim jobs
+with database leases, retry a failed file up to three times, and clean expired,
+cancelled, and terminally failed temporary objects. A single document
+conversion is killed after `UPLOAD_CONVERT_TIMEOUT_MS` (default 120000, clamped
+to 10000-600000) and a worker stops renewing its lease after
+`UPLOAD_JOB_WALL_CLOCK_MS` (default 900000, clamped to 60000-3600000) so a
+wedged job is recovered by another worker instead of holding its slot. Terminal session metadata is retained
 for seven days so clients can inspect outcomes, then deleted in bounded cleanup
 batches.
 Deployments must therefore run `backend/src/index.ts`

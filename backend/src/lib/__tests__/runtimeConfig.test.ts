@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  uploadConversionTimeoutMs,
+  uploadJobWallClockMs,
   uploadProcessingConfiguration,
   uploadSessionRateLimitConfiguration,
   validateRuntimeConfiguration,
@@ -82,12 +84,20 @@ describe("upload-session rate-limit configuration", () => {
       sessionCreationMaxPerHour: 250,
     });
   });
+
+  it("clamps an hourly creation limit the database cannot represent", () => {
+    expect(
+      uploadSessionRateLimitConfiguration({
+        RATE_LIMIT_UPLOAD_SESSION_CREATE_MAX_PER_HOUR: "9999999999",
+      }).sessionCreationMaxPerHour,
+    ).toBe(1_000_000);
+  });
 });
 
 describe("upload-processing configuration", () => {
-  it("uses a 16-job pool with at most four active jobs per user by default", () => {
+  it("uses a four-job pool with at most four active jobs per user by default", () => {
     expect(uploadProcessingConfiguration({})).toEqual({
-      concurrency: 16,
+      concurrency: 4,
       maxRunningPerUser: 4,
     });
   });
@@ -113,5 +123,45 @@ describe("upload-processing configuration", () => {
       concurrency: 64,
       maxRunningPerUser: 4,
     });
+  });
+});
+
+describe("upload worker deadlines", () => {
+  it("uses two-minute conversions and a fifteen-minute job budget by default", () => {
+    expect(uploadConversionTimeoutMs({})).toBe(120_000);
+    expect(uploadJobWallClockMs({})).toBe(900_000);
+  });
+
+  it("accepts overrides inside the supported range", () => {
+    expect(
+      uploadConversionTimeoutMs({ UPLOAD_CONVERT_TIMEOUT_MS: "45000" }),
+    ).toBe(45_000);
+    expect(uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "300000" })).toBe(
+      300_000,
+    );
+  });
+
+  it("clamps overrides that would disable or never reach the deadline", () => {
+    expect(uploadConversionTimeoutMs({ UPLOAD_CONVERT_TIMEOUT_MS: "1" })).toBe(
+      10_000,
+    );
+    expect(
+      uploadConversionTimeoutMs({ UPLOAD_CONVERT_TIMEOUT_MS: "9999999" }),
+    ).toBe(600_000);
+    expect(uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "1" })).toBe(
+      60_000,
+    );
+    expect(uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "9999999999" })).toBe(
+      3_600_000,
+    );
+  });
+
+  it("falls back to the defaults for unparseable values", () => {
+    expect(
+      uploadConversionTimeoutMs({ UPLOAD_CONVERT_TIMEOUT_MS: "soon" }),
+    ).toBe(120_000);
+    expect(uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "-5" })).toBe(
+      900_000,
+    );
   });
 });

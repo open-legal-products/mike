@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import { recordAudit } from "./audit";
 import { convertedPdfKey, officeFileToPdf } from "./convert";
 import { shouldConvertToPdf } from "./documentTypes";
+import { uploadJobWallClockMs } from "./runtimeConfig";
 import {
   copyFile,
   createFileReadStream,
@@ -694,33 +695,31 @@ export async function processUploadJob(
   if (filesError || !fileRow) {
     throw filesError ?? new Error("upload_session_file_not_found");
   }
-  const files = [fileRow as UploadFileRow];
-  const terminalUploadFailureCount = files.filter(
-    (file) =>
-      file.status === "error" &&
-      !!file.error_code &&
-      TERMINAL_UPLOAD_ERROR_CODES.has(file.error_code),
-  ).length;
+  const file = fileRow as UploadFileRow;
+  const terminalUploadFailure =
+    file.status === "error" &&
+    !!file.error_code &&
+    TERMINAL_UPLOAD_ERROR_CODES.has(file.error_code);
 
-  const heartbeat = setInterval(() => {
+  const startedAt = Date.now();
+  const wallClockMs = uploadJobWallClockMs();
+  const heartbeat: NodeJS.Timeout = setInterval(() => {
+    // Past the wall-clock budget, stop renewing the lease. A wedged job then
+    // ages out and claim_upload_processing_job can steal it for a retry
+    // instead of the slot being held forever.
+    if (Date.now() - startedAt >= wallClockMs) {
+      clearInterval(heartbeat);
+      return;
+    }
     void heartbeatJob(db, jobId, workerId).catch((error) => {
       console.error("[upload-worker] heartbeat failed", { jobId, error });
     });
   }, UPLOAD_WORKER_HEARTBEAT_MS);
   heartbeat.unref();
 
-  let failed = 0;
-  const processingFailures: UploadFileRow[] = [];
+  let failed = false;
   try {
-    for (const file of files) {
-      if (
-        file.status === "completed" ||
-        (file.status === "error" &&
-          !!file.error_code &&
-          TERMINAL_UPLOAD_ERROR_CODES.has(file.error_code))
-      ) {
-        continue;
-      }
+    if (file.status !== "completed" && !terminalUploadFailure) {
       await heartbeatJob(db, jobId, workerId);
       const { error: statusError } = await db
         .from("upload_session_files")
@@ -740,8 +739,7 @@ export async function processUploadJob(
         // A failed timer heartbeat makes ownership uncertain. Re-prove the
         // lease before recording even a failure result.
         await heartbeatJob(db, jobId, workerId);
-        failed += 1;
-        processingFailures.push(file);
+        failed = true;
         console.error("[upload-worker] file processing failed", {
           jobId,
           sessionId: typedSession.id,
@@ -761,32 +759,33 @@ export async function processUploadJob(
         if (updateError) throw updateError;
         await markCreatedDocumentFailed(db, typedSession, file);
         await heartbeatJob(db, jobId, workerId);
-        continue;
       }
 
-      // Long conversions may outlive a lease heartbeat. Re-prove ownership
-      // before publishing the result or deleting the sealed source object.
-      await heartbeatJob(db, jobId, workerId);
-      const { error } = await db
-        .from("upload_session_files")
-        .update({
-          status: "completed",
-          result,
-          error_code: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file.id)
-        .eq("session_id", typedSession.id);
-      if (error) throw error;
-      await deleteFile(file.sealed_storage_path).catch(() => {});
-      await heartbeatJob(db, jobId, workerId);
+      if (!failed) {
+        // Long conversions may outlive a lease heartbeat. Re-prove ownership
+        // before publishing the result or deleting the sealed source object.
+        await heartbeatJob(db, jobId, workerId);
+        const { error } = await db
+          .from("upload_session_files")
+          .update({
+            status: "completed",
+            result,
+            error_code: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", file.id)
+          .eq("session_id", typedSession.id);
+        if (error) throw error;
+        await deleteFile(file.sealed_storage_path).catch(() => {});
+        await heartbeatJob(db, jobId, workerId);
+      }
     }
   } finally {
     clearInterval(heartbeat);
   }
 
   const now = new Date().toISOString();
-  if (failed > 0 && typedJob.attempts < UPLOAD_JOB_MAX_ATTEMPTS) {
+  if (failed && typedJob.attempts < UPLOAD_JOB_MAX_ATTEMPTS) {
     const retryAt = new Date(
       Date.now() + typedJob.attempts * 5_000,
     ).toISOString();
@@ -823,11 +822,9 @@ export async function processUploadJob(
     return;
   }
 
-  const partialFailure = failed > 0 || terminalUploadFailureCount > 0;
+  const partialFailure = failed || terminalUploadFailure;
   if (partialFailure) {
-    for (const file of processingFailures) {
-      await removeFailedCreatedDocument(db, typedSession, file);
-    }
+    if (failed) await removeFailedCreatedDocument(db, typedSession, file);
     const { data: failedFiles } = await db
       .from("upload_session_files")
       .select("sealed_storage_path")
