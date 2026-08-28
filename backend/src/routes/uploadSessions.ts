@@ -362,6 +362,7 @@ async function signPendingFiles(
       const url = await getSignedUploadUrl(
         file.staging_storage_path,
         file.content_type,
+        file.expected_size_bytes,
         ttl,
       );
       if (!url) throw new Error("Failed to create signed upload URL");
@@ -370,6 +371,9 @@ async function signPendingFiles(
         upload: {
           method: "PUT" as const,
           url,
+          // Content-Length is part of the signature but is deliberately absent
+          // here: browsers set it from the body and refuse a manual override,
+          // so a wrong-size body fails signature validation at the store.
           headers: { "Content-Type": file.content_type },
           expires_at: new Date(Date.now() + ttl * 1000).toISOString(),
         },
@@ -383,35 +387,40 @@ async function verifyAndSealSessionFiles(
   session: UploadSessionRow,
   files: UploadSessionFileRow[],
 ): Promise<boolean[]> {
+  // Every result write is conditioned on the file still being the 'verifying'
+  // claim this call made. Losing that claim — a reset or a stolen lease — must
+  // never overwrite the newer state, so it is reported as "not sealed" rather
+  // than as an error.
+  const writeSealResult = async (
+    file: UploadSessionFileRow,
+    payload: Record<string, unknown>,
+  ): Promise<boolean> => {
+    const { data, error } = await db
+      .from("upload_session_files")
+      .update({ ...payload, updated_at: new Date().toISOString() })
+      .eq("id", file.id)
+      .eq("session_id", session.id)
+      .eq("status", "verifying")
+      .select("id")
+      .maybeSingle();
+    if (error) throw error;
+    return !!data;
+  };
+
   return await mapWithConcurrency(files, 5, async (file) => {
     const sealed = await headFile(file.sealed_storage_path);
     if (sealed?.size === file.expected_size_bytes) {
-      const { error } = await db
-        .from("upload_session_files")
-        .update({
-          status: "uploaded",
-          observed_size_bytes: sealed.size,
-          etag: sealed.etag,
-          error_code: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file.id)
-        .eq("session_id", session.id);
-      if (error) throw error;
-      return true;
+      return await writeSealResult(file, {
+        status: "uploaded",
+        observed_size_bytes: sealed.size,
+        etag: sealed.etag,
+        error_code: null,
+      });
     }
 
     const staged = await headFile(file.staging_storage_path);
     if (!staged) {
-      const { error } = await db
-        .from("upload_session_files")
-        .update({
-          status: "pending_upload",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file.id)
-        .eq("session_id", session.id);
-      if (error) throw error;
+      await writeSealResult(file, { status: "pending_upload" });
       return false;
     }
     if (
@@ -423,18 +432,12 @@ async function verifyAndSealSessionFiles(
           ? "size_mismatch"
           : "content_type_mismatch";
       await deleteFile(file.staging_storage_path).catch(() => {});
-      const { error } = await db
-        .from("upload_session_files")
-        .update({
-          status: "error",
-          observed_size_bytes: staged.size,
-          etag: staged.etag,
-          error_code: errorCode,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", file.id)
-        .eq("session_id", session.id);
-      if (error) throw error;
+      await writeSealResult(file, {
+        status: "error",
+        observed_size_bytes: staged.size,
+        etag: staged.etag,
+        error_code: errorCode,
+      });
       return false;
     }
 
@@ -444,19 +447,12 @@ async function verifyAndSealSessionFiles(
       throw new Error("Failed to verify sealed upload object");
     }
     await deleteFile(file.staging_storage_path);
-    const { error } = await db
-      .from("upload_session_files")
-      .update({
-        status: "uploaded",
-        observed_size_bytes: copied.size,
-        etag: copied.etag,
-        error_code: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", file.id)
-      .eq("session_id", session.id);
-    if (error) throw error;
-    return true;
+    return await writeSealResult(file, {
+      status: "uploaded",
+      observed_size_bytes: copied.size,
+      etag: copied.etag,
+      error_code: null,
+    });
   });
 }
 
@@ -471,6 +467,24 @@ async function refreshSessionStatus(db: Db, sessionId: string): Promise<void> {
     target_session_id: sessionId,
   });
   if (error) throw error;
+}
+
+/**
+ * Slide the session deadline forward as files land. A large batch on a slow
+ * uplink can outlive the initial 30-minute TTL; the RPC applies its own
+ * absolute cap from session creation, so this cannot extend a session forever.
+ * A failure here must never fail an upload that already succeeded.
+ */
+async function extendSessionExpiry(db: Db, sessionId: string): Promise<void> {
+  const { error } = await db.rpc("extend_upload_session_expiry", {
+    target_session_id: sessionId,
+  });
+  if (error) {
+    console.error("[upload-sessions] extending the session expiry failed", {
+      sessionId,
+      error,
+    });
+  }
 }
 
 async function queueFileProcessing(
@@ -540,6 +554,7 @@ async function completeSessionFile(
 
   if (file.status === "uploaded") {
     await queueFileProcessing(db, session.id, userId, file.id);
+    await extendSessionExpiry(db, session.id);
     await refreshSessionStatus(db, session.id);
     return "resolved";
   }
@@ -585,6 +600,7 @@ async function completeSessionFile(
     return current?.status === "error" ? "resolved" : "incomplete";
   }
   await queueFileProcessing(db, session.id, userId, file.id);
+  await extendSessionExpiry(db, session.id);
   await refreshSessionStatus(db, session.id);
   return "resolved";
 }
@@ -730,7 +746,7 @@ uploadSessionsRouter.post(
     const pendingFiles = files.filter((file) =>
       ["pending_upload", "verifying"].includes(file.status),
     );
-    if (pendingFiles.length) {
+    if (pendingFiles.some((file) => file.status === "pending_upload")) {
       const { error } = await db
         .from("upload_session_files")
         .update({
@@ -739,7 +755,22 @@ uploadSessionsRouter.post(
           updated_at: new Date().toISOString(),
         })
         .eq("session_id", session.id)
-        .in("status", ["pending_upload", "verifying"]);
+        .eq("status", "pending_upload");
+      if (error) return void sendInternalError(res, error);
+    }
+    if (pendingFiles.some((file) => file.status === "verifying")) {
+      // Only reclaim a verification lease that has already expired. A fresh
+      // one means another request is still sealing that file.
+      const { error } = await db
+        .from("upload_session_files")
+        .update({
+          status: "pending_upload",
+          error_code: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("session_id", session.id)
+        .eq("status", "verifying")
+        .lte("updated_at", verificationLeaseCutoff());
       if (error) return void sendInternalError(res, error);
     }
     res.json({

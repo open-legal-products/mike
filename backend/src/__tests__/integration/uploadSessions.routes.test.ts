@@ -78,6 +78,17 @@ describe("upload session routes", () => {
       expect.objectContaining({ target_hourly_session_limit: 50 }),
     );
     expect(mocks.getSignedUploadUrl).toHaveBeenCalledTimes(2);
+    // The declared byte count is signed into the URL; the browser supplies the
+    // matching Content-Length itself, so it is not echoed in the descriptor.
+    expect(mocks.getSignedUploadUrl).toHaveBeenCalledWith(
+      expect.any(String),
+      "application/pdf",
+      1234,
+      expect.any(Number),
+    );
+    expect(response.body.files[0].upload.headers).not.toHaveProperty(
+      "Content-Length",
+    );
   });
 
   it("rejects more than 50 files without touching the database or storage", async () => {

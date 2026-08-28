@@ -47,7 +47,12 @@ function queryFor(table: string) {
       predicates.push((row) => values.includes(row[column]));
       return query;
     }),
-    lte: vi.fn(() => query),
+    lte: vi.fn((column: string, value: string) => {
+      // Timestamps are ISO-8601, so a string comparison is a faithful stand-in
+      // for the database predicate that guards verification leases.
+      predicates.push((row) => String(row[column] ?? "") <= value);
+      return query;
+    }),
     is: vi.fn(() => query),
     order: vi.fn(() => query),
     maybeSingle: vi.fn(async () => {
@@ -135,6 +140,7 @@ describe("upload session completion", () => {
         status: "pending_upload",
         error_code: null,
         result: null,
+        updated_at: "2000-01-01T00:00:00.000Z",
       },
     ];
     mocks.copyFile.mockResolvedValue(undefined);
@@ -270,7 +276,110 @@ describe("upload session completion", () => {
     expect(mocks.getSignedUploadUrl).toHaveBeenCalledWith(
       "staging-key",
       "application/pdf",
+      4,
       expect.any(Number),
+    );
+  });
+
+  it("does not reclaim a verifying file whose lease is still fresh", async () => {
+    mocks.files[0]!.status = "verifying";
+    mocks.files[0]!.updated_at = new Date().toISOString();
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.files[0]).toMatchObject({ status: "verifying" });
+  });
+
+  it("reclaims a verifying file whose lease has expired", async () => {
+    mocks.files[0]!.status = "verifying";
+    mocks.files[0]!.updated_at = "2000-01-01T00:00:00.000Z";
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.files[0]).toMatchObject({ status: "pending_upload" });
+  });
+
+  it("does not publish a seal result after its verification claim is stolen", async () => {
+    mocks.headFile.mockImplementationOnce(async () => {
+      mocks.files[0]!.status = "pending_upload";
+      return { size: 4, etag: "sealed-etag", contentType: "application/pdf" };
+    });
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("upload_incomplete");
+    expect(mocks.files[0]).toMatchObject({ status: "pending_upload" });
+    expect(mocks.rpc).not.toHaveBeenCalledWith(
+      "queue_upload_session_file_processing",
+      expect.anything(),
+    );
+  });
+
+  it("extends the session deadline after a file is sealed and queued", async () => {
+    mocks.headFile
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        size: 4,
+        etag: "staged-etag",
+        contentType: "application/pdf",
+      })
+      .mockResolvedValueOnce({
+        size: 4,
+        etag: "sealed-etag",
+        contentType: "application/pdf",
+      });
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.rpc).toHaveBeenCalledWith("extend_upload_session_expiry", {
+      target_session_id: "22222222-2222-4222-8222-222222222222",
+    });
+  });
+
+  it("still reports success when the deadline cannot be extended", async () => {
+    mocks.rpc.mockImplementation(async (name: string) => {
+      if (name === "extend_upload_session_expiry") {
+        return { data: null, error: { message: "rpc unavailable" } };
+      }
+      return name === "queue_upload_session_file_processing"
+        ? { data: "job-1", error: null }
+        : { data: "pending_upload", error: null };
+    });
+    mocks.files[0]!.status = "uploaded";
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
+    );
+
+    expect(response.status).toBe(200);
+    expect(log).toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it("does not extend the deadline when the client reports a failed transfer", async () => {
+    const response = await request(app)
+      .post(
+        "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
+      )
+      .send({ failed: true });
+
+    expect(response.status).toBe(200);
+    expect(mocks.rpc).not.toHaveBeenCalledWith(
+      "extend_upload_session_expiry",
+      expect.anything(),
     );
   });
 
