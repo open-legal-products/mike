@@ -86,7 +86,7 @@ describe("document directory upload paths", () => {
     });
 
     it("caps a directory upload at the backend hourly request limit", () => {
-        expect(MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD).toBe(50);
+        expect(MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD).toBe(500);
     });
 
     it("preserves the selected root folder and nested subfolders", () => {

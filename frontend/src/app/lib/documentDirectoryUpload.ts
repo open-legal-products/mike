@@ -3,7 +3,11 @@ export type DocumentUploadEntry = {
     relativePath: string;
 };
 
-export const MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD = 50;
+// Pre-flight ceiling for one drop/selection. The upload client chunks large
+// selections into <=50-file sessions itself, so this is not the session limit —
+// it only stops a mis-drop (say, a home directory) from queueing hundreds of
+// sessions against the 50-session hourly cap. 500 files = at most 10 sessions.
+export const MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD = 500;
 export const DOCUMENT_UPLOAD_CONCURRENCY = 2;
 
 export type DocumentUploadProgressEntry = {
