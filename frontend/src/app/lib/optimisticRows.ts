@@ -11,6 +11,7 @@ export function restoreOptimisticallyDeletedRows<T extends { id: string }>(
     const included = new Set<string>();
 
     for (const snapshotRow of snapshotRows) {
+        if (included.has(snapshotRow.id)) continue;
         const currentRow = currentById.get(snapshotRow.id);
         if (currentRow) {
             restored.push(currentRow);
@@ -24,6 +25,7 @@ export function restoreOptimisticallyDeletedRows<T extends { id: string }>(
     for (const currentRow of currentRows) {
         if (included.has(currentRow.id)) continue;
         restored.push(currentRow);
+        included.add(currentRow.id);
     }
 
     return restored;

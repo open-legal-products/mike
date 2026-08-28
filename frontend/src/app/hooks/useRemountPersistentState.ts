@@ -55,6 +55,12 @@ export const REMOUNT_PERSISTENCE_MS = 30 * 60 * 1000;
 const entries = new Map<string, StoreEntry<unknown>>();
 
 function entryFor<T>(key: string, initialValue: T): StoreEntry<T> {
+    // Server renders never run subscribe teardown, so entries cached during SSR
+    // would accumulate in the Node process for the lifetime of the server.
+    // Hand back a throwaway entry instead and let the client own the store.
+    if (typeof window === "undefined") {
+        return new StoreEntry(initialValue, () => {});
+    }
     const existing = entries.get(key);
     if (existing) return existing as StoreEntry<T>;
     const created = new StoreEntry(initialValue, () => {

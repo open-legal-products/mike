@@ -15,6 +15,8 @@ import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { usePaginatedProjects } from "@/app/hooks/usePaginatedProjects";
 import { OwnerOnlyPopup } from "@/app/components/popups/OwnerOnlyPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 import { useAuth } from "@/app/contexts/AuthContext";
 import type { Project } from "@/app/components/shared/types";
 import { NewProjectModal } from "./NewProjectModal";
@@ -111,6 +113,7 @@ export function ProjectsOverview() {
     const [actionsOpen, setActionsOpen] = useState(false);
     const [search, setSearch] = useState("");
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
     const [selectionCameFromSelectAll, setSelectionCameFromSelectAll] =
         useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
@@ -375,10 +378,19 @@ export function ProjectsOverview() {
         try {
             await deleteProject(project.id);
         } catch (error) {
+            console.error("delete project failed", error);
             setProjects((current) =>
                 restoreOptimisticallyDeletedRows(current, snapshot, [project.id]),
             );
-            throw error;
+            // The row action calls this without awaiting, so rethrowing would
+            // only produce an unhandled rejection and a row that reappears
+            // with no explanation.
+            setActionError(
+                userFacingApiError(
+                    error,
+                    "This project could not be deleted. Please try again.",
+                ),
+            );
         }
     }
 
@@ -838,6 +850,11 @@ export function ProjectsOverview() {
                 open={!!ownerOnlyAction}
                 action={ownerOnlyAction ?? undefined}
                 onClose={() => setOwnerOnlyAction(null)}
+            />
+            <WarningPopup
+                open={!!actionError}
+                message={actionError ?? ""}
+                onClose={() => setActionError(null)}
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}

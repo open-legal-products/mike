@@ -20,6 +20,27 @@ describe("restoreOptimisticallyDeletedRows", () => {
         ).toEqual([snapshot[1], snapshot[2]]);
     });
 
+    it("emits each id once when the snapshot repeats a row", () => {
+        const snapshot = [
+            { id: "a", value: 1 },
+            { id: "a", value: 1 },
+            { id: "b", value: 2 },
+        ];
+
+        expect(
+            restoreOptimisticallyDeletedRows([snapshot[2]], snapshot, ["a"]),
+        ).toEqual([snapshot[0], snapshot[2]]);
+    });
+
+    it("emits each id once when a current row repeats a restored row", () => {
+        const snapshot = [{ id: "a" }, { id: "b" }];
+        const current = [{ id: "b" }, { id: "b" }];
+
+        expect(
+            restoreOptimisticallyDeletedRows(current, snapshot, ["a"]),
+        ).toEqual([snapshot[0], current[0]]);
+    });
+
     it("preserves rows added after the optimistic removal", () => {
         const snapshot = [{ id: "a" }, { id: "b" }];
         const added = { id: "c" };
