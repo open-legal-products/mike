@@ -1,7 +1,21 @@
--- Migration date: 2026-08-24
--- Create the final direct-upload session schema: concurrent sessions,
--- per-file processing jobs, configurable creation limits, and worker audit
--- attribution.
+-- Migration date: 2026-08-28
+-- Direct-upload session schema: concurrent sessions, per-file processing jobs,
+-- configurable creation limits, worker audit attribution, and a cross-replica
+-- per-user claim cap.
+--
+-- This file consolidates the branch's two earlier drafts (20260824_01 and
+-- 20260828_01) into a single transactional migration dated at the tip of the
+-- migration order. The split versions had two deployment hazards:
+--   1. 20260824_01 sorted BEFORE six migrations already released on main, so
+--      an existing deployment (which applies only files newer than its
+--      recorded version, in filename order) would skip the table-creating
+--      file entirely and then fail on the index below.
+--   2. 20260828_01 was non-transactional and dropped claim_upload_processing_job
+--      before recreating it — a failure between the two statements would leave
+--      a deployment with no claim function at all.
+-- NOTE FOR MERGE: if further migrations land on main before this branch
+-- merges, this file must be renamed past them — the filename is a position in
+-- a global order that main owns, assigned at merge time, not authorship time.
 begin;
 
 create table if not exists public.upload_sessions (
@@ -149,6 +163,10 @@ create index if not exists upload_processing_jobs_ready_idx
 create index if not exists upload_processing_jobs_session_idx
   on public.upload_processing_jobs(session_id, created_at);
 
+create index if not exists upload_processing_jobs_running_user_idx
+  on public.upload_processing_jobs(user_id, locked_at)
+  where status = 'running';
+
 alter table public.upload_sessions enable row level security;
 alter table public.upload_session_files enable row level security;
 alter table public.upload_processing_jobs enable row level security;
@@ -233,7 +251,31 @@ begin
     raise exception using errcode = '22023', message = 'invalid_upload_manifest';
   end if;
 
-  perform pg_advisory_xact_lock(hashtextextended(target_user_id::text, 0));
+  -- Namespace the advisory key: hashtextextended(user_id, 0) with no prefix is
+  -- already taken by install_missing_default_workflows, and an un-namespaced
+  -- key silently serializes unrelated features against each other (see the
+  -- advisory-lock registry comment at the top of schema.sql).
+  perform pg_advisory_xact_lock(
+    hashtextextended('upload-session:' || target_user_id::text, 0)
+  );
+
+  -- Housekeeping runs FIRST, under the user lock: expire stale pending
+  -- sessions and error out stale verifying ones before the busy check below.
+  -- In the earlier draft these updates sat after the busy check, so the one
+  -- branch where a stale session was exactly what blocked the caller
+  -- (upload_target_busy) rolled them back and the 409 persisted until the
+  -- 60-second background sweep happened to run.
+  update public.upload_sessions
+  set status = 'expired', updated_at = now()
+  where user_id = target_user_id
+    and status = 'pending_upload'
+    and expires_at <= now();
+
+  update public.upload_sessions
+  set status = 'error', updated_at = now()
+  where user_id = target_user_id
+    and status = 'verifying'
+    and updated_at <= now() - interval '5 minutes';
 
   if target_purpose in (
     'document_version_create',
@@ -268,18 +310,6 @@ begin
   if recent_session_count >= target_hourly_session_limit then
     raise exception using errcode = 'P0001', message = 'upload_session_rate_limit_exceeded';
   end if;
-
-  update public.upload_sessions
-  set status = 'expired', updated_at = now()
-  where user_id = target_user_id
-    and status = 'pending_upload'
-    and expires_at <= now();
-
-  update public.upload_sessions
-  set status = 'error', updated_at = now()
-  where user_id = target_user_id
-    and status = 'verifying'
-    and updated_at <= now() - interval '5 minutes';
 
   insert into public.upload_sessions (
     id,
@@ -336,6 +366,42 @@ begin
     staging_storage_path text,
     sealed_storage_path text
   );
+end;
+$$;
+
+-- Extend a live session's deadline after per-file progress. The per-file
+-- protocol gives a natural liveness signal: each successful completion proves
+-- the client is still working, so the deadline slides (never shrinks), capped
+-- at an absolute age so an abandoned-but-polling client cannot keep a session
+-- alive forever. Without this, the largest supported batch (2 GB) on an
+-- ordinary uplink outlives the fixed 30-minute TTL and is destroyed mid-upload.
+create or replace function public.extend_upload_session_expiry(
+  target_session_id uuid,
+  target_extension_seconds integer default 1800,
+  target_max_session_age_seconds integer default 14400
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if target_extension_seconds not between 60 and 3600
+     or target_max_session_age_seconds not between 600 and 86400 then
+    raise exception using errcode = '22023', message = 'invalid_upload_session_extension';
+  end if;
+
+  update public.upload_sessions
+  set expires_at = greatest(
+        expires_at,
+        least(
+          now() + make_interval(secs => target_extension_seconds),
+          created_at + make_interval(secs => target_max_session_age_seconds)
+        )
+      ),
+      updated_at = now()
+  where id = target_session_id
+    and status in ('pending_upload', 'verifying', 'uploaded', 'processing');
 end;
 $$;
 
@@ -397,13 +463,32 @@ begin
     terminal_at := now();
   end if;
 
+  -- cleaned_at means "this session's storage objects have been deleted".
+  -- A COMPLETED session's objects were already removed by the worker as part
+  -- of processing, so stamping it here is truthful. An ERROR session's
+  -- objects may still exist (the worker that would have deleted them is
+  -- often exactly what died), so cleaned_at must stay null — it is the
+  -- object sweeper's cursor, and stamping it here permanently hid errored
+  -- sessions from the sweep, orphaning their sealed objects.
+  -- The write is also guarded so repeated refreshes of an already-terminal
+  -- session do not advance completed_at/updated_at: retention filters on
+  -- updated_at, and an unconditional bump let any polling client defer the
+  -- retention delete indefinitely.
   update public.upload_sessions
   set status = next_status,
       error_code = next_error_code,
-      completed_at = terminal_at,
-      cleaned_at = case when terminal_at is not null then terminal_at else cleaned_at end,
+      completed_at = case
+        when terminal_at is null then null
+        else coalesce(completed_at, terminal_at)
+      end,
+      cleaned_at = case
+        when next_status = 'completed' then coalesce(cleaned_at, terminal_at)
+        else cleaned_at
+      end,
       updated_at = now()
-  where id = target_session_id;
+  where id = target_session_id
+    and (status is distinct from next_status
+      or error_code is distinct from next_error_code);
 
   return next_status;
 end;
@@ -424,12 +509,17 @@ declare
   file_row public.upload_session_files%rowtype;
   processing_job_id uuid;
 begin
+  -- Plain read: this function only needs to VALIDATE the session status, and
+  -- taking FOR UPDATE here created a session->file->job lock order while
+  -- claim_upload_processing_job acquires job->file->session — a genuine
+  -- deadlock cycle on the documented completion-retry path (reproduced live
+  -- during review). Locks below are acquired job-first to match the claim
+  -- function's order.
   select *
     into session_row
   from public.upload_sessions
   where id = target_session_id
-    and user_id = target_user_id
-  for update;
+    and user_id = target_user_id;
 
   if session_row.id is null then
     raise exception using errcode = 'P0002', message = 'upload_session_not_found';
@@ -438,6 +528,26 @@ begin
     raise exception using errcode = 'P0001', message = 'upload_session_not_active';
   end if;
 
+  if not exists (
+    select 1
+    from public.upload_session_files
+    where id = target_file_id
+      and session_id = target_session_id
+  ) then
+    raise exception using errcode = 'P0002', message = 'upload_session_file_not_found';
+  end if;
+
+  -- Job first (matches claim_upload_processing_job's lock order). The no-op
+  -- conflict update exists only to make RETURNING yield the existing id, so a
+  -- repeated completion call is idempotent.
+  insert into public.upload_processing_jobs (session_id, file_id, user_id)
+  values (target_session_id, target_file_id, target_user_id)
+  on conflict (file_id) do update
+    set file_id = excluded.file_id
+  returning id into processing_job_id;
+
+  -- File second. A failed readiness check raises, which rolls the job upsert
+  -- back with the rest of the transaction.
   select *
     into file_row
   from public.upload_session_files
@@ -445,26 +555,20 @@ begin
     and session_id = target_session_id
   for update;
 
-  if file_row.id is null then
-    raise exception using errcode = 'P0002', message = 'upload_session_file_not_found';
-  end if;
   if file_row.status not in ('uploaded', 'processing', 'completed') then
     raise exception using errcode = 'P0001', message = 'upload_session_file_not_ready';
   end if;
-
-  insert into public.upload_processing_jobs (session_id, file_id, user_id)
-  values (target_session_id, target_file_id, target_user_id)
-  on conflict (file_id) do update
-    set file_id = excluded.file_id
-  returning id into processing_job_id;
 
   return processing_job_id;
 end;
 $$;
 
+drop function if exists public.claim_upload_processing_job(text, integer);
+
 create or replace function public.claim_upload_processing_job(
   target_worker_id text,
-  target_lease_seconds integer default 600
+  target_lease_seconds integer default 600,
+  target_max_running_per_user integer default 4
 )
 returns uuid
 language plpgsql
@@ -472,29 +576,100 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
+  candidate_ids uuid[];
+  candidate record;
+  active_user_jobs integer;
   claimed_job_id uuid;
   claimed_session_id uuid;
   claimed_file_id uuid;
 begin
   if length(target_worker_id) not between 1 and 200
-     or target_lease_seconds not between 60 and 3600 then
+     or target_lease_seconds not between 60 and 3600
+     or target_max_running_per_user not between 1 and 64 then
     raise exception using errcode = '22023', message = 'invalid_upload_worker_claim';
   end if;
 
-  select id, session_id, file_id
-    into claimed_job_id, claimed_session_id, claimed_file_id
-  from public.upload_processing_jobs
-  where attempts < 3
-    and ((
-      status = 'queued'
-      and available_at <= now()
-    ) or (
-      status = 'running'
-      and locked_at <= now() - make_interval(secs => target_lease_seconds)
-    ))
-  order by available_at, created_at
-  for update skip locked
-  limit 1;
+  -- Bound the candidate set BEFORE the per-row fairness work. The lateral
+  -- running-count below sits under a sort, so without this cap every ready
+  -- job pays a count on every poll of every worker even when nothing is
+  -- claimable — one 50-file batch meant 50 lateral counts x 16 workers x 1/s.
+  -- 32 candidates is plenty: a worker claims at most one job per poll.
+  select array_agg(id)
+    into candidate_ids
+  from (
+    select id
+    from public.upload_processing_jobs
+    where attempts < 3
+      and ((
+        status = 'queued'
+        and available_at <= now()
+      ) or (
+        status = 'running'
+        and locked_at <= now() - make_interval(secs => target_lease_seconds)
+      ))
+    order by available_at, created_at
+    limit 32
+  ) as ready;
+
+  if candidate_ids is null then
+    return null;
+  end if;
+
+  for candidate in
+    select
+      job.id,
+      job.session_id,
+      job.file_id,
+      job.user_id,
+      active.running_count
+    from public.upload_processing_jobs as job
+    cross join lateral (
+      select count(*)::integer as running_count
+      from public.upload_processing_jobs as running_job
+      where running_job.user_id = job.user_id
+        and running_job.status = 'running'
+        and running_job.locked_at >
+          now() - make_interval(secs => target_lease_seconds)
+    ) as active
+    where job.id = any(candidate_ids)
+      and job.attempts < 3
+      and active.running_count < target_max_running_per_user
+      and ((
+        job.status = 'queued'
+        and job.available_at <= now()
+      ) or (
+        job.status = 'running'
+        and job.locked_at <=
+          now() - make_interval(secs => target_lease_seconds)
+      ))
+    order by active.running_count, job.available_at, job.created_at
+    for update of job skip locked
+  loop
+    -- Serialize the count-and-claim decision for this user across every
+    -- backend replica. A hash collision only delays a claim until the next
+    -- poll; it cannot let a user exceed the cap.
+    if not pg_try_advisory_xact_lock(
+      hashtextextended(candidate.user_id::text, 8242026)
+    ) then
+      continue;
+    end if;
+
+    select count(*)::integer
+      into active_user_jobs
+    from public.upload_processing_jobs
+    where user_id = candidate.user_id
+      and status = 'running'
+      and locked_at > now() - make_interval(secs => target_lease_seconds);
+
+    if active_user_jobs >= target_max_running_per_user then
+      continue;
+    end if;
+
+    claimed_job_id := candidate.id;
+    claimed_session_id := candidate.session_id;
+    claimed_file_id := candidate.file_id;
+    exit;
+  end loop;
 
   if claimed_job_id is null then
     return null;
@@ -526,11 +701,13 @@ revoke all on public.upload_session_files from anon, authenticated;
 revoke all on public.upload_processing_jobs from anon, authenticated;
 revoke all on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb, integer)
   from public, anon, authenticated;
+revoke all on function public.extend_upload_session_expiry(uuid, integer, integer)
+  from public, anon, authenticated;
 revoke all on function public.refresh_upload_session_status(uuid)
   from public, anon, authenticated;
 revoke all on function public.queue_upload_session_file_processing(uuid, uuid, uuid)
   from public, anon, authenticated;
-revoke all on function public.claim_upload_processing_job(text, integer)
+revoke all on function public.claim_upload_processing_job(text, integer, integer)
   from public, anon, authenticated;
 
 grant select, insert, update, delete on public.upload_sessions to service_role;
@@ -538,11 +715,15 @@ grant select, insert, update, delete on public.upload_session_files to service_r
 grant select, insert, update, delete on public.upload_processing_jobs to service_role;
 grant execute on function public.create_upload_session(uuid, uuid, text, jsonb, timestamptz, jsonb, integer)
   to service_role;
+grant execute on function public.extend_upload_session_expiry(uuid, integer, integer)
+  to service_role;
 grant execute on function public.refresh_upload_session_status(uuid)
   to service_role;
 grant execute on function public.queue_upload_session_file_processing(uuid, uuid, uuid)
   to service_role;
-grant execute on function public.claim_upload_processing_job(text, integer)
+grant execute on function public.claim_upload_processing_job(text, integer, integer)
   to service_role;
 
 commit;
+
+notify pgrst, 'reload schema';
