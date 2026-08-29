@@ -80,7 +80,7 @@ const MODEL_NAME_ACRONYMS: Record<string, string> = {
 
 export function modelDisplayName(modelId: string): string {
   const normalized = modelId
-    .replace(/^(?:openrouter|vercel|opencode-go|ollama)\//, "")
+    .replace(/^(?:openrouter|orcarouter|vercel|opencode-go|ollama)\//, "")
     .split("/")
     .at(-1)!
     .replace(/(\d)-(\d)/g, "$1.$2");
@@ -110,7 +110,7 @@ export function modelDisplayName(modelId: string): string {
  * Router slugs, which double as model-id prefixes and API-key provider names.
  * Kept in sync with backend/src/lib/routerModels.ts ROUTER_SLUGS.
  */
-export const ROUTER_SLUGS = ["openrouter", "vercel", "opencode-go"] as const;
+export const ROUTER_SLUGS = ["openrouter", "orcarouter", "vercel", "opencode-go"] as const;
 export type RouterSlug = (typeof ROUTER_SLUGS)[number];
 
 const ROUTER_VENDOR_GROUPS: Record<string, string> = {
@@ -178,6 +178,7 @@ interface Props {
    *  trigger instead of flashing "No Models" on every page load. */
   apiKeysLoading?: boolean;
   openRouterModels?: string[];
+  orcaRouterModels?: string[];
   vercelModels?: string[];
   openCodeGoModels?: string[];
   compact?: boolean;
@@ -211,6 +212,15 @@ export function openRouterModelOptions(models: string[]): ModelOption[] {
   }));
 }
 
+export function orcaRouterModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => ({
+    id: `orcarouter/${model}`,
+    label: modelDisplayName(model),
+    group: underlyingProviderGroup(model, "orcarouter"),
+    source: "OrcaRouter",
+  }));
+}
+
 export function vercelModelOptions(models: string[]): ModelOption[] {
   return models.map((model) => ({
     id: `vercel/${model}`,
@@ -235,6 +245,7 @@ export function ModelToggle({
   apiKeys,
   apiKeysLoading = false,
   openRouterModels = [],
+  orcaRouterModels = [],
   vercelModels = [],
   openCodeGoModels = [],
   compact = false,
@@ -247,6 +258,7 @@ export function ModelToggle({
   const models = [
     ...MODELS,
     ...openRouterModelOptions(openRouterModels),
+    ...orcaRouterModelOptions(orcaRouterModels),
     ...vercelModelOptions(vercelModels),
     ...openCodeGoModelOptions(openCodeGoModels),
     ...ollamaModels.map((model) => ({
@@ -282,6 +294,7 @@ export function ModelToggle({
       (availableModels.length > 0 ? "Select model" : "No Models"));
   const emptyReason = noModelsReason(apiKeys, {
     openrouter: openRouterModels,
+    orcarouter: orcaRouterModels,
     vercel: vercelModels,
     "opencode-go": openCodeGoModels,
   });

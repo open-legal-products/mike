@@ -116,6 +116,7 @@ const API_KEY_STATUS = {
     gemini: false,
     openai: false,
     openrouter: true,
+    orcarouter: true,
     vercel: true,
     "opencode-go": true,
     courtlistener: false,
@@ -124,6 +125,7 @@ const API_KEY_STATUS = {
         gemini: null,
         openai: null,
         openrouter: "user",
+        orcarouter: "user",
         vercel: "user",
         "opencode-go": "user",
         courtlistener: null,
@@ -135,6 +137,7 @@ beforeEach(() => {
     getUserApiKeyStatus.mockResolvedValue(API_KEY_STATUS);
     getAllUserRouterModels.mockResolvedValue({
         openrouter: [],
+        orcarouter: [],
         vercel: [],
         "opencode-go": [],
     });
@@ -169,6 +172,25 @@ describe("PATCH /user/profile router model selections", () => {
             "user-1",
             "vercel",
             ["vercel/v0-1.5-md"],
+            expect.anything(),
+        );
+    });
+
+    it("accepts OrcaRouter vendor/model catalog ids", async () => {
+        const response = await request(app)
+            .patch("/user/profile")
+            .send({
+                orcaRouterModels: [
+                    "orcarouter/deepseek/deepseek-v4-flash",
+                    "anthropic/claude-sonnet-4.5",
+                ],
+            });
+
+        expect(response.status).toBe(200);
+        expect(replaceUserRouterModels).toHaveBeenCalledWith(
+            "user-1",
+            "orcarouter",
+            ["deepseek/deepseek-v4-flash", "anthropic/claude-sonnet-4.5"],
             expect.anything(),
         );
     });

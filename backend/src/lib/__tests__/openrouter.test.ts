@@ -428,6 +428,60 @@ describe("OpenRouter LLM adapter", () => {
     });
 });
 
+describe("OrcaRouter LLM adapter", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.clearAllMocks();
+        delete process.env.ORCAROUTER_BASE_URL;
+        delete process.env.ORCAROUTER_API_KEY;
+    });
+
+    it("uses the saved key, endpoint, and unprefixed model ID", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    choices: [{ message: { content: "An Orca title" } }],
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const result = await completeWithProvider({
+            model: "orcarouter/deepseek/deepseek-v4-flash-free",
+            user: "Title this",
+            apiKeys: { orcarouter: "orca-user-key" },
+        });
+
+        expect(result).toBe("An Orca title");
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe("https://api.orcarouter.ai/v1/chat/completions");
+        expect(new Headers(init.headers).get("authorization")).toBe(
+            "Bearer orca-user-key",
+        );
+        // OpenRouter-only attribution headers must not leak to other routers.
+        expect(init.headers).not.toHaveProperty("X-Title");
+        expect(JSON.parse(String(init.body))).toMatchObject({
+            model: "deepseek/deepseek-v4-flash-free",
+        });
+    });
+
+    it("names OrcaRouter when no key is configured", async () => {
+        delete process.env.ORCAROUTER_API_KEY;
+        await expect(
+            completeWithProvider({
+                model: "orcarouter/deepseek/deepseek-v4-flash-free",
+                user: "Title this",
+            }),
+        ).rejects.toThrow(
+            "OrcaRouter API key is not configured. Set ORCAROUTER_API_KEY",
+        );
+    });
+});
+
 describe("Vercel AI Gateway LLM adapter", () => {
     afterEach(() => {
         vi.unstubAllGlobals();

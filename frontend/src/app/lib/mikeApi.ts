@@ -415,6 +415,7 @@ export interface UserProfile {
     quickActionsVisible: boolean;
     darkMode: boolean;
     openRouterModels: string[];
+    orcaRouterModels: string[];
     vercelModels: string[];
     openCodeGoModels: string[];
     apiKeyStatus: ApiKeyStatus;
@@ -528,6 +529,7 @@ export async function updateUserProfile(payload: {
     quickActionsVisible?: boolean;
     darkMode?: boolean;
     openRouterModels?: string[];
+    orcaRouterModels?: string[];
     vercelModels?: string[];
     openCodeGoModels?: string[];
 }): Promise<UserProfile> {
@@ -569,6 +571,7 @@ export type ApiKeyProvider =
     | "gemini"
     | "openai"
     | "openrouter"
+    | "orcarouter"
     | "vercel"
     | "opencode-go"
     | "courtlistener";
@@ -616,6 +619,13 @@ export async function getOllamaModels(): Promise<OllamaModelOption[]> {
 export async function getOpenRouterModels(): Promise<RouterCatalogModel[]> {
     const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
         "/models/openrouter",
+    );
+    return models;
+}
+
+export async function getOrcaRouterModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
+        "/models/orcarouter",
     );
     return models;
 }

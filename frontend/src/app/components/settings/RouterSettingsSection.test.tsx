@@ -18,6 +18,7 @@ const {
 vi.mock("@/app/lib/mikeApi", () => ({
     getOpenRouterModels,
     getVercelModels: vi.fn().mockResolvedValue([]),
+    getOrcaRouterModels: vi.fn().mockResolvedValue([]),
     getOpenCodeGoModels,
 }));
 
@@ -26,6 +27,7 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
         profile: {
             apiKeys: {
                 openrouter: { configured: true, source: "user" },
+                orcarouter: { configured: false, source: null },
                 vercel: { configured: false, source: null },
                 "opencode-go": {
                     configured: openCodeGoConfigured.value,
@@ -33,10 +35,12 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
                 },
             },
             openRouterModels: ["anthropic/claude-sonnet-4.5"],
+            orcaRouterModels: [],
             vercelModels: [],
             openCodeGoModels: [],
         },
         updateOpenRouterModels,
+        updateOrcaRouterModels: vi.fn(),
         updateVercelModels: vi.fn(),
         updateOpenCodeGoModels,
     }),

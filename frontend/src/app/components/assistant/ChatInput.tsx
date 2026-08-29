@@ -137,6 +137,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             profile && !apiKeysDegraded
                 ? {
                   openRouterModels: profile.openRouterModels,
+                  orcaRouterModels: profile.orcaRouterModels,
                   vercelModels: profile.vercelModels,
                   openCodeGoModels: profile.openCodeGoModels,
                   }

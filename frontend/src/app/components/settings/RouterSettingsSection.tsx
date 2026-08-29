@@ -13,6 +13,7 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import {
     getOpenCodeGoModels,
     getOpenRouterModels,
+    getOrcaRouterModels,
     getVercelModels,
     type RouterCatalogModel,
 } from "@/app/lib/mikeApi";
@@ -64,6 +65,11 @@ const ROUTER_MODEL_ID: Record<
         pattern: CATALOG_MODEL_ID_RE,
         shape: "vendor/model",
         example: "anthropic/claude-sonnet-5",
+    },
+    orcarouter: {
+        pattern: CATALOG_MODEL_ID_RE,
+        shape: "vendor/model",
+        example: "deepseek/deepseek-v4-flash",
     },
     vercel: {
         pattern: CATALOG_MODEL_ID_RE,
@@ -120,16 +126,24 @@ export function RouterSettingsSection() {
     const {
         profile,
         updateOpenRouterModels,
+        updateOrcaRouterModels,
         updateVercelModels,
         updateOpenCodeGoModels,
     } = useUserProfile();
     const openRouterConfigured =
         profile?.apiKeys.openrouter.configured === true;
+    const orcaRouterConfigured =
+        profile?.apiKeys.orcarouter.configured === true;
     const vercelConfigured = profile?.apiKeys.vercel.configured === true;
     const openCodeGoConfigured =
         profile?.apiKeys["opencode-go"].configured === true;
 
-    if (!openRouterConfigured && !vercelConfigured && !openCodeGoConfigured) {
+    if (
+        !openRouterConfigured &&
+        !orcaRouterConfigured &&
+        !vercelConfigured &&
+        !openCodeGoConfigured
+    ) {
         return null;
     }
 
@@ -150,6 +164,15 @@ export function RouterSettingsSection() {
                         selection={profile?.openRouterModels ?? []}
                         loadCatalog={getOpenRouterModels}
                         onSave={updateOpenRouterModels}
+                    />
+                )}
+                {orcaRouterConfigured && (
+                    <RouterModelsSetting
+                        provider="orcarouter"
+                        label="OrcaRouter"
+                        selection={profile?.orcaRouterModels ?? []}
+                        loadCatalog={getOrcaRouterModels}
+                        onSave={updateOrcaRouterModels}
                     />
                 )}
                 {vercelConfigured && (

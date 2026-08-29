@@ -27,6 +27,11 @@ const MODEL_API_KEY_FIELDS = [
         placeholder: "sk-or-...",
     },
     {
+        provider: "orcarouter",
+        label: "OrcaRouter API Key",
+        placeholder: "sk-orca-...",
+    },
+    {
         provider: "vercel",
         label: "Vercel AI Gateway API Key",
         placeholder: "vck_...",

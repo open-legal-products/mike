@@ -20,6 +20,7 @@ import {
     canonicalModelId,
     openCodeGoModelOptions,
     openRouterModelOptions,
+    orcaRouterModelOptions,
     vercelModelOptions,
     type ModelOption,
 } from "@/app/components/assistant/ModelToggle";
@@ -46,9 +47,11 @@ export default function ModelPreferencesPage() {
     >({});
     const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const openRouterSelection = profile?.openRouterModels ?? [];
+    const orcaRouterSelection = profile?.orcaRouterModels ?? [];
     const vercelSelection = profile?.vercelModels ?? [];
     const selectedOpenRouterOptions =
         openRouterModelOptions(openRouterSelection);
+    const selectedOrcaRouterOptions = orcaRouterModelOptions(orcaRouterSelection);
     const selectedVercelOptions = vercelModelOptions(vercelSelection);
     const selectedOpenCodeGoOptions = openCodeGoModelOptions(
         profile?.openCodeGoModels ?? [],
@@ -108,6 +111,7 @@ export default function ModelPreferencesPage() {
                             options={[
                                 ...SETTINGS_MODELS,
                                 ...selectedOpenRouterOptions,
+                                ...selectedOrcaRouterOptions,
                                 ...selectedVercelOptions,
                                 ...selectedOpenCodeGoOptions,
                                 ...ollamaModels,
@@ -136,6 +140,7 @@ export default function ModelPreferencesPage() {
                             options={[
                                 ...MODELS,
                                 ...selectedOpenRouterOptions,
+                                ...selectedOrcaRouterOptions,
                                 ...selectedVercelOptions,
                                 ...selectedOpenCodeGoOptions,
                                 ...ollamaModels,

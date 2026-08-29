@@ -13,6 +13,7 @@ interface SelectedModelSources {
   lastSelectedModel?: string | null;
   routerSelections?: {
     openRouterModels: string[];
+    orcaRouterModels: string[];
     vercelModels: string[];
     openCodeGoModels: string[];
   } | null;
@@ -31,6 +32,7 @@ function usableStoredModel(
   if (router && sources.routerSelections) {
     const selections = {
       openrouter: sources.routerSelections.openRouterModels,
+      orcarouter: sources.routerSelections.orcaRouterModels,
       vercel: sources.routerSelections.vercelModels,
       "opencode-go": sources.routerSelections.openCodeGoModels,
     };
@@ -52,6 +54,7 @@ export function useSelectedModel(
   const manualSelection = useRef(false);
   const previousSessionKey = useRef(sources.sessionKey);
   const openRouterModels = sources.routerSelections?.openRouterModels;
+  const orcaRouterModels = sources.routerSelections?.orcaRouterModels;
   const vercelModels = sources.routerSelections?.vercelModels;
   const openCodeGoModels = sources.routerSelections?.openCodeGoModels;
 
@@ -80,6 +83,7 @@ export function useSelectedModel(
     sources.lastSelectedModel,
     sources.apiKeyStatus,
     openRouterModels,
+    orcaRouterModels,
     vercelModels,
     openCodeGoModels,
   ]); // eslint-disable-line react-hooks/exhaustive-deps

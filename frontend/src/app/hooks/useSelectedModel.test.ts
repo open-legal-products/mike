@@ -9,6 +9,7 @@ const keys: ApiKeyState = {
     gemini: { configured: false, source: null },
     openai: { configured: true, source: "user" },
     openrouter: { configured: true, source: "user" },
+    orcarouter: { configured: false, source: null },
     vercel: { configured: false, source: null },
     "opencode-go": { configured: false, source: null },
     courtlistener: { configured: false, source: null },
@@ -16,6 +17,7 @@ const keys: ApiKeyState = {
 
 const routerSelections = {
     openRouterModels: ["openai/gpt-5.4"],
+    orcaRouterModels: [],
     vercelModels: [],
     openCodeGoModels: [],
 };

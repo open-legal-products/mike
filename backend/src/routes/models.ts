@@ -126,6 +126,75 @@ modelsRouter.get("/openrouter", requireAuth, async (_req, res) => {
     }
 });
 
+// OrcaRouter's authenticated catalog, limited to text models that support
+// tool calling because Mike supplies tools on interactive chat requests.
+modelsRouter.get("/orcarouter", requireAuth, async (_req, res) => {
+    const userId = res.locals.userId as string;
+    try {
+        const apiKeys = await getUserApiKeys(userId, createServerSupabase());
+        const key = apiKeys.orcarouter?.trim();
+        if (!key) {
+            return void res.status(422).json({
+                code: "missing_api_key",
+                detail: "An OrcaRouter API key is required to list models.",
+            });
+        }
+
+        // Honor the same base-URL override as the chat adapter so a proxy or
+        // test double sees the catalog request too (read per request, like
+        // the Vercel route below, so tests and re-configuration work).
+        const baseUrl = (
+            process.env.ORCAROUTER_BASE_URL?.trim() ||
+            "https://api.orcarouter.ai/v1"
+        ).replace(/\/+$/, "");
+        const response = await fetch(`${baseUrl}/models`, {
+            headers: { Authorization: `Bearer ${key}` },
+        });
+        if (!response.ok) {
+            const detail = await response.text().catch(() => "");
+            sendInternalError(
+                res,
+                new Error(
+                    `OrcaRouter model catalog request failed (${response.status})${detail ? `: ${detail}` : ""}`,
+                ),
+                502,
+            );
+            return;
+        }
+
+        const payload = (await response.json()) as {
+            data?: Array<{
+                id?: unknown;
+                name?: unknown;
+                pricing?: {
+                    prompt?: unknown;
+                    completion?: unknown;
+                };
+            }>;
+        };
+        const models = (payload.data ?? []).flatMap((model) => {
+            if (typeof model.id !== "string" || !model.id.trim()) return [];
+            const pricing = catalogPricing(
+                model.pricing?.prompt,
+                model.pricing?.completion,
+            );
+            return [
+                {
+                    id: model.id.trim(),
+                    label:
+                        typeof model.name === "string" && model.name.trim()
+                            ? model.name.trim()
+                            : model.id.trim(),
+                    ...(pricing ? { pricing } : {}),
+                },
+            ];
+        });
+        res.json({ models });
+    } catch (error) {
+        sendInternalError(res, error);
+    }
+});
+
 // Vercel AI Gateway's public catalog, limited to text models that support tool
 // calling because Mike supplies tools on interactive chat requests. A key must
 // still be configured before the catalog is exposed in the user's settings.

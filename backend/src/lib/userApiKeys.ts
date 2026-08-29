@@ -8,6 +8,7 @@ export type ApiKeyProvider =
     | "gemini"
     | "openai"
     | "openrouter"
+    | "orcarouter"
     | "vercel"
     | "opencode-go"
     | "courtlistener";
@@ -28,6 +29,7 @@ const PROVIDERS: ApiKeyProvider[] = [
     "gemini",
     "openai",
     "openrouter",
+    "orcarouter",
     "vercel",
     "opencode-go",
     "courtlistener",
@@ -47,6 +49,8 @@ function envApiKey(provider: ApiKeyProvider): string | null {
             return process.env.OPENAI_API_KEY?.trim() || null;
         case "openrouter":
             return process.env.OPENROUTER_API_KEY?.trim() || null;
+        case "orcarouter":
+            return process.env.ORCAROUTER_API_KEY?.trim() || null;
         case "vercel":
             return (
                 process.env.AI_GATEWAY_API_KEY?.trim() ||
@@ -127,6 +131,7 @@ export async function getUserApiKeyStatus(
         gemini: false,
         openai: false,
         openrouter: false,
+        orcarouter: false,
         vercel: false,
         "opencode-go": false,
         courtlistener: false,
@@ -135,6 +140,7 @@ export async function getUserApiKeyStatus(
             gemini: null,
             openai: null,
             openrouter: null,
+            orcarouter: null,
             vercel: null,
             "opencode-go": null,
             courtlistener: null,
@@ -174,6 +180,7 @@ export async function getUserApiKeys(
         gemini: envApiKey("gemini"),
         openai: envApiKey("openai"),
         openrouter: envApiKey("openrouter"),
+        orcarouter: envApiKey("orcarouter"),
         vercel: envApiKey("vercel"),
         "opencode-go": envApiKey("opencode-go"),
         courtlistener: envApiKey("courtlistener"),

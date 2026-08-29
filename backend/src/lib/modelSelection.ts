@@ -201,6 +201,7 @@ export function titleModelForChat(
         case "openai":
             return OPENAI_LOW_MODELS[0];
         case "openrouter":
+        case "orcarouter":
         case "vercel":
         case "opencode-go":
         case "ollama":
