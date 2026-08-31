@@ -60,7 +60,7 @@ const GPT_56_REASONING_LEVELS: readonly ReasoningLevel[] = REASONING_LEVELS;
 export function reasoningLevelsForModel(
   modelId: string,
 ): readonly ReasoningLevel[] {
-  const catalogId = modelId.replace(/^(?:openrouter|vercel)\//, "");
+  const catalogId = modelId.replace(/^(?:openrouter|orcarouter|vercel)\//, "");
   if (/(?:^|\/)gpt-5\.6(?:-|$)/.test(catalogId)) {
     return GPT_56_REASONING_LEVELS;
   }

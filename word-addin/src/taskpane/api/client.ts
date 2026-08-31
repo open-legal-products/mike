@@ -182,6 +182,7 @@ interface UserProfile {
   mfaOnLogin: boolean;
   legalResearchUs: boolean;
   openRouterModels: string[];
+  orcaRouterModels: string[];
   vercelModels: string[];
   openCodeGoModels: string[];
   apiKeyStatus: ApiKeyStatus;
@@ -218,6 +219,7 @@ export interface ApiKeyStatus {
   gemini: boolean;
   openai: boolean;
   openrouter: boolean;
+  orcarouter: boolean;
   vercel: boolean;
   "opencode-go": boolean;
   courtlistener: boolean;
@@ -227,6 +229,7 @@ export interface ApiKeyStatus {
       | "gemini"
       | "openai"
       | "openrouter"
+      | "orcarouter"
       | "vercel"
       | "opencode-go"
       | "courtlistener",

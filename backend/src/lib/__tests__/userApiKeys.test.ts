@@ -22,6 +22,7 @@ describe("normalizeApiKeyProvider", () => {
 
     it("returns the supported router providers", () => {
         expect(normalizeApiKeyProvider("openrouter")).toBe("openrouter");
+        expect(normalizeApiKeyProvider("orcarouter")).toBe("orcarouter");
         expect(normalizeApiKeyProvider("vercel")).toBe("vercel");
         expect(normalizeApiKeyProvider("opencode-go")).toBe("opencode-go");
     });
@@ -41,6 +42,7 @@ describe("hasEnvApiKey", () => {
         "OPENAI_API_KEY",
         "GEMINI_API_KEY",
         "OPENROUTER_API_KEY",
+        "ORCAROUTER_API_KEY",
         "AI_GATEWAY_API_KEY",
         "VERCEL_AI_GATEWAY_API_KEY",
         "OPENCODE_API_KEY",
@@ -85,6 +87,16 @@ describe("hasEnvApiKey", () => {
     it("accepts VERCEL_AI_GATEWAY_API_KEY as a compatibility alias", () => {
         process.env.VERCEL_AI_GATEWAY_API_KEY = "vercel-key-test";
         expect(hasEnvApiKey("vercel")).toBe(true);
+    });
+
+    it("returns true for OpenRouter when OPENROUTER_API_KEY is set", () => {
+        process.env.OPENROUTER_API_KEY = "or-key-test";
+        expect(hasEnvApiKey("openrouter")).toBe(true);
+    });
+
+    it("returns true for OrcaRouter when ORCAROUTER_API_KEY is set", () => {
+        process.env.ORCAROUTER_API_KEY = "orca-key-test";
+        expect(hasEnvApiKey("orcarouter")).toBe(true);
     });
 
     it("returns true for OpenCode Go when OPENCODE_API_KEY is set", () => {

@@ -504,6 +504,7 @@ function providerLabel(provider: Provider): string {
     if (provider === "claude") return "Anthropic";
     if (provider === "openai") return "OpenAI";
     if (provider === "openrouter") return "OpenRouter";
+    if (provider === "orcarouter") return "OrcaRouter";
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
     if (provider === "ollama") return "Local (Ollama)";

@@ -140,6 +140,7 @@ const ALL_MODELS = new Set<string>([
 export function providerForModel(model: string): Provider {
     if (model.startsWith("ollama")) return "ollama";
     if (model.startsWith("openrouter/")) return "openrouter";
+    if (model.startsWith("orcarouter/")) return "orcarouter";
     if (model.startsWith("vercel/")) return "vercel";
     if (model.startsWith("opencode-go/")) return "opencode-go";
     if (model.startsWith("claude")) return "claude";
@@ -165,9 +166,11 @@ export function resolveModel(
         canonical &&
         (ALL_MODELS.has(canonical) ||
             canonical.startsWith("ollama/") ||
-            /^(?:openrouter|vercel)\/[^\s/]+\/[^\s]+$/.test(canonical) ||
+            /^(?:openrouter|orcarouter|vercel)\/[^\s/]+\/[^\s]+$/.test(
+                canonical,
+            ) ||
             // OpenCode Go's catalog ids are single-segment ("glm-5"), not the
-            // vendor/model pairs OpenRouter and Vercel publish.
+            // vendor/model pairs OpenRouter, OrcaRouter and Vercel publish.
             /^opencode-go\/[^\s]+$/.test(canonical))
     )
         return canonical;
@@ -176,6 +179,10 @@ export function resolveModel(
 
 export function openRouterModelId(model: string): string {
     return model.replace(/^openrouter\//, "");
+}
+
+export function orcaRouterModelId(model: string): string {
+    return model.replace(/^orcarouter\//, "");
 }
 
 export function vercelModelId(model: string): string {

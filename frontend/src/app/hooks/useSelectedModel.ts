@@ -30,6 +30,7 @@ export interface SelectedModelSources {
     lastSelectedModel?: string | null;
     routerSelections?: {
         openRouterModels: string[];
+        orcaRouterModels: string[];
         vercelModels: string[];
         openCodeGoModels: string[];
     } | null;
@@ -51,6 +52,7 @@ function usableStoredModel(
     if (router && sources.routerSelections) {
         const selections: Record<RouterSlug, string[]> = {
             openrouter: sources.routerSelections.openRouterModels,
+            orcarouter: sources.routerSelections.orcaRouterModels,
             vercel: sources.routerSelections.vercelModels,
             "opencode-go": sources.routerSelections.openCodeGoModels,
         };
@@ -72,6 +74,7 @@ export function useSelectedModel(
     const manuallySelected = useRef(false);
     const previousSelectionKey = useRef(sources.selectionKey);
     const openRouterModels = sources.routerSelections?.openRouterModels;
+    const orcaRouterModels = sources.routerSelections?.orcaRouterModels;
     const vercelModels = sources.routerSelections?.vercelModels;
     const openCodeGoModels = sources.routerSelections?.openCodeGoModels;
     const hasRouterSelections = sources.routerSelections != null;
@@ -83,6 +86,7 @@ export function useSelectedModel(
             routerSelections: hasRouterSelections
                 ? {
                       openRouterModels: openRouterModels ?? [],
+                      orcaRouterModels: orcaRouterModels ?? [],
                       vercelModels: vercelModels ?? [],
                       openCodeGoModels: openCodeGoModels ?? [],
                   }
@@ -95,6 +99,7 @@ export function useSelectedModel(
             sources.lastSelectedModel,
             hasRouterSelections,
             openRouterModels,
+            orcaRouterModels,
             vercelModels,
             openCodeGoModels,
             sources.apiKeys,

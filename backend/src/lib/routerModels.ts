@@ -4,7 +4,7 @@ import { resolveModel } from "./llm/models";
 
 type Db = ReturnType<typeof createServerSupabase>;
 
-export type RouterSlug = "openrouter" | "vercel" | "opencode-go";
+export type RouterSlug = "openrouter" | "orcarouter" | "vercel" | "opencode-go";
 
 /**
  * Every router, in the order the settings UI lists them. A router's slug is
@@ -13,6 +13,7 @@ export type RouterSlug = "openrouter" | "vercel" | "opencode-go";
  */
 export const ROUTER_SLUGS: readonly RouterSlug[] = [
     "openrouter",
+    "orcarouter",
     "vercel",
     "opencode-go",
 ];
@@ -42,6 +43,7 @@ export function isRouterModelSelected(
 /** Router labels as the settings UI names them, for user-facing messages. */
 const ROUTER_LABELS: Record<RouterSlug, string> = {
     openrouter: "OpenRouter",
+    orcarouter: "OrcaRouter",
     vercel: "Vercel AI Gateway",
     "opencode-go": "OpenCode Go",
 };

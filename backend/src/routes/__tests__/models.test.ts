@@ -239,6 +239,114 @@ describe("GET /models/vercel", () => {
     });
 });
 
+describe("GET /models/orcarouter", () => {
+    beforeEach(() => {
+        getUserApiKeys.mockResolvedValue({ orcarouter: "orca-user-key" });
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.clearAllMocks();
+        delete process.env.ORCAROUTER_BASE_URL;
+    });
+
+    it("requires a configured OrcaRouter key", async () => {
+        getUserApiKeys.mockResolvedValue({});
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock);
+
+        const response = await request(app).get("/models/orcarouter");
+
+        expect(response.status).toBe(422);
+        expect(response.body.code).toBe("missing_api_key");
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("returns the authenticated OrcaRouter catalog in selector shape", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    data: [
+                        {
+                            id: "deepseek/deepseek-v4-flash-free",
+                            name: "DeepSeek V4 Flash Free",
+                        },
+                        {
+                            id: "anthropic/claude-sonnet-4.5",
+                            name: "Claude Sonnet 4.5",
+                            pricing: {
+                                prompt: "0.000003",
+                                completion: "0.000015",
+                            },
+                        },
+                        { id: null, name: "Invalid" },
+                    ],
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            ),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const response = await request(app).get("/models/orcarouter");
+
+        expect(response.status).toBe(200);
+        expect(response.body.models).toEqual([
+            { id: "deepseek/deepseek-v4-flash-free", label: "DeepSeek V4 Flash Free" },
+            {
+                id: "anthropic/claude-sonnet-4.5",
+                label: "Claude Sonnet 4.5",
+                pricing: { input: "0.000003", output: "0.000015" },
+            },
+        ]);
+        expect(fetchMock).toHaveBeenCalledWith(
+            "https://api.orcarouter.ai/v1/models",
+            { headers: { Authorization: "Bearer orca-user-key" } },
+        );
+        // The user's key must never reach the browser.
+        expect(JSON.stringify(response.body)).not.toContain("orca-user-key");
+    });
+
+    it("honors ORCAROUTER_BASE_URL like the chat adapter", async () => {
+        process.env.ORCAROUTER_BASE_URL = "http://localhost:4444/api/v1/";
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValue(
+                new Response(JSON.stringify({ data: [] }), { status: 200 }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const response = await request(app).get("/models/orcarouter");
+
+        expect(response.status).toBe(200);
+        expect(fetchMock.mock.calls[0]?.[0]).toBe(
+            "http://localhost:4444/api/v1/models",
+        );
+    });
+
+    it("reports an upstream failure as a bad gateway", async () => {
+        const consoleError = vi
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(new Response("nope", { status: 401 })),
+        );
+
+        const response = await request(app).get("/models/orcarouter");
+
+        expect(response.status).toBe(502);
+        expect(response.body).toEqual({
+            code: INTERNAL_ERROR_CODE,
+            detail: INTERNAL_ERROR_MESSAGE,
+        });
+        expect(response.text).not.toContain("nope");
+        consoleError.mockRestore();
+    });
+});
+
 describe("GET /models/opencode-go", () => {
     beforeEach(() => {
         getUserApiKeys.mockResolvedValue({ "opencode-go": "oc-user-key" });

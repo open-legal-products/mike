@@ -468,6 +468,7 @@ const CATALOG_MODEL_ID_RE = /^[^\s/]+\/[^\s]+$/;
  */
 const ROUTER_MODEL_ID_RE: Record<RouterSlug, RegExp> = {
     openrouter: CATALOG_MODEL_ID_RE,
+    orcarouter: CATALOG_MODEL_ID_RE,
     vercel: CATALOG_MODEL_ID_RE,
     "opencode-go": /^[^\s]+$/,
 };
@@ -478,6 +479,7 @@ const ROUTER_MODEL_ID_RE: Record<RouterSlug, RegExp> = {
  */
 export const ROUTER_PROFILE_FIELDS: Record<RouterSlug, string> = {
     openrouter: "openRouterModels",
+    orcarouter: "orcaRouterModels",
     vercel: "vercelModels",
     "opencode-go": "openCodeGoModels",
 };

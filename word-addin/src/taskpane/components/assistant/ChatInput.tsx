@@ -105,6 +105,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const [keyStatus, setKeyStatus] = useState<ApiKeyStatus | null>(null);
     const [keyStatusLoading, setKeyStatusLoading] = useState(true);
     const [openRouterModels, setOpenRouterModels] = useState<string[]>([]);
+    const [orcaRouterModels, setOrcaRouterModels] = useState<string[]>([]);
     const [vercelModels, setVercelModels] = useState<string[]>([]);
     const [openCodeGoModels, setOpenCodeGoModels] = useState<string[]>([]);
     const [profileLastSelectedModel, setProfileLastSelectedModel] = useState<
@@ -116,7 +117,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       chatModel,
       lastSelectedModel: lastSelectedModel ?? profileLastSelectedModel,
       routerSelections: profileLoaded
-        ? { openRouterModels, vercelModels, openCodeGoModels }
+        ? {
+            openRouterModels,
+            orcaRouterModels,
+            vercelModels,
+            openCodeGoModels,
+          }
         : null,
       apiKeyStatus: keyStatus,
     });
@@ -237,6 +243,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         setKeyStatus(status);
         if (profile) {
           setOpenRouterModels(profile.openRouterModels ?? []);
+          setOrcaRouterModels(profile.orcaRouterModels ?? []);
           setVercelModels(profile.vercelModels ?? []);
           setOpenCodeGoModels(profile.openCodeGoModels ?? []);
           setProfileLastSelectedModel(profile.lastSelectedChatModel ?? null);
@@ -570,6 +577,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                     keyStatus={keyStatus}
                     keyStatusLoading={keyStatusLoading}
                     openRouterModels={openRouterModels}
+                    orcaRouterModels={orcaRouterModels}
                     vercelModels={vercelModels}
                     openCodeGoModels={openCodeGoModels}
                     compact={compactControls}
@@ -586,6 +594,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                       const routerHasNoModels =
                         (keyStatus?.openrouter &&
                           openRouterModels.length === 0) ||
+                        (keyStatus?.orcarouter &&
+                          orcaRouterModels.length === 0) ||
                         (keyStatus?.vercel && vercelModels.length === 0) ||
                         (keyStatus?.["opencode-go"] &&
                           openCodeGoModels.length === 0);

@@ -10,6 +10,7 @@ import {
   normalizeReasoningLevelForModel,
   openCodeGoModelId,
   openRouterModelId,
+  orcaRouterModelId,
   providerForModel,
   vercelModelId,
 } from "./models";
@@ -25,6 +26,9 @@ import { REASONING_LEVELS } from "./types";
 const OPENROUTER_BASE_URL =
   process.env.OPENROUTER_BASE_URL?.trim().replace(/\/+$/, "") ||
   "https://openrouter.ai/api/v1";
+const ORCAROUTER_BASE_URL =
+  process.env.ORCAROUTER_BASE_URL?.trim().replace(/\/+$/, "") ||
+  "https://api.orcarouter.ai/v1";
 const OPENCODE_GO_BASE_URL =
   process.env.OPENCODE_GO_BASE_URL?.trim().replace(/\/+$/, "") ||
   "https://opencode.ai/zen/go/v1";
@@ -41,17 +45,19 @@ type CompleteProviderParams = {
 
 type RouterProvider = Extract<
   Provider,
-  "openrouter" | "vercel" | "opencode-go"
+  "openrouter" | "orcarouter" | "vercel" | "opencode-go"
 >;
 
 const ROUTER_LABELS: Record<RouterProvider, string> = {
   openrouter: "OpenRouter",
+  orcarouter: "OrcaRouter",
   vercel: "Vercel AI Gateway",
   "opencode-go": "OpenCode Go",
 };
 
 const ROUTER_KEY_ENV_HINTS: Record<RouterProvider, string> = {
   openrouter: "OPENROUTER_API_KEY",
+  orcarouter: "ORCAROUTER_API_KEY",
   vercel: "AI_GATEWAY_API_KEY",
   "opencode-go": "OPENCODE_API_KEY",
 };
@@ -79,6 +85,7 @@ function routerEnvironmentKey(provider: RouterProvider): string | undefined {
     );
   }
   if (provider === "opencode-go") return process.env.OPENCODE_API_KEY?.trim();
+  if (provider === "orcarouter") return process.env.ORCAROUTER_API_KEY?.trim();
   return process.env.OPENROUTER_API_KEY?.trim();
 }
 
@@ -88,6 +95,7 @@ function routerUserKey(
 ): string | null | undefined {
   if (provider === "vercel") return apiKeys?.vercel;
   if (provider === "opencode-go") return apiKeys?.["opencode-go"];
+  if (provider === "orcarouter") return apiKeys?.orcarouter;
   return apiKeys?.openrouter;
 }
 
@@ -151,6 +159,23 @@ async function createRouterAdapter(
       label: ROUTER_LABELS[provider],
       model: openrouter.chat(openRouterModelId(model)),
       modelId: model,
+    };
+  }
+
+  if (provider === "orcarouter") {
+    const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
+    const orcarouter = createOpenAICompatible({
+      name: "orcarouter",
+      apiKey: key,
+      baseURL: ORCAROUTER_BASE_URL,
+      fetch: aiSdkFetch,
+    });
+    return {
+      provider,
+      label: ROUTER_LABELS[provider],
+      model: orcarouter(orcaRouterModelId(model)),
+      modelId: model,
+      supportsReasoning: false,
     };
   }
 
@@ -247,7 +272,7 @@ async function createProviderAdapter(
     };
   }
 
-  if (provider === "openrouter" || provider === "vercel") {
+  if (provider === "openrouter" || provider === "vercel" || provider === "orcarouter") {
     return createRouterAdapter(provider, model, apiKeys);
   }
 

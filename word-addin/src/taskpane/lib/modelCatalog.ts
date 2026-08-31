@@ -11,7 +11,7 @@ import type { ApiKeyStatus } from "../api/client";
 export type ModelGroup = string;
 
 /** Kept in sync with frontend ModelToggle.tsx ROUTER_SLUGS. */
-export const ROUTER_SLUGS = ["openrouter", "vercel", "opencode-go"] as const;
+export const ROUTER_SLUGS = ["openrouter", "orcarouter", "vercel", "opencode-go"] as const;
 
 export interface ModelOption {
   id: string;
@@ -70,7 +70,7 @@ const MODEL_NAME_ACRONYMS: Record<string, string> = {
 
 export function modelDisplayName(modelId: string): string {
   const normalized = modelId
-    .replace(/^(?:openrouter|vercel|opencode-go|ollama)\//, "")
+    .replace(/^(?:openrouter|orcarouter|vercel|opencode-go|ollama)\//, "")
     .split("/")
     .at(-1)!
     .replace(/(\d)-(\d)/g, "$1.$2");
@@ -107,6 +107,15 @@ export function openRouterModelOptions(models: string[]): ModelOption[] {
     label: modelDisplayName(model),
     group: underlyingProviderGroup(model, "openrouter"),
     source: "OpenRouter",
+  }));
+}
+
+export function orcaRouterModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => ({
+    id: `orcarouter/${model}`,
+    label: modelDisplayName(model),
+    group: underlyingProviderGroup(model, "orcarouter"),
+    source: "OrcaRouter",
   }));
 }
 
@@ -197,6 +206,7 @@ export function isModelAvailable(
   // for requests the backend would happily accept.
   if (!status) return true;
   if (modelId.startsWith("openrouter/")) return !!status.openrouter;
+  if (modelId.startsWith("orcarouter/")) return !!status.orcarouter;
   if (modelId.startsWith("vercel/")) return !!status.vercel;
   if (modelId.startsWith("opencode-go/")) return !!status["opencode-go"];
   const model = STATIC_MODELS.find((item) => item.id === modelId);
@@ -210,6 +220,9 @@ export function missingModelProvider(modelId: string): string {
   const group = STATIC_MODELS.find((item) => item.id === modelId)?.group;
   if (modelId.startsWith("openrouter/") || group === "OpenRouter") {
     return "OpenRouter";
+  }
+  if (modelId.startsWith("orcarouter/") || group === "OrcaRouter") {
+    return "OrcaRouter";
   }
   if (modelId.startsWith("vercel/") || group === "Vercel AI Gateway") {
     return "Vercel AI Gateway";

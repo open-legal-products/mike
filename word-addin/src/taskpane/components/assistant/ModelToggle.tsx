@@ -11,6 +11,7 @@ import {
   modelDisplayName,
   openCodeGoModelOptions,
   openRouterModelOptions,
+  orcaRouterModelOptions,
   vercelModelOptions,
   STATIC_MODELS,
   type ModelOption,
@@ -22,6 +23,7 @@ export function ModelToggle({
   keyStatus,
   keyStatusLoading = false,
   openRouterModels,
+  orcaRouterModels,
   vercelModels,
   openCodeGoModels,
   compact = false,
@@ -36,6 +38,7 @@ export function ModelToggle({
    *  disabled trigger instead of flashing "No Models". */
   keyStatusLoading?: boolean;
   openRouterModels: string[];
+  orcaRouterModels: string[];
   vercelModels: string[];
   openCodeGoModels: string[];
   compact?: boolean;
@@ -59,6 +62,7 @@ export function ModelToggle({
 
   const models = useMemo(() => {
     const openRouterOptions = openRouterModelOptions(openRouterModels);
+    const orcaRouterOptions = orcaRouterModelOptions(orcaRouterModels);
     const vercelOptions = vercelModelOptions(vercelModels);
     const openCodeGoOptions = openCodeGoModelOptions(openCodeGoModels);
     const localOptions = ollamaModels.map((model) => ({
@@ -69,6 +73,7 @@ export function ModelToggle({
     return [
       ...STATIC_MODELS,
       ...openRouterOptions,
+      ...orcaRouterOptions,
       ...vercelOptions,
       ...openCodeGoOptions,
       ...localOptions,
@@ -80,6 +85,7 @@ export function ModelToggle({
     keyStatus,
     ollamaModels,
     openRouterModels,
+    orcaRouterModels,
     vercelModels,
     openCodeGoModels,
   ]);

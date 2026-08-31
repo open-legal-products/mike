@@ -133,11 +133,12 @@ export function NewTRModal({
     useEffect(() => {
         if (!open || !profile?.tabularModel) return;
         const defaultModel = profile.tabularModel;
-        const router = (["openrouter", "vercel", "opencode-go"] as const).find(
-            (slug) => defaultModel.startsWith(`${slug}/`),
-        );
+        const router = (
+            ["openrouter", "orcarouter", "vercel", "opencode-go"] as const
+        ).find((slug) => defaultModel.startsWith(`${slug}/`));
         const selectedByRouter: Record<RouterSlug, string[]> = {
             openrouter: profile.openRouterModels,
+            orcarouter: profile.orcaRouterModels,
             vercel: profile.vercelModels,
             "opencode-go": profile.openCodeGoModels,
         };

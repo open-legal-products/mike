@@ -56,6 +56,7 @@ interface UserProfile {
     legalResearchUs: boolean;
     quickActionsVisible: boolean;
     openRouterModels: string[];
+    orcaRouterModels: string[];
     vercelModels: string[];
     openCodeGoModels: string[];
     darkMode: boolean;
@@ -98,6 +99,7 @@ interface UserProfileContextType {
     updateLegalResearchUs: (enabled: boolean) => Promise<boolean>;
     updateQuickActionsVisible: (visible: boolean) => Promise<boolean>;
     updateOpenRouterModels: (models: string[]) => Promise<boolean>;
+    updateOrcaRouterModels: (models: string[]) => Promise<boolean>;
     updateVercelModels: (models: string[]) => Promise<boolean>;
     updateOpenCodeGoModels: (models: string[]) => Promise<boolean>;
     updateDarkMode: (enabled: boolean) => Promise<void>;
@@ -118,6 +120,7 @@ const API_KEY_PROVIDERS: ApiKeyProvider[] = [
     "gemini",
     "openai",
     "openrouter",
+    "orcarouter",
     "vercel",
     "opencode-go",
     "courtlistener",
@@ -129,6 +132,7 @@ function emptyApiKeys(): ApiKeyState {
         gemini: { configured: false, source: null },
         openai: { configured: false, source: null },
         openrouter: { configured: false, source: null },
+        orcarouter: { configured: false, source: null },
         vercel: { configured: false, source: null },
         "opencode-go": { configured: false, source: null },
         courtlistener: { configured: false, source: null },
@@ -164,6 +168,9 @@ function toProfile(data: ApiUserProfile): UserProfile {
         mfaOnLogin: profile.mfaOnLogin === true,
         openRouterModels: Array.isArray(profile.openRouterModels)
             ? profile.openRouterModels
+            : [],
+        orcaRouterModels: Array.isArray(profile.orcaRouterModels)
+            ? profile.orcaRouterModels
             : [],
         vercelModels: Array.isArray(profile.vercelModels)
             ? profile.vercelModels
@@ -228,6 +235,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 legalResearchUs: true,
                 quickActionsVisible: true,
                 openRouterModels: [],
+                orcaRouterModels: [],
                 vercelModels: [],
                 openCodeGoModels: [],
                 darkMode: false,
@@ -499,6 +507,22 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         [user],
     );
 
+    const updateOrcaRouterModels = useCallback(
+        async (orcaRouterModels: string[]): Promise<boolean> => {
+            if (!user) return false;
+            try {
+                const updated = await updateUserProfile({ orcaRouterModels });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [user],
+    );
+
     const updateVercelModels = useCallback(
         async (vercelModels: string[]): Promise<boolean> => {
             if (!user) return false;
@@ -620,6 +644,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 updateLegalResearchUs,
                 updateQuickActionsVisible,
                 updateOpenRouterModels,
+                updateOrcaRouterModels,
                 updateVercelModels,
                 updateOpenCodeGoModels,
                 updateDarkMode,

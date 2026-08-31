@@ -187,6 +187,9 @@ describe("router slugs", () => {
         expect(routerForModelId("openrouter/openai/gpt-5.4")).toBe(
             "openrouter",
         );
+        expect(routerForModelId("orcarouter/deepseek/deepseek-v4-flash")).toBe(
+            "orcarouter",
+        );
         expect(routerForModelId("vercel/openai/gpt-5.4")).toBe("vercel");
         expect(routerForModelId("opencode-go/glm-5")).toBe("opencode-go");
         expect(routerForModelId("gemini-3-flash-preview")).toBeNull();

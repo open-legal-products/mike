@@ -15,6 +15,7 @@ import {
     providerForModel,
     resolveModel,
     openRouterModelId,
+    orcaRouterModelId,
     vercelModelId,
     openCodeGoModelId,
     isOpenCodeGoChatCompletionsModel,
@@ -69,6 +70,12 @@ describe("providerForModel", () => {
         expect(providerForModel("vercel/anthropic/claude-sonnet-4.5")).toBe(
             "vercel",
         );
+    });
+
+    it("maps namespaced OrcaRouter ids to the orcarouter provider", () => {
+        expect(
+            providerForModel("orcarouter/deepseek/deepseek-v4-flash"),
+        ).toBe("orcarouter");
     });
 
     it("maps namespaced OpenCode Go ids to the opencode-go provider", () => {
@@ -159,6 +166,18 @@ describe("resolveModel", () => {
         );
     });
 
+    it("accepts namespaced OrcaRouter model ids", () => {
+        expect(
+            resolveModel(
+                "orcarouter/deepseek/deepseek-v4-flash-free",
+                DEFAULT_MAIN_MODEL,
+            ),
+        ).toBe("orcarouter/deepseek/deepseek-v4-flash-free");
+        expect(resolveModel("orcarouter/invalid", DEFAULT_MAIN_MODEL)).toBe(
+            DEFAULT_MAIN_MODEL,
+        );
+    });
+
     it("accepts namespaced Vercel AI Gateway model ids", () => {
         expect(resolveModel("vercel/openai/gpt-5.4", DEFAULT_MAIN_MODEL)).toBe(
             "vercel/openai/gpt-5.4",
@@ -225,6 +244,14 @@ describe("openRouterModelId", () => {
         expect(openRouterModelId("openrouter/openrouter/auto")).toBe(
             "openrouter/auto",
         );
+    });
+});
+
+describe("orcaRouterModelId", () => {
+    it("removes only the internal provider namespace", () => {
+        expect(
+            orcaRouterModelId("orcarouter/deepseek/deepseek-v4-flash-free"),
+        ).toBe("deepseek/deepseek-v4-flash-free");
     });
 });
 
