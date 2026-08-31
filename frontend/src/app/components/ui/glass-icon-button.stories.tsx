@@ -2,7 +2,8 @@ import type { Story } from "@ladle/react";
 import { MoreHorizontal, PanelRightClose, X } from "lucide-react";
 import { GlassIconButton } from "@/app/components/ui/glass-icon-button";
 
-export default { title: "UI / GlassIconButton" };
+const meta = { title: "UI / GlassIconButton" };
+export default meta;
 
 /**
  * Circular glass icon button — modal close, panel dismiss. It is icon-only, so

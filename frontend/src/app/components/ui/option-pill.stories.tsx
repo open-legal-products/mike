@@ -3,7 +3,8 @@ import type { Story } from "@ladle/react";
 import { X } from "lucide-react";
 import { OptionPill } from "@/app/components/ui/option-pill";
 
-export default { title: "UI / OptionPill" };
+const meta = { title: "UI / OptionPill" };
+export default meta;
 
 /** A compact removable option, distinct from an action button. */
 export const Default: Story = () => (

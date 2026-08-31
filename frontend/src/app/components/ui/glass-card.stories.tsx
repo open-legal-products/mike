@@ -2,7 +2,8 @@ import type { Story } from "@ladle/react";
 import { GlassCard } from "@/app/components/ui/glass-card";
 import { PillButton } from "@/app/components/ui/pill-button";
 
-export default { title: "UI / GlassCard" };
+const meta = { title: "UI / GlassCard" };
+export default meta;
 
 /**
  * The flat-tier card surface used by signup/login/onboarding. It takes children

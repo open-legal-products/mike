@@ -18,7 +18,8 @@ import {
     DropdownMenuTrigger,
 } from "@/app/components/ui/dropdown-menu";
 
-export default { title: "UI / DropdownMenu" };
+const meta = { title: "UI / DropdownMenu" };
+export default meta;
 
 /**
  * The raw Radix/shadcn menu primitives. In app chrome use `liquid-dropdown`

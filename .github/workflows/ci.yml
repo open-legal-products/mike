@@ -91,3 +91,9 @@ jobs:
       # not required for this compile-time check.
       # This catches type errors (next build runs tsc) and broken routes/imports.
       - run: npm run build
+
+      # Bundles every web and cross-target UI story. Type-level drift is caught
+      # by the production build above; this catches broken story imports and
+      # Ladle configuration. The script is required infrastructure, so its
+      # accidental removal must fail CI rather than silently skip this gate.
+      - run: npm run catalog:build

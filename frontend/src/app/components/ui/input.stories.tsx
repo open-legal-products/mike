@@ -1,7 +1,8 @@
 import type { Story } from "@ladle/react";
 import { Input } from "@/app/components/ui/input";
 
-export default { title: "UI / Input" };
+const meta = { title: "UI / Input" };
+export default meta;
 
 /**
  * shadcn's input, on the semantic token set. For app forms prefer

@@ -1,7 +1,8 @@
 import type { Story } from "@ladle/react";
 import { CiteButton } from "@/app/components/ui/cite-button";
 
-export default { title: "UI / CiteButton" };
+const meta = { title: "UI / CiteButton" };
+export default meta;
 
 const QUOTE =
     "The parties agree that this Agreement shall be governed by the laws of the State of New York.";

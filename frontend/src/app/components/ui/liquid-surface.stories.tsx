@@ -16,7 +16,8 @@ import {
     LIQUID_TABLE_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
 
-export default { title: "UI / LiquidSurface" };
+const meta = { title: "UI / LiquidSurface" };
+export default meta;
 
 const MATERIALS: [label: string, className: string][] = [
     ["liquid-glass-flat", LIQUID_GLASS_FLAT_CLASS],

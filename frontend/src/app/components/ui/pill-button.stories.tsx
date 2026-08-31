@@ -2,7 +2,8 @@ import type { Story } from "@ladle/react";
 import { Plus } from "lucide-react";
 import { PillButton } from "@/app/components/ui/pill-button";
 
-export default { title: "UI / PillButton" };
+const meta = { title: "UI / PillButton" };
+export default meta;
 
 /** The app's primary action button. Shared with the Word add-in via `PillButtonUI`. */
 export const Tones: Story = () => (
