@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mike</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1c1c1e;
+        --muted: #6e6e73;
+        --bg: #f2f2f4;
+        --accent: #1a56db;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #f2f2f4;
+          --muted: #98989e;
+          --bg: #141417;
+          --accent: #6ea8ff;
+        }
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          sans-serif;
+        -webkit-app-region: drag;
+        user-select: none;
+      }
+      main {
+        /* Same shape as welcome/connect: draggable body, no-drag content
+           island — a page with zero no-drag area turns the whole window
+           into a titlebar. */
+        -webkit-app-region: no-drag;
+        text-align: center;
+      }
+      .spinner {
+        width: 28px;
+        height: 28px;
+        margin: 0 auto 16px;
+        border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      #status {
+        color: var(--muted);
+        font-size: 13px;
+        min-height: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="spinner"></div>
+      <h1>Starting Mike on this Mac</h1>
+      <div id="status">Warming up…</div>
+    </main>
+    <script>
+      window.mikeDesktop.onLocalStatus((msg) => {
+        document.getElementById("status").textContent = msg;
+      });
+    </script>
+  </body>
+</html>

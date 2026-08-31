@@ -1,0 +1,32 @@
+{
+  "name": "mike-desktop",
+  "productName": "Mike",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mike for Mac — desktop shell around the Mike web app",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "MIKE_DESKTOP_DEV=1 electron .",
+    "start:local": "electron . --local",
+    "local:fetch": "bash scripts/fetch-local-stack.sh",
+    "local:build": "bash scripts/build-local-stack.sh",
+    "local:stage": "bash scripts/stage-local-stack.sh",
+    "dist": "electron-builder --mac --config electron-builder.json",
+    "dist:local": "electron-builder --mac --config electron-builder.local.json",
+    "dist:signed": "electron-builder --mac --config electron-builder.release.json",
+    "dist:local:signed": "node scripts/make-signed-local-config.mjs && electron-builder --mac --config electron-builder.release.local.json",
+    "e2e": "node e2e/app.e2e.mjs",
+    "e2e:flows": "node e2e/flows.e2e.mjs",
+    "e2e:local": "node e2e/local.e2e.mjs",
+    "icon": "electron scripts/render-icon.js && bash scripts/make-icns.sh"
+  },
+  "devDependencies": {
+    "electron": "^38.3.0",
+    "electron-builder": "^26.0.12",
+    "playwright-core": "^1.61.1"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}

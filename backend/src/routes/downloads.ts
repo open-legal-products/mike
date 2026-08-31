@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import { buildContentDisposition, downloadFile } from "../lib/storage";
-import { verifyDownload } from "../lib/downloadTokens";
+import { verifyDownload, verifyBlobToken } from "../lib/downloadTokens";
 import { ensureDocAccess } from "../lib/access";
 import { contentTypeForDocumentType } from "../lib/documentTypes";
 
@@ -14,6 +14,30 @@ function contentTypeFor(filename: string): string {
         : "";
     return contentTypeForDocumentType(suffix);
 }
+
+// GET /download/signed/:token — the filesystem storage driver's presigned
+// URL. Deliberately unauthenticated, exactly like the S3 presigned URLs it
+// replaces: the browser reaches it through a bare <a> click or fetch with no
+// Authorization header. The token IS the authorization — an expiring HMAC
+// capability minted by an authenticated route (documents /url, workflow
+// references) AFTER its own access check, scoped to one object. Registered
+// before /:token so Express doesn't swallow it with the pattern below.
+downloadsRouter.get("/signed/:token", async (req, res) => {
+    const info = verifyBlobToken(req.params.token);
+    if (!info)
+        return void res.status(404).json({ detail: "Invalid or expired link" });
+
+    const raw = await downloadFile(info.path);
+    if (!raw)
+        return void res.status(404).json({ detail: "File not found" });
+
+    res.setHeader("Content-Type", contentTypeFor(info.filename));
+    res.setHeader(
+        "Content-Disposition",
+        buildContentDisposition("attachment", info.filename),
+    );
+    res.send(Buffer.from(raw));
+});
 
 // GET /download/:token
 downloadsRouter.get("/:token", requireAuth, async (req, res) => {
