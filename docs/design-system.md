@@ -291,8 +291,10 @@ npm run catalog:build    # static build; this is what CI smoke-tests
 
 Stories are colocated with the primitive as `*.stories.tsx`, the same way tests
 are. When you add a primitive to `components/ui/`, add a story for it in the
-same change — CI compiles every story, so a story that drifts from its
-primitive's props breaks the build rather than rotting quietly.
+same change. Stories are inside the app's `tsconfig`, so `npm run build`
+type-checks them: a story that drifts from its primitive's props fails CI
+rather than rotting quietly. `npm run catalog:build` then bundles them, which
+catches a story importing an export that no longer exists.
 
 Two things about the catalog environment are worth knowing before you edit it:
 
