@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import {
+    AlertCircle,
     ChevronLeft,
     ChevronRight,
     FileText,
@@ -71,6 +72,16 @@ import {
     folderDeleteDialogReducer,
     removeDeletedDocumentTabs,
 } from "@/app/lib/folderDeleteState";
+import {
+    combineUploadWarnings,
+    formatFailedUploadWarning,
+    formatUnsupportedDocumentWarning,
+    partitionSupportedDocumentFiles,
+} from "@/app/lib/documentUploadValidation";
+import {
+    DOCUMENT_UPLOAD_CONCURRENCY,
+    settleWithConcurrency,
+} from "@/app/lib/documentDirectoryUpload";
 
 interface Props {
     params: Promise<{ id: string; chatId: string }>;
@@ -241,6 +252,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // Upload state
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
+    const [uploadWarning, setUploadWarning] = useState<string | null>(null);
     const [explorerDragOver, setExplorerDragOver] = useState(false);
 
     // Tabs
@@ -672,20 +684,47 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // ── Upload ────────────────────────────────────────────────────────────────
     async function uploadFiles(files: File[]) {
         if (!files.length) return;
+        const { supported, unsupported } =
+            partitionSupportedDocumentFiles(files);
+        const unsupportedWarning =
+            formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
+        if (supported.length === 0) {
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            return;
+        }
         setUploading(true);
         try {
-            const uploaded = await Promise.all(
-                files.map((f) => uploadProjectDocument(projectId, f)),
+            // Bounded concurrency instead of Promise.all: a 20-file drop must
+            // not open 20 simultaneous multipart requests (Open-Legal-Products/mike#8),
+            // and one failed file must not discard the other 19 results.
+            const results = await settleWithConcurrency(
+                supported,
+                DOCUMENT_UPLOAD_CONCURRENCY,
+                (f) => uploadProjectDocument(projectId, f),
             );
-            setProject((prev) => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    documents: [...(prev.documents ?? []), ...uploaded],
-                };
-            });
-        } catch (err) {
-            console.error("Upload failed:", err);
+            const uploaded = results.flatMap((result) =>
+                result.status === "fulfilled" ? [result.value] : [],
+            );
+            const failed = supported.filter(
+                (_, index) => results[index].status === "rejected",
+            );
+            if (failed.length > 0) console.error("Upload failed:", results);
+            setUploadWarning(
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    formatFailedUploadWarning(failed),
+                ),
+            );
+            if (uploaded.length > 0) {
+                setProject((prev) => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        documents: [...(prev.documents ?? []), ...uploaded],
+                    };
+                });
+            }
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1081,6 +1120,23 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                     </button>
                                 </div>
                             </div>
+
+                            {uploadWarning && (
+                                <div className="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-gray-900">
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-600" />
+                                    <span className="min-w-0 flex-1">
+                                        {uploadWarning}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setUploadWarning(null)}
+                                        className="shrink-0 rounded p-0.5 text-black hover:bg-gray-100"
+                                        aria-label="Dismiss warning"
+                                    >
+                                        <X className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
+                            )}
 
                             {/* Drop overlay */}
                             <div

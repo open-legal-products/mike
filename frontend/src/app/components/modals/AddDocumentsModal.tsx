@@ -14,9 +14,15 @@ import type { DirectoryTab } from "../shared/useDirectoryData";
 import { Modal } from "./Modal";
 import {
     SUPPORTED_DOCUMENT_ACCEPT,
+    combineUploadWarnings,
+    formatFailedUploadWarning,
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
+import {
+    DOCUMENT_UPLOAD_CONCURRENCY,
+    settleWithConcurrency,
+} from "@/app/lib/documentDirectoryUpload";
 
 interface Props {
     open: boolean;
@@ -207,7 +213,8 @@ export function AddDocumentsModal({
         if (!files.length) return;
         const { supported, unsupported } =
             partitionSupportedDocumentFiles(files);
-        setUploadWarning(formatUnsupportedDocumentWarning(unsupported));
+        const unsupportedWarning = formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
         if (supported.length === 0) {
             if (fileInputRef.current) fileInputRef.current.value = "";
             return;
@@ -215,11 +222,28 @@ export function AddDocumentsModal({
         setUploadingFilenames(supported.map((file) => file.name));
         setUploading(true);
         try {
-            const uploaded = await Promise.all(
-                supported.map((f) =>
+            // Bounded concurrency instead of Promise.all: a 20-file drop must
+            // not open 20 simultaneous multipart requests (Open-Legal-Products/mike#8),
+            // and one failed file must not discard the other 19 results.
+            const results = await settleWithConcurrency(
+                supported,
+                DOCUMENT_UPLOAD_CONCURRENCY,
+                (f) =>
                     projectId
                         ? uploadProjectDocument(projectId, f)
                         : uploadStandaloneDocument(f),
+            );
+            const uploaded = results.flatMap((result) =>
+                result.status === "fulfilled" ? [result.value] : [],
+            );
+            const failed = supported.filter(
+                (_, index) => results[index].status === "rejected",
+            );
+            if (failed.length > 0) console.error("Upload failed:", results);
+            setUploadWarning(
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    formatFailedUploadWarning(failed),
                 ),
             );
             setExtraUploadedDocs((prev) => [...uploaded, ...prev]);
@@ -230,8 +254,6 @@ export function AddDocumentsModal({
                         !prev.some((selected) => selected.id === document.id),
                 ),
             ]);
-        } catch (err) {
-            console.error("Upload failed:", err);
         } finally {
             setUploading(false);
             setUploadingFilenames([]);

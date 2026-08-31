@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
     SUPPORTED_DOCUMENT_ACCEPT,
     UNSUPPORTED_DOCUMENT_WARNING_MESSAGE,
+    combineUploadWarnings,
+    formatFailedUploadWarning,
     formatUnsupportedDocumentWarning,
     isSupportedDocumentFile,
     partitionSupportedDocumentFiles,
@@ -83,6 +85,43 @@ describe("formatUnsupportedDocumentWarning", () => {
     it("returns the shared warning message when files were rejected", () => {
         expect(formatUnsupportedDocumentWarning([file("x.txt")])).toBe(
             UNSUPPORTED_DOCUMENT_WARNING_MESSAGE,
+        );
+    });
+});
+
+describe("formatFailedUploadWarning", () => {
+    it("returns null when every upload succeeded", () => {
+        expect(formatFailedUploadWarning([])).toBeNull();
+    });
+
+    it("names each failed file so outcomes are per-file, not batch-wide", () => {
+        expect(formatFailedUploadWarning([file("a.pdf"), file("b.docx")])).toBe(
+            "Could not upload a.pdf, b.docx. Please try again.",
+        );
+    });
+
+    it("collapses long failure lists after the first three names", () => {
+        const failed = ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"].map(file);
+        expect(formatFailedUploadWarning(failed)).toBe(
+            "Could not upload a.pdf, b.pdf, c.pdf and 2 more. Please try again.",
+        );
+    });
+});
+
+describe("combineUploadWarnings", () => {
+    it("returns null when there is nothing to warn about", () => {
+        expect(combineUploadWarnings(null, null)).toBeNull();
+    });
+
+    it("passes a single warning through unchanged", () => {
+        expect(combineUploadWarnings(null, "Only warning.")).toBe(
+            "Only warning.",
+        );
+    });
+
+    it("joins unsupported-type and failed-upload warnings into one strip", () => {
+        expect(combineUploadWarnings("First.", null, "Second.")).toBe(
+            "First. Second.",
         );
     });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Upload } from "lucide-react";
+import { AlertCircle, Loader2, Upload, X } from "lucide-react";
 import type { Document, Folder, Project, Workflow } from "../shared/types";
 import {
     getProject,
@@ -9,6 +9,17 @@ import {
     uploadProjectDocument,
     uploadStandaloneDocument,
 } from "@/app/lib/mikeApi";
+import {
+    SUPPORTED_DOCUMENT_ACCEPT,
+    combineUploadWarnings,
+    formatFailedUploadWarning,
+    formatUnsupportedDocumentWarning,
+    partitionSupportedDocumentFiles,
+} from "@/app/lib/documentUploadValidation";
+import {
+    DOCUMENT_UPLOAD_CONCURRENCY,
+    settleWithConcurrency,
+} from "@/app/lib/documentDirectoryUpload";
 import { FileDirectory } from "../shared/FileDirectory";
 import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
@@ -83,6 +94,7 @@ export function NewTRModal({
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
     const [groupBySubfolder, setGroupBySubfolder] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [uploadWarning, setUploadWarning] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Workflow templates
@@ -226,6 +238,14 @@ export function NewTRModal({
     async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
         const files = Array.from(e.target.files ?? []);
         if (!files.length) return;
+        const { supported, unsupported } =
+            partitionSupportedDocumentFiles(files);
+        const unsupportedWarning = formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
+        if (supported.length === 0) {
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            return;
+        }
         setUploading(true);
         try {
             const uploadProjectId = isProjectMode
@@ -233,11 +253,28 @@ export function NewTRModal({
                 : underProject
                   ? selectedProjectId
                   : undefined;
-            const uploaded = await Promise.all(
-                files.map((f) =>
+            // Bounded concurrency instead of Promise.all: a 20-file drop must
+            // not open 20 simultaneous multipart requests (Open-Legal-Products/mike#8),
+            // and one failed file must not discard the other 19 results.
+            const results = await settleWithConcurrency(
+                supported,
+                DOCUMENT_UPLOAD_CONCURRENCY,
+                (f) =>
                     uploadProjectId
                         ? uploadProjectDocument(uploadProjectId, f)
                         : uploadStandaloneDocument(f),
+            );
+            const uploaded = results.flatMap((result) =>
+                result.status === "fulfilled" ? [result.value] : [],
+            );
+            const failed = supported.filter(
+                (_, index) => results[index].status === "rejected",
+            );
+            if (failed.length > 0) console.error("Upload failed:", results);
+            setUploadWarning(
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    formatFailedUploadWarning(failed),
                 ),
             );
             if (uploadProjectId) {
@@ -252,8 +289,6 @@ export function NewTRModal({
                         !prev.some((selected) => selected.id === document.id),
                 ),
             ]);
-        } catch (err) {
-            console.error("Upload failed:", err);
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
@@ -368,7 +403,7 @@ export function NewTRModal({
             <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt"
+                accept={SUPPORTED_DOCUMENT_ACCEPT}
                 multiple
                 className="hidden"
                 onChange={handleUpload}
@@ -479,6 +514,22 @@ export function NewTRModal({
                     </div>
                 ) : (
                     <div className="flex min-h-0 flex-1 flex-col">
+                        {uploadWarning && (
+                            <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-gray-900">
+                                <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-600" />
+                                <span className="min-w-0 flex-1">
+                                    {uploadWarning}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setUploadWarning(null)}
+                                    className="shrink-0 rounded p-0.5 text-black hover:bg-gray-100"
+                                    aria-label="Dismiss warning"
+                                >
+                                    <X className="h-3.5 w-3.5" />
+                                </button>
+                            </div>
+                        )}
                         {showDirectory && (
                             <FileDirectory
                                 documents={directoryDocuments}
