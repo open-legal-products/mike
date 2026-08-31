@@ -1,7 +1,8 @@
 import type { Story } from "@ladle/react";
 import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
 
-export default { title: "UI / FormField" };
+const meta = { title: "UI / FormField" };
+export default meta;
 
 /** The glass variant is the default app form control. */
 export const GlassField: Story = () => (

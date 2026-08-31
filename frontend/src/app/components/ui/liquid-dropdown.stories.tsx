@@ -17,7 +17,8 @@ import {
 } from "@/app/components/ui/liquid-dropdown";
 import { TabPillButton } from "@/app/components/ui/tab-pill-button";
 
-export default { title: "UI / LiquidDropdown" };
+const meta = { title: "UI / LiquidDropdown" };
+export default meta;
 
 /**
  * The glass skin over `dropdown-menu` — this is the one to use in app chrome.

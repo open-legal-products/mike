@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { Story } from "@ladle/react";
 import { SearchBar } from "@/app/components/ui/search-bar";
 
-export default { title: "UI / SearchBar" };
+const meta = { title: "UI / SearchBar" };
+export default meta;
 
 /** The clear button only appears once there is a value. */
 export const Interactive: Story = () => {

@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { Story } from "@ladle/react";
 import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
 
-export default { title: "UI / ToggleSwitch" };
+const meta = { title: "UI / ToggleSwitch" };
+export default meta;
 
 /**
  * `role="switch"` + `aria-checked`, so the state is not carried by colour

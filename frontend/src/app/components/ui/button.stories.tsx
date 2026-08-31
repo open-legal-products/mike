@@ -2,7 +2,8 @@ import type { Story } from "@ladle/react";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 
-export default { title: "UI / Button" };
+const meta = { title: "UI / Button" };
+export default meta;
 
 export const Variants: Story = () => (
     <div className="flex flex-wrap items-center gap-3">

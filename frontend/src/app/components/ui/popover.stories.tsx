@@ -6,7 +6,8 @@ import {
     PopoverTrigger,
 } from "@/app/components/ui/popover";
 
-export default { title: "UI / Popover" };
+const meta = { title: "UI / Popover" };
+export default meta;
 
 /** Radix popover on the float-tier glass surface. Content is portalled. */
 export const Default: Story = () => (

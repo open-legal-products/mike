@@ -3,7 +3,8 @@ import type { Story } from "@ladle/react";
 import { CheckSquare } from "@/app/components/ui/check-square";
 import { LIQUID_GLASS_MODAL_ROW_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 
-export default { title: "UI / CheckSquare" };
+const meta = { title: "UI / CheckSquare" };
+export default meta;
 
 /**
  * Decorative by default (`aria-hidden`), because the row around it owns the

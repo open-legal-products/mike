@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { Story } from "@ladle/react";
 import { TabPillButton } from "@/app/components/ui/tab-pill-button";
 
-export default { title: "UI / TabPillButton" };
+const meta = { title: "UI / TabPillButton" };
+export default meta;
 
 const FILTERS = ["All", "Drafts", "Filed", "Archived"];
 

@@ -3,7 +3,8 @@ import { FileText, TriangleAlert } from "lucide-react";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButton } from "@/app/components/ui/pill-button";
 
-export default { title: "UI / EmptyState" };
+const meta = { title: "UI / EmptyState" };
+export default meta;
 
 /**
  * The standard "nothing here yet" block. It also owns the display heading
