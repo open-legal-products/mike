@@ -37,6 +37,36 @@ function getClient(): S3Client {
   return cachedClient;
 }
 
+// Presigned URLs are handed to the user's browser, so their signature must be
+// computed against an endpoint the browser can actually reach. Self-hosted
+// deploys talk to storage over the compose network (http://storage:9000) — a
+// hostname that only resolves inside Docker, and an S3 signature is bound to
+// the host it was signed for, so the URL can't simply be rewritten afterwards.
+// R2_PUBLIC_ENDPOINT_URL lets those deploys sign against the host-published
+// endpoint instead; cloud R2/S3 endpoints are already public, so it defaults
+// to R2_ENDPOINT_URL and nothing changes there.
+// Read once at module load, like the internal client's config: the endpoint is
+// static per process, and reading it here (rather than per call) keeps the
+// cache honest — a frozen client can't disagree with a re-read env var.
+const PRESIGN_ENDPOINT = process.env.R2_PUBLIC_ENDPOINT_URL;
+let cachedPresignClient: S3Client | undefined;
+
+function getPresignClient(): S3Client {
+  if (!PRESIGN_ENDPOINT) return getClient();
+  if (!cachedPresignClient) {
+    cachedPresignClient = new S3Client({
+      region: "auto",
+      endpoint: PRESIGN_ENDPOINT,
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+      },
+    });
+  }
+  return cachedPresignClient;
+}
+
 const BUCKET = process.env.R2_BUCKET_NAME ?? "mike";
 
 export const storageEnabled = Boolean(
@@ -139,7 +169,7 @@ export async function getSignedUrl(
 ): Promise<string | null> {
   if (!storageEnabled) return null;
   try {
-    const client = getClient();
+    const client = getPresignClient();
     // Override the response Content-Disposition so the browser uses this
     // filename on download, instead of the last path segment of the R2 key
     // (which includes the document UUID). The `download` attribute on <a>

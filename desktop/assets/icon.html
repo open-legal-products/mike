@@ -1,0 +1,165 @@
+<!doctype html>
+<!--
+  Source of truth for the Mike.app icon: the product's 12-blade glass
+  asterisk (frontend/src/app/components/chat/mike-icon.tsx, DEFAULT_PALETTE,
+  inlined here as static SVG) on a macOS Big-Sur-style plate. Rendered to
+  1024×1024 PNG by scripts/render-icon.js, then iconutil → icon.icns.
+  Canvas is transparent outside the plate; the plate is the app-background
+  light gradient so the dock icon reads as "Mike's login page in miniature".
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 1024px;
+        height: 1024px;
+        background: transparent;
+        overflow: hidden;
+      }
+      svg {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+      <defs>
+        <!-- Apple icon-grid plate: 824×824 centered, r≈185. -->
+        <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#ffffff" />
+          <stop offset="100%" stop-color="#eceff3" />
+        </linearGradient>
+        <linearGradient id="plateEdge" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9" />
+          <stop offset="100%" stop-color="#c9ced6" stop-opacity="0.9" />
+        </linearGradient>
+        <filter id="plateShadow" x="-15%" y="-15%" width="130%" height="130%">
+          <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#0b1220" flood-opacity="0.22" />
+        </filter>
+
+        <!-- Verbatim gradients from MikeIcon's DEFAULT_PALETTE. -->
+        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="3" flood-color="#000000" flood-opacity="0.3" />
+        </filter>
+        <linearGradient id="glassFill" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#0a0a0a" stop-opacity="0.9" />
+          <stop offset="30%" stop-color="#151515" stop-opacity="0.8" />
+          <stop offset="70%" stop-color="#080808" stop-opacity="0.85" />
+          <stop offset="100%" stop-color="#111111" stop-opacity="0.9" />
+        </linearGradient>
+        <linearGradient id="specular" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5" />
+          <stop offset="15%" stop-color="#ffffff" stop-opacity="0.2" />
+          <stop offset="35%" stop-color="#ffffff" stop-opacity="0" />
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+        </linearGradient>
+        <linearGradient id="glassBorder" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3" />
+          <stop offset="50%" stop-color="#666666" stop-opacity="0.1" />
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0.2" />
+        </linearGradient>
+        <linearGradient id="innerLight" x1="100%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0" />
+          <stop offset="40%" stop-color="#777777" stop-opacity="0.08" />
+          <stop offset="60%" stop-color="#222222" stop-opacity="0.05" />
+          <stop offset="100%" stop-color="#ffffff" stop-opacity="0" />
+        </linearGradient>
+        <clipPath id="topClip">
+          <rect x="30" y="-25" width="130" height="23" />
+        </clipPath>
+        <path
+          id="blade"
+          d="M 40,0 A 4,4 0 0 1 43,-3 Q 95,-22 147,-3 A 4,4 0 0 1 150,0 A 4,4 0 0 1 147,3 Q 95,22 43,3 A 4,4 0 0 1 40,0 Z"
+        />
+      </defs>
+
+      <!-- Plate -->
+      <g filter="url(#plateShadow)">
+        <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#plate)" />
+        <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="url(#plateEdge)" stroke-width="3" />
+      </g>
+
+      <!-- Asterisk: MikeIcon draws in a 300×300 viewBox centered at (250,250).
+           Scale ×2.1 → ~630px spread, centered on the 1024 canvas. -->
+      <g transform="translate(512, 512) scale(2.1) translate(-250, -250)">
+        <g transform="translate(250, 250)">
+          <g transform="rotate(0)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(30)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(60)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(90)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(120)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(150)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(180)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(210)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(240)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(270)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(300)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+          <g transform="rotate(330)" filter="url(#shadow)">
+            <use href="#blade" fill="url(#glassFill)" />
+            <use href="#blade" fill="url(#innerLight)" />
+            <use href="#blade" fill="url(#specular)" clip-path="url(#topClip)" />
+            <use href="#blade" fill="none" stroke="url(#glassBorder)" stroke-width="0.8" />
+          </g>
+        </g>
+      </g>
+    </svg>
+  </body>
+</html>

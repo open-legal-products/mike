@@ -149,10 +149,17 @@ function mcpOAuthPopupHtml(
 ) {
     const targetOrigin = new URL(frontendUrl()).origin;
     const targetUrl = frontendUrl();
+    // `detail` carries the attacker-controllable ?error= query value into this
+    // inline script. JSON.stringify does not escape "<", so a payload of
+    // "</script><script>…" would break out of the script element; escaping
+    // "<" as its < form keeps the string inside the JS literal. The CSP
+    // nonce is the primary defense, but the popup now keeps a live
+    // window.opener (COOP is relaxed on this route), so this is the belt to
+    // that suspenders.
     const message = JSON.stringify({
         type: "mcp_oauth_result",
         ...payload,
-    });
+    }).replace(/</g, "\\u003c");
     return `<!doctype html>
 <html>
   <head>
@@ -187,15 +194,26 @@ function mcpOAuthPopupHtml(
 </html>`;
 }
 
-function mcpOAuthPopupCsp(nonce: string) {
-    return [
-        "default-src 'none'",
-        `script-src 'nonce-${nonce}'`,
-        "style-src 'unsafe-inline'",
-        "base-uri 'none'",
-        "form-action 'none'",
-        "frame-ancestors 'none'",
-    ].join("; ");
+function mcpOAuthPopupHeaders(nonce: string) {
+    return {
+        "Content-Security-Policy": [
+            "default-src 'none'",
+            `script-src 'nonce-${nonce}'`,
+            "style-src 'unsafe-inline'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+        ].join("; "),
+        // The whole popup hand-off hinges on window.opener surviving until
+        // this page has posted its result back to the app. Helmet's default
+        // Cross-Origin-Opener-Policy of same-origin would move this document
+        // into a fresh browsing-context group the moment the popup arrives
+        // here from the (cross-origin) consent page — severing window.opener
+        // and silently breaking the flow in every browser. This route opts
+        // out; the strict CSP above still leaves the page unable to do
+        // anything beyond its inline postMessage script.
+        "Cross-Origin-Opener-Policy": "unsafe-none",
+    };
 }
 
 const PROFILE_SELECT_WITH_CHAT_SELECTIONS =
@@ -1536,7 +1554,7 @@ userRouter.get("/mcp-connectors/oauth/callback", async (req, res) => {
         if (!state || !code)
             throw new Error("OAuth callback is missing state or code.");
         const result = await completeUserMcpConnectorOAuth(state, code, db);
-        res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+        res.set(mcpOAuthPopupHeaders(nonce))
             .type("html")
             .send(
                 mcpOAuthPopupHtml(
@@ -1562,7 +1580,7 @@ userRouter.get("/mcp-connectors/oauth/callback", async (req, res) => {
                     : undefined,
         });
         res.status(400)
-            .set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+            .set(mcpOAuthPopupHeaders(nonce))
             .type("html")
             .send(
                 mcpOAuthPopupHtml(

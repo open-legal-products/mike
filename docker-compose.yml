@@ -280,6 +280,15 @@ services:
       - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0}
       - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU}
       - R2_ENDPOINT_URL=http://storage:9000
+      # Presigned URLs go to the user's browser, which can't resolve the
+      # compose-internal "storage" hostname — sign them against the
+      # host-published port instead (see backend/src/lib/storage.ts). The
+      # default works for a browser on the docker host; a REMOTE deploy must
+      # set R2_PUBLIC_ENDPOINT_URL to a public HTTPS URL that reverse-proxies
+      # to storage (the storage port itself is bound loopback-only below). This
+      # var is interpolated from the shell / compose-root .env, NOT backend/.env
+      # (env_file can't win over an interpolated value — see the note below).
+      - R2_PUBLIC_ENDPOINT_URL=${R2_PUBLIC_ENDPOINT_URL:-http://localhost:${STORAGE_PORT:-9000}}
       - R2_ACCESS_KEY_ID=rustfsadmin
       - R2_SECRET_ACCESS_KEY=rustfsadmin
       - R2_BUCKET_NAME=mike

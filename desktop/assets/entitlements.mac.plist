@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Hardened Runtime entitlements required by Electron/Chromium. Notarization
+    demands the Hardened Runtime, and Chromium's JIT + V8 need these three
+    exceptions or the app crashes on launch under it. This is the standard
+    Electron entitlements set — nothing app-specific, no data-access
+    entitlements (the shell touches no camera/mic/contacts/etc.).
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
