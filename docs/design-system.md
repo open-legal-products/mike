@@ -279,7 +279,33 @@ These are the rules the primitives already follow. Match them in new work.
 - **Decorative elements are hidden.** Icons inside a labelled control get
   `aria-hidden`.
 
+## Component catalog
+
+Every primitive in the table above has stories in the Ladle catalog. Run it
+from `frontend/`:
+
+```bash
+npm run catalog          # dev server on http://localhost:61000
+npm run catalog:build    # static build; this is what CI smoke-tests
+```
+
+Stories are colocated with the primitive as `*.stories.tsx`, the same way tests
+are. When you add a primitive to `components/ui/`, add a story for it in the
+same change. Stories are inside the app's `tsconfig`, so `npm run build`
+type-checks them: a story that drifts from its primitive's props fails CI
+rather than rotting quietly. `npm run catalog:build` then bundles them, which
+catches a story importing an export that no longer exists.
+
+Two things about the catalog environment are worth knowing before you edit it:
+
+- The catalog imports the app's real `globals.css`, so it renders on the same
+  tokens and materials as the app. The theme toggle drives the same `.dark`
+  class the Settings > Appearance preference sets, so dark values are real.
+- Tailwind v4's automatic source detection skips dot-directories, so nothing
+  in `frontend/.ladle/` is scanned for class names. Catalog chrome is styled
+  with plain CSS in `.ladle/ladle.css` for that reason. Story files live under
+  `src/` and are scanned normally, so use Tailwind freely in a `*.stories.tsx`.
+
 ## Related
 
 - Frontend test conventions: [frontend-testing.md](frontend-testing.md)
-- Component catalog (Storybook or Ladle): tracked in issue #323, not set up yet

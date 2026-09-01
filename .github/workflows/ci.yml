@@ -83,6 +83,16 @@ jobs:
       # This catches type errors (next build runs tsc) and broken routes/imports.
       - run: npm run build
 
+      # Component catalog smoke check (docs/design-system.md). This bundles
+      # every story in src/app/components/ui/, so a story importing an export
+      # that no longer exists, or a broken .ladle config, fails here instead of
+      # being found by the next person who opens the catalog. Type-level drift
+      # between a story and its primitive is already caught by `next build`
+      # above, which type-checks the stories too — esbuild strips types without
+      # checking them, so this step does not duplicate that.
+      # --if-present keeps it a no-op on trees without the script.
+      - run: npm run catalog:build --if-present
+
   # -----------------------------------------------------------------------
   # Offline eval harness: deterministic scorecard for citation accuracy,
   # prompt-injection resistance, and privilege/PII leakage. Runs against

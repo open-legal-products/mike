@@ -1,0 +1,33 @@
+/*
+ * Catalog stylesheet. It pulls in the app's real globals.css, so the catalog
+ * renders on exactly the same tokens, materials and dark-mode values as the
+ * app rather than on a copy that can drift.
+ *
+ * Two catalog-only gaps have to be closed here:
+ *
+ * 1. Tailwind v4's automatic source detection skips dot-directories, so
+ *    nothing in `.ladle/` is scanned and a utility class used only by the
+ *    Provider generates no CSS. An `@source` override does not lift that
+ *    exclusion either. Story files live under `src/` and are scanned normally,
+ *    so keep catalog chrome styled with the plain CSS below and put anything
+ *    that needs Tailwind in a `*.stories.tsx`.
+ *
+ * 2. The font variables are supplied by `next/font` on <body> in the real app
+ *    (layout.tsx). There is no Next.js here, so `font-sans` and `font-serif`
+ *    would resolve to nothing. Point them at the same two families, falling
+ *    back to a system stack when they are not installed locally.
+ */
+@import "../src/app/globals.css";
+
+:root {
+    --font-inter: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --font-eb-garamond: "EB Garamond", ui-serif, Georgia, serif;
+}
+
+.ladle-canvas {
+    min-height: 100vh;
+    padding: 1.5rem;
+    background-color: var(--app-background);
+    color: var(--color-gray-700);
+    font-family: var(--font-sans);
+}
