@@ -4,6 +4,7 @@ import { Library } from "lucide-react";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import type { MessageFile } from "../shared/types";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { QuotedMessageContent } from "../shared/QuotedMessageContent";
 
 interface Props {
     content: string;
@@ -18,7 +19,10 @@ export function UserMessage({ content, files, workflow, onFileClick }: Props) {
     return (
         <div className="w-full flex justify-end">
             <div className="max-w-[80%] bg-gray-100 rounded-xl px-4 py-3">
-                <p className="text-sm text-gray-900 whitespace-pre-wrap">{content}</p>
+                <QuotedMessageContent
+                    content={content}
+                    className="text-sm text-gray-900"
+                />
                 {(workflow || hasFiles) && (
                     <div className="flex flex-wrap justify-end gap-1.5 mt-3">
                         {workflow && (

@@ -61,6 +61,8 @@ import type {
 } from "@/app/components/shared/types";
 import { expandCitationToEntries } from "@/app/components/shared/types";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
+import { useQuotableSelection } from "@/app/hooks/useQuotableSelection";
+import { QuoteSelectionPopup } from "@/app/components/shared/QuoteSelectionPopup";
 import {
     INITIAL_FOLDER_DELETE_DIALOG_STATE,
     clearDeletedDocumentId,
@@ -542,6 +544,19 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             });
         },
         [activeTab, handleChat],
+    );
+
+    // Highlighting inside an assistant response offers "Add to Chat", scoped
+    // to this page's own message scroller.
+    const { selection: quotableSelection, clear: clearQuotableSelection } =
+        useQuotableSelection(messagesContainerRef);
+
+    const addQuotedExcerpt = useCallback(
+        (text: string) => {
+            chatInputRef.current?.addQuotedExcerpt(text);
+            clearQuotableSelection();
+        },
+        [clearQuotableSelection],
     );
 
     const handleDocClick = (doc: Document) => {
@@ -1443,6 +1458,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                 </div>
             </div>
+            <QuoteSelectionPopup
+                selection={quotableSelection}
+                onAdd={addQuotedExcerpt}
+            />
             <OwnerOnlyPopup
                 open={!!ownerOnlyAction}
                 action={ownerOnlyAction ?? undefined}
