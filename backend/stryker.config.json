@@ -1,14 +1,20 @@
 {
   "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
-  "_comment": "Mutation testing for the SECURITY-CRITICAL libs only (access control, download-token signing, citation extraction). These are the modules where a test suite that merely *executes* lines without *asserting* behavior is dangerous, so we pay the mutation-testing cost here and nowhere else. Deliberately NOT a merge gate — run on demand via `npm run test:mutation` or the monthly mutation.yml workflow. Floors only go up: when tests kill more mutants, raise thresholds.break in the same PR. Widen mutate only alongside tests that keep the score above the floor.",
+  "_comment": "Mutation testing for the SECURITY-CRITICAL libs only (access control, download-token signing, citation extraction + verification, the SSRF private-IP guard). These are the modules where a test suite that merely *executes* lines without *asserting* behavior is dangerous, so we pay the mutation-testing cost here and nowhere else. Runs as a PR gate only when these files/tests change (mutation.yml path filter), on demand via `npm run test:mutation`, and monthly via cron. ignoreStatic: module-load-time mutants (e.g. the BlockList subnet tables in privateIp.ts) cannot be toggled by Stryker's mutation switching and would survive spuriously; runtime behavior of those tables is asserted by privateIp.test.ts instead. Floors only go up: when tests kill more mutants, raise thresholds.break in the same PR. Widen mutate only alongside tests that keep the score above the floor. Measured 2026-08-27 with all five files: 70.01.",
   "testRunner": "vitest",
   "mutate": [
     "src/lib/access.ts",
     "src/lib/downloadTokens.ts",
-    "src/lib/chat/citations.ts"
+    "src/lib/chat/citations.ts",
+    "src/lib/privateIp.ts",
+    "src/lib/chat/verifyCitations.ts"
   ],
   "coverageAnalysis": "perTest",
-  "reporters": ["html", "clear-text", "progress"],
+  "reporters": [
+    "html",
+    "clear-text",
+    "progress"
+  ],
   "htmlReporter": {
     "fileName": "reports/mutation/mutation.html"
   },
@@ -17,5 +23,6 @@
     "low": 70,
     "break": 69
   },
-  "tempDirName": ".stryker-tmp"
+  "tempDirName": ".stryker-tmp",
+  "ignoreStatic": true
 }

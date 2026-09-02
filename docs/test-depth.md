@@ -1,7 +1,8 @@
 # Test Depth: Mutation Testing and the SSE Load Harness
 
-Two on-demand tools that go a level deeper than the regular vitest suite.
-**Neither gates merges** — see "Why not merge gates?" at the bottom.
+Two tools that go a level deeper than the regular vitest suite. Mutation
+testing gates PRs that touch the security libs (and only those PRs); the
+load harness is local/on-demand — see "What gates merges?" at the bottom.
 
 ## Mutation testing (backend security libs)
 
@@ -20,6 +21,10 @@ dangerous (scope in `backend/stryker.config.json`):
 - `src/lib/downloadTokens.ts` — HMAC-signed download tokens
 - `src/lib/chat/citations.ts` — citation extraction (what the model may
   cite from which document)
+- `src/lib/chat/verifyCitations.ts` — quote-against-source verification
+  (the "verified" badge)
+- `src/lib/privateIp.ts` — the SSRF private/reserved-IP guard for
+  server-side connector fetches
 
 ### Running it
 
@@ -29,8 +34,10 @@ npm ci
 npm run test:mutation
 ```
 
-Takes about 3 minutes locally. Or run the **Mutation testing** workflow
-from the Actions tab (it also runs itself monthly as a drift check).
+Takes about a minute locally (~2 in CI). The **Mutation testing**
+workflow also runs automatically on any PR that touches the mutated
+modules, their tests, or the harness config, can be dispatched from the
+Actions tab, and runs itself monthly as a drift check.
 
 ### Reading the report
 
@@ -44,13 +51,15 @@ Open `backend/reports/mutation/mutation.html` (in CI: download the
 - **No coverage** — no test even runs that code. Coverage gap, not an
   assertion gap.
 
-Scores measured when this harness landed varied by file (citations ~78–80,
-downloadTokens 65.4, access 63.6). The access figure is mostly
-no-coverage mutants in
+Scores measured 2026-08-27 with all five files in scope: total 70.0
+(citations 79.2, verifyCitations 63.5, downloadTokens 65.4, access 63.8,
+privateIp 65.9). The access figure is mostly no-coverage mutants in
 `listAccessibleProjectIds`/`filterAccessibleDocumentIds` — its score on
-*covered* code is 82.4.
-`thresholds.break` is set to **69**, ~5 points under the lowest measured
-score, so a run fails only on a genuine regression.
+*covered* code is 82.2. `ignoreStatic` is on: module-load-time mutants
+(the BlockList subnet tables) can't be toggled by mutation switching and
+would survive spuriously; their runtime behavior is asserted directly in
+`privateIp.test.ts`. `thresholds.break` is **69**, just under the
+measured total, so a run fails only on a genuine regression.
 When you kill survivors, raise `break` in the same PR — floors only go up.
 
 ## SSE load harness (k6)
@@ -102,26 +111,24 @@ missed an SLO we never agreed on".
 
 Tune with `VUS`, `RAMP_DURATION`, `HOLD_DURATION`, `PROMPT`.
 
-### Running from GitHub Actions
+There is deliberately no GitHub Actions workflow for the load harness.
+One existed (`.github/workflows/loadtest.yml`, 2026-08-12 to 2026-08-27)
+but was removed without ever having run: it required an externally
+deployed non-production stack and a `LOADTEST_AUTH_TOKEN` repository
+secret, neither of which ever existed, so it sat in the Actions tab as a
+gate that could not execute. The k6 scenario above is the actual tool;
+if the project ever gains a permanent staging stack, a smoke-scale
+post-deploy run of it is the natural workflow to (re)add — resurrect the
+removed workflow from git history as a starting point.
 
-The **SSE load test** workflow (`.github/workflows/loadtest.yml`) is
-manual-only and boots nothing itself: give it the base URL of an already
-running non-production stack you deployed — anything serving the backend
-API (`POST /chat` behind Supabase bearer auth) with real provider keys —
-and store a test user's token in the `LOADTEST_AUTH_TOKEN` repository
-secret. **Never point it at production.**
+## What gates merges?
 
-## Why not merge gates?
-
-- **Cost/latency.** Mutation testing multiplies suite runtime by the
-  mutant count; the load test needs a live stack with real provider keys.
-  Both are too slow/stateful to sit in front of every PR for a solo
-  maintainer, and a flaky required check is worse than none.
-- **They detect drift, not correctness of a single diff.** The monthly
-  mutation cron catches "tests went hollow" over time; the load harness
-  is for before/after checks around streaming changes and incident
-  reproduction.
-
-If the project grows contributors and a permanent staging stack, the
-natural next step is: mutation testing on changed security-lib files in
-PRs, and a small smoke-scale k6 run post-deploy. Until then: on demand.
+- **Mutation testing gates only the PRs it can judge**: the mutation.yml
+  path filter runs it when the mutated security libs, their tests, or the
+  harness itself change. A measured run costs ~2 minutes, so gating those
+  PRs is cheap; unrelated PRs never pay it. The monthly cron still
+  catches "tests went hollow" drift that lands between such PRs.
+- **The load harness never gates.** It needs a live stack and real
+  provider keys, and it detects capacity/stability drift, not the
+  correctness of a single diff — it is for before/after checks around
+  streaming changes and incident reproduction.

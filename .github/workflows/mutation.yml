@@ -1,19 +1,43 @@
 # Mutation testing: prove the security-critical unit tests assert behavior.
 #
-# Stryker mutates src/lib/access.ts, downloadTokens.ts, and chat/citations.ts
-# (scope defined in backend/stryker.config.json) and
-# re-runs the vitest suite per mutant. A surviving mutant = a behavior
-# change (e.g. an access check inverted) that no test caught.
+# Stryker mutates the security-critical modules listed in
+# backend/stryker.config.json (access control, download-token signing,
+# citation extraction + verification, the SSRF IP guard) and re-runs the
+# vitest suite per mutant. A surviving mutant = a behavior change (e.g. an
+# access check inverted, a blocked IP range allowed) that no test caught.
 #
-# ON-DEMAND, NOT a merge gate: it takes ~10 minutes of CI per run, which is
-# too slow to put in front of every PR for a solo maintainer. Run it
-# manually from the Actions tab, or let the monthly cron catch drift. The
-# `thresholds.break` in stryker.config.json fails the run if the mutation
-# score regresses below the documented floor. See docs/test-depth.md.
+# Runs as a PR gate ONLY when those modules, their tests, or this harness
+# change — the path filter below keeps it off unrelated PRs. This is the
+# "mutation testing on changed security-lib files in PRs" step that
+# docs/test-depth.md named as the natural next stage; a measured run takes
+# ~2 minutes (the original ~10-minute estimate predated measurement — this
+# workflow had never actually executed before 2026-08-27). The monthly cron
+# still catches drift that lands between such PRs, and
+# `thresholds.break` in stryker.config.json fails any run whose score
+# regresses below the documented floor. See docs/test-depth.md.
 name: Mutation testing
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main, upstream-main]
+    # Keep this list in sync with the `mutate` array in
+    # backend/stryker.config.json, plus the tests that kill those mutants
+    # and the harness itself.
+    paths:
+      - backend/src/lib/access.ts
+      - backend/src/lib/downloadTokens.ts
+      - backend/src/lib/privateIp.ts
+      - backend/src/lib/chat/citations.ts
+      - backend/src/lib/chat/verifyCitations.ts
+      - backend/src/lib/__tests__/access.test.ts
+      - backend/src/lib/__tests__/downloadTokens.test.ts
+      - backend/src/lib/__tests__/privateIp.test.ts
+      - backend/src/lib/__tests__/citations.test.ts
+      - backend/src/lib/chat/verifyCitations.test.ts
+      - backend/src/lib/mcp/__tests__/client.ssrf.test.ts
+      - backend/stryker.config.json
+      - .github/workflows/mutation.yml
   schedule:
     # Monthly, on the 3rd at 06:17 UTC (odd minute to dodge the top-of-hour
     # GitHub cron rush). Drift check only — failures show up in the Actions

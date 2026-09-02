@@ -1,13 +1,14 @@
 # CI: build and test.
 #
 # Adapted from the amal66/mike fork's .github/workflows/ci.yml (monorepo
-# layout) to this repository's backend/ + frontend/ layout. Test steps use
-# `npm test --if-present`, and the eval job checks for evals/run.mjs, so this
-# workflow is safe to merge before or after the test-harness and evals PRs:
-# on a tree without those pieces the test steps no-op and the build still
-# gates the merge. Beyond the fork version this also builds the frontend
-# (placeholder NEXT_PUBLIC_* env — verified sufficient for `next build`) and
-# runs eslint as a blocking gate (the error backlog is at zero).
+# layout) to this repository's backend/ + frontend/ layout. Both test steps
+# run the coverage-ratchet variant and FAIL when a suite or a coverage floor
+# regresses — the `--if-present` escape hatches from the pre-harness era are
+# gone, so a renamed or missing test script breaks the build instead of
+# silently skipping the suite. Beyond the fork version this also builds the
+# frontend (placeholder NEXT_PUBLIC_* env — verified sufficient for
+# `next build`) and runs eslint as a blocking gate (the error backlog is at
+# zero).
 name: CI
 
 on:
@@ -42,9 +43,13 @@ jobs:
 
       - run: npm ci
 
-      # No-ops on a tree without a "test" script (e.g. before the vitest
-      # harness PR merges); runs the suite once it exists.
-      - run: npm test --if-present
+      # Runs the suite WITH the coverage-ratchet floors from
+      # vitest.config.mts (see its thresholds comment): a coverage drop
+      # fails CI, same as the frontend job below. This step ran plain
+      # `npm test --if-present` from 2026-07-22 to 2026-08-27, so the
+      # backend ratchet existed but was never enforced — the floors below
+      # were re-measured and raised when this gate was wired up.
+      - run: npm run test:coverage
 
       - run: npm run build
 
@@ -82,28 +87,3 @@ jobs:
       # not required for this compile-time check.
       # This catches type errors (next build runs tsc) and broken routes/imports.
       - run: npm run build
-
-  # -----------------------------------------------------------------------
-  # Offline eval harness: deterministic scorecard for citation accuracy,
-  # prompt-injection resistance, and privilege/PII leakage. Runs against
-  # committed fixtures (no network, no LLM calls, no secrets), so it is cheap
-  # enough to gate every PR. --threshold 1.0 = every case must pass.
-  # Skips gracefully until the evals PR merges.
-  # -----------------------------------------------------------------------
-  evals:
-    name: Eval harness
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Run eval harness (skips if evals/ not present)
-        run: |
-          if [ -f evals/run.mjs ]; then
-            node evals/run.mjs --threshold 1.0
-          else
-            echo "evals/run.mjs not present on this tree; skipping"
-          fi

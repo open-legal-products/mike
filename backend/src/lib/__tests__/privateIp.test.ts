@@ -73,4 +73,42 @@ describe("private/reserved IP classification", () => {
             expect(isBlockedIp(ip)).toBe(true);
         },
     );
+
+    // NAT64 prefix confusion: the 64:ff9b::/96 branch is the ONLY path where
+    // an embedded IPv4 can make an IPv6 literal come back "allowed", so every
+    // hextet of the prefix match is load-bearing. Each address below differs
+    // from the well-known prefix in exactly one hextet while embedding a
+    // PUBLIC IPv4 — if any single prefix comparison is loosened, the branch
+    // treats the address as NAT64 and returns "allowed" for what is really a
+    // non-global (blocked) destination. The earlier "64:ff9b:1::1" case can't
+    // catch that, because its embedded IPv4 is private and blocks anyway.
+    it.each([
+        "63:ff9b::8.8.8.8", // wrong hextet 0
+        "64:ff9a::8.8.8.8", // wrong hextet 1
+        "64:ff9b:1::8.8.8.8", // local-use 64:ff9b:1::/48, hextet 2 set
+        "64:ff9b:0:1::8.8.8.8", // hextet 3 set
+        "64:ff9b::1:0:808:808", // hextet 4 set
+        "64:ff9b:0:0:0:1:808:808", // hextet 5 set
+    ])("blocks near-NAT64 address %s despite a public embedded IPv4", (ip) => {
+        expect(isPrivateIpv6(ip)).toBe(true);
+        expect(isBlockedIp(ip)).toBe(true);
+    });
+
+    // 0xffff is a VALID hextet, not an out-of-range value — pin the boundary
+    // of the group-value check so it can't silently tighten to >= 0xffff and
+    // start failing closed on legitimate global addresses.
+    it("allows a global unicast address with an all-ones hextet", () => {
+        expect(isPrivateIpv6("2606:4700::ffff")).toBe(false);
+        expect(isBlockedIp("2606:4700::ffff")).toBe(false);
+    });
+
+    // Junk handed DIRECTLY to the v6 classifier (not routed via isBlockedIp)
+    // must fail closed at both guards: the net.isIP gate and the null-groups
+    // gate behind it.
+    it.each(["not-an-ip", "8.8.8.8", "1:2:3:4:5:6:7:8:9", ""])(
+        "isPrivateIpv6 fails closed on non-IPv6 input %s",
+        (ip) => {
+            expect(isPrivateIpv6(ip)).toBe(true);
+        },
+    );
 });
