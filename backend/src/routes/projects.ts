@@ -1125,10 +1125,14 @@ projectsRouter.get("/:projectId/chats", requireAuth, async (req, res) => {
   if (!access.ok)
     return void res.status(404).json({ detail: "Project not found" });
 
+  // Assigned agents inherit their parent's project binding so access control
+  // follows the project's rules, but they belong to the conversation that
+  // spawned them, not to the project's chat list.
   const { data, error } = await db
     .from("chats")
     .select("*")
     .eq("project_id", projectId)
+    .is("parent_chat_id", null)
     .order("created_at", { ascending: false });
   if (error) return void sendInternalError(res, error);
   const chats = data ?? [];

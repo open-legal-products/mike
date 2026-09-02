@@ -67,9 +67,22 @@ import {
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    buildQuotedMessageContent,
+    MAX_QUOTED_EXCERPT_CHARS,
+    prepareExcerpt,
+} from "@/app/lib/quotedExcerpts";
+import { QuotedExcerptChips } from "../shared/QuotedExcerptChip";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
+    /**
+     * Attach a highlighted excerpt of an assistant response as quoted
+     * context for the next message. Imperative for the same reason `addDoc`
+     * is: the composer owns the draft, and the surface that captured the
+     * selection has no business duplicating the draft state.
+     */
+    addQuotedExcerpt: (raw: string) => void;
     startWorkflow: (
         workflow: { id: string; title: string },
         prompt?: string,
@@ -117,6 +130,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 ) {
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<Document[]>([]);
+    const [quotedExcerpts, setQuotedExcerpts] = useState<string[]>([]);
+    const [quoteNotice, setQuoteNotice] = useState<string | null>(null);
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
         id: string;
         title: string;
@@ -235,6 +250,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 if (prev.some((d) => d.id === doc.id)) return prev;
                 return [...prev, doc];
             });
+        },
+        addQuotedExcerpt: (raw: string) => {
+            const { text, truncated } = prepareExcerpt(raw);
+            if (!text) return;
+            setQuoteNotice(
+                truncated
+                    ? `Excerpt shortened to ${MAX_QUOTED_EXCERPT_CHARS.toLocaleString()} characters.`
+                    : null,
+            );
+            setQuotedExcerpts((prev) =>
+                // Re-highlighting the same passage is a mis-click, not a
+                // request for the same quote twice.
+                prev.includes(text) ? prev : [...prev, text],
+            );
+            requestAnimationFrame(() => textareaRef.current?.focus());
         },
         startWorkflow: (workflow, prompt) => {
             setSelectedWorkflow(workflow);
@@ -466,10 +496,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         }));
         setAttachedDocs([]);
         setSelectedWorkflow(null);
+        // Excerpts are folded into the message content itself, so the
+        // persisted user message stays self-contained and history replay
+        // needs no knowledge of this feature. Chips clear on send.
+        const content = buildQuotedMessageContent(quotedExcerpts, query);
+        setQuotedExcerpts([]);
+        setQuoteNotice(null);
 
         onSubmit?.({
             role: "user",
-            content: query,
+            content,
             files: files.length > 0 ? files : undefined,
             workflow: workflow ?? undefined,
             model,
@@ -560,6 +596,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         LIQUID_GLASS_TRANSLUCENT_CLASS,
                     )}
                 >
+                    {/* Quoted excerpts from assistant responses */}
+                    <QuotedExcerptChips
+                        excerpts={quotedExcerpts}
+                        notice={quoteNotice}
+                        onRemove={(index) =>
+                            setQuotedExcerpts((prev) =>
+                                prev.filter((_, i) => i !== index),
+                            )
+                        }
+                        className="px-2 pt-2"
+                    />
+
                     {/* Attached chips */}
                     {(selectedWorkflow || attachedDocs.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">

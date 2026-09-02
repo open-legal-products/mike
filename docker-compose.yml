@@ -139,6 +139,7 @@ services:
       - ./backend/migrations/20260901_01_transparent_tables.sql:/transparent-tables-migration.sql:ro
       - ./backend/migrations/20260901_02_project_visibility_scopes.sql:/project-visibility-migration.sql:ro
       - ./backend/migrations/20260901_03_workflow_assets_as_documents.sql:/workflow-assets-migration.sql:ro
+      - ./backend/migrations/20260901_04_chat_agents.sql:/chat-agents-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -165,6 +166,7 @@ services:
         psql "$$DB" -v ON_ERROR_STOP=1 -f /transparent-tables-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /project-visibility-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /workflow-assets-migration.sql;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /chat-agents-migration.sql;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;

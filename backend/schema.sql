@@ -1396,6 +1396,12 @@ $$;
 -- Assistant chats
 -- ---------------------------------------------------------------------------
 
+-- `parent_chat_id` turns a chat into a highlight-assigned "agent" of another
+-- chat: it was spawned from `source_excerpt` of `source_message_id` with
+-- `agent_instruction` as its brief. Ordinary chats leave all four null. Depth
+-- is capped at one level by the API, not the schema. `source_message_id` is
+-- deliberately not a foreign key — it anchors rendering, and the self-cascade
+-- already removes agents when the parent conversation is deleted.
 create table if not exists public.chats (
   id uuid primary key default gen_random_uuid(),
   project_id uuid references public.projects(id) on delete cascade,
@@ -1403,6 +1409,10 @@ create table if not exists public.chats (
   title text,
   model text,
   reasoning_level text check (reasoning_level in ('none', 'low', 'medium', 'high', 'xhigh', 'max')),
+  parent_chat_id uuid references public.chats(id) on delete cascade,
+  agent_instruction text,
+  source_message_id uuid,
+  source_excerpt text,
   created_at timestamptz not null default now()
 );
 
@@ -1414,6 +1424,12 @@ create index if not exists chats_user_created_idx
 
 create index if not exists idx_chats_project
   on public.chats(project_id);
+
+-- Partial: every lookup is "the agents of this parent", and ordinary chats
+-- (the overwhelming majority of rows) never match.
+create index if not exists idx_chats_parent
+  on public.chats(parent_chat_id)
+  where parent_chat_id is not null;
 
 create or replace function public.get_chats_overview(
   p_user_id text,
@@ -1442,11 +1458,16 @@ as $$
     p.name as project_name
   from public.chats c
   left join public.projects p on p.id = c.project_id
-  where c.user_id::text = p_user_id
-     or (
-       p.id is not null
-       and p.user_id::text = p_user_id
-     )
+  -- Agents (parent_chat_id set) are reached from their parent conversation,
+  -- never from the global recent-chats list.
+  where c.parent_chat_id is null
+    and (
+      c.user_id::text = p_user_id
+      or (
+        p.id is not null
+        and p.user_id::text = p_user_id
+      )
+    )
   order by c.created_at desc, c.id asc
   limit case
     when p_limit is null then null
@@ -1455,6 +1476,8 @@ as $$
   offset greatest(coalesce(p_offset, 0), 0);
 $$;
 
+-- `edited_at` is set when an assistant message is rewritten by an accepted
+-- agent proposal, so the UI can mark the response as revised.
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),
   chat_id uuid not null references public.chats(id) on delete cascade,
@@ -1463,6 +1486,7 @@ create table if not exists public.chat_messages (
   files jsonb,
   workflow jsonb,
   citations jsonb,
+  edited_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -1654,6 +1678,9 @@ as $$
     select c.project_id, count(*)::integer as chat_count
     from public.chats c
     where c.project_id in (select vp.id from visible_projects vp)
+      -- Agents belong to their parent conversation, not to the project's
+      -- own chat list, so they must not inflate the project's chat count.
+      and c.parent_chat_id is null
     group by c.project_id
   ),
   review_counts as (
@@ -2515,6 +2542,9 @@ as $$
     select c.project_id, count(*)::integer as chat_count
     from public.chats c
     where c.project_id in (select vp.id from visible_projects vp)
+      -- Agents belong to their parent conversation, not to the project's
+      -- own chat list, so they must not inflate the project's chat count.
+      and c.parent_chat_id is null
     group by c.project_id
   ),
   review_counts as (

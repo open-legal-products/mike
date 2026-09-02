@@ -30,7 +30,7 @@ import {
     type AssistantEvent,
     type Message,
 } from "../shared/types";
-import { ChatInput } from "../assistant/ChatInput";
+import { ChatInput, type ChatInputHandle } from "../assistant/ChatInput";
 import { PreResponseWrapper } from "../assistant/PreResponseWrapper";
 import {
     DocReadBlock,
@@ -50,6 +50,12 @@ import {
 import { cn } from "@/app/lib/utils";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { subscribeToTabularChatSettingsUpdates } from "@/app/lib/tabularChatSettingsEvents";
+import {
+    QUOTABLE_ATTRIBUTE,
+    useQuotableSelection,
+} from "@/app/hooks/useQuotableSelection";
+import { QuoteSelectionPopup } from "../shared/QuoteSelectionPopup";
+import { QuotedMessageContent } from "../shared/QuotedMessageContent";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -291,6 +297,8 @@ function TRAssistantMessage({
     const renderContent = (text: string, key: number) => (
         <div
             key={key}
+            // Response prose only — highlighting here offers "Add to Chat".
+            {...{ [QUOTABLE_ATTRIBUTE]: "" }}
             className="prose prose-sm max-w-none text-sm leading-relaxed"
         >
             <ReactMarkdown
@@ -413,8 +421,8 @@ function MessageBubble({
     if (msg.role === "user") {
         return (
             <div className="flex justify-end">
-                <div className="max-w-[90%] rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-800 whitespace-pre-wrap">
-                    {msg.content}
+                <div className="max-w-[90%] rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-800">
+                    <QuotedMessageContent content={msg.content} />
                 </div>
             </div>
         );
@@ -700,6 +708,18 @@ export function TRChatPanel({
     const abortRef = useRef<AbortController | null>(null);
     const historyRef = useRef<HTMLDivElement>(null);
     const hasScrolledRef = useRef(false);
+
+    // The shared composer owns the attached excerpts, exactly as it does for
+    // the standalone and project assistant chats. The panel owns only the
+    // popup, because the selection it watches lives in the panel's scroller.
+    const chatInputRef = useRef<ChatInputHandle>(null);
+    const { selection: quotableSelection, clear: clearQuotableSelection } =
+        useQuotableSelection(messagesContainerRef);
+
+    function addQuotedExcerpt(raw: string) {
+        clearQuotableSelection();
+        chatInputRef.current?.addQuotedExcerpt(raw);
+    }
 
     // Drip animation refs
     const dripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1080,6 +1100,12 @@ export function TRChatPanel({
         setCurrentChatModel(message.model);
         setCurrentChatReasoningLevel(message.reasoning);
 
+        // `trimmed` already carries any attached excerpts: the shared composer
+        // folds them into the content it submits. The history this panel
+        // replays therefore carries the quotes with no new request field and
+        // no change to the tabular chat schema.
+        const content = trimmed;
+
         // Build messages array for backend (plain text history)
         const history: { role: string; content: string }[] = messages.map(
             (m) => ({
@@ -1087,9 +1113,9 @@ export function TRChatPanel({
                 content: m.content,
             }),
         );
-        const allMessages = [...history, { role: "user", content: trimmed }];
+        const allMessages = [...history, { role: "user", content }];
 
-        const userMsg: TRMessage = { role: "user", content: trimmed };
+        const userMsg: TRMessage = { role: "user", content };
         const assistantMsg: TRMessage = {
             role: "assistant",
             content: "",
@@ -1858,6 +1884,7 @@ export function TRChatPanel({
                 className="absolute bottom-0 left-0 right-0 z-10 px-3 pb-3"
             >
                 <ChatInput
+                    ref={chatInputRef}
                     onSubmit={(message) => void handleSubmit(message)}
                     onCancel={handleCancel}
                     isLoading={isLoading}
@@ -1872,6 +1899,11 @@ export function TRChatPanel({
                     }
                 />
             </div>
+
+            <QuoteSelectionPopup
+                selection={quotableSelection}
+                onAdd={addQuotedExcerpt}
+            />
         </div>
     );
 }

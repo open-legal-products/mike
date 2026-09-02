@@ -21,6 +21,7 @@ import type {
     AskInputResponseItem,
     AssistantEvent,
     Chat,
+    ChatAgent,
     ChatDetailOut,
     Citation,
     Document,
@@ -62,6 +63,7 @@ interface ServerMessage {
     files?: MessageFile[] | null;
     workflow?: { id: string; title: string } | null;
     citations?: Citation[] | null;
+    edited_at?: string | null;
     created_at: string;
 }
 interface ServerChatDetailOut {
@@ -1527,6 +1529,75 @@ export async function createChat(payload?: {
     });
 }
 
+/**
+ * Assign an agent to part of an assistant response. Same endpoint as
+ * `createChat` — an agent *is* a chat — with the four fields that say where it
+ * came from. The project binding is inherited from the parent, so it is not
+ * sent.
+ */
+export async function createChatAgent(payload: {
+    parent_chat_id: string;
+    agent_instruction: string;
+    source_message_id?: string | null;
+    source_excerpt?: string | null;
+}): Promise<{
+    id: string;
+    title: string | null;
+    agent_instruction: string | null;
+    source_message_id: string | null;
+    source_excerpt: string | null;
+    created_at: string;
+}> {
+    return apiRequest("/chat/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+}
+
+/** The agents assigned to one chat's responses, with their derived status. */
+export async function listChatAgents(chatId: string): Promise<ChatAgent[]> {
+    return apiRequest<ChatAgent[]>(
+        `/chat/${encodeURIComponent(chatId)}/agents`,
+    );
+}
+
+/**
+ * Replace an assistant message's stored events — how an accepted proposal
+ * lands on the original response. The new content is computed on the client
+ * (see `applyProposalToEvents`), so this stays a generic write.
+ */
+export async function updateChatMessageContent(
+    chatId: string,
+    messageId: string,
+    content: AssistantEvent[],
+): Promise<{ id: string; content: AssistantEvent[]; edited_at: string | null }> {
+    return apiRequest(
+        `/chat/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content }),
+        },
+    );
+}
+
+/** Mark one proposal card accepted or rejected in the agent's own thread. */
+export async function resolveEditProposal(
+    chatId: string,
+    proposalId: string,
+    status: "accepted" | "rejected",
+): Promise<{ proposal_id: string; status: "accepted" | "rejected" }> {
+    return apiRequest(
+        `/chat/${encodeURIComponent(chatId)}/proposals/${encodeURIComponent(proposalId)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status }),
+        },
+    );
+}
+
 export async function listChats(options?: {
     limit?: number;
     offset?: number;
@@ -1567,6 +1638,7 @@ export async function getChat(chatId: string): Promise<ChatDetailOut> {
                     .join("") ?? "",
             citations: m.citations ?? undefined,
             events,
+            edited_at: m.edited_at ?? null,
         };
     });
     return { chat: raw.chat, messages };

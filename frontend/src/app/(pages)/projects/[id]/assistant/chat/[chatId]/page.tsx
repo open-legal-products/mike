@@ -61,6 +61,10 @@ import type {
 } from "@/app/components/shared/types";
 import { expandCitationToEntries } from "@/app/components/shared/types";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
+import { useQuotableSelection } from "@/app/hooks/useQuotableSelection";
+import { QuoteSelectionPopup } from "@/app/components/shared/QuoteSelectionPopup";
+import { useAgentSurface } from "@/app/components/assistant/agents/useAgentSurface";
+import { replaceMessageById } from "@/app/lib/chatAgents";
 import {
     INITIAL_FOLDER_DELETE_DIALOG_STATE,
     clearDeletedDocumentId,
@@ -542,6 +546,52 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             });
         },
         [activeTab, handleChat],
+    );
+
+    // Highlighting inside an assistant response offers "Add to Chat", scoped
+    // to this page's own message scroller.
+    const { selection: quotableSelection, clear: clearQuotableSelection } =
+        useQuotableSelection(messagesContainerRef);
+
+    const addQuotedExcerpt = useCallback(
+        (text: string) => {
+            chatInputRef.current?.addQuotedExcerpt(text);
+            clearQuotableSelection();
+        },
+        [clearQuotableSelection],
+    );
+
+    // An accepted proposal rewrites one specific response, which may not be
+    // the newest one — so the swap matches by id rather than by position.
+    const handleMessageRevised = useCallback(
+        (revised: Message) => {
+            if (!revised.id) return;
+            setMessages((prev) =>
+                replaceMessageById(prev, revised.id!, () => revised),
+            );
+        },
+        [setMessages],
+    );
+
+    const {
+        dock: agentDock,
+        panel: agentPanel,
+        panelOpen: agentPanelOpen,
+        assignFromSelection,
+        assignDisabledReason,
+        markersFor,
+    } = useAgentSurface({
+        chatId,
+        messages,
+        onMessageRevised: handleMessageRevised,
+    });
+
+    const assignToAgent = useCallback(
+        (text: string) => {
+            assignFromSelection(text);
+            clearQuotableSelection();
+        },
+        [assignFromSelection, clearQuotableSelection],
     );
 
     const handleDocClick = (doc: Document) => {
@@ -1373,8 +1423,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             />
                                         </div>
                                     ) : (
+                                        <div key={i}>
                                         <AssistantMessage
-                                            key={i}
                                             events={msg.events}
                                             isStreaming={
                                                 i === messages.length - 1 &&
@@ -1401,6 +1451,13 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                                 reloadingDocIds.has(docId)
                                             }
                                         />
+                                        {msg.edited_at && (
+                                            <p className="mt-1 text-[11px] text-gray-400">
+                                                Revised
+                                            </p>
+                                        )}
+                                        {markersFor(msg.id)}
+                                        </div>
                                     ),
                                 );
                             })()}
@@ -1412,6 +1469,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     <div className="absolute bottom-2 left-0 right-0 z-30 w-full md:bottom-3">
                         <div className="pointer-events-none absolute -bottom-2 left-4 right-4 z-0 h-7 bg-app-background md:-bottom-3" />
                         <div className="relative z-20 w-full px-4">
+                            {agentDock}
                             <ChatInput
                                 ref={chatInputRef}
                                 onSubmit={handleSubmit}
@@ -1442,7 +1500,21 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         </div>
                     </div>
                 </div>
+
+                {/* Agent thread panel — a fourth column beside the chat, so
+                    the conversation stays readable while an agent answers. */}
+                {agentPanelOpen && (
+                    <div className="fixed inset-y-0 right-0 z-40 flex w-full justify-end p-3 md:relative md:inset-auto md:z-auto md:w-auto md:shrink-0 md:p-0">
+                        {agentPanel}
+                    </div>
+                )}
             </div>
+            <QuoteSelectionPopup
+                selection={quotableSelection}
+                onAdd={addQuotedExcerpt}
+                onAssign={chatId ? assignToAgent : undefined}
+                assignDisabledReason={assignDisabledReason}
+            />
             <OwnerOnlyPopup
                 open={!!ownerOnlyAction}
                 action={ownerOnlyAction ?? undefined}

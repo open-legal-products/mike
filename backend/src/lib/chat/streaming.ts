@@ -125,7 +125,34 @@ export type AssistantEvent =
       occurrence: "all" | null;
       reason: string | null;
     }
+  | {
+      /**
+       * A concrete rewrite an assigned agent proposes for the response it was
+       * spawned from. Persisted in the agent's own message; `status` is
+       * updated in place when the user accepts or rejects the card.
+       */
+      type: "edit_proposal";
+      proposal_id: string;
+      target_excerpt: string;
+      replacement: string;
+      reason: string | null;
+      status: "pending" | "accepted" | "rejected";
+    }
   | { type: "error"; message: string; safe_to_display?: boolean };
+
+/**
+ * A set of tools the shared dispatcher does not own, answered by whoever
+ * assembled the turn. `owns` claims the call by name and `execute` returns the
+ * tool result plus any events to splice into the stream, exactly where the
+ * call landed.
+ */
+export interface ToolsAdapter {
+  schemas: OpenAIToolSchema[];
+  owns: (name: string) => boolean;
+  execute: (
+    call: import("../llm").NormalizedToolCall,
+  ) => Promise<{ content: string; events: AssistantEvent[] }>;
+}
 
 /**
  * Tools the model can call that execute outside this process — in the Word
@@ -133,13 +160,14 @@ export type AssistantEvent =
  * its posted result; the loop treats the returned content exactly like a
  * server-side tool result.
  */
-export interface ClientToolsAdapter {
-  schemas: OpenAIToolSchema[];
-  owns: (name: string) => boolean;
-  execute: (
-    call: import("../llm").NormalizedToolCall,
-  ) => Promise<{ content: string; events: AssistantEvent[] }>;
-}
+export type ClientToolsAdapter = ToolsAdapter;
+
+/**
+ * Tools answered in this process by the route that built the turn, for
+ * behaviour that only exists on one surface. Unlike `clientTools` these never
+ * leave the server, so they run in the same pass with no round trip.
+ */
+export type RouteToolsAdapter = ToolsAdapter;
 
 export class AssistantStreamError extends Error {
   fullText: string;
@@ -228,6 +256,12 @@ export async function runLLMStream(params: {
   /** Tools executed by the connected client (Word add-in) instead of here. */
   clientTools?: ClientToolsAdapter;
   /**
+   * Tools answered by the calling route in this process — currently the
+   * assigned-agent `propose_edit` tool. Omitted on every other surface, which
+   * is how the tool stays invisible outside an agent's own chat.
+   */
+  routeTools?: RouteToolsAdapter;
+  /**
    * Tool-loop iteration budget (default 10). Surfaces whose tools are built
    * around retry round-trips (Word client edits: propose → fail → re-read →
    * retry) need headroom, or the loop ends before the model's summary.
@@ -269,6 +303,7 @@ export async function runLLMStream(params: {
     workflowStore,
     tabularStore,
     clientTools,
+    routeTools,
     buildCitations,
     model,
     apiKeys,
@@ -289,6 +324,7 @@ export async function runLLMStream(params: {
     ...mcpTools,
     ...(extraTools ?? []),
     ...(clientTools?.schemas ?? []),
+    ...(routeTools?.schemas ?? []),
   ];
 
   // Extract system prompt; pass remaining turns to the adapter as
@@ -513,9 +549,9 @@ export async function runLLMStream(params: {
         // server batch and sequentially among themselves: each call mutates
         // or reads the live document, so order is part of their semantics.
         const clientResultByCallId = new Map<string, string>();
-        const serverCalls = clientTools
-          ? calls.filter((c) => !clientTools.owns(c.name))
-          : calls;
+        const serverCalls = calls.filter(
+          (c) => !clientTools?.owns(c.name) && !routeTools?.owns(c.name),
+        );
         if (clientTools) {
           for (const call of calls) {
             if (!clientTools.owns(call.name)) continue;
@@ -523,6 +559,23 @@ export async function runLLMStream(params: {
               await clientTools.execute(call);
             clientResultByCallId.set(call.id, content);
             events.push(...clientEvents);
+            throwIfAborted(signal);
+          }
+        }
+
+        // Route-owned tools run in this process, so they only need the same
+        // splice-in-order treatment: their events land where the call did and
+        // their result is keyed by call id like any other.
+        if (routeTools) {
+          for (const call of calls) {
+            if (!routeTools.owns(call.name)) continue;
+            const { content, events: routeEvents } =
+              await routeTools.execute(call);
+            clientResultByCallId.set(call.id, content);
+            for (const event of routeEvents) {
+              write(`data: ${JSON.stringify(event)}\n\n`);
+              events.push(event);
+            }
             throwIfAborted(signal);
           }
         }

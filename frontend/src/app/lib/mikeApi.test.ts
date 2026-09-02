@@ -9,6 +9,7 @@ import {
     copyDocumentVersionFromDocument,
     copyDocumentsToWorkflowAssets,
     createChat,
+    createChatAgent,
     createQuickAction,
     createLibraryFolder,
     createMcpConnector,
@@ -42,6 +43,9 @@ import {
     generateTabularColumnPrompt,
     getApiKeyStatus,
     getChat,
+    listChatAgents,
+    resolveEditProposal,
+    updateChatMessageContent,
     getAuditHistory,
     getPanelDocument,
     getDocument,
@@ -2588,5 +2592,99 @@ describe("unwrapping and blob wrappers", () => {
         expect(lastFetchCall().url).toBe("/api/user/exports/exp%2F1/download");
         expect(filename).toBe("history.csv");
         expect(await blob.text()).toBe("csv-bytes");
+    });
+});
+
+describe("chat agents", () => {
+    it("createChatAgent posts the assignment to the shared create route", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({
+                id: "agent-1",
+                title: "check this",
+                agent_instruction: "check this",
+                source_message_id: "m1",
+                source_excerpt: "the clause",
+                created_at: "2026-08-26T10:00:00Z",
+            }),
+        );
+
+        const created = await createChatAgent({
+            parent_chat_id: "c1",
+            agent_instruction: "check this",
+            source_message_id: "m1",
+            source_excerpt: "the clause",
+        });
+
+        expect(lastFetchCall().url).toBe("/api/chat/create");
+        expect(lastFetchCall().init.method).toBe("POST");
+        expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
+            parent_chat_id: "c1",
+            agent_instruction: "check this",
+            source_message_id: "m1",
+            source_excerpt: "the clause",
+            // No project_id: an agent inherits its parent's binding.
+        });
+        expect(created.id).toBe("agent-1");
+    });
+
+    it("listChatAgents reads the parent chat's agents", async () => {
+        fetchMock.mockResolvedValue(jsonResponse([]));
+
+        await listChatAgents("c 1");
+
+        expect(lastFetchCall().url).toBe("/api/chat/c%201/agents");
+    });
+
+    it("updateChatMessageContent PATCHes the events array", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ id: "m1", content: [], edited_at: "now" }),
+        );
+        const content: AssistantEvent[] = [{ type: "content", text: "new" }];
+
+        await updateChatMessageContent("c 1", "m 1", content);
+
+        expect(lastFetchCall().url).toBe("/api/chat/c%201/messages/m%201");
+        expect(lastFetchCall().init.method).toBe("PATCH");
+        expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
+            content,
+        });
+    });
+
+    it("resolveEditProposal PATCHes the proposal's status", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ proposal_id: "p1", status: "accepted" }),
+        );
+
+        await resolveEditProposal("agent-1", "p 1", "accepted");
+
+        expect(lastFetchCall().url).toBe(
+            "/api/chat/agent-1/proposals/p%201",
+        );
+        expect(lastFetchCall().init.method).toBe("PATCH");
+        expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
+            status: "accepted",
+        });
+    });
+
+    it("getChat carries edited_at onto assistant messages", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({
+                chat: { id: "c1" },
+                messages: [
+                    {
+                        id: "m1",
+                        chat_id: "c1",
+                        role: "assistant",
+                        content: [{ type: "content", text: "revised" }],
+                        edited_at: "2026-08-26T11:00:00Z",
+                        created_at: "2026-08-26T10:00:00Z",
+                    },
+                ],
+            }),
+        );
+
+        const { messages } = await getChat("c1");
+
+        expect(messages[0].edited_at).toBe("2026-08-26T11:00:00Z");
     });
 });

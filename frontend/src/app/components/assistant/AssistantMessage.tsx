@@ -174,7 +174,12 @@ export function AssistantMessage({
         event.type !== "error" &&
         event.type !== "ask_inputs_response" &&
         event.type !== "case_citation" &&
-        event.type !== "case_opinions";
+        event.type !== "case_opinions" &&
+        // Agent proposals render as their own accept/reject cards below the
+        // message, the way document edits do, so they must not count as an
+        // inline block — otherwise the block chain draws a connector to
+        // nothing.
+        event.type !== "edit_proposal";
 
     // Find the last content event so its raw text can be smoothed before
     // citation preprocessing — slicing already-preprocessed text would risk

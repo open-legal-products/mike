@@ -125,6 +125,30 @@ export interface Chat {
     model?: string | null;
     reasoning_level?: Message["reasoning"] | null;
     created_at: string;
+    /** Set when this chat is an agent assigned to another chat's response. */
+    parent_chat_id?: string | null;
+    agent_instruction?: string | null;
+    source_message_id?: string | null;
+    source_excerpt?: string | null;
+}
+
+/**
+ * One agent card in the dock, as the server describes it.
+ *
+ * `status` is derived from stored messages, so it only ever says whether an
+ * answer exists. "Processing" is the client's own overlay for a stream it is
+ * currently holding open — which is why an agent whose stream was interrupted
+ * comes back as `empty` and gets a rerun affordance instead of a spinner.
+ */
+export interface ChatAgent {
+    id: string;
+    title: string | null;
+    agent_instruction: string | null;
+    source_message_id: string | null;
+    source_excerpt: string | null;
+    created_at: string;
+    status: "ready" | "empty";
+    pending_proposals: number;
 }
 
 export interface EditAnnotation {
@@ -304,6 +328,20 @@ export type AssistantEvent =
           cluster_id: number;
           document?: PanelDocument;
       }
+    | {
+          /**
+           * A concrete rewrite an assigned agent proposes for the response it
+           * was spawned from, rendered as an accept/reject suggestion card in
+           * the agent's own thread. `status` is updated in place when the user
+           * resolves it, so a reload shows what was already decided.
+           */
+          type: "edit_proposal";
+          proposal_id: string;
+          target_excerpt: string;
+          replacement: string;
+          reason: string | null;
+          status: "pending" | "accepted" | "rejected";
+      }
     | { type: "content"; text: string; isStreaming?: boolean };
 
 export type CaseCitationQuote = {
@@ -327,6 +365,12 @@ export interface Message {
     events?: AssistantEvent[];
     /** Set when streaming failed; rendered as a red error block. */
     error?: string;
+    /**
+     * When an accepted agent proposal rewrote this response. Drives the
+     * "revised" marker, so a reader can tell edited prose from what the model
+     * originally wrote.
+     */
+    edited_at?: string | null;
 }
 
 export type MessageFile = {

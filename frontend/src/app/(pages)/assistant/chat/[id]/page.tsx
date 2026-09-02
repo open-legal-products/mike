@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAssistantChat } from "@/app/hooks/useAssistantChat";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { ChatView } from "@/app/components/assistant/ChatView";
 import { getChat } from "@/app/lib/mikeApi";
+import { replaceMessageById } from "@/app/lib/chatAgents";
+import type { Message } from "@/app/components/shared/types";
 
 export default function AssistantChatPage() {
     const router = useRouter();
@@ -73,6 +75,18 @@ export default function AssistantChatPage() {
         }
     }, [newChatMessages, messages.length, isResponseLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // An accepted proposal rewrites one specific response, which may not be
+    // the newest one — so the swap matches by id rather than by position.
+    const handleMessageRevised = useCallback(
+        (revised: Message) => {
+            if (!revised.id) return;
+            setMessages((prev) =>
+                replaceMessageById(prev, revised.id!, () => revised),
+            );
+        },
+        [setMessages],
+    );
+
     return (
         <ChatView
             chatId={id}
@@ -82,6 +96,7 @@ export default function AssistantChatPage() {
             isResponseLoading={isResponseLoading}
             handleChat={handleChat}
             cancel={cancel}
+            onMessageRevised={handleMessageRevised}
         />
     );
 }
