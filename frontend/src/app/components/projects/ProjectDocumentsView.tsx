@@ -59,7 +59,14 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
         setOwnerOnlyAction,
         setDocumentFolderBreadcrumbs,
         setDocumentUploadHeaderAction,
+        accessRole,
+        canDo,
     } = workspace;
+    // Null while the project row is in flight. The folder controls keep their
+    // place in the toolbar during that window — removing them would reflow the
+    // header on every navigation — but they are disabled, because until the
+    // role arrives nobody knows whether this caller may organize anything.
+    const roleKnown = accessRole !== null;
     const [createFolderAction, setCreateFolderAction] = useState<
         (() => void) | null
     >(null);
@@ -338,13 +345,17 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                     )}
                 </div>
             )}
-            <TabPillButton
-                onClick={createFolderAction ?? undefined}
-                disabled={!createFolderAction || projectLoading}
-            >
-                <Plus className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Folder</span>
-            </TabPillButton>
+            {(!roleKnown || canDo("docs.organize")) && (
+                <TabPillButton
+                    onClick={createFolderAction ?? undefined}
+                    disabled={
+                        !roleKnown || !createFolderAction || projectLoading
+                    }
+                >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Folder</span>
+                </TabPillButton>
+            )}
         </div>
     );
 
@@ -374,8 +385,16 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 search={search}
                 operations={operations}
                 emptyStateTitle="Documents"
-                onAddDocumentsActionChange={handleSavedFilesActionChange}
-                onUploadFilesActionChange={handleUploadFilesActionChange}
+                onAddDocumentsActionChange={
+                    canDo("content.edit")
+                        ? handleSavedFilesActionChange
+                        : undefined
+                }
+                onUploadFilesActionChange={
+                    canDo("content.edit")
+                        ? handleUploadFilesActionChange
+                        : undefined
+                }
                 onUploadFolderActionChange={handleUploadFolderActionChange}
                 onCreateFolderActionChange={handleCreateFolderActionChange}
                 onFolderViewBackActionChange={handleFolderBackActionChange}
@@ -414,6 +433,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                     ) : null
                 }
                 onOwnerOnlyAction={setOwnerOnlyAction}
+                canDo={canDo}
             />
         </>
     );

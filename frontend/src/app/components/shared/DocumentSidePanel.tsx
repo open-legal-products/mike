@@ -674,7 +674,7 @@ export function DocumentSidePanel({
                                         : "—"
                                 }
                             />
-                            <DataRow label="Owner" value={ownerLabel} />
+                            <DataRow label="Uploaded by" value={ownerLabel} />
                             <DataRow
                                 label="Uploaded"
                                 value={
@@ -891,7 +891,7 @@ export function DocumentSidePanel({
                                                                     title={
                                                                         canDelete
                                                                             ? "Delete version"
-                                                                            : "Only the document owner can delete versions"
+                                                                            : "Only the person who uploaded this document can delete its versions"
                                                                     }
                                                                 >
                                                                     {versionDeleting ? (
@@ -964,7 +964,7 @@ export function DocumentSidePanel({
                             title={
                                 canDelete
                                     ? "Delete document"
-                                    : "Only the document owner can delete this document"
+                                    : "Only the person who uploaded this document can delete it"
                             }
                         >
                             {deletingDocument ? (

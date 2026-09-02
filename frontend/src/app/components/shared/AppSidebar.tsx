@@ -8,7 +8,13 @@ import {
     useRef,
     type UIEvent,
 } from "react";
-import { PanelLeft, ChevronsUpDown, ChevronDown, Loader2 } from "lucide-react";
+import {
+  Building2,
+  PanelLeft,
+  ChevronsUpDown,
+  ChevronDown,
+  Loader2,
+} from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
@@ -624,6 +630,21 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     >
                                         <SettingsSkeuoIcon className="h-4 w-4" />
                                         Settings
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            router.push(
+                                                "/settings/organizations",
+                                            );
+                                            setIsDropdownOpen(false);
+                                        }}
+                                        className={cn(
+                                            "w-full px-4 py-2 text-left text-sm text-gray-700 flex items-center gap-2 rounded-md",
+                                            LIQUID_GLASS_HOVER_CLASS,
+                                        )}
+                                    >
+                                        <Building2 className="h-4 w-4" />
+                                        Organizations
                                     </button>
                                     <button
                                         onClick={() => {

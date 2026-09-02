@@ -71,7 +71,22 @@ import {
     getWorkflowFilterOptions,
     hideWorkflow,
     isMfaRequiredError,
+    acceptOrgInvitation,
+    cancelOrgInvitation,
+    createOrg,
+    createOrgInvitation,
+    declineOrgInvitation,
+    getProjectAccess,
+    grantProjectAccess,
     listChats,
+    listMyOrgInvitations,
+    listOrgInvitations,
+    listOrgMembers,
+    listOrgs,
+    removeOrgMember,
+    resendOrgInvitation,
+    revokeProjectAccess,
+    updateOrgMember,
     listDocumentVersions,
     listHiddenWorkflows,
     listLibraryDocumentIds,
@@ -2423,6 +2438,114 @@ describe("thin endpoint wrappers", () => {
             name: "deleteWorkflowAsset",
             call: () => deleteWorkflowAsset("w1", "asset-1"),
             url: "/workflows/w1/assets/asset-1",
+            method: "DELETE",
+        },
+        // Organizations (multi-tenant RBAC)
+        {
+            // The org-scoped variant of project creation: org_id must survive
+            // serialization so the server can stamp the tenant.
+            name: "createProject (into an org)",
+            call: () =>
+                createProject("Firm matter", undefined, undefined, undefined, "org-1"),
+            url: "/projects",
+            method: "POST",
+            body: { name: "Firm matter", org_id: "org-1" },
+        },
+        {
+            name: "listOrgs",
+            call: () => listOrgs(),
+            url: "/orgs",
+        },
+        {
+            name: "createOrg",
+            call: () => createOrg("Smith & Jones LLP"),
+            url: "/orgs",
+            method: "POST",
+            body: { name: "Smith & Jones LLP" },
+        },
+        {
+            name: "listOrgMembers",
+            call: () => listOrgMembers("org-1"),
+            url: "/orgs/org-1/members",
+        },
+        {
+            name: "updateOrgMember",
+            call: () => updateOrgMember("org-1", "user-2", "admin"),
+            url: "/orgs/org-1/members/user-2",
+            method: "PATCH",
+            body: { role: "admin" },
+        },
+        {
+            name: "removeOrgMember",
+            call: () => removeOrgMember("org-1", "user-2"),
+            url: "/orgs/org-1/members/user-2",
+            method: "DELETE",
+        },
+        // Invitations — the only way a membership row is ever created.
+        {
+            name: "createOrgInvitation",
+            call: () =>
+                createOrgInvitation("org-1", "counsel@firm.example", "member"),
+            url: "/orgs/org-1/invitations",
+            method: "POST",
+            body: { email: "counsel@firm.example", role: "member" },
+        },
+        {
+            name: "listOrgInvitations",
+            call: () => listOrgInvitations("org-1"),
+            url: "/orgs/org-1/invitations",
+        },
+        {
+            name: "cancelOrgInvitation",
+            call: () => cancelOrgInvitation("org-1", "inv-1"),
+            url: "/orgs/org-1/invitations/inv-1",
+            method: "DELETE",
+        },
+        {
+            name: "resendOrgInvitation",
+            call: () => resendOrgInvitation("org-1", "inv-1"),
+            url: "/orgs/org-1/invitations/inv-1/resend",
+            method: "POST",
+        },
+        {
+            // The recipient's side hangs off /user: they are not a member of
+            // the organization yet, so no org-scoped route could authorize
+            // them.
+            name: "listMyOrgInvitations",
+            call: () => listMyOrgInvitations(),
+            url: "/user/invitations",
+        },
+        {
+            name: "acceptOrgInvitation",
+            call: () => acceptOrgInvitation("inv-1"),
+            url: "/user/invitations/inv-1/accept",
+            method: "POST",
+        },
+        {
+            name: "declineOrgInvitation",
+            call: () => declineOrgInvitation("inv-1"),
+            url: "/user/invitations/inv-1/decline",
+            method: "POST",
+        },
+        // Per-recipient project access grants.
+        {
+            name: "getProjectAccess",
+            call: () => getProjectAccess("p1"),
+            url: "/projects/p1/access",
+        },
+        {
+            name: "grantProjectAccess",
+            call: () =>
+                grantProjectAccess("p1", "counsel@outside.example", "viewer"),
+            url: "/projects/p1/access",
+            method: "POST",
+            body: { email: "counsel@outside.example", role: "viewer" },
+        },
+        {
+            // The email is a path segment, so it has to survive encoding.
+            name: "revokeProjectAccess",
+            call: () => revokeProjectAccess("p1", "counsel+eu@outside.example"),
+            url: "/projects/p1/access/counsel%2Beu%40outside.example",
             method: "DELETE",
         },
     ];

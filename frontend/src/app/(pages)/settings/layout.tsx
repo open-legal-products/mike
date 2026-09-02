@@ -27,6 +27,11 @@ const TABS: TabDef[] = [
         href: "/settings/privacy-data",
     },
     { id: "security", label: "Security", href: "/settings/security" },
+    {
+        id: "organizations",
+        label: "Organizations",
+        href: "/settings/organizations",
+    },
     { id: "models", label: "Model Preferences", href: "/settings/models" },
     {
         id: "byok",

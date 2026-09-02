@@ -12,7 +12,7 @@ import {
 } from "@/app/components/ui/liquid-dropdown";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useAuth } from "@/app/contexts/AuthContext";
-import { OwnerOnlyPopup } from "@/app/components/popups/OwnerOnlyPopup";
+import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
 import type { Chat } from "@/app/components/shared/types";
 import { ChatSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { cn } from "@/app/lib/utils";
@@ -36,8 +36,10 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
     const [editTitle, setEditTitle] = useState(chat.title ?? "");
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
     const editInputRef = useRef<HTMLInputElement>(null);
-    // Sidebar can show collaborator chats from projects the user owns;
-    // rename/delete are still creator-only on the backend, so guard here.
+    // The sidebar shows collaborator chats from projects the user can reach,
+    // but PATCH/DELETE /chats/:id both filter on `.eq("user_id", userId)`
+    // (backend/src/routes/chat.ts) — creator-only, with no role path at all.
+    // So this is a row-ownership check, not a rung on the project ladder.
     const isChatOwner = !!user?.id && chat.user_id === user.id;
 
     useEffect(() => {
@@ -133,7 +135,7 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                             <LiquidDropdownItem
                                 onClick={() => {
                                     if (!isChatOwner) {
-                                        setOwnerOnlyAction("rename this chat");
+                                        setOwnerOnlyAction("rename it");
                                         return;
                                     }
                                     setEditTitle(chat.title ?? "");
@@ -146,7 +148,7 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                             <LiquidDropdownItem
                                 onClick={() => {
                                     if (!isChatOwner) {
-                                        setOwnerOnlyAction("delete this chat");
+                                        setOwnerOnlyAction("delete it");
                                         return;
                                     }
                                     void deleteChat(chat.id);
@@ -160,9 +162,20 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                     </DropdownMenu>
                 </>
             )}
-            <OwnerOnlyPopup
+            <PermissionDeniedPopup
                 open={!!ownerOnlyAction}
-                action={ownerOnlyAction ?? undefined}
+                title="Chat creator only"
+                // Spelled out rather than left to the role-based default,
+                // which would have claimed "Only an admin can rename this
+                // chat." No admin can: the server asks who created the row,
+                // not what role the asker holds. For the same reason there is
+                // no "ask …" line here — there is nobody to ask, because
+                // nobody can grant this.
+                message={
+                    ownerOnlyAction
+                        ? `Only the person who started this chat can ${ownerOnlyAction}.`
+                        : undefined
+                }
                 onClose={() => setOwnerOnlyAction(null)}
             />
         </div>

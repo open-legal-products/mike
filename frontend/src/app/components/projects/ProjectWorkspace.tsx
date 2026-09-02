@@ -17,9 +17,13 @@ import {
     createTabularReview,
     deleteProject,
     getProject,
+    getProjectAccess,
     getProjectPeople,
+    grantProjectAccess,
     listProjectChats,
+    revokeProjectAccess,
     updateProject,
+    type ProjectGrant,
 } from "@/app/lib/mikeApi";
 import type {
     Chat,
@@ -31,16 +35,64 @@ import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { TabPillButton } from "@/app/components/ui/tab-pill-button";
 import { NewTRModal } from "@/app/components/tabular/NewTRModal";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { OwnerOnlyPopup } from "@/app/components/popups/OwnerOnlyPopup";
+import {
+    PermissionDeniedPopup,
+    type AccessContact,
+} from "@/app/components/popups/PermissionDeniedPopup";
 import { PeopleModal } from "@/app/components/modals/PeopleModal";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import {
+    type Capability,
+    type ProjectRole,
+    can,
+    roleFromLoaded,
+} from "@/app/lib/permissions";
 import { ProjectDetailsModal } from "./ProjectDetailsModal";
 import {
     ProjectPageHeader,
     type ProjectWorkspaceSection,
 } from "./ProjectPageParts";
+
+/**
+ * A denied action: the sentence for the popup plus which role the action is
+ * reserved for. A plain string means the strictest tier, admin.
+ *
+ * The third shape is for rules that are not rungs on the ladder at all — the
+ * server asks "did you create this row?", which no role can answer for you.
+ * Those carry their own sentence, and deliberately offer nobody to ask,
+ * because there is nobody who could grant it.
+ */
+export type OwnerGate =
+    | string
+    | { action: string; requiredRole: "admin" | "member" }
+    | { title?: string; message: string };
+
+/**
+ * Turn a gate into `PermissionDeniedPopup` props, so every surface renders
+ * the same gate the same way instead of re-deriving `requiredRole` inline.
+ */
+export function permissionDeniedProps(
+    gate: OwnerGate | null,
+    contacts?: AccessContact[] | null,
+) {
+    if (gate && typeof gate === "object" && "message" in gate) {
+        return {
+            open: true,
+            title: gate.title,
+            message: gate.message,
+            contacts: null,
+        };
+    }
+    return {
+        open: !!gate,
+        action: typeof gate === "string" ? gate : gate?.action,
+        requiredRole:
+            typeof gate === "string" ? ("admin" as const) : gate?.requiredRole,
+        contacts,
+    };
+}
 
 type ProjectWorkspaceValue = {
     projectId: string;
@@ -68,7 +120,20 @@ type ProjectWorkspaceValue = {
     setDocumentFolderBreadcrumbs: React.Dispatch<
         React.SetStateAction<Array<{ label: string; onClick: () => void }>>
     >;
-    setOwnerOnlyAction: React.Dispatch<React.SetStateAction<string | null>>;
+    setOwnerOnlyAction: React.Dispatch<React.SetStateAction<OwnerGate | null>>;
+    /**
+     * The caller's role on this project, or `null` while the project row is
+     * still in flight — an explicit "not known yet", never a guess. Surfaces
+     * that render an affordance should disable it while this is null rather
+     * than assume either answer.
+     */
+    accessRole: ProjectRole | null;
+    /**
+     * Capability check against the caller's role — mirror of the server.
+     * Answers `false` while the role is unknown, so a gated affordance is
+     * closed until the server has told us it may open.
+     */
+    canDo: (capability: Capability) => boolean;
 };
 
 const ProjectWorkspaceContext =
@@ -119,8 +184,13 @@ export function ProjectWorkspaceProvider({
     const [projectChats, setProjectChats] = useState<Chat[] | null>(null);
     const [projectChatsLoading, setProjectChatsLoading] = useState(false);
     const [peopleModalOpen, setPeopleModalOpen] = useState(false);
+    // Direct access grants, loaded only when the share dialog is opened: every
+    // project page would otherwise pay for a roster nobody looked at.
+    const [grants, setGrants] = useState<ProjectGrant[] | null>(null);
     const [projectDetailsOpen, setProjectDetailsOpen] = useState(false);
-    const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
+    const [ownerOnlyAction, setOwnerOnlyAction] = useState<OwnerGate | null>(
+        null,
+    );
     const [deleteProjectConfirmOpen, setDeleteProjectConfirmOpen] =
         useState(false);
     const [deleteProjectStatus, setDeleteProjectStatus] = useState<
@@ -147,6 +217,17 @@ export function ProjectWorkspaceProvider({
     const projectChatsPromiseRef = useRef<Promise<Chat[]> | null>(null);
 
     useEffect(() => {
+        // A new projectId is a new answer to "who am I here?". This provider
+        // lives in the [id] layout, which the App Router keeps mounted across
+        // dynamic-param navigation — so without this reset the PREVIOUS
+        // project's row, and therefore its role, stays live for the whole
+        // fetch window. An admin of project A navigating into project B they
+        // can only view kept admin affordances (Delete included) until B's
+        // row arrived: `roleKnown` was true, so nothing was disabled and
+        // `denyUnlessLoading` never suppressed a thing. Unknown-while-loading
+        // only protects anyone if loading actually starts from unknown.
+        setProject(null);
+        setFolders([]);
         setProjectChats(null);
         setProjectChatsLoading(false);
         setDocumentFolderBreadcrumbs([]);
@@ -235,7 +316,67 @@ export function ProjectWorkspaceProvider({
         void ensureProjectChats();
     }, [ensureProjectChats]);
 
+    // Role derived from the loaded project. Until it arrives the role is
+    // *unknown* — not "admin", which is what this used to assume so the shell
+    // would not flash disabled controls. Assuming the top of the ladder while
+    // waiting means every gate stands open during the window in which we know
+    // least, and a viewer who clicks Delete in that window gets a confirmation
+    // dialog for an action the server will refuse. Unknown is its own answer:
+    // `canDo` says no, affordances stay disabled, and no refusal popup accuses
+    // the user of lacking a role we have not looked up yet.
+    const accessRole: ProjectRole | null = roleFromLoaded(project);
+    const roleKnown = accessRole !== null;
+    const canDo = useCallback(
+        (capability: Capability) => can(accessRole, capability),
+        [accessRole],
+    );
+    /**
+     * Refuse an action, explaining only when we can. While the role is
+     * unknown the caller is not told "only an admin can do this" — we do not
+     * know that they are not one — the click simply does nothing, because the
+     * control that produced it is disabled anyway.
+     */
+    const denyUnlessLoading = useCallback(
+        (gate: OwnerGate) => {
+            if (roleKnown) setOwnerOnlyAction(gate);
+        },
+        [roleKnown],
+    );
+
+    const refreshGrants = useCallback(async () => {
+        try {
+            const access = await getProjectAccess(projectId);
+            setGrants(access.grants);
+        } catch (error) {
+            console.error("[project workspace] failed to load access", error);
+            setGrants([]);
+        }
+    }, [projectId]);
+
+    useEffect(() => {
+        setGrants(null);
+    }, [projectId]);
+
+    useEffect(() => {
+        // The grant list is the management surface and the server now only
+        // serves it at access.manage — the People modal's role pickers, its
+        // one consumer, render only at that tier anyway. Below admin the
+        // modal shows the /people roster, so there is nothing to fetch and
+        // no point collecting a 403 on every open.
+        if (peopleModalOpen && grants === null && canDo("access.manage"))
+            void refreshGrants();
+    }, [peopleModalOpen, grants, refreshGrants, canDo]);
+
     const createChat = useCallback(async () => {
+        // Creating a chat in a project is member-tier server-side; without
+        // this gate an org viewer's click fails with a silent 404.
+        if (!canDo("content.edit")) {
+            denyUnlessLoading({
+                action: "start a chat in this project",
+                requiredRole: "member",
+            });
+            return;
+        }
         setCreatingChat(true);
         try {
             const id = await saveChat(projectId);
@@ -262,11 +403,29 @@ export function ProjectWorkspaceProvider({
         } finally {
             setCreatingChat(false);
         }
-    }, [profile?.displayName, projectId, router, saveChat, user?.id]);
+    }, [
+        canDo,
+        denyUnlessLoading,
+        profile?.displayName,
+        projectId,
+        router,
+        saveChat,
+        user?.id,
+    ]);
 
     const openNewReview = useCallback(() => {
+        // Creating a review is member-tier server-side (POST /tabular-review
+        // gates on content.edit) — stop viewers before the modal, not after
+        // an unexplained failed submit.
+        if (!canDo("content.edit")) {
+            denyUnlessLoading({
+                action: "create a tabular review",
+                requiredRole: "member",
+            });
+            return;
+        }
         setNewTRModalOpen(true);
-    }, []);
+    }, [canDo, denyUnlessLoading]);
 
     async function handleCreateReview(
         title: string,
@@ -299,8 +458,11 @@ export function ProjectWorkspaceProvider({
         cmNumber: string;
         practice: string;
     }) {
-        if (project && project.is_owner === false) {
-            setOwnerOnlyAction("edit project details");
+        if (!canDo("access.manage")) {
+            denyUnlessLoading({
+                action: "edit project details",
+                requiredRole: "admin",
+            });
             return;
         }
         const name = values.name.trim();
@@ -325,8 +487,8 @@ export function ProjectWorkspaceProvider({
     }
 
     function requestProjectDelete() {
-        if (project && project.is_owner === false) {
-            setOwnerOnlyAction("delete this project");
+        if (!canDo("container.delete")) {
+            denyUnlessLoading("delete this project");
             return;
         }
         setDeleteProjectStatus("idle");
@@ -369,6 +531,8 @@ export function ProjectWorkspaceProvider({
             setDocumentUploadHeaderAction,
             setDocumentFolderBreadcrumbs,
             setOwnerOnlyAction,
+            accessRole,
+            canDo,
         }),
         [
             projectId,
@@ -387,6 +551,8 @@ export function ProjectWorkspaceProvider({
             createChat,
             openNewReview,
             setDocumentUploadHeaderAction,
+            accessRole,
+            canDo,
         ],
     );
 
@@ -407,7 +573,8 @@ export function ProjectWorkspaceProvider({
                     activeSection={activeSection}
                     creatingChat={creatingChat}
                     creatingReview={creatingReview}
-                    isOwner={project?.is_owner !== false}
+                    canManageProject={canDo("access.manage")}
+                    roleKnown={roleKnown}
                     onBackToProjects={() => router.push("/projects")}
                     onProjectRoot={openProjectRoot}
                     onOpenDetails={() => setProjectDetailsOpen(true)}
@@ -439,16 +606,18 @@ export function ProjectWorkspaceProvider({
                     projectCmNumber={project?.cm_number}
                 />
 
-                <OwnerOnlyPopup
-                    open={!!ownerOnlyAction}
-                    action={ownerOnlyAction ?? undefined}
+                <PermissionDeniedPopup
+                    {...permissionDeniedProps(
+                        ownerOnlyAction,
+                        project?.admin_contacts,
+                    )}
                     onClose={() => setOwnerOnlyAction(null)}
                 />
 
                 <ProjectDetailsModal
                     open={projectDetailsOpen}
                     project={project}
-                    canEdit={project?.is_owner !== false}
+                    canEdit={canDo("access.manage")}
                     onClose={() => setProjectDetailsOpen(false)}
                     onSave={handleProjectDetailsSave}
                     onShareProject={() => {
@@ -493,25 +662,23 @@ export function ProjectWorkspaceProvider({
                                     : ""),
                             "People",
                         ]}
-                        onSharedWithChange={
-                            project.is_owner === false
-                                ? undefined
-                                : async (next) => {
-                                      const updated = await updateProject(
-                                          projectId,
-                                          { shared_with: next },
-                                      );
-                                      setProject((prev) =>
-                                          prev
-                                              ? {
-                                                    ...prev,
-                                                    shared_with:
-                                                        updated.shared_with,
-                                                }
-                                              : prev,
-                                      );
-                                  }
-                        }
+                        access={{
+                            grants: grants ?? [],
+                            orgId: project.org_id ?? null,
+                            canManage: canDo("access.manage"),
+                            onGrant: async (email, role) => {
+                                await grantProjectAccess(
+                                    projectId,
+                                    email,
+                                    role,
+                                );
+                                await refreshGrants();
+                            },
+                            onRevoke: async (email) => {
+                                await revokeProjectAccess(projectId, email);
+                                await refreshGrants();
+                            },
+                        }}
                     />
                 )}
             </div>

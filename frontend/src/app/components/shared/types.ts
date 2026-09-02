@@ -36,10 +36,32 @@ export interface LibraryFolder {
 
 export interface Project {
     id: string;
+    /** The creator. Null once an org project outlives the account that made it. */
     user_id: string;
+    /** Provenance only: "created by me". Authorization reads access_role. */
     is_owner?: boolean;
+    /**
+     * Server-computed project role for the caller, already merged
+     * strongest-wins across the creator, direct-grant and organization
+     * branches. Returned by the detail endpoint and by the list RPCs.
+     */
+    access_role?: "admin" | "member" | "viewer";
+    /** The caller's role in the owning organization, if the project has one. */
+    org_role?: "admin" | "member" | null;
+    org_id?: string | null;
     owner_display_name?: string | null;
     owner_email?: string | null;
+    /**
+     * Everyone who can administer this project, with an address. The
+     * permission-denied popup needs it: telling somebody they were refused
+     * without saying who to ask is a dead end.
+     */
+    admin_contacts?: {
+        user_id: string | null;
+        email: string | null;
+        display_name: string | null;
+        source: "creator" | "grant" | "organization";
+    }[];
     name: string;
     cm_number: string | null;
     practice: string | null;
@@ -727,6 +749,11 @@ export interface TabularReview {
     is_owner?: boolean;
     /** Server-set: true while another generation request holds the review lease. */
     is_running?: boolean;
+    /** Server-computed role for the caller, from the detail endpoint and the
+     *  overview RPC alike. */
+    access_role?: "admin" | "member" | "viewer";
+    owner_email?: string | null;
+    owner_display_name?: string | null;
     created_at: string;
     updated_at: string;
     document_count?: number;

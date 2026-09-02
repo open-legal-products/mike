@@ -43,7 +43,7 @@ import { ProjectExplorer } from "@/app/components/projects/ProjectExplorer";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { OwnerOnlyPopup } from "@/app/components/popups/OwnerOnlyPopup";
+import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -68,6 +68,7 @@ import {
     folderDeleteDialogReducer,
     removeDeletedDocumentTabs,
 } from "@/app/lib/folderDeleteState";
+import { can, roleFromLoaded } from "@/app/lib/permissions";
 
 interface Props {
     params: Promise<{ id: string; chatId: string }>;
@@ -219,6 +220,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const [chatTitle, setChatTitle] = useState<string | null>(null);
     const [chatOwnerId, setChatOwnerId] = useState<string | null>(null);
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
+    const [editorGateAction, setEditorGateAction] = useState<string | null>(
+        null,
+    );
     const [chatLoaded, setChatLoaded] = useState(false);
     const [creatingChat, setCreatingChat] = useState(false);
     const [deletingChat, setDeletingChat] = useState(false);
@@ -289,6 +293,25 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     );
     const { messages, isResponseLoading, handleChat, setMessages, cancel } =
         useAssistantChat({ initialMessages, chatId, projectId });
+
+    // Server ladder: writing to a project chat needs content.edit on the
+    // project, except that the chat's own creator may always continue it.
+    //
+    // While the project is still loading the role is unknown, and unknown is
+    // not a licence. `!project ||` made it one: for the whole load window a
+    // viewer's composer was live and their upload button enabled, and the
+    // refusal only arrived from the server afterwards. The composer now stays
+    // closed until we know — the read-only placeholder is the same one a
+    // viewer sees, so the transition on a load is a placeholder swap rather
+    // than a control appearing that was never theirs.
+    const projectRole = roleFromLoaded(project);
+    const canEditContent = can(projectRole, "content.edit");
+    // The chat's own creator keeps writing to it whatever their project role,
+    // because the server puts a row's creator at the top of that row's ladder.
+    // That exception is knowable without the project, so it still applies
+    // during the load window.
+    const canSendChat =
+        canEditContent || (!!chatOwnerId && chatOwnerId === user?.id);
     const pendingInitialUserMessageRef = useRef<Message | null>(
         initialMessages.length === 1 && initialMessages[0].role === "user"
             ? initialMessages[0]
@@ -672,6 +695,13 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // ── Upload ────────────────────────────────────────────────────────────────
     async function uploadFiles(files: File[]) {
         if (!files.length) return;
+        if (!canEditContent) {
+            // Only accuse somebody of lacking a role once we know they do.
+            if (projectRole) {
+                setEditorGateAction("upload documents to this project");
+            }
+            return;
+        }
         setUploading(true);
         try {
             const outcomes = await uploadProjectDocuments(
@@ -1054,7 +1084,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         onClick={() =>
                                             fileInputRef.current?.click()
                                         }
-                                        disabled={uploading}
+                                        disabled={uploading || !canEditContent}
                                         title="Upload documents"
                                         className="p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors disabled:opacity-40"
                                     >
@@ -1420,6 +1450,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 chatKey={chatId}
                                 chatModel={chatModel}
                                 chatReasoningLevel={chatReasoningLevel}
+                                canSend={canSendChat}
                                 hideAddDocButton
                                 projectId={projectId}
                                 onDocumentClick={handleDocClick}
@@ -1443,10 +1474,18 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                 </div>
             </div>
-            <OwnerOnlyPopup
+            <PermissionDeniedPopup
                 open={!!ownerOnlyAction}
                 action={ownerOnlyAction ?? undefined}
+                contacts={project?.admin_contacts}
                 onClose={() => setOwnerOnlyAction(null)}
+            />
+            <PermissionDeniedPopup
+                open={!!editorGateAction}
+                action={editorGateAction ?? undefined}
+                requiredRole="member"
+                contacts={project?.admin_contacts}
+                onClose={() => setEditorGateAction(null)}
             />
             <ConfirmPopup
                 open={!!pendingDeleteFolder}

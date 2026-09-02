@@ -16,12 +16,17 @@ import {
     usePaginatedProjects,
     type ProjectScope,
 } from "@/app/hooks/usePaginatedProjects";
-import { OwnerOnlyPopup } from "@/app/components/popups/OwnerOnlyPopup";
+import {
+    mergeAccessContacts,
+    PermissionDeniedPopup,
+    type AccessContact,
+} from "@/app/components/popups/PermissionDeniedPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { useAuth } from "@/app/contexts/AuthContext";
 import type { Project } from "@/app/components/shared/types";
+import { can, roleFrom } from "@/app/lib/permissions";
 import { NewProjectModal } from "./NewProjectModal";
 import { ProjectDetailsModal } from "./ProjectDetailsModal";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
@@ -69,7 +74,14 @@ function formatDate(iso: string) {
     });
 }
 
-function getProjectOwnerLabel(project: Project, currentUserId?: string | null) {
+/**
+ * Who created the row. This is provenance, not permission: what the caller may
+ * do here comes from `access_role`, which the overview RPC now returns.
+ */
+function getProjectCreatorLabel(
+    project: Project,
+    currentUserId?: string | null,
+) {
     if (project.is_owner ?? project.user_id === currentUserId) return "Me";
     return (
         project.owner_display_name?.trim() ||
@@ -120,7 +132,16 @@ export function ProjectsOverview() {
     } | null>(null);
     const [actionsOpen, setActionsOpen] = useState(false);
     const [search, setSearch] = useState("");
-    const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
+    /**
+     * A refusal, together with the people who could lift it. Naming somebody
+     * is the whole point of the popup, and it can only do that if the surface
+     * raising the refusal hands over the row's `admin_contacts` — which the
+     * projects overview RPC returns on every row.
+     */
+    const [ownerOnlyAction, setOwnerOnlyAction] = useState<{
+        action: string;
+        contacts?: AccessContact[] | null;
+    } | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [selectionCameFromSelectAll, setSelectionCameFromSelectAll] =
         useState(false);
@@ -288,9 +309,9 @@ export function ProjectsOverview() {
     );
     const ownerFilterButton = (
         <TableFilters
-            label="Filter by owner"
+            label="Filter by creator"
             value={ownerFilter}
-            allLabel="All Owners"
+            allLabel="All Creators"
             widthClassName="w-44"
             options={ownerOptions}
             onChange={handleOwnerFilterChange}
@@ -343,11 +364,14 @@ export function ProjectsOverview() {
         practice: string;
     }) {
         if (!detailsProject) return;
-        if (
-            detailsProject.is_owner === false ||
-            (user?.id && detailsProject.user_id !== user.id)
-        ) {
-            setOwnerOnlyAction("edit project details");
+        // The list rows carry the caller's merged access_role, so an
+        // organization admin editing a colleague's matter is no longer
+        // mistaken for an outsider just because they did not create it.
+        if (!can(roleFrom(detailsProject), "access.manage")) {
+            setOwnerOnlyAction({
+                action: "edit project details",
+                contacts: detailsProject.admin_contacts,
+            });
             return;
         }
         const name = values.name.trim();
@@ -407,24 +431,36 @@ export function ProjectsOverview() {
         setActionsOpen(false);
         setConfirmDeleteAllOpen(false);
         setSelectionCameFromSelectAll(false);
-        // Only the project owner can delete; the per-row delete is hidden
-        // for shared projects but the bulk action can still pick them up
-        // if a user toggled them across filters (or select-all-matching
-        // pulled in ids that were never paged into `projects`, which is why
-        // this uses getProjectOwnerId rather than looking the row up
-        // directly). Filter and warn.
-        const owned = ids.filter((id) => {
-            const ownerId = getProjectOwnerId(id);
-            return !ownerId || ownerId === user?.id;
+        // Deleting a project needs container.delete, i.e. project admin. The
+        // per-row control is already hidden for rows the caller cannot
+        // delete, but the bulk action can still pick them up if a user
+        // toggled them across filters — or if select-all-matching pulled in
+        // ids that were never paged in, which is why creator identity is the
+        // fallback when the row itself is not loaded.
+        const roleById = new Map(
+            projects.map((p) => [p.id, roleFrom(p)] as const),
+        );
+        const deletable = ids.filter((id) => {
+            const role = roleById.get(id);
+            if (role) return can(role, "container.delete");
+            // Unloaded row: creator identity is all we have, and it has to
+            // MATCH. `!creatorId ||` treated "we don't know who created this"
+            // as permission to delete it, which is the one answer an unknown
+            // must never produce — select-all-matching is exactly the path
+            // that hands back ids whose rows were never paged in. A row we
+            // cannot vouch for is skipped and counted as blocked, so the user
+            // is told rather than silently having it dropped.
+            const creatorId = getProjectOwnerId(id);
+            return !!creatorId && !!user?.id && creatorId === user.id;
         });
-        const blocked = ids.length - owned.length;
+        const blocked = ids.length - deletable.length;
         setSelectedIds([]);
         const snapshot = projects;
         setProjects((current) =>
-            current.filter((project) => !owned.includes(project.id)),
+            current.filter((project) => !deletable.includes(project.id)),
         );
         const { failedIds } = await deleteTabularReviewsWithConcurrency(
-            owned,
+            deletable,
             deleteProject,
         );
         if (failedIds.length > 0) {
@@ -434,9 +470,18 @@ export function ProjectsOverview() {
             setSelectedIds(failedIds);
         }
         if (blocked > 0) {
-            setOwnerOnlyAction(
-                `delete ${blocked} of the selected projects — only the project owner can delete a project`,
+            // Several rows were refused, so offer the union of their admins
+            // rather than a refusal that names nobody.
+            const blockedContacts = mergeAccessContacts(
+                ids
+                    .filter((id) => !deletable.includes(id))
+                    .map((id) => projects.find((p) => p.id === id))
+                    .map((project) => project?.admin_contacts),
             );
+            setOwnerOnlyAction({
+                action: `delete ${blocked} of the selected projects — only a project admin can delete a project`,
+                contacts: blockedContacts,
+            });
         }
     }
 
@@ -539,7 +584,7 @@ export function ProjectsOverview() {
                         </TableHeaderCell>
                         <TableHeaderCell className="w-32">
                             <div className="flex items-center gap-1">
-                                <span>Owner</span>
+                                <span>Created by</span>
                                 {!loading && ownerFilterButton}
                             </div>
                         </TableHeaderCell>
@@ -662,9 +707,14 @@ export function ProjectsOverview() {
                                 selectedIds,
                             );
                             const appliesToSelection = actionIds.length > 1;
-                            const canManage =
-                                project.is_owner ??
-                                (project.user_id === user?.id);
+                            // The list rows carry the caller's merged
+                            // access_role, so an organization admin editing a
+                            // colleague's matter is no longer mistaken for an
+                            // outsider just because they did not create it.
+                            const canManage = can(
+                                roleFrom(project),
+                                "access.manage",
+                            );
                             return (
                             <TableRow
                                 key={project.id}
@@ -773,7 +823,7 @@ export function ProjectsOverview() {
                                     )}
                                 </TableCell>
                                 <TableCell className="w-32">
-                                    {getProjectOwnerLabel(project, user?.id)}
+                                    {getProjectCreatorLabel(project, user?.id)}
                                 </TableCell>
                                 <TableCell className="w-24">
                                     {project.document_count ?? 0}
@@ -847,16 +897,16 @@ export function ProjectsOverview() {
                 project={detailsProject}
                 canEdit={
                     !!detailsProject &&
-                    detailsProject.is_owner !== false &&
-                    (!user?.id || detailsProject.user_id === user.id)
+                    can(roleFrom(detailsProject), "access.manage")
                 }
                 onClose={() => setDetailsProject(null)}
                 onSave={handleProjectDetailsSave}
             />
 
-            <OwnerOnlyPopup
+            <PermissionDeniedPopup
                 open={!!ownerOnlyAction}
-                action={ownerOnlyAction ?? undefined}
+                action={ownerOnlyAction?.action}
+                contacts={ownerOnlyAction?.contacts}
                 onClose={() => setOwnerOnlyAction(null)}
             />
             <WarningPopup
@@ -867,7 +917,7 @@ export function ProjectsOverview() {
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}
                 title="Delete all selected projects?"
-                message={`This will permanently delete every selected project you own, including selected projects not currently shown. Every file within those projects will also be deleted. Shared projects you do not own will be skipped. ${selectedIds.length} projects are selected.`}
+                message={`This will permanently delete every selected project you administer, including selected projects not currently shown. Every file within those projects will also be deleted. Projects you cannot delete will be skipped. ${selectedIds.length} projects are selected.`}
                 confirmLabel="Delete"
                 onCancel={() => setConfirmDeleteAllOpen(false)}
                 onConfirm={() => void handleDeleteSelected()}

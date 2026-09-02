@@ -123,6 +123,8 @@ interface Props {
     onClose: () => void;
     initialChatId?: string | null;
     onChatIdChange?: (chatId: string | null) => void;
+    /** Sending is member-tier server-side; false renders a read-only composer. */
+    canSend?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +626,7 @@ export function TRChatPanel({
     onClose,
     initialChatId,
     onChatIdChange,
+    canSend = true,
 }: Props) {
     const [chats, setChats] = useState<TRChat[]>([]);
     const [currentChatId, setCurrentChatId] = useState<string | null>(
@@ -1861,6 +1864,7 @@ export function TRChatPanel({
                     onSubmit={(message) => void handleSubmit(message)}
                     onCancel={handleCancel}
                     isLoading={isLoading}
+                    canSend={canSend}
                     hideAddDocButton
                     hideWorkflowButton
                     chatModel={currentChatModel}

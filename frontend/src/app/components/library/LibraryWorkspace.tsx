@@ -15,6 +15,7 @@ import {
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Plus } from "lucide-react";
 import { DocTable } from "@/app/components/documents/DocTable";
+import { NO_ROLE_MODEL } from "@/app/lib/permissions";
 import type {
   DocTableFolderBreadcrumb,
   DocTableFolder,
@@ -1000,6 +1001,11 @@ export function LibraryCollectionPage({
           autoLoadOnScroll
                     enableHeaderFilters
                     defaultSort={{ key: "updated", direction: "desc" }}
+                    // The library is the caller's own shelf: there is no
+                    // project, so no project role. Stated rather than left
+                    // implicit, so a surface that DOES have a role and forgot
+                    // to pass it stands out instead of silently opening.
+                    canDo={NO_ROLE_MODEL}
                 />
             </div>
         </div>

@@ -85,6 +85,12 @@ interface Props {
     onSubmit: (message: Message) => void;
     onCancel: () => void;
     isLoading: boolean;
+    /**
+     * Whether the caller may write into this chat. False renders a read-only
+     * composer — sending, attaching, and drop-uploads stay off, matching
+     * what the server would refuse for a project viewer.
+     */
+    canSend?: boolean;
     hideAddDocButton?: boolean;
     hideWorkflowButton?: boolean;
     projectName?: string;
@@ -102,6 +108,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         onSubmit,
         onCancel,
         isLoading,
+        canSend = true,
         hideAddDocButton,
         hideWorkflowButton,
         projectName,
@@ -308,6 +315,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
     const handleDroppedFiles = useCallback(
         async (files: File[]) => {
+            if (!canSend) {
+                setUploadWarning(
+                    "Only someone with edit access can add documents.",
+                );
+                return;
+            }
             const { supported, unsupported } =
                 partitionSupportedDocumentFiles(files);
             setUploadWarning(formatUnsupportedDocumentWarning(unsupported));
@@ -381,7 +394,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 setUploadingFiles([]);
             }
         },
-        [addAttachedDocuments, onDocumentsUploaded, projectId],
+        [addAttachedDocuments, canSend, onDocumentsUploaded, projectId],
     );
 
     useEffect(() => {
@@ -493,7 +506,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
     const handleSubmit = () => {
         const query = value.trim();
-        if (slashCommandsLoading) return;
+        if (!canSend || slashCommandsLoading) return;
         const slashWorkflow = exactSlashWorkflow(slashWorkflows ?? [], query);
         if (slashWorkflow) {
             selectSlashWorkflow(slashWorkflow);
@@ -654,7 +667,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         <textarea
                             ref={textareaRef}
                             rows={1}
-                            placeholder="How can I help?"
+                            disabled={!canSend}
+                            placeholder={
+                                canSend
+                                    ? "How can I help?"
+                                    : "Viewing only — sending needs edit access"
+                            }
                             value={value}
                             onChange={handleChange}
                             onKeyDown={handleKeyDown}
@@ -681,7 +699,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         className="flex items-center justify-between p-2.5"
                     >
                         <div className="flex items-center gap-1">
-                            {!hideAddDocButton && (
+                            {!hideAddDocButton && canSend && (
                                 <AddDocButton
                                     onBrowseAll={() => {
                                         setDocSelectorInitialTab("files");
@@ -693,7 +711,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                     hideLabel={compactControls}
                                 />
                             )}
-                            {!hideWorkflowButton && (
+                            {!hideWorkflowButton && canSend && (
                                 <button
                                     type="button"
                                     onClick={() => setWorkflowModalOpen(true)}
@@ -752,8 +770,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                 )}
                                 onClick={handleActionClick}
                                 disabled={
-                                    !isLoading &&
-                                    (!value.trim() || slashCommandsLoading)
+                                    !canSend ||
+                                    (!isLoading &&
+                                        (!value.trim() ||
+                                            slashCommandsLoading))
                                 }
                             >
                                 {isLoading ? (

@@ -46,6 +46,11 @@ import {
 } from "@/app/components/shared/RowActions";
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { useAuth } from "@/app/contexts/AuthContext";
+import {
+    creatorScopedAllowed,
+    type Capability,
+} from "@/app/lib/permissions";
+import type { OwnerGate } from "@/app/components/projects/ProjectWorkspace";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { UploadOverlay } from "@/app/components/assistant/UploadOverlay";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
@@ -216,7 +221,14 @@ interface DocTableProps {
     folderViewId?: string | null;
     onFolderViewIdChange?: (folderId: string | null) => void;
     onSelectionActionsChange?: (actions: DocTableSelectionActions | null) => void;
-    onOwnerOnlyAction?: Dispatch<SetStateAction<string | null>>;
+    onOwnerOnlyAction?: Dispatch<SetStateAction<OwnerGate | null>>;
+    /**
+     * Role-based capability check for the containing collection. Required:
+     * a table whose job here is gating must be told what the caller may do,
+     * and a surface with no role model at all (the personal library) says so
+     * by passing `NO_ROLE_MODEL` rather than by leaving this out.
+     */
+    canDo: (capability: Capability) => boolean;
     enableHeaderFilters?: boolean;
     // When provided, folder contents are fetched on demand as folders are
     // expanded (instead of the whole tree being loaded and auto-expanded
@@ -366,6 +378,7 @@ export function DocTable({
     onFolderViewIdChange,
     onSelectionActionsChange,
     onOwnerOnlyAction,
+    canDo,
     enableHeaderFilters = false,
     onExpandFolder,
     documentsHasMoreByLevel,
@@ -408,6 +421,20 @@ export function DocTable({
     const loadingRef = useRef(loading);
     const renderAddDocumentsModalRef = useRef(renderAddDocumentsModal);
     const setOwnerOnlyAction = useMemo(() => onOwnerOnlyAction ?? (() => {}), [onOwnerOnlyAction]);
+    const allowed = canDo;
+    /** Guard: false + popup when the caller's role lacks the capability. */
+    const requireCapability = useCallback(
+        (
+            capability: Capability,
+            action: string,
+            requiredRole: "admin" | "member",
+        ) => {
+            if (allowed(capability)) return true;
+            setOwnerOnlyAction({ action, requiredRole });
+            return false;
+        },
+        [allowed, setOwnerOnlyAction],
+    );
 
     useEffect(() => {
         loadingRef.current = loading;
@@ -416,12 +443,17 @@ export function DocTable({
 
     const openAddDocuments = useCallback(() => {
         if (loadingRef.current) return;
+        // Same capability the header Add button is gated on — this also
+        // covers the empty-state click, which calls openAddDocuments
+        // directly.
+        if (!requireCapability("content.edit", "add documents", "member"))
+            return;
         if (renderAddDocumentsModalRef.current) {
             setAddDocsOpen(true);
             return;
         }
         documentUploadInputRef.current?.click();
-    }, []);
+    }, [requireCapability]);
 
     useEffect(() => {
         onAddDocumentsActionChange?.(openAddDocuments);
@@ -528,16 +560,80 @@ export function DocTable({
         await handleDropDocumentVersions(doc, [file]);
     }
 
+    /**
+     * Version file-replace and delete are creator-scoped server-side, not
+     * role-based: `DELETE /single-documents/:id/versions/:versionId` and
+     * `PUT …/versions/:versionId/file` both call
+     * `creatorScopedAllowed(access, doc.user_id)` (backend/src/lib/access.ts),
+     * which is
+     *
+     *     the document's uploader
+     *     — or, ONLY once that account is gone and `user_id` is null,
+     *       somebody holding container.delete on the project.
+     *
+     * The departed-uploader arm exists because deleting an account blanks
+     * `documents.user_id`; while an uploader still exists, "an admin does not
+     * get to reach into a colleague's versions" (that comment is the server's
+     * own). No capability in the matrix expresses this, so it is checked here
+     * against the row, and the refusal says which rule it is.
+     */
+    function requireDocOwnerForVersions(docId: string, action: string): boolean {
+        const doc = documents.find((d) => d.id === docId);
+        if (!doc) {
+            // Fail closed. This used to `return true` — a document we cannot
+            // find is one we know nothing about, and the one thing we must
+            // not do with an unknown is wave it through.
+            setOwnerOnlyAction({
+                title: "Document unavailable",
+                message:
+                    "That document is not loaded, so its versions cannot be changed. Reload and try again.",
+            });
+            return false;
+        }
+        if (
+            creatorScopedAllowed(
+                doc.user_id,
+                user?.id,
+                allowed("container.delete"),
+            )
+        )
+            return true;
+        if (doc.user_id) {
+            // Not "Only an admin can …", which is what the admin-tier popup
+            // used to claim: no admin can lift this while the uploader's
+            // account exists, so naming that tier sent people to somebody who
+            // could not help. And no "ask …" line, for the same reason.
+            setOwnerOnlyAction({
+                title: "Uploader only",
+                message: `Only the person who uploaded this document can ${action}.`,
+            });
+            return false;
+        }
+        // No uploader on the row: the server does hand these versions to
+        // project admins, so here the admin tier IS the rule and the normal
+        // popup — with its contact line — is the right one.
+        setOwnerOnlyAction({ action, requiredRole: "admin" });
+        return false;
+    }
+
     async function submitNewVersion(doc: Document, file: File, filename: string) {
+        // Same tier as the server's POST /versions guard (content.edit).
+        if (!requireCapability("content.edit", "upload a new version", "member"))
+            return;
         try {
             await uploadDocumentVersion(doc.id, file, filename);
             await refreshDocumentVersionState(doc.id);
         } catch (e) {
             console.error("uploadDocumentVersion failed", e);
+            setDocumentUploadWarning("Version upload failed. Please try again.");
         }
     }
 
     async function replaceVersionFile(docId: string, versionId: string, file: File, filename: string) {
+        if (
+            !requireDocOwnerForVersions(docId, "replace this version's file")
+        )
+            return;
         await replaceDocumentVersionFile(docId, versionId, file, filename);
         const res = await refreshDocumentVersionState(docId);
         const replaced = res.versions.find((version) => version.id === versionId);
@@ -570,6 +666,9 @@ export function DocTable({
      * Patch a version filename and update the local cache in place.
      */
     async function handleRenameVersion(docId: string, versionId: string, filename: string | null) {
+        // Server PATCH /versions/:id guard is content.edit.
+        if (!requireCapability("content.edit", "rename versions", "member"))
+            return;
         const previousFilename = versionsByDocId
             .get(docId)
             ?.versions.find((version) => version.id === versionId)
@@ -597,6 +696,8 @@ export function DocTable({
     }
 
     async function handleDeleteVersion(docId: string, versionId: string) {
+        if (!requireDocOwnerForVersions(docId, "delete document versions"))
+            return;
         try {
             await deleteDocumentVersion(docId, versionId);
             const res = await refreshDocumentVersionState(docId);
@@ -921,6 +1022,10 @@ export function DocTable({
             setCreatingFolderIn(undefined);
             return;
         }
+        if (!requireCapability("docs.organize", "create folders", "member")) {
+            setCreatingFolderIn(undefined);
+            return;
+        }
 
         // Immediately hide the input and show an optimistic folder row
         setCreatingFolderIn(undefined);
@@ -956,6 +1061,10 @@ export function DocTable({
         const name = renameFolderValue.trim();
         setRenamingFolderId(null);
         if (!name) return;
+        // Folder operations are member-level: organizing the shelf is part
+        // of collaborating on what sits on it, not an administrative act.
+        if (!requireCapability("docs.organize", "rename folders", "member"))
+            return;
         const updatedAt = new Date().toISOString();
         setFolders((prev) =>
             prev.map((folder) =>
@@ -996,6 +1105,14 @@ export function DocTable({
     }
 
     function requestDeleteFolder(folderId: string) {
+        if (
+            !requireCapability(
+                "docs.organize",
+                "delete folders and their documents",
+                "member",
+            )
+        )
+            return;
         const folder = folders.find((f) => f.id === folderId);
         if (!folder) return;
         const impact = folderDeleteImpact(folderId);
@@ -1162,6 +1279,10 @@ export function DocTable({
     }
 
     async function handleRemoveDocFromFolder(docId: string) {
+        if (
+            !requireCapability("docs.organize", "move documents", "member")
+        )
+            return;
         setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, folder_id: null } : d)));
         await operations.moveDocument(docId, null);
     }
@@ -1174,6 +1295,12 @@ export function DocTable({
         }
         const previous = documents.find((d) => d.id === docId);
         if (!previous || trimmed === previous.filename) {
+            setRenamingDocumentId(null);
+            return;
+        }
+        if (
+            !requireCapability("docs.organize", "rename documents", "member")
+        ) {
             setRenamingDocumentId(null);
             return;
         }
@@ -1206,10 +1333,13 @@ export function DocTable({
 
     async function handleRemoveDoc(docId: string) {
         const doc = docs.find((d) => d.id === docId);
-        // Backend only lets the doc creator delete. Warn the requester
-        // instead of letting the request 404 silently.
-        if (doc && user?.id && doc.user_id && doc.user_id !== user.id) {
-            setOwnerOnlyAction("delete this document");
+        // Backend only lets the document's uploader delete. Warn the
+        // requester instead of letting the request 404 silently — and refuse
+        // when we cannot establish ownership, which the old condition read as
+        // permission (it required `doc`, `user.id` AND `doc.user_id` to be
+        // present before it would refuse anything).
+        if (!canDeleteDocument(doc)) {
+            refuseDocumentDelete("delete it");
             return;
         }
         setDeletingDocIds((prev) => new Set([...prev, docId]));
@@ -1307,8 +1437,38 @@ export function DocTable({
         return documentVersionNumber(doc);
     }
 
-    function isSharedDocument(doc: Document | null | undefined): boolean {
-        return !!(doc?.user_id && user?.id && doc.user_id !== user.id);
+    /**
+     * Whether the caller may delete this document.
+     *
+     * `DELETE /single-documents/:documentId` (backend/src/routes/documents.ts)
+     * selects the row with `.eq("id", documentId).eq("user_id", userId)` and
+     * 404s if that finds nothing. There is no `ensureDocAccess`, no `can()`,
+     * no departed-uploader arm — deletion is pure row ownership, and a
+     * project admin genuinely cannot delete a colleague's document. So this
+     * stays keyed on the uploader rather than moving to `canDo`; a role-based
+     * check here would be the client promising something the server refuses.
+     *
+     * What changes is that both halves must now be KNOWN. The old
+     * `isSharedDocument(doc)` test answered false — "not somebody else's" —
+     * for a document with no uploader at all and for a caller whose id had
+     * not resolved, and both were being read as "yours, go ahead", enabling
+     * a delete the server was always going to 404.
+     */
+    const canDeleteDocument = useCallback(
+        (doc: Document | null | undefined): boolean =>
+            // Creator-scoped with NO departed-uploader arm: this route has no
+            // `ensureDocAccess` at all, so when `user_id` is null the row is
+            // deletable by nobody.
+            creatorScopedAllowed(doc?.user_id, user?.id, false),
+        [user?.id],
+    );
+
+    /** The refusal for a delete: the uploader rule, and nobody to ask. */
+    function refuseDocumentDelete(action: string) {
+        setOwnerOnlyAction({
+            title: "Uploader only",
+            message: `Only the person who uploaded this document can ${action}.`,
+        });
     }
 
     function requestFolderUploadConflictChoice(conflict: {
@@ -1339,6 +1499,12 @@ export function DocTable({
         baseFolderId: string | null = viewedFolderIdRef.current,
     ) {
         if (entries.length === 0) return;
+        // Drag-and-drop and the folder picker bypass the
+        // (capability-gated) Add button, so they need the same
+        // content.edit check: viewers get the role popup instead of a
+        // doomed upload that the backend would 403 anyway.
+        if (!requireCapability("content.edit", "add documents", "member"))
+            return;
         const { supported, unsupported } = partitionSupportedDocumentFiles(
             entries.map((entry) => entry.file),
         );
@@ -1651,6 +1817,10 @@ export function DocTable({
 
     async function handleDropDocumentVersions(doc: Document, files: File[]) {
         if (files.length === 0) return;
+        // Same tier as the server's POST /versions guard (content.edit) —
+        // without it an org viewer's drop fails into console.error only.
+        if (!requireCapability("content.edit", "upload a new version", "member"))
+            return;
         const { supported, unsupported } = partitionSupportedDocumentFiles(files);
         setDocumentUploadWarning(formatUnsupportedDocumentWarning(unsupported));
         if (supported.length === 0) return;
@@ -1663,6 +1833,7 @@ export function DocTable({
             await refreshDocumentVersionState(doc.id);
         } catch (err) {
             console.error("Document version drop upload failed", err);
+            setDocumentUploadWarning("Version upload failed. Please try again.");
         } finally {
             setUploadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -1768,6 +1939,10 @@ export function DocTable({
                 return doc && (doc.folder_id ?? null) !== targetFolderId;
             });
             if (movingIds.length === 0) return;
+            if (
+                !requireCapability("docs.organize", "move documents", "member")
+            )
+                return;
             const updatedAt = new Date().toISOString();
             setDocuments((prev) =>
                 prev.map((document) =>
@@ -1807,6 +1982,10 @@ export function DocTable({
                 );
             }
         } else if (subFolderId && subFolderId !== targetFolderId) {
+            if (
+                !requireCapability("docs.organize", "move folders", "member")
+            )
+                return;
             if (targetFolderId !== null && wouldCreateCycle(subFolderId, targetFolderId)) return;
             const folder = folders.find((f) => f.id === subFolderId);
             if (!folder || (folder.parent_folder_id ?? null) === targetFolderId) return;
@@ -2532,7 +2711,7 @@ export function DocTable({
                                                                 : undefined
                                                         }
                                                         onDelete={() => requestRemoveDoc(doc)}
-                                                        deleteDisabled={isSharedDocument(doc)}
+                                                        deleteDisabled={!canDeleteDocument(doc)}
                                                     />
                                                 )}
                                             </div>
@@ -2929,6 +3108,10 @@ export function DocTable({
     }, [downloadDoc, selectedFolderRootIds, selectedStandaloneDocIds]);
 
     const handleRemoveSelectedFromFolder = useCallback(async () => {
+        if (
+            !requireCapability("docs.organize", "move documents", "member")
+        )
+            return;
         const ids = selectedStandaloneDocIds.filter(
             (id) => docs.find((d) => d.id === id)?.folder_id != null,
         );
@@ -2936,12 +3119,21 @@ export function DocTable({
         setSelectedFolderIds(new Set());
         setDocuments((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, folder_id: null } : d)));
         await Promise.all(ids.map((id) => operations.moveDocument(id, null).catch(() => {})));
-    }, [docs, operations, selectedStandaloneDocIds, setDocuments]);
+    }, [docs, operations, requireCapability, selectedStandaloneDocIds, setDocuments]);
 
     const deleteDocumentIds = useCallback(async (ids: string[]) => {
         const owned = ids.filter((id) => {
             const doc = documents.find((candidate) => candidate.id === id);
-            return !doc || !doc.user_id || !user?.id || doc.user_id === user.id;
+            // A row we can see is judged on its uploader, both halves known.
+            // A row we cannot see is left to the server, and deliberately so:
+            // unlike project delete — where an admin's sweep really could
+            // destroy rows they never looked at — this endpoint filters on
+            // `user_id = me`, so an id we cannot resolve is at worst a 404
+            // counted in the failure notice. Excluding those would break
+            // select-all-matching in the library, where every row is the
+            // caller's own but few are paged in.
+            if (!doc) return true;
+            return canDeleteDocument(doc);
         });
         const blocked = ids.length - owned.length;
         const snapshot = docs;
@@ -3014,7 +3206,15 @@ export function DocTable({
         if (deletedIds.length > 0 && operations.bulkDeleteDocuments) {
             await operations.refreshCollection();
         }
-    }, [docs, documents, operations, setDocuments, setOwnerOnlyAction, user?.id]);
+    }, [
+        canDeleteDocument,
+        docs,
+        documents,
+        operations,
+        selectedDocIds,
+        setDocuments,
+        setOwnerOnlyAction,
+    ]);
 
     const handleDeleteSelectedItems = useCallback(async () => {
         setConfirmDeleteAllOpen(false);
@@ -4108,7 +4308,7 @@ export function DocTable({
                                                                             void handleUploadNewVersion(doc)
                                                                         }
                                                                         onDelete={() => requestRemoveDoc(doc)}
-                                                                        deleteDisabled={isSharedDocument(doc)}
+                                                                        deleteDisabled={!canDeleteDocument(doc)}
                                                                     />
                                                                 )}
                                                             </div>
@@ -4266,7 +4466,8 @@ export function DocTable({
                                                         : undefined
                                                 }
                                                 deleteDisabled={
-                                                    !menuAppliesToSelection && isSharedDocument(menuDoc)
+                                                    !menuAppliesToSelection &&
+                                                    !canDeleteDocument(menuDoc)
                                                 }
                                             />
                                         ) : (
@@ -4370,7 +4571,7 @@ export function DocTable({
                 onDeleteVersion={handleDeleteVersion}
                 onUploadNewVersion={submitNewVersion}
                 onReplaceVersion={replaceVersionFile}
-                canDelete={!isSharedDocument(sidePanelDoc)}
+                canDelete={canDeleteDocument(sidePanelDoc)}
                 onOwnerOnlyAction={setOwnerOnlyAction}
                 onDelete={async (doc) => {
                     await handleRemoveDoc(doc.id);

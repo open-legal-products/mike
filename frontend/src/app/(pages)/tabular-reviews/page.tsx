@@ -13,6 +13,7 @@ import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
 import {
     deleteTabularReview,
     createTabularReview,
+    getTabularReviewPeople,
     listProjects,
     updateTabularReview,
 } from "@/app/lib/mikeApi";
@@ -20,7 +21,11 @@ import type { TabularReview, Project } from "@/app/components/shared/types";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { NewTRModal } from "@/app/components/tabular/NewTRModal";
 import { TabularReviewDetailsModal } from "@/app/components/tabular/TabularReviewDetailsModal";
-import { OwnerOnlyPopup } from "@/app/components/popups/OwnerOnlyPopup";
+import {
+    PermissionDeniedPopup,
+    type AccessContact,
+} from "@/app/components/popups/PermissionDeniedPopup";
+import { can, roleFrom } from "@/app/lib/permissions";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -118,7 +123,23 @@ export default function TabularReviewsPage() {
         sort,
     });
     const [actionsOpen, setActionsOpen] = useState(false);
-    const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
+    /**
+     * A refusal plus the person who can lift it. Unlike the projects overview,
+     * the reviews overview RPC returns no contact columns at all — only
+     * `access_role` — so the address is fetched from
+     * `/tabular-review/:id/people` the first time a refusal actually fires,
+     * exactly as TabularReviewView does for a standalone review. The popup
+     * opens immediately and the "ask …" line fills in when the roster
+     * answers; a refusal that names nobody is a dead end.
+     */
+    const [ownerOnlyAction, setOwnerOnlyAction] = useState<{
+        reviewId: string;
+        action: string;
+        requiredRole: "admin" | "member";
+    } | null>(null);
+    const [contactsByReviewId, setContactsByReviewId] = useState<
+        Record<string, AccessContact[]>
+    >({});
     const [selectionCameFromSelectAll, setSelectionCameFromSelectAll] =
         useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
@@ -255,9 +276,39 @@ export default function TabularReviewsPage() {
         }
     };
 
+    /**
+     * Refuse an action on one review, and make sure the popup can say who to
+     * ask. The roster is fetched once per review and cached, so repeated
+     * refusals on the same row cost nothing.
+     */
+    function refuse(
+        reviewId: string,
+        action: string,
+        requiredRole: "admin" | "member" = "admin",
+    ) {
+        setOwnerOnlyAction({ reviewId, action, requiredRole });
+        if (contactsByReviewId[reviewId]) return;
+        void getTabularReviewPeople(reviewId)
+            .then((people) => {
+                setContactsByReviewId((prev) => ({
+                    ...prev,
+                    [reviewId]: people.owner ? [people.owner] : [],
+                }));
+            })
+            .catch(() => {
+                // A roster we cannot read just means no name to offer; the
+                // refusal itself still stands.
+                setContactsByReviewId((prev) => ({ ...prev, [reviewId]: [] }));
+            });
+    }
+
     function requestReviewDetails(review: TabularReview) {
-        if (user?.id && review.user_id !== user.id) {
-            setOwnerOnlyAction("edit tabular review details");
+        // The overview RPC now returns each row's merged access_role. Details
+        // editing is member-tier — the server's PATCH asks for content.edit —
+        // so the refusal must say "member", not "admin" (the review page and
+        // this list previously disagreed about the same action).
+        if (!can(roleFrom(review), "content.edit")) {
+            refuse(review.id, "edit tabular review details", "member");
             return;
         }
         setDetailsReview(review);
@@ -268,8 +319,8 @@ export default function TabularReviewsPage() {
         projectId?: string | null;
     }) {
         if (!detailsReview) return;
-        if (user?.id && detailsReview.user_id !== user.id) {
-            setOwnerOnlyAction("edit tabular review details");
+        if (!can(roleFrom(detailsReview), "content.edit")) {
+            refuse(detailsReview.id, "edit tabular review details", "member");
             return;
         }
         const updated = await updateTabularReview(detailsReview.id, {
@@ -301,9 +352,22 @@ export default function TabularReviewsPage() {
         setConfirmDeleteAllOpen(false);
         setSelectionCameFromSelectAll(false);
         setBulkDeleteNotice(null);
+        // Prefer the loaded row's role; select-all-matching can hand back
+        // ids that were never paged in, and for those the creator id is the
+        // only signal available.
+        const roleById = new Map(
+            reviews.map((review) => [review.id, roleFrom(review)] as const),
+        );
         const owned = ids.filter((id) => {
+            const role = roleById.get(id);
+            if (role) return can(role, "container.delete");
+            // Fail closed on rows we could not load. `!user?.id ||` made an
+            // unknown viewer identity pass every creator check, so a signed-in
+            // state that had not settled yet turned select-all-matching into
+            // "delete everything selected". Both halves must be known and
+            // must match; anything else is counted as blocked and reported.
             const ownerId = getReviewOwnerId(id);
-            return !!ownerId && (!user?.id || ownerId === user.id);
+            return !!ownerId && !!user?.id && ownerId === user.id;
         });
         const blocked = ids.length - owned.length;
         setSelectedIds([]);
@@ -324,7 +388,7 @@ export default function TabularReviewsPage() {
         }
         const notices = [
             blocked > 0
-                ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only the review creator can delete them.`
+                ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only a review admin can delete them.`
                 : null,
             failedIds.length > 0
                 ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
@@ -334,8 +398,8 @@ export default function TabularReviewsPage() {
     }
 
     async function handleDeleteReviewRow(review: TabularReview) {
-        if (user?.id && review.user_id !== user.id) {
-            setOwnerOnlyAction("delete this tabular review");
+        if (!can(roleFrom(review), "container.delete")) {
+            refuse(review.id, "delete this tabular review");
             return;
         }
         const snapshot = reviews;
@@ -775,15 +839,21 @@ export default function TabularReviewsPage() {
                 projects={projects}
                 canEdit={
                     !!detailsReview &&
-                    (!user?.id || detailsReview.user_id === user.id)
+                    can(roleFrom(detailsReview), "content.edit")
                 }
                 onClose={() => setDetailsReview(null)}
                 onSave={handleDetailsSave}
             />
 
-            <OwnerOnlyPopup
+            <PermissionDeniedPopup
                 open={!!ownerOnlyAction}
-                action={ownerOnlyAction ?? undefined}
+                action={ownerOnlyAction?.action}
+                requiredRole={ownerOnlyAction?.requiredRole}
+                contacts={
+                    ownerOnlyAction
+                        ? contactsByReviewId[ownerOnlyAction.reviewId]
+                        : null
+                }
                 onClose={() => setOwnerOnlyAction(null)}
             />
             <WarningPopup
@@ -795,7 +865,7 @@ export default function TabularReviewsPage() {
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}
                 title="Delete all selected reviews?"
-                message={`This will permanently delete every selected review you own, including selected reviews not currently shown. Their review results and associated data will also be deleted. Reviews owned by others will be skipped. ${selectedIds.length} reviews are selected.`}
+                message={`This will permanently delete every selected review you administer, including selected reviews not currently shown. Their review results and associated data will also be deleted. Reviews you cannot delete will be skipped. ${selectedIds.length} reviews are selected.`}
                 confirmLabel="Delete"
                 onCancel={() => setConfirmDeleteAllOpen(false)}
                 onConfirm={() => void handleDeleteSelected()}

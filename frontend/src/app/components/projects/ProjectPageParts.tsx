@@ -363,7 +363,8 @@ export function ProjectPageHeader({
     activeSection,
     creatingChat,
     creatingReview,
-    isOwner,
+    canManageProject,
+    roleKnown = true,
     onBackToProjects,
     onProjectRoot,
     onOpenDetails,
@@ -382,7 +383,14 @@ export function ProjectPageHeader({
     activeSection: ProjectWorkspaceSection;
     creatingChat: boolean;
     creatingReview: boolean;
-    isOwner: boolean;
+    /** Whether the caller holds access.manage on this project. */
+    canManageProject: boolean;
+    /**
+     * False while the project row — and with it the caller's role — is still
+     * loading. Role-gated menu items disable themselves rather than offering
+     * an action whose outcome nobody knows yet.
+     */
+    roleKnown?: boolean;
     onBackToProjects: () => void;
     onProjectRoot: () => void;
     onOpenDetails: () => void;
@@ -414,7 +422,7 @@ export function ProjectPageHeader({
             : activeSection === "assistant"
               ? {
                     onClick: onNewChat,
-                    disabled: creatingChat,
+                    disabled: creatingChat || !roleKnown,
                     icon: creatingChat ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
@@ -425,7 +433,7 @@ export function ProjectPageHeader({
                 }
               : {
                     onClick: onNewReview,
-                    disabled: creatingReview,
+                    disabled: creatingReview || !roleKnown,
                     icon: creatingReview ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
@@ -481,17 +489,23 @@ export function ProjectPageHeader({
                             <HeaderActionsMenu
                                 items={[
                                     {
-                                        label: isOwner
+                                        label: canManageProject
                                             ? "Edit details"
                                             : "View details",
                                         icon: Pencil,
                                         onSelect: onOpenDetails,
+                                        disabled: !roleKnown,
                                     },
                                     {
+                                        // Kept visible below admin so the
+                                        // refusal can name someone who can
+                                        // lift it; disabled only while the
+                                        // role itself is still unknown.
                                         label: "Delete",
                                         icon: Trash2,
                                         onSelect: onDeleteProject,
                                         variant: "danger",
+                                        disabled: !roleKnown,
                                     },
                                 ]}
                             />
