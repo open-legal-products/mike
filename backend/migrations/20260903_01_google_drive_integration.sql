@@ -1,4 +1,5 @@
--- 2026-08-25: Native Google Drive integration.
+-- Migration date: 2026-09-03
+-- Native Google Drive integration.
 --
 -- First-party Drive tools that call the GA Drive REST API directly with a
 -- per-user OAuth token — no dependency on Google's preview-gated MCP server.
