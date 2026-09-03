@@ -19,7 +19,9 @@ import {
     SettingsTextInput,
 } from "@/app/components/settings/SettingsTextInput";
 import { Modal } from "@/app/components/modals/Modal";
-import { NewMcpModal } from "@/app/components/settings/NewMcpModal";
+import {
+    ConnectorSetupNotice,
+    NewMcpModal } from "@/app/components/settings/NewMcpModal";
 import {
     MfaVerificationPopup,
     needsMfaVerification,
@@ -375,7 +377,7 @@ function GoogleDriveCard({
                 )}
             </div>
             {status !== null && !status.connected && status.schemaReady === false && (
-                <p className="mt-2 text-xs text-gray-500">
+                <p className="px-4 pb-4 text-xs text-gray-500">
                     Not available on this server yet: the database is missing
                     the Google Drive migration
                     (backend/migrations/20260903_01_google_drive_integration.sql).
@@ -386,7 +388,7 @@ function GoogleDriveCard({
                 !status.connected &&
                 status.schemaReady !== false &&
                 !status.configured && (
-                    <div className="mt-2 text-xs text-gray-500">
+                    <div className="px-4 pb-4 text-xs text-gray-500">
                         <p>
                             Not available on this server: the administrator
                             needs to configure a Google OAuth client (see
@@ -407,13 +409,13 @@ function GoogleDriveCard({
                 <button
                     type="button"
                     onClick={() => abortRef.current?.abort()}
-                    className="mt-2 text-xs text-gray-400 underline-offset-2 hover:underline"
+                    className="mx-4 mb-4 text-xs text-gray-400 underline-offset-2 hover:underline"
                 >
                     Cancel
                 </button>
             )}
             {error && (
-                <p className="mt-2 whitespace-pre-wrap text-xs text-red-600">
+                <p className="px-4 pb-4 whitespace-pre-wrap text-xs text-red-600">
                     {error}
                 </p>
             )}
@@ -435,9 +437,6 @@ export default function ConnectorsPage() {
         null,
     );
     const [addError, setAddError] = useState<string | null>(null);
-    // Operator-side setup text from the backend (code connector_setup_required):
-    // rendered as guidance in the modal body, not as a red failure line.
-    const [addSetupNotice, setAddSetupNotice] = useState<string | null>(null);
     const [addAuthMessage, setAddAuthMessage] = useState<string | null>(null);
     const [showAddToken, setShowAddToken] = useState(false);
     const [showAddAdvanced, setShowAddAdvanced] = useState(false);
@@ -451,6 +450,11 @@ export default function ConnectorsPage() {
         clearBearerToken: false,
     });
     const [detailError, setDetailError] = useState<string | null>(null);
+    // Setup steps from a Refresh on an unconfigured provider, shown inside
+    // the details modal (a page-level banner would sit behind it).
+    const [detailSetupNotice, setDetailSetupNotice] = useState<string | null>(
+        null,
+    );
     const [loadingConnectorId, setLoadingConnectorId] = useState<string | null>(
         null,
     );
@@ -516,6 +520,10 @@ export default function ConnectorsPage() {
             clearBearerToken: false,
         });
         setDetailError(null);
+        // detailSetupNotice is deliberately NOT reset here: the Add flow sets
+        // it in the same batch that selects the new connector, and this
+        // effect runs right after that render. It is cleared on open/close
+        // and before every sensitive action instead.
         setClearedBearerTokenConnectorId(null);
         setShowDetailToken(false);
         setShowDetailAdvanced(false);
@@ -560,9 +568,19 @@ export default function ConnectorsPage() {
                   null,
         );
         setDetailError(null);
+        setDetailSetupNotice(null);
         setLoadingConnectorId(connectorId);
         try {
-            replaceConnector(await getMcpConnector(connectorId));
+            const fresh = await getMcpConnector(connectorId);
+            replaceConnector(fresh);
+            // A connector created moments ago (the Add flow's setup-required
+            // handover) is not in this closure's `connectors`, so the seed
+            // above found nothing and replaceConnector only merges into an
+            // existing selection. Adopt the fetched record unless the user
+            // has since opened a different connector.
+            setSelectedConnectorDetails((current) =>
+                current && current.id !== connectorId ? current : fresh,
+            );
         } catch (err) {
             setDetailError(
                 userFacingApiError(
@@ -583,6 +601,7 @@ export default function ConnectorsPage() {
     ) => {
         setError(null);
         setDetailError(null);
+        setDetailSetupNotice(null);
         try {
             if (await needsMfaVerification()) {
                 setPendingMfaAction(action);
@@ -592,6 +611,17 @@ export default function ConnectorsPage() {
         } catch (err) {
             if (isMfaRequiredError(err)) {
                 setPendingMfaAction(action);
+                return;
+            }
+            if (
+                isConnectorSetupError(err) &&
+                action.type === "refresh" &&
+                selectedConnectorId === action.connectorId
+            ) {
+                // Refresh from the details modal on a Slack/Google connector
+                // whose OAuth client is not configured on this server: show
+                // the operator steps where the user is looking.
+                setDetailSetupNotice(err.message);
                 return;
             }
             const message = userFacingApiError(err, "Action failed.");
@@ -618,7 +648,6 @@ export default function ConnectorsPage() {
         setAddStep("form");
         setAddResult(null);
         setAddError(null);
-        setAddSetupNotice(null);
         setAddAuthMessage(null);
         setShowAddToken(false);
         setShowAddAdvanced(false);
@@ -776,6 +805,9 @@ export default function ConnectorsPage() {
             setAddStep("working");
             setAddError(null);
             setAddAuthMessage(null);
+            // Kept outside the try so the setup-required branch below can
+            // hand the already-created connector to the details modal.
+            let createdConnector: McpConnectorSummary | null = null;
             try {
                 const headers = parseCustomHeaders(addDraft.customHeaders);
                 const connector = await createMcpConnector({
@@ -784,6 +816,7 @@ export default function ConnectorsPage() {
                     bearerToken: addDraft.bearerToken.trim() || null,
                     ...(headers ? { headers } : {}),
                 });
+                createdConnector = connector;
                 let refreshed: McpConnectorSummary;
                 try {
                     refreshed = await refreshMcpConnectorTools(connector.id);
@@ -834,12 +867,18 @@ export default function ConnectorsPage() {
                 }
                 setAddStep("form");
                 setAddAuthMessage(null);
-                if (isConnectorSetupError(err)) {
-                    // The connector row was created; only the OAuth start was
-                    // refused. The instructions name the env vars and the
-                    // redirect URI, so show them where the user is looking.
-                    setAddSetupNotice(err.message);
-                    setAddError(null);
+                if (isConnectorSetupError(err) && createdConnector) {
+                    // The connector row exists; only the OAuth start was
+                    // refused because this deployment lacks the provider's
+                    // OAuth client. Leaving the Add form open would invite a
+                    // second Connect click — and a duplicate connector — so
+                    // hand over to the new connector's details modal and show
+                    // the operator steps there. Refresh re-runs the flow
+                    // once the operator has configured the backend.
+                    const message = err.message;
+                    closeAddModal();
+                    await openConnectorDetails(createdConnector.id);
+                    setDetailSetupNotice(message);
                     return;
                 }
                 setAddError(
@@ -858,6 +897,7 @@ export default function ConnectorsPage() {
             async () => {
                 setBusyKey(`save:${selectedConnector.id}`);
                 setDetailError(null);
+        setDetailSetupNotice(null);
                 try {
                     const headers = parseCustomHeaders(
                         detailDraft.customHeaders,
@@ -900,6 +940,7 @@ export default function ConnectorsPage() {
             async () => {
                 setBusyKey(`clear-token:${connectorId}`);
                 setDetailError(null);
+        setDetailSetupNotice(null);
                 setClearedBearerTokenConnectorId(null);
                 try {
                     const saved = await updateMcpConnector(connectorId, {
@@ -1117,7 +1158,6 @@ export default function ConnectorsPage() {
                 step={addStep}
                 result={addResult}
                 error={addError}
-                setupNotice={addSetupNotice}
                 authMessage={addAuthMessage}
                 showToken={showAddToken}
                 showAdvanced={showAddAdvanced}
@@ -1136,6 +1176,7 @@ export default function ConnectorsPage() {
                 connector={selectedConnector}
                 draft={detailDraft}
                 error={detailError}
+                setupNotice={detailSetupNotice}
                 busyKey={busyKey}
                 toolsLoading={loadingConnectorId === selectedConnectorId}
                 clearTokenStatus={
@@ -1255,6 +1296,7 @@ function McpConnectorDetailsModal({
     connector,
     draft,
     error,
+    setupNotice,
     busyKey,
     toolsLoading,
     clearTokenStatus,
@@ -1276,6 +1318,7 @@ function McpConnectorDetailsModal({
     connector: McpConnectorSummary | null;
     draft: DetailDraft;
     error: string | null;
+    setupNotice: string | null;
     busyKey: string | null;
     toolsLoading: boolean;
     clearTokenStatus: "idle" | "clearing" | "cleared";
@@ -1360,6 +1403,7 @@ function McpConnectorDetailsModal({
         >
             {connector && (
                 <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pb-4">
+                    {setupNotice && <ConnectorSetupNotice text={setupNotice} />}
                     <ConnectorForm
                         draft={draft}
                         showToken={showToken}

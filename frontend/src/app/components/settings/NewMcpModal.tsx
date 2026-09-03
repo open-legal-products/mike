@@ -39,12 +39,6 @@ interface NewMcpModalProps {
     step: NewMcpStep;
     result: McpConnectorSummary | null;
     error: string | null;
-    /**
-     * Setup steps the backend returned because this deployment lacks the
-     * provider's OAuth client. Guidance for the operator, not a failure of
-     * anything the user typed — so it renders in the body, above the form.
-     */
-    setupNotice?: string | null;
     authMessage: string | null;
     showToken: boolean;
     showAdvanced: boolean;
@@ -62,7 +56,6 @@ export function NewMcpModal({
     step,
     result,
     error,
-    setupNotice = null,
     authMessage,
     showToken,
     showAdvanced,
@@ -149,20 +142,6 @@ export function NewMcpModal({
                         The assistant will have access to this MCP server and
                         its enabled tools.
                     </p>
-                    {setupNotice && (
-                        <div
-                            role="status"
-                            className="rounded-xl border border-white/70 bg-white/75 px-3 py-2 text-xs text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.03),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-xl"
-                        >
-                            <p className="font-medium text-gray-900">
-                                This server needs a one-time setup by the
-                                administrator
-                            </p>
-                            <p className="mt-1 whitespace-pre-wrap break-words">
-                                {setupNotice}
-                            </p>
-                        </div>
-                    )}
                     <div className="flex flex-wrap items-center gap-2">
                         {CONNECTOR_PRESETS.map((preset) => (
                             <button
@@ -197,6 +176,27 @@ export function NewMcpModal({
                 </div>
             )}
         </Modal>
+    );
+}
+
+/**
+ * Operator-side setup steps returned by the backend (code
+ * `connector_setup_required`). Rendered as guidance, not as a failure of
+ * anything the user typed. Lives here next to the Add modal but is shown in
+ * the connector details modal, which is where the Add flow hands over when
+ * a just-created connector turns out to need deployment-side setup.
+ */
+export function ConnectorSetupNotice({ text }: { text: string }) {
+    return (
+        <div
+            role="status"
+            className="rounded-xl border border-white/70 bg-white/75 px-3 py-2 text-xs text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.03),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-xl"
+        >
+            <p className="font-medium text-gray-900">
+                This server needs a one-time setup by the administrator
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words">{text}</p>
+        </div>
     );
 }
 

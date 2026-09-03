@@ -109,7 +109,7 @@ describe("ConnectorsPage OAuth poll cancellation", () => {
         vi.mocked(refreshMcpConnectorTools).mockRejectedValue(
             new MikeApiError({
                 message: "oauth required",
-                status: 401,
+                status: 409,
                 code: "oauth_required",
             }),
         );
@@ -267,17 +267,20 @@ describe("ConnectorsPage operator setup guidance", () => {
         cleanup();
     });
 
-    it("shows the backend's setup instructions in the Add modal instead of a generic failure", async () => {
+    it("hands a just-created connector that needs deployment setup to its details modal, with the instructions", async () => {
         // Slack has no dynamic client registration: the connector row is
         // created, the tool refresh says "oauth required", and the OAuth
         // start is refused with connector_setup_required carrying the
-        // operator steps and this deployment's redirect URI.
+        // operator steps and this deployment's redirect URI. The Add modal
+        // must NOT stay open on its form (a second Connect would create a
+        // duplicate); the new connector's details open instead.
         vi.mocked(getGoogleDriveStatus).mockReturnValue(new Promise(() => {}));
         vi.mocked(createMcpConnector).mockResolvedValue(makeSummary());
+        vi.mocked(getMcpConnector).mockResolvedValue(makeSummary());
         vi.mocked(refreshMcpConnectorTools).mockRejectedValue(
             new MikeApiError({
                 message: "oauth required",
-                status: 401,
+                status: 409,
                 code: "oauth_required",
             }),
         );
@@ -312,9 +315,11 @@ describe("ConnectorsPage operator setup guidance", () => {
         expect(notice.textContent).toContain(
             "http://localhost:3000/api/user/mcp-connectors/oauth/callback",
         );
-        // Back on the form, and NOT the red "Failed to add connector" line.
+        // The Add modal is gone (no "New MCP connector" breadcrumb, no red
+        // "Failed to add connector" line); the details modal is open.
         expect(screen.queryByText(/failed to add connector/i)).toBeNull();
-        expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+        expect(screen.queryByText("New MCP connector")).toBeNull();
+        expect(screen.getByRole("button", { name: /delete connector/i })).toBeTruthy();
     });
 
     it("tells the operator which redirect URI to register while Drive is not configured", async () => {

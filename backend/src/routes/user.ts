@@ -1676,8 +1676,14 @@ userRouter.post(
                 connectorId: req.params.connectorId,
                 error: errorMessage(err),
             });
+            // NOT a 401: since authentication moved to HttpOnly cookies the
+            // browser treats every 401 from this API as "your Mike session is
+            // gone" and logs the user out (frontend authenticatedFetch). This
+            // is the UPSTREAM server wanting authorization, and the Mike
+            // session is fine — 409 says "the connector is not in a state
+            // where tools can be listed"; the client keys on `code`.
             if (err instanceof McpOAuthRequiredError) {
-                return void res.status(401).json({
+                return void res.status(409).json({
                     code: err.code,
                     detail: "This connector needs to be authorized again.",
                 });
