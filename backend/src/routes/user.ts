@@ -41,7 +41,15 @@ import {
     setUserMcpToolEnabled,
     startUserMcpConnectorOAuth,
     updateUserMcpConnector,
+    ConnectorSetupError,
 } from "../lib/mcpConnectors";
+import { conciseMcpErrorMessage } from "../lib/mcp/errors";
+import {
+    completeGoogleDriveOAuth,
+    disconnectGoogleDrive,
+    getGoogleDriveStatus,
+    startGoogleDriveOAuth,
+} from "../lib/integrations/googleDrive";
 import {
     deleteAllUserChats,
     deleteAllUserTabularReviews,
@@ -1570,6 +1578,16 @@ userRouter.post(
                 connectorId: req.params.connectorId,
                 error: detail,
             });
+            // The setup error is static text this repo authors (with only our
+            // own redirect URI interpolated), so it is safe to hand to the
+            // browser — and it is the one failure here the user can fix.
+            // Everything else may carry SDK-embedded upstream bodies and stays
+            // a fixed string; the operator reads the real message in the log.
+            if (err instanceof ConnectorSetupError) {
+                return void res
+                    .status(400)
+                    .json({ code: err.code, detail: err.message });
+            }
             res.status(400).json({
                 detail: "Connector authorization could not be started.",
             });
@@ -1602,9 +1620,13 @@ userRouter.get("/mcp-connectors/oauth/callback", async (req, res) => {
                 ),
             );
     } catch (err) {
-        const detail = errorMessage(err);
+        // The popup only ever shows a fixed, sanitized string. The operator
+        // gets both the raw message and the concise diagnostic — the SDK
+        // embeds entire server response bodies, including HTML error pages,
+        // in its messages, so the concise form is what is actually readable.
         console.error("[user/mcp-connectors] oauth callback failed", {
-            error: detail,
+            error: errorMessage(err),
+            diagnostic: conciseMcpErrorMessage(err),
             stateHash: shortHash(state),
             hasCode: !!code,
             hasError: !!error,
@@ -1646,14 +1668,22 @@ userRouter.post(
             );
             res.json(connector);
         } catch (err) {
-            const detail = errorMessage(err);
+            // Full message (with any embedded response body) goes to the log;
+            // the user gets the concise diagnostic — never a raw HTML error
+            // page — plus the versioned-endpoint hint for Google URLs.
             console.error("[user/mcp-connectors] refresh failed", {
                 userId,
                 connectorId: req.params.connectorId,
-                error: detail,
+                error: errorMessage(err),
             });
+            // NOT a 401: since authentication moved to HttpOnly cookies the
+            // browser treats every 401 from this API as "your Mike session is
+            // gone" and logs the user out (frontend authenticatedFetch). This
+            // is the UPSTREAM server wanting authorization, and the Mike
+            // session is fine — 409 says "the connector is not in a state
+            // where tools can be listed"; the client keys on `code`.
             if (err instanceof McpOAuthRequiredError) {
-                return void res.status(401).json({
+                return void res.status(409).json({
                     code: err.code,
                     detail: "This connector needs to be authorized again.",
                 });
@@ -1661,6 +1691,125 @@ userRouter.post(
             res.status(400).json({
                 detail: "Connector tools could not be refreshed.",
             });
+        }
+    },
+);
+
+// ---------------------------------------------------------------------------
+// Native Google Drive integration (first-party, GA Drive REST API — no MCP
+// preview program required). One connection per user; the popup pages reuse
+// the MCP OAuth popup renderer.
+// ---------------------------------------------------------------------------
+
+// GET /user/integrations/google-drive
+userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    try {
+        // The card shows the exact redirect URI to register while the client
+        // is not configured yet, so the operator never has to guess it. In
+        // production backendPublicUrl throws without API_PUBLIC_URL; that is
+        // a deployment error to report as "unknown", not a status failure.
+        let redirectUri: string | null = null;
+        try {
+            redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
+        } catch {
+            redirectUri = null;
+        }
+        res.json({ ...(await getGoogleDriveStatus(userId)), redirectUri });
+    } catch (err) {
+        console.error("[google-drive] status failed", {
+            userId,
+            error: errorMessage(err),
+        });
+        res.status(500).json({ detail: "Failed to load Google Drive status." });
+    }
+});
+
+// POST /user/integrations/google-drive/oauth/start
+userRouter.post(
+    "/integrations/google-drive/oauth/start",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        try {
+            const redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
+            const result = await startGoogleDriveOAuth(userId, redirectUri);
+            res.json(result);
+        } catch (err) {
+            const detail = errorMessage(err);
+            console.error("[google-drive] oauth start failed", {
+                userId,
+                error: detail,
+            });
+            // Same allowlist as the MCP start route: only the repo-authored
+            // setup instructions reach the browser verbatim. A DB or crypto
+            // failure here must not echo its message to the client.
+            if (err instanceof ConnectorSetupError) {
+                return void res
+                    .status(400)
+                    .json({ code: err.code, detail: err.message });
+            }
+            res.status(400).json({
+                detail: "Google Drive authorization could not be started.",
+            });
+        }
+    },
+);
+
+// GET /user/integrations/google-drive/oauth/callback
+userRouter.get(
+    "/integrations/google-drive/oauth/callback",
+    async (req, res) => {
+        const nonce = crypto.randomBytes(16).toString("base64");
+        const state =
+            typeof req.query.state === "string" ? req.query.state : "";
+        const code = typeof req.query.code === "string" ? req.query.code : "";
+        const error =
+            typeof req.query.error === "string" ? req.query.error : undefined;
+        try {
+            if (error) throw new Error(error);
+            if (!state || !code)
+                throw new Error("OAuth callback is missing state or code.");
+            await completeGoogleDriveOAuth(state, code);
+            res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+                .type("html")
+                .send(
+                    mcpOAuthPopupHtml(
+                        { success: true, connectorId: "google-drive" },
+                        nonce,
+                    ),
+                );
+        } catch (err) {
+            const detail = errorMessage(err);
+            console.error("[google-drive] oauth callback failed", {
+                error: detail,
+                hasCode: !!code,
+            });
+            res.status(400)
+                .set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+                .type("html")
+                .send(mcpOAuthPopupHtml({ success: false, detail }, nonce));
+        }
+    },
+);
+
+// DELETE /user/integrations/google-drive
+userRouter.delete(
+    "/integrations/google-drive",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (_req, res) => {
+        const userId = res.locals.userId as string;
+        try {
+            await disconnectGoogleDrive(userId);
+            res.status(204).end();
+        } catch (err) {
+            console.error("[google-drive] disconnect failed", {
+                userId,
+                error: errorMessage(err),
+            });
+            res.status(500).json({ detail: "Failed to disconnect Google Drive." });
         }
     },
 );
