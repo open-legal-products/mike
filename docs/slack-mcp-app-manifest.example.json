@@ -15,7 +15,7 @@
     },
     "oauth_config": {
         "redirect_urls": [
-            "https://REPLACE-WITH-YOUR-BACKEND-HOST/user/mcp-connectors/oauth/callback"
+            "https://REPLACE-WITH-YOUR-MIKE-HOST/api/user/mcp-connectors/oauth/callback"
         ],
         "scopes": {
             "bot": ["users:read"],
