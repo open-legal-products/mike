@@ -1,3 +1,4 @@
+import type { Db } from "./supabase";
 /**
  * Project / document access helpers.
  *
@@ -11,9 +12,6 @@
  * owner-only (delete, rename, member management).
  */
 
-import type { createServerSupabase } from "./supabase";
-
-type Db = ReturnType<typeof createServerSupabase>;
 
 export type ProjectAccess =
     | {

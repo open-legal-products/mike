@@ -6,7 +6,7 @@ vi.mock("../../lib/supabase", () => ({
 
 const loadReviewRow = vi.fn();
 const loadRowDocumentText = vi.fn();
-vi.mock("../../lib/tabular/tabular.rows", () => ({
+vi.mock("../../modules/tabular/tabular.rows", () => ({
     loadReviewRow: (...a: unknown[]) => loadReviewRow(...a),
     loadRowDocumentText: (...a: unknown[]) => loadRowDocumentText(...a),
 }));
@@ -15,15 +15,15 @@ vi.mock("../../lib/tabular/tabular.rows", () => ({
 // owner's provider keys). Stub only that resolution; the lease helpers exported
 // from the same module are the subject of the tests below and must stay real.
 const validateSelectedModel = vi.fn();
-vi.mock("../../lib/tabular/tabular.shared", async (importOriginal) => ({
+vi.mock("../../modules/tabular/tabular.shared", async (importOriginal) => ({
     ...(await importOriginal<
-        typeof import("../../lib/tabular/tabular.shared")
+        typeof import("../../modules/tabular/tabular.shared")
     >()),
     validateSelectedModel: (...a: unknown[]) => validateSelectedModel(...a),
 }));
 
 const queryTabularAllColumns = vi.fn();
-vi.mock("../../lib/tabular/tabular.extract", () => ({
+vi.mock("../../modules/tabular/tabular.extract", () => ({
     queryTabularAllColumns: (...a: unknown[]) => queryTabularAllColumns(...a),
 }));
 

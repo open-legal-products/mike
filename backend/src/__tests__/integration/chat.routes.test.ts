@@ -225,7 +225,7 @@ vi.mock("../../lib/chat", async (importOriginal) => {
     };
 });
 
-vi.mock("../../lib/userSettings", () => ({
+vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
         title_model: "test-model",
@@ -363,7 +363,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("uses the profile last-selected model when a new chat omits model", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
             title_model: null,
@@ -553,7 +553,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("uses the shared last-selected model for a local Word chat", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
             title_model: null,
@@ -1041,7 +1041,7 @@ describe("POST /chat — streaming endpoint", () => {
 
     it("keeps CourtListener disabled for Word chats even when legal research is enabled", async () => {
         const chatLib = await import("../../lib/chat");
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             title_model: "test-model",
             tabular_model: "test-model",
@@ -1096,7 +1096,7 @@ describe("PATCH /chat/:chatId", () => {
     });
 
     it("updates the chat and profile when a model is selected", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings");
         const res = await request(app)
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
@@ -1116,7 +1116,7 @@ describe("PATCH /chat/:chatId", () => {
     });
 
     it("updates the chat and profile when reasoning is selected", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings");
         const res = await request(app)
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
@@ -1142,7 +1142,7 @@ describe("PATCH /word-chat/:chatId/model", () => {
     });
 
     it("updates a cloud Word chat and the profile on selection", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings");
         const chatId = "6f783e59-35c4-4ddc-896a-94aa4d05a768";
         const documentId = "6f783e59-35c4-4ddc-896a-94aa4d05a767";
         const res = await request(app)

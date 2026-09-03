@@ -11,18 +11,14 @@ import {
 import {
     extractRowColumns,
     finalizeCell,
-} from "../lib/tabular/tabular.extractRow";
-import { loadReviewRow } from "../lib/tabular/tabular.rows";
-import {
     finishGenerationIfIdle,
+    loadReviewRow,
     renewGeneration,
     validateSelectedModel,
     TABULAR_GENERATION_HEARTBEAT_MS,
     type Column,
-} from "../lib/tabular/tabular.shared";
-import { createServerSupabase } from "../lib/supabase";
-
-type Db = ReturnType<typeof createServerSupabase>;
+} from "../modules/tabular/tabular.service";
+import { createServerSupabase, type Db } from "../lib/supabase";
 
 export interface ExtractionDeps {
     db: Db;

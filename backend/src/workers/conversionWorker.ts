@@ -6,9 +6,7 @@ import {
 } from "../lib/queue/conversionQueue";
 import { downloadFile, uploadFile } from "../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../lib/convert";
-import { createServerSupabase } from "../lib/supabase";
-
-type Db = ReturnType<typeof createServerSupabase>;
+import { createServerSupabase, type Db } from "../lib/supabase";
 
 /**
  * Convert one uploaded DOCX/DOC to PDF and finalize the document.

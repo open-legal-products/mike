@@ -1,6 +1,4 @@
-import { createServerSupabase } from "../supabase";
-
-export type Db = ReturnType<typeof createServerSupabase>;
+export type { Db } from "../supabase";
 
 export type McpTransport = "streamable_http";
 export type McpAuthType = "none" | "bearer" | "oauth";

@@ -42,7 +42,7 @@ vi.mock("../../lib/convert", async (importOriginal) => {
   return { ...actual, docxToPdf };
 });
 
-import { workflowAddonsRouter } from "../../routes/workflowAddons";
+import { workflowAddonsRouter } from "../../modules/workflows/workflowAddons.routes";
 
 function queryReturning(data: unknown[]) {
   const query: Record<string, unknown> = {};

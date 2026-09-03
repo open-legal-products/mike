@@ -33,12 +33,18 @@ import { createServerSupabase } from "../supabase";
 import { getConversionQueue, conversionJobId } from "../queue/conversionQueue";
 import { getExtractionQueue, extractionJobId } from "../queue/extractionQueue";
 import { withRedisTimeout } from "../queue/connection";
-import { finalizeCell } from "../tabular/tabular.extractRow";
-import { finishGenerationIfIdle } from "../tabular/tabular.shared";
+// KNOWN LAYERING INVERSION: lib/ normally must not import from modules/, but
+// the cell-finalization primitives are domain logic that belongs to the
+// tabular module. Import them ONLY through the module's service facade; do
+// not add further lib -> modules edges (a follow-up will move this sweep's
+// tabular half into the module instead).
+import {
+    finalizeCell,
+    finishGenerationIfIdle,
+} from "../../modules/tabular/tabular.service";
 import { redisEnabled } from "../dbq/driver";
 import { liveDbJobExists } from "../dbq/enqueue";
-
-type Db = ReturnType<typeof createServerSupabase>;
+import type { Db } from "../supabase";
 
 const DEFAULT_DOC_STALE_MS = 30 * 60 * 1000;
 

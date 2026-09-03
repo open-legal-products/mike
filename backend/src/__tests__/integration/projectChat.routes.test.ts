@@ -74,7 +74,7 @@ vi.mock("../../lib/chat", async (importOriginal) => {
     };
 });
 
-vi.mock("../../lib/userSettings", () => ({
+vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
         title_model: "test-model",
@@ -166,7 +166,7 @@ describe("POST /projects/:projectId/chat", () => {
     });
 
     it("uses the shared last-selected model when a new project chat omits model", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
             title_model: null,

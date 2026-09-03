@@ -21,6 +21,12 @@
 - [Tamper-evident exports](tamper-evident-exports.md) — document hashes and
   optional signed manifests
 
+## Backend
+
+- [Backend architecture](backend-architecture.md) — domain modules over a
+  shared kernel: module anatomy, the service contract, the layering rules, and
+  the fitness test that enforces them
+
 ## Frontend
 
 - [Design system](design-system.md) — color/typography/spacing tokens, the shared

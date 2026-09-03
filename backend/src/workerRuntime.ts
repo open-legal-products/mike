@@ -21,7 +21,7 @@ import {
 } from "./lib/dbq/handlers";
 import { enqueueDbJob } from "./lib/dbq/enqueue";
 import { runStaleWorkSweep } from "./lib/maintenance/staleWork";
-import { startUploadProcessingWorkers } from "./lib/uploadProcessing";
+import { startUploadProcessingWorkers } from "./modules/uploads/uploads.service";
 import { uploadProcessingConfiguration } from "./lib/runtimeConfig";
 import { createServerSupabase } from "./lib/supabase";
 

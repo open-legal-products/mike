@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { downloadFile, listFiles } from "./storage";
-import { createServerSupabase } from "./supabase";
+import type { Db } from "./supabase";
 
 const COURTLISTENER_BASE = "https://www.courtlistener.com/api/rest/v4";
 const COURTLISTENER_WEB_BASE = "https://www.courtlistener.com";
@@ -9,7 +9,7 @@ const COURTLISTENER_STORAGE_BASE = "https://storage.courtlistener.com";
 const COURTLISTENER_R2_OPINIONS_PREFIX = "courtlistener/opinions/by-cluster";
 
 type JsonRecord = Record<string, unknown>;
-type ServerSupabase = ReturnType<typeof createServerSupabase>;
+type ServerSupabase = Db;
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
     if (isDev) console.log(...args);

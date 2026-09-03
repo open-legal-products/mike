@@ -5,7 +5,7 @@ import {
     resolveEffectiveReasoningLevel,
     titleModelForChat,
 } from "../modelSelection";
-import type { createServerSupabase } from "../supabase";
+import type { Db } from "../supabase";
 
 const routerModels = {
     openrouter: ["anthropic/claude-sonnet-4.5"],
@@ -83,7 +83,7 @@ describe("resolveEffectiveReasoningLevel", () => {
 });
 
 describe("resolveEffectiveChatModel", () => {
-    const db = {} as ReturnType<typeof createServerSupabase>;
+    const db = {} as Db;
 
     it("uses an explicit request before persisted values", async () => {
         await expect(

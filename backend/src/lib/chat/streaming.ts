@@ -6,7 +6,7 @@ import {
 } from "../llm";
 import { resolveRequestedModel } from "../routerModels";
 import { UserFacingError } from "../userFacingError";
-import { createServerSupabase } from "../supabase";
+import type { Db } from "../supabase";
 import { buildUserMcpTools, type McpToolEvent } from "../mcpConnectors";
 import type { SourceDocument } from "../sourceDocuments";
 import {
@@ -217,7 +217,7 @@ export async function runLLMStream(params: {
   docStore: DocStore;
   docIndex: DocIndex;
   userId: string;
-  db: ReturnType<typeof createServerSupabase>;
+  db: Db;
   write: (s: string) => void;
   extraTools?: unknown[];
   includeResearchTools?: boolean;

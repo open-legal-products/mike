@@ -97,10 +97,32 @@ helpers in `frontend/src/app/lib/userFacingError.ts` for unexpected failures.
 
 ## Backend Structure
 
-- `backend/src/app.ts` configures Express, middleware, rate limits, and route
-  mounting.
-- HTTP handlers live in `backend/src/routes/`.
-- Reusable domain and infrastructure logic lives in `backend/src/lib/`.
+- Read `docs/backend-architecture.md` before adding or moving backend code.
+  It is the source of truth for the module layout, the layering rules, and
+  the test that enforces them.
+- `backend/src/app.ts` configures Express, middleware, rate limits, and mounts
+  one router per module.
+- HTTP handlers and their domain logic live in
+  `backend/src/modules/<domain>/`. `<name>.routes.ts` is the HTTP layer: it
+  parses params/query/body, calls the service, and maps typed results onto
+  status codes and JSON; it never queries the database. `<name>.service.ts`
+  is the module's facade (named re-exports only, exactly one per module) and,
+  for small modules, the implementation. Service code takes an explicit
+  `db: Db` (from `backend/src/lib/supabase.ts`) plus request-derived
+  primitives, returns typed results (`ServiceResult<T>` from
+  `backend/src/lib/serviceResult.ts` for new code), and never touches
+  `req`/`res`. SSE streaming loops are the one deliberate exception and stay
+  in the routes file.
+- Large modules split the service into topic files (`<name>.<topic>.ts`)
+  behind the facade. Import a module from outside (another module, a worker,
+  a job, `app.ts`) only through that facade.
+- `backend/src/lib/` is the shared kernel: infrastructure and cross-domain
+  primitives. It must not import from `backend/src/modules/`, and neither may
+  `backend/src/middleware/`. There is no `backend/src/routes/` directory; a
+  new HTTP surface is a new module.
+- `backend/src/__tests__/architecture.test.ts` checks these rules on every
+  test run. If it fails, fix the layering rather than the test; allowlist
+  entries need a comment explaining why.
 - Authentication and other request middleware live in
   `backend/src/middleware/`.
 - LLM provider creation is centralized in

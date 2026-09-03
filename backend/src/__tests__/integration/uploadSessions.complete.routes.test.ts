@@ -104,7 +104,7 @@ vi.mock("../../lib/storage", () => ({
   headFile: mocks.headFile,
 }));
 
-import { uploadSessionsRouter } from "../../routes/uploadSessions";
+import { uploadSessionsRouter } from "../../modules/uploads/uploads.routes";
 
 const app = express();
 app.use(express.json());

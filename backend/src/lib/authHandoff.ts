@@ -2,8 +2,7 @@ import crypto from "node:crypto";
 import type { Session } from "@supabase/supabase-js";
 import { createServerSupabase } from "./supabase";
 import { authHandoffEncryptionSecret } from "./runtimeConfig";
-
-type Db = ReturnType<typeof createServerSupabase>;
+import type { Db } from "./supabase";
 
 const HANDOFF_TABLE = "auth_handoff_tickets";
 const DEFAULT_TTL_SECONDS = 120;

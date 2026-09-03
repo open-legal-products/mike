@@ -1,6 +1,7 @@
 # Backend unit-test coverage
 
-The backend has a Vitest unit-test harness over `backend/src/lib/**`. This doc
+The backend has a Vitest unit-test harness whose coverage ratchet measures
+`backend/src/lib/**` and `backend/src/modules/**`. This doc
 tracks what is covered, what still needs tests, and how the coverage ratchet
 works — so you can pick up a checkbox below and land it as a small PR.
 
@@ -14,7 +15,9 @@ npm run test:coverage # same, plus the per-file coverage table + floor check
 ```
 
 Tests live throughout `backend/src/**/*.test.ts`, including `lib/__tests__/`,
-nested feature directories, `routes/__tests__/`, and `src/__tests__/integration/`.
+nested feature directories, `modules/<domain>/__tests__/`, and
+`src/__tests__/integration/`. `src/__tests__/architecture.test.ts` enforces
+the module layering described in `docs/backend-architecture.md`.
 Read a couple of the existing suites first (`lib/__tests__/access.test.ts`,
 `lib/__tests__/userDataCleanup.test.ts`) and match their conventions: plain
 in-memory Supabase query mocks for unit tests, no real network, one `describe`
@@ -48,10 +51,13 @@ Per-area statement coverage from `npm run test:coverage`:
 | `lib/mcp/**` | 6 | minimal |
 | `lib/userSettings.ts`, `lib/officeText.ts`, `lib/spreadsheet.ts` | 0 | ✗ |
 
-Global: **52.72% statements / 46.31% branches / 53.24% functions / 54.11%
-lines**. The global number remains relatively low because `src/lib/**` includes
-several large feature libs (toolDispatcher, documentOps, CourtListener, MCP,
-and provider adapters) that dominate the line count.
+Global: **51.26% statements / 44.30% branches / 55.05% functions / 53.03%
+lines**. The global number remains relatively low because the measured set
+includes several large feature libs (toolDispatcher, documentOps,
+CourtListener, MCP, and provider adapters) and — since the module
+reorganization widened the include to `src/modules/**` — every domain's route
+handlers and service layers, which are exercised mostly through the
+integration suites.
 
 ## TODO — untested libs, in priority order
 

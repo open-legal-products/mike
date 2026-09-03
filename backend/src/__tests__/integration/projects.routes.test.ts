@@ -132,7 +132,7 @@ vi.mock("../../lib/documentVersions", () => ({
 import { app } from "../../app";
 import crypto from "crypto";
 import { manifestPublicKey } from "../../lib/manifestSigning";
-import { createServerSupabase } from "../../lib/supabase";
+import { createServerSupabase, type Db } from "../../lib/supabase";
 
 const SIGNING_KEY = "3b".repeat(32);
 
@@ -154,7 +154,7 @@ function captureRpcArgs(): { args: unknown; name: string | undefined } {
             captured.args = args;
             return originalRpc(name, args as never);
         });
-        return db as unknown as ReturnType<typeof createServerSupabase>;
+        return db as unknown as Db;
     });
     return captured;
 }
@@ -334,7 +334,7 @@ describe("projects.routes", () => {
             vi.mocked(createServerSupabase).mockImplementationOnce(() => {
                 const db = mockSupabase();
                 db.rpc = rpcMock;
-                return db as unknown as ReturnType<typeof createServerSupabase>;
+                return db as unknown as Db;
             });
 
       const res = await request(app)

@@ -151,7 +151,7 @@ vi.mock("../../lib/access", () => ({
     listAccessibleProjectIds: vi.fn(async () => []),
 }));
 
-vi.mock("../../lib/userSettings", () => ({
+vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: (...args: unknown[]) => getUserModelSettings(...args),
     getUserApiKeys: vi.fn(async () => ({})),
     persistLastSelectedChatModel: vi.fn(async () => null),

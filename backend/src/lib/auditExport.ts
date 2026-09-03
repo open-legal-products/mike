@@ -5,10 +5,8 @@
 // (lib/dbq/handlers.ts), which runs in a worker where importing an Express
 // router would drag in the whole HTTP surface.
 
-import type { createServerSupabase } from "./supabase";
 import { normalizeDisplayName } from "./userLookup";
-
-type Db = ReturnType<typeof createServerSupabase>;
+import type { Db } from "./supabase";
 
 /** One CSV export is a single flat page; this caps the artifact size. */
 export const AUDIT_EXPORT_LIMIT = 2000;

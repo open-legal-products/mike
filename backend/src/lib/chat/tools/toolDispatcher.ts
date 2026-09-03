@@ -10,7 +10,6 @@ import {
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
 import { executeMcpToolCall, type McpToolEvent } from "../../mcpConnectors";
-import { createServerSupabase } from "../../supabase";
 import {
   type DocStore,
   type DocIndex,
@@ -70,6 +69,7 @@ import {
   upsertCourtlistenerCases,
   type CourtlistenerTurnState,
 } from "./courtlistenerTurnState";
+import type { Db } from "../../supabase";
 
 function sourceMaterialNotice(
   sourceKind: "document" | "library_template" | "workflow_asset" | undefined,
@@ -259,7 +259,7 @@ export async function runToolCalls(
   toolCalls: ToolCall[],
   docStore: DocStore,
   userId: string,
-  db: ReturnType<typeof createServerSupabase>,
+  db: Db,
   write: (s: string) => void,
   workflowStore?: WorkflowStore,
   tabularStore?: TabularCellStore,
