@@ -221,3 +221,30 @@ export function sanitizeMcpToolErrorResult(result: unknown): UnknownRecord {
         ...(structuredError ? { structuredError } : {}),
     };
 }
+
+/**
+ * A connector cannot start because THIS DEPLOYMENT is missing operator-side
+ * configuration: an OAuth client for a provider that refuses to register one
+ * dynamically (Google, Slack), so no amount of clicking will get past it.
+ *
+ * Why this is its own class: main's error posture forbids returning
+ * SDK-derived text to the browser, because the MCP SDK embeds entire upstream
+ * response bodies (Google's full HTML 400 page included) in `Error.message`.
+ * A plain `Error` therefore has to be sanitized into a fixed string — and
+ * that fixed string is useless to the person who actually needs to act,
+ * who on a fresh self-hosted install is usually the one clicking Connect.
+ *
+ * The message carried here is static text this repository authors (the
+ * provider registry's `setupInstructions`, or the Drive integration's own
+ * copy) with only the deployment's redirect URI interpolated — nothing a
+ * remote server or the SDK produced. Routes may therefore allowlist this
+ * class and return `message` verbatim without weakening the rule for
+ * everything else.
+ */
+export class ConnectorSetupError extends Error {
+    readonly code = "connector_setup_required";
+    constructor(message: string) {
+        super(message);
+        this.name = "ConnectorSetupError";
+    }
+}

@@ -28,6 +28,7 @@ import {
     type GoogleDriveStatus,
     type McpConnectorSummary,
     MikeApiError,
+    isConnectorSetupError,
     createMcpConnector,
     deleteMcpConnector,
     disconnectGoogleDrive,
@@ -362,20 +363,46 @@ function GoogleDriveCard({
                     <button
                         type="button"
                         onClick={() => void connect()}
-                        disabled={busy || !status.configured}
+                        disabled={
+                            busy ||
+                            !status.configured ||
+                            status.schemaReady === false
+                        }
                         className={`inline-flex h-9 items-center gap-1.5 text-sm ${settingsGlassPrimaryButtonClassName}`}
                     >
                         {busy ? "Waiting for Google…" : "Connect"}
                     </button>
                 )}
             </div>
-            {status !== null && !status.connected && !status.configured && (
+            {status !== null && !status.connected && status.schemaReady === false && (
                 <p className="mt-2 text-xs text-gray-500">
-                    Not available on this server: the administrator needs to
-                    configure a Google OAuth client (see &ldquo;Google Drive
-                    Integration&rdquo; in the README).
+                    Not available on this server yet: the database is missing
+                    the Google Drive migration
+                    (backend/migrations/20260903_01_google_drive_integration.sql).
+                    The administrator needs to apply it and restart.
                 </p>
             )}
+            {status !== null &&
+                !status.connected &&
+                status.schemaReady !== false &&
+                !status.configured && (
+                    <div className="mt-2 text-xs text-gray-500">
+                        <p>
+                            Not available on this server: the administrator
+                            needs to configure a Google OAuth client (see
+                            &ldquo;Google Drive Integration&rdquo; in the
+                            README).
+                        </p>
+                        {status.redirectUri && (
+                            <p className="mt-1">
+                                Authorized redirect URI to register:{" "}
+                                <code className="break-all text-gray-700">
+                                    {status.redirectUri}
+                                </code>
+                            </p>
+                        )}
+                    </div>
+                )}
             {busy && !status?.connected && (
                 <button
                     type="button"
@@ -408,6 +435,9 @@ export default function ConnectorsPage() {
         null,
     );
     const [addError, setAddError] = useState<string | null>(null);
+    // Operator-side setup text from the backend (code connector_setup_required):
+    // rendered as guidance in the modal body, not as a red failure line.
+    const [addSetupNotice, setAddSetupNotice] = useState<string | null>(null);
     const [addAuthMessage, setAddAuthMessage] = useState<string | null>(null);
     const [showAddToken, setShowAddToken] = useState(false);
     const [showAddAdvanced, setShowAddAdvanced] = useState(false);
@@ -588,6 +618,7 @@ export default function ConnectorsPage() {
         setAddStep("form");
         setAddResult(null);
         setAddError(null);
+        setAddSetupNotice(null);
         setAddAuthMessage(null);
         setShowAddToken(false);
         setShowAddAdvanced(false);
@@ -803,6 +834,14 @@ export default function ConnectorsPage() {
                 }
                 setAddStep("form");
                 setAddAuthMessage(null);
+                if (isConnectorSetupError(err)) {
+                    // The connector row was created; only the OAuth start was
+                    // refused. The instructions name the env vars and the
+                    // redirect URI, so show them where the user is looking.
+                    setAddSetupNotice(err.message);
+                    setAddError(null);
+                    return;
+                }
                 setAddError(
                     userFacingApiError(err, "Failed to add connector."),
                 );
@@ -1078,6 +1117,7 @@ export default function ConnectorsPage() {
                 step={addStep}
                 result={addResult}
                 error={addError}
+                setupNotice={addSetupNotice}
                 authMessage={addAuthMessage}
                 showToken={showAddToken}
                 showAdvanced={showAddAdvanced}

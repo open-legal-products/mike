@@ -25,6 +25,7 @@ import {
     encryptString,
     stateHash,
 } from "../mcp/client";
+import { ConnectorSetupError } from "../mcp/errors";
 import type { Db, McpToolEvent } from "../mcp/types";
 import { extractPdfText } from "../chat/tools/documentOps";
 
@@ -77,6 +78,24 @@ export function googleDriveOAuthEnv(): {
 
 type StateConfig = { codeVerifier: string; redirectUri: string };
 
+/**
+ * Operator-facing setup steps, with this deployment's real redirect URI
+ * substituted in so it can be pasted straight into the Google console. Static
+ * repo-authored text — see ConnectorSetupError for why that matters.
+ */
+export function googleDriveSetupInstructions(redirectUri: string): string {
+    return (
+        "Google Drive needs an OAuth client. Create one in Google Cloud Console " +
+        "(APIs & Services → Credentials → Create credentials → OAuth client ID → " +
+        `Web application) with authorized redirect URI ${redirectUri}, enable the ` +
+        "Google Drive API (drive.googleapis.com), then set " +
+        "GOOGLE_DRIVE_OAUTH_CLIENT_ID and GOOGLE_DRIVE_OAUTH_CLIENT_SECRET " +
+        "(or the GOOGLE_MCP_OAUTH_* equivalents) in backend/.env and restart. " +
+        "The redirect URI is derived from API_PUBLIC_URL, so fix that first if it " +
+        "is not the address browsers use to reach Mike."
+    );
+}
+
 export async function startGoogleDriveOAuth(
     userId: string,
     redirectUri: string,
@@ -84,14 +103,7 @@ export async function startGoogleDriveOAuth(
 ): Promise<{ authorizationUrl: string }> {
     const env = googleDriveOAuthEnv();
     if (!env.clientId || !env.clientSecret) {
-        throw new Error(
-            "Google Drive needs an OAuth client. Create one in Google Cloud Console " +
-                "(APIs & Services → Credentials → Create credentials → OAuth client ID → " +
-                `Web application) with authorized redirect URI ${redirectUri}, enable the ` +
-                "Google Drive API (drive.googleapis.com), then set " +
-                "GOOGLE_DRIVE_OAUTH_CLIENT_ID and GOOGLE_DRIVE_OAUTH_CLIENT_SECRET " +
-                "(or the GOOGLE_MCP_OAUTH_* equivalents) in backend/.env and restart.",
-        );
+        throw new ConnectorSetupError(googleDriveSetupInstructions(redirectUri));
     }
 
     const codeVerifier = base64Url(crypto.randomBytes(32));
@@ -259,16 +271,53 @@ async function loadTokenRow(userId: string, db: Db): Promise<TokenRow | null> {
     return (data as TokenRow | null) ?? null;
 }
 
+export type GoogleDriveStatus = {
+    connected: boolean;
+    scope: string | null;
+    /** Both halves of the OAuth client are set in the environment. */
+    configured: boolean;
+    /**
+     * The token tables exist. False means the Drive migration has not been
+     * applied to this database — the one setup step an env var cannot
+     * reveal, and without this flag it surfaced as a 500 that the card could
+     * only render as a misleading "administrator needs to configure an OAuth
+     * client".
+     */
+    schemaReady: boolean;
+};
+
+/**
+ * PostgREST answers a query against a table it cannot find with PGRST205
+ * ("Could not find the table … in the schema cache"); a direct Postgres
+ * connection would say 42P01 (undefined_table). Either one means the Drive
+ * migration is missing, not that the user is disconnected.
+ */
+function isMissingTableError(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const code = (error as { code?: unknown }).code;
+    return code === "PGRST205" || code === "42P01";
+}
+
 export async function getGoogleDriveStatus(
     userId: string,
     db: Db = createServerSupabase(),
-): Promise<{ connected: boolean; scope: string | null; configured: boolean }> {
+): Promise<GoogleDriveStatus> {
     const env = googleDriveOAuthEnv();
-    const row = await loadTokenRow(userId, db);
+    const configured = !!(env.clientId && env.clientSecret);
+    let row: TokenRow | null;
+    try {
+        row = await loadTokenRow(userId, db);
+    } catch (error) {
+        if (isMissingTableError(error)) {
+            return { connected: false, scope: null, configured, schemaReady: false };
+        }
+        throw error;
+    }
     return {
         connected: !!row?.encrypted_access_token,
         scope: row?.scope ?? null,
-        configured: !!(env.clientId && env.clientSecret),
+        configured,
+        schemaReady: true,
     };
 }
 

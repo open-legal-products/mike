@@ -368,6 +368,21 @@ describe("startUserMcpConnectorOAuth", () => {
                 db,
             ),
         ).rejects.toThrow(/SLACK_MCP_OAUTH_CLIENT_ID/);
+        // Typed so the route can allowlist it: this is repo-authored text
+        // with our own redirect URI in it, not SDK output, so it may reach
+        // the browser verbatim while every other failure stays sanitized.
+        await expect(
+            startUserMcpConnectorOAuth(
+                "user-1",
+                connector.id,
+                "https://app.test/callback",
+                db,
+            ),
+        ).rejects.toMatchObject({
+            name: "ConnectorSetupError",
+            code: "connector_setup_required",
+            message: expect.stringContaining("https://app.test/callback"),
+        });
         expect(authMock).not.toHaveBeenCalled();
     });
 

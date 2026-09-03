@@ -41,6 +41,7 @@ import {
     setUserMcpToolEnabled,
     startUserMcpConnectorOAuth,
     updateUserMcpConnector,
+    ConnectorSetupError,
 } from "../lib/mcpConnectors";
 import { conciseMcpErrorMessage } from "../lib/mcp/errors";
 import {
@@ -1577,6 +1578,16 @@ userRouter.post(
                 connectorId: req.params.connectorId,
                 error: detail,
             });
+            // The setup error is static text this repo authors (with only our
+            // own redirect URI interpolated), so it is safe to hand to the
+            // browser — and it is the one failure here the user can fix.
+            // Everything else may carry SDK-embedded upstream bodies and stays
+            // a fixed string; the operator reads the real message in the log.
+            if (err instanceof ConnectorSetupError) {
+                return void res
+                    .status(400)
+                    .json({ code: err.code, detail: err.message });
+            }
             res.status(400).json({
                 detail: "Connector authorization could not be started.",
             });
@@ -1685,10 +1696,20 @@ userRouter.post(
 // ---------------------------------------------------------------------------
 
 // GET /user/integrations/google-drive
-userRouter.get("/integrations/google-drive", requireAuth, async (_req, res) => {
+userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     try {
-        res.json(await getGoogleDriveStatus(userId));
+        // The card shows the exact redirect URI to register while the client
+        // is not configured yet, so the operator never has to guess it. In
+        // production backendPublicUrl throws without API_PUBLIC_URL; that is
+        // a deployment error to report as "unknown", not a status failure.
+        let redirectUri: string | null = null;
+        try {
+            redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
+        } catch {
+            redirectUri = null;
+        }
+        res.json({ ...(await getGoogleDriveStatus(userId)), redirectUri });
     } catch (err) {
         console.error("[google-drive] status failed", {
             userId,
@@ -1715,7 +1736,17 @@ userRouter.post(
                 userId,
                 error: detail,
             });
-            res.status(400).json({ detail });
+            // Same allowlist as the MCP start route: only the repo-authored
+            // setup instructions reach the browser verbatim. A DB or crypto
+            // failure here must not echo its message to the client.
+            if (err instanceof ConnectorSetupError) {
+                return void res
+                    .status(400)
+                    .json({ code: err.code, detail: err.message });
+            }
+            res.status(400).json({
+                detail: "Google Drive authorization could not be started.",
+            });
         }
     },
 );

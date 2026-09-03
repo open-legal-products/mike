@@ -74,7 +74,9 @@ const PROVIDERS: McpOAuthProviderQuirks[] = [
             "Google Cloud Console (APIs & Services → Credentials → Create credentials → " +
             `OAuth client ID → Web application) with authorized redirect URI ${redirectUri}, ` +
             "then set GOOGLE_MCP_OAUTH_CLIENT_ID and GOOGLE_MCP_OAUTH_CLIENT_SECRET in " +
-            "backend/.env (see .env.example) and restart the backend.",
+            "backend/.env (see .env.example) and restart the backend. The redirect URI " +
+            "is derived from API_PUBLIC_URL, so fix that first if it is not the address " +
+            "browsers use to reach Mike.",
         // Google's MCP endpoints are versioned, and their discovery metadata
         // advertises the UNversioned path (`…/mcp`), so hitting the advertised
         // path yields an opaque generic 400. Users who copy the URL from the
@@ -111,7 +113,9 @@ const PROVIDERS: McpOAuthProviderQuirks[] = [
             "under the app's Agents settings, enable PKCE under OAuth & Permissions, and " +
             `add ${redirectUri} as a redirect URL (Slack requires HTTPS). Then set ` +
             "SLACK_MCP_OAUTH_CLIENT_ID and SLACK_MCP_OAUTH_CLIENT_SECRET in backend/.env " +
-            "(see .env.example) and restart the backend.",
+            "(see .env.example) and restart the backend. The redirect URI is derived from " +
+            "API_PUBLIC_URL, so fix that first if it is not the HTTPS address browsers " +
+            "use to reach Mike.",
         // Slack serves exactly one MCP endpoint. Anything else on the
         // slack.com zone answers with a 302 redirect or an HTML page — the
         // SDK then fails with an opaque non-2xx error, so point the user at

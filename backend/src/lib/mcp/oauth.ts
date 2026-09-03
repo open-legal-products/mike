@@ -20,6 +20,7 @@ import {
     stateHash,
     validateRemoteMcpUrl,
 } from "./client";
+import { ConnectorSetupError } from "./errors";
 import { mcpOAuthProviderFor } from "./providers";
 import {
     CLIENT_INFO,
@@ -766,7 +767,9 @@ export async function startUserMcpConnectorOAuth(
     if (!env.clientId && providerQuirks?.setupInstructions) {
         const stored = await loadOAuthToken(connector.id, db);
         if (!stored?.client_id) {
-            throw new Error(providerQuirks.setupInstructions(redirectUri));
+            throw new ConnectorSetupError(
+                providerQuirks.setupInstructions(redirectUri),
+            );
         }
     }
     // Scope is intentionally left to the SDK when not explicitly configured: it

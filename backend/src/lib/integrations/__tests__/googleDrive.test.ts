@@ -3,8 +3,10 @@ import {
     GOOGLE_DRIVE_SCOPE,
     buildGoogleDriveTools,
     executeGoogleDriveToolCall,
+    getGoogleDriveStatus,
     startGoogleDriveOAuth,
 } from "../googleDrive";
+import { ConnectorSetupError } from "../../mcp/errors";
 import { encryptString } from "../../mcp/client";
 import type { Db } from "../../mcp/types";
 
@@ -114,6 +116,11 @@ describe("startGoogleDriveOAuth", () => {
         await expect(
             startGoogleDriveOAuth("user-1", "https://app.test/cb", db),
         ).rejects.toThrow(/https:\/\/app\.test\/cb/);
+        // The typed class is what lets the route return this text to the
+        // browser; a plain Error would be sanitized into a fixed string.
+        await expect(
+            startGoogleDriveOAuth("user-1", "https://app.test/cb", db),
+        ).rejects.toBeInstanceOf(ConnectorSetupError);
     });
 
     it("builds a PKCE + offline-access authorization URL and stores state", async () => {
@@ -137,6 +144,80 @@ describe("startGoogleDriveOAuth", () => {
         expect(url.searchParams.get("prompt")).toBe("consent");
         expect(inserts).toHaveLength(1);
         expect(inserts[0].table).toBe("google_drive_oauth_states");
+    });
+});
+
+describe("getGoogleDriveStatus", () => {
+    it("reports the schema as ready and the client as configured", async () => {
+        const status = await getGoogleDriveStatus("user-1", makeDb({}));
+        expect(status).toEqual({
+            connected: false,
+            scope: null,
+            configured: true,
+            schemaReady: true,
+        });
+    });
+
+    it("reports a missing Drive migration instead of failing the status call", async () => {
+        // PostgREST's "table not in schema cache" — what a deployment that
+        // set the env vars but never applied the migration actually gets.
+        // Before this flag the route answered 500 and the card blamed the
+        // OAuth client, which was configured perfectly well.
+        const db = {
+            from() {
+                return {
+                    select() {
+                        return {
+                            eq() {
+                                return {
+                                    maybeSingle: () =>
+                                        Promise.resolve({
+                                            data: null,
+                                            error: {
+                                                code: "PGRST205",
+                                                message:
+                                                    "Could not find the table 'public.user_google_drive_tokens' in the schema cache",
+                                            },
+                                        }),
+                                };
+                            },
+                        };
+                    },
+                };
+            },
+        } as unknown as Db;
+        const status = await getGoogleDriveStatus("user-1", db);
+        expect(status).toEqual({
+            connected: false,
+            scope: null,
+            configured: true,
+            schemaReady: false,
+        });
+    });
+
+    it("still surfaces unrelated database errors", async () => {
+        const db = {
+            from() {
+                return {
+                    select() {
+                        return {
+                            eq() {
+                                return {
+                                    maybeSingle: () =>
+                                        Promise.resolve({
+                                            data: null,
+                                            error: { code: "57P01", message: "terminating connection" },
+                                        }),
+                                };
+                            },
+                        };
+                    },
+                };
+            },
+        } as unknown as Db;
+        await expect(getGoogleDriveStatus("user-1", db)).rejects.toMatchObject({
+            code: "57P01",
+        });
     });
 });
 
