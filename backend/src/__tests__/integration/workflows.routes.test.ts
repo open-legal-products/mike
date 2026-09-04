@@ -628,6 +628,134 @@ describe("workflows.routes", () => {
 
       expect(res.status).toBe(204);
     });
+
+    // Revoking used to fire the delete and ignore its result: a failed
+    // delete and an unknown share id both answered 204, so the client
+    // dropped the row from the list while the person kept access.
+    describe("DELETE /workflows/:workflowId/shares/:shareId", () => {
+      beforeEach(() => {
+        supabaseState.tables.workflows = {
+          data: { id: "w-personal", user_id: "u1", org_id: null },
+          error: null,
+        };
+      });
+
+      it("returns 204 when a row was actually removed", async () => {
+        supabaseState.tables.workflow_shares = {
+          data: [{ id: "s1" }],
+          error: null,
+        };
+
+        const res = await request(app)
+          .delete("/workflows/w-personal/shares/s1")
+          .set(...AUTH);
+
+        expect(res.status).toBe(204);
+      });
+
+      it("returns 404 when the share id matched nothing", async () => {
+        supabaseState.tables.workflow_shares = { data: [], error: null };
+
+        const res = await request(app)
+          .delete("/workflows/w-personal/shares/s-unknown")
+          .set(...AUTH);
+
+        expect(res.status).toBe(404);
+        expect(res.body.detail).toBe("Access grant not found");
+      });
+
+      it("reports a failed delete instead of a false 204", async () => {
+        supabaseState.tables.workflow_shares = {
+          data: null,
+          error: { message: "boom" },
+        };
+
+        const res = await request(app)
+          .delete("/workflows/w-personal/shares/s1")
+          .set(...AUTH);
+
+        expect(res.status).toBe(500);
+        expect(res.body.detail).toBe("Something went wrong. Please try again.");
+      });
+    });
+
+    // A rejected batch must leave nothing behind: the loop used to validate
+    // and write one email at a time, so a bad third address returned 400
+    // with the first two overrides already persisted.
+    it("writes no org override when a later email in the batch is invalid", async () => {
+      supabaseState.tables.workflows = {
+        data: { id: "w-org", user_id: "u1", org_id: "org-1" },
+        error: null,
+      };
+      const upserts: unknown[] = [];
+      vi.mocked(createServerSupabase).mockImplementationOnce(() => {
+        const build = (
+          resolve: (filters: Record<string, unknown>) => unknown,
+        ) => {
+          const filters: Record<string, unknown> = {};
+          const b: Record<string, unknown> = {};
+          for (const method of ["select", "order", "limit", "in", "is"])
+            b[method] = () => b;
+          b.eq = (column: string, value: unknown) => {
+            filters[column] = value;
+            return b;
+          };
+          b.upsert = (payload: unknown) => {
+            upserts.push(payload);
+            return b;
+          };
+          b.single = () => Promise.resolve({ data: resolve(filters), error: null });
+          b.maybeSingle = b.single;
+          b.then = (onResolve: (v: unknown) => unknown) =>
+            Promise.resolve({ data: resolve(filters), error: null }).then(
+              onResolve,
+            );
+          return b;
+        };
+        return {
+          from: (table: string) => {
+            if (table === "workflows")
+              return build(() => ({
+                id: "w-org",
+                user_id: "u1",
+                org_id: "org-1",
+              }));
+            if (table === "user_profiles")
+              return build((filters) => {
+                const email = String(filters.email ?? "");
+                return email
+                  ? { user_id: `u-${email.split("@")[0]}`, email }
+                  : null;
+              });
+            if (table === "org_members")
+              return build((filters) =>
+                // The third address belongs to a real user who is not in
+                // this organization.
+                filters.user_id === "u-third"
+                  ? null
+                  : { user_id: filters.user_id, role: "member" },
+              );
+            return build(() => null);
+          },
+          rpc: () => Promise.resolve({ data: null, error: null }),
+          auth: {
+            getUser: () =>
+              Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
+          },
+        } as unknown as ReturnType<typeof createServerSupabase>;
+      });
+
+      const res = await request(app)
+        .post("/workflows/w-org/share")
+        .set(...AUTH)
+        .send({
+          emails: ["first@firm.test", "second@firm.test", "third@firm.test"],
+          role: "viewer",
+        });
+
+      expect(res.status).toBe(400);
+      expect(upserts).toEqual([]);
+    });
   });
 
   describe("organization workflow Owner operations", () => {
