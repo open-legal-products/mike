@@ -2436,3 +2436,202 @@ export async function deleteWorkflowAsset(
         method: "DELETE",
     });
 }
+
+// ---------------------------------------------------------------------------
+// Playbooks
+// ---------------------------------------------------------------------------
+
+export type PlaybookClauseUsage =
+    | "illustrative"
+    | "preferred"
+    | "verbatim"
+    | "accepted"
+    | "unacceptable";
+export interface PlaybookClause {
+    text: string;
+    usage: PlaybookClauseUsage;
+    sourceRefs: string[];
+}
+export interface PlaybookPosition {
+    name: string;
+    criteria: string;
+    sampleClauses: PlaybookClause[];
+}
+export interface PlaybookRule {
+    id: string;
+    name: string;
+    concept: string;
+    scope: "clause" | "agreement";
+    required: boolean;
+    guidance: string;
+    standard: PlaybookPosition | null;
+    fallbacks: PlaybookPosition[];
+    unacceptable: PlaybookPosition[];
+    conditions: string[];
+    actions: Array<{ scenario: string; instruction: string }>;
+    sourceRefs: string[];
+}
+export interface PlaybookTopic {
+    id: string;
+    name: string;
+    rules: PlaybookRule[];
+}
+export interface PlaybookContent {
+    name: string;
+    description: string;
+    globalGuidance: string;
+    representedParty: string;
+    documentTypes: string[];
+    jurisdictions: string[];
+    topics: PlaybookTopic[];
+}
+export interface Playbook {
+    id: string;
+    userId: string;
+    name: string;
+    description: string;
+    status: "draft" | "published";
+    draft: PlaybookContent;
+    publishedVersionId: string | null;
+    publishedVersionNumber: number | null;
+    publishedName: string | null;
+    sourceFilename: string | null;
+    importModel: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+export type PlaybookFindingStatus =
+    | "not_applicable"
+    | "acceptable"
+    | "needs_review"
+    | "unacceptable"
+    | "missing_required"
+    | "outside_scope";
+export interface PlaybookFinding {
+    id: string;
+    topicId: string | null;
+    ruleId: string | null;
+    ruleName: string;
+    status: PlaybookFindingStatus;
+    quote: string;
+    location: string;
+    analysis: string;
+    suggestedText: string;
+}
+export interface PlaybookRun {
+    id: string;
+    playbookId: string;
+    versionId: string;
+    versionNumber: number;
+    model: string;
+    documentName: string | null;
+    reviewMode: "strict" | "permissive";
+    status: string;
+    summary: string | null;
+    findings: PlaybookFinding[];
+    error: string | null;
+    startedAt: string;
+    completedAt: string | null;
+}
+export interface PlaybookConfiguration {
+    availableModelIds: string[];
+    defaultModel: string | null;
+}
+
+export async function getPlaybookConfiguration(): Promise<PlaybookConfiguration> {
+    return apiRequest("/playbooks/configuration");
+}
+
+export async function listPlaybooks(): Promise<Playbook[]> {
+    return apiRequest("/playbooks");
+}
+
+export async function getPlaybook(playbookId: string): Promise<Playbook> {
+    return apiRequest(`/playbooks/${encodeURIComponent(playbookId)}`);
+}
+
+/**
+ * The source .docx goes straight to object storage under a signed URL, then
+ * the API compiles it from that key. The API never receives the file body.
+ */
+export async function importPlaybook(
+    file: File,
+    model: string,
+    name?: string,
+): Promise<Playbook> {
+    const staged = await apiRequest<{
+        uploadUrl: string;
+        storageKey: string;
+        contentType: string;
+    }>("/playbooks/import/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, sizeBytes: file.size }),
+    });
+
+    const upload = await fetch(staged.uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": staged.contentType },
+        body: file,
+    });
+    if (!upload.ok) {
+        throw new Error("The playbook could not be uploaded. Please try again.");
+    }
+
+    return apiRequest<Playbook>("/playbooks/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            storageKey: staged.storageKey,
+            filename: file.name,
+            model,
+            ...(name?.trim() ? { name: name.trim() } : {}),
+        }),
+    });
+}
+
+export async function updatePlaybook(
+    playbookId: string,
+    draft: PlaybookContent,
+): Promise<Playbook> {
+    return apiRequest(`/playbooks/${encodeURIComponent(playbookId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft }),
+    });
+}
+
+export async function publishPlaybook(playbookId: string): Promise<Playbook> {
+    return apiRequest(`/playbooks/${encodeURIComponent(playbookId)}/publish`, {
+        method: "POST",
+    });
+}
+
+export async function reviewDocumentWithPlaybook(
+    playbookId: string,
+    payload: {
+        documentText: string;
+        documentName?: string;
+        instructions?: string;
+        model: string;
+        reviewMode: "strict" | "permissive";
+    },
+): Promise<PlaybookRun> {
+    return apiRequest(`/playbooks/${encodeURIComponent(playbookId)}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+}
+
+export async function listPlaybookRuns(
+    playbookId: string,
+): Promise<PlaybookRun[]> {
+    return apiRequest(`/playbooks/${encodeURIComponent(playbookId)}/runs`);
+}
+
+export async function deletePlaybook(playbookId: string): Promise<void> {
+    return apiRequest(`/playbooks/${encodeURIComponent(playbookId)}`, {
+        method: "DELETE",
+    });
+}

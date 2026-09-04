@@ -26,6 +26,7 @@ import {
     SignOutSkeuoIcon,
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { HistorySkeuoIcon } from "@/app/components/shared/HistorySkeuoIcon";
+import { ListChecks } from "lucide-react";
 import { ProjectSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { listProjectSummaries } from "@/app/lib/mikeApi";
 import type { Project } from "@/app/components/shared/types";
@@ -46,6 +47,7 @@ const NAV_ITEMS = [
         icon: TabularReviewSkeuoIcon,
     },
     { href: "/workflows", label: "Workflows", icon: WorkflowSkeuoIcon },
+    { href: "/playbooks", label: "Playbooks", icon: ListChecks },
 ];
 
 const RECENT_PROJECT_PAGE_SIZE = 10;
