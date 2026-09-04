@@ -48,7 +48,30 @@ for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
 }
 
 const packageEntries = Object.entries(packages);
+
+// FAIL CLOSED ON AN EMPTY LOCKFILE. A lockfile with no `packages` map (an
+// npm 6 lockfile, a truncated write, a wrong cwd) produces zero queries, so
+// every loop below is skipped, `advisories` is empty and the gate prints
+// "passed" having checked nothing at all — a gate that answers "clean" for a
+// tree it never looked at is worse than no gate.
+if (packageEntries.length === 0) {
+  console.error(
+    "package-lock.json declared no resolved packages — refusing to pass the gate.",
+  );
+  console.error(
+    "  (npm 6 lockfiles have no `packages` map; run `npm install` with npm 7+ to regenerate it.)",
+  );
+  process.exit(1);
+}
+
 const osvBaseUrl = process.env.OSV_API_BASE_URL ?? "https://api.osv.dev/v1";
+
+/**
+ * How many advisory batches were actually answered by a service. Checked
+ * before the pass line: a run that never got an answer has not audited
+ * anything, and must not be allowed to report success.
+ */
+let batchesAnswered = 0;
 
 async function fetchJson(url, init, { attempts = 3, timeoutMs = 30_000 } = {}) {
   let lastError;
@@ -92,15 +115,39 @@ async function loadNpmReport() {
       body: JSON.stringify(batch),
     }, { attempts: 1, timeoutMs: 15_000 });
 
+    // VALIDATE, don't coerce. A registry (or a proxy, or a captive network)
+    // that answers 200 with `{"error":"..."}` used to sail through here: the
+    // payload is an object, its one value is not an array, the old code
+    // coerced it to `[]`, and the gate reported "0 advisories, passed". An
+    // advisory service that did not answer the question must send us to OSV,
+    // and if OSV fails too the gate fails — never passes by default.
     if (!batchReport || Array.isArray(batchReport) || typeof batchReport !== "object") {
       throw new Error("npm returned an invalid advisory report");
     }
+    for (const key of ["error", "message", "code"]) {
+      if (Object.hasOwn(batchReport, key)) {
+        throw new Error(
+          `npm advisory service returned an error payload (${key}: ${JSON.stringify(batchReport[key])})`,
+        );
+      }
+    }
+    for (const [packageName, packageAdvisories] of Object.entries(batchReport)) {
+      if (!Array.isArray(packageAdvisories)) {
+        throw new Error(
+          `npm returned a non-array advisory list for ${packageName}`,
+        );
+      }
+    }
+    batchesAnswered += 1;
     for (const [packageName, packageAdvisories] of Object.entries(batchReport)) {
       report[packageName] = [
         ...(report[packageName] ?? []),
-        ...(Array.isArray(packageAdvisories) ? packageAdvisories : []),
+        ...packageAdvisories,
       ];
     }
+  }
+  if (batchesAnswered === 0) {
+    throw new Error("npm answered no advisory batches");
   }
   return report;
 }
@@ -128,6 +175,7 @@ async function loadOsvReport() {
     if (!Array.isArray(response?.results)) {
       throw new Error("OSV returned an invalid advisory report");
     }
+    batchesAnswered += 1;
     for (const [resultIndex, result] of response.results.entries()) {
       const query = batchQueries[resultIndex];
       for (const vulnerability of result.vulns ?? []) {
@@ -195,6 +243,9 @@ let report;
 try {
   report = await loadNpmReport();
 } catch (npmError) {
+  // Each loader counts only its OWN answered batches; a partially answered
+  // npm run must not lend its credit to the OSV attempt.
+  batchesAnswered = 0;
   console.warn(
     `npm advisory service unavailable; checking OSV instead (${npmError instanceof Error ? npmError.message : String(npmError)})`,
   );
@@ -242,6 +293,14 @@ for (const e of unused) {
 if (blocking.length > 0) {
   console.error(`\n${blocking.length} high/critical advisories are not allowlisted:`);
   for (const line of blocking) console.error(`  ${line}`);
+  process.exit(1);
+}
+// Last line of defence: reaching here with nothing answered means the loops
+// above ran zero times, which is "no data", not "no advisories".
+if (batchesAnswered === 0) {
+  console.error(
+    "No advisory service answered — refusing to pass the gate.",
+  );
   process.exit(1);
 }
 console.log(`audit gate passed (${advisories.size} high/critical advisories, all allowlisted)`);
