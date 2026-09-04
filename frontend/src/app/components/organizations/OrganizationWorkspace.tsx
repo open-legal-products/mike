@@ -125,6 +125,10 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
   const [removeSelectedOpen, setRemoveSelectedOpen] = useState(false);
   const [removingSelected, setRemovingSelected] = useState(false);
   const [removeMember, setRemoveMember] = useState<OrgMember | null>(null);
+  const [pendingSelfRoleChange, setPendingSelfRoleChange] = useState<{
+    member: OrgMember;
+    role: OrgRole;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -163,6 +167,20 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
 
   const isAdmin = org?.role === "admin";
 
+  /**
+   * Demoting yourself is the one role change that rewrites what this page is
+   * allowed to do, so it is confirmed before it runs rather than silently
+   * pulling the admin controls out from under the click.
+   */
+  function requestRoleChange(member: OrgMember, role: OrgRole) {
+    if (!isAdmin || member.role === role || busyMemberId) return;
+    if (member.user_id === user?.id && role !== "admin") {
+      setPendingSelfRoleChange({ member, role });
+      return;
+    }
+    void changeRole(member, role);
+  }
+
   async function changeRole(member: OrgMember, role: OrgRole) {
     if (!isAdmin || member.role === role || busyMemberId) return;
     setBusyMemberId(member.user_id);
@@ -174,6 +192,14 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
           row.user_id === member.user_id ? { ...row, role } : row,
         ),
       );
+      // The membership row is not the only place this role lives: `org.role`
+      // gates every admin-only control and request on the page. Without this
+      // the demoted admin keeps a UI they no longer have rights for, and each
+      // action 403s until a reload.
+      if (member.user_id === user?.id) {
+        setOrg((current) => (current ? { ...current, role } : current));
+        if (role !== "admin") setInvitations([]);
+      }
     } catch (error) {
       setActionError(userFacingApiError(error, "Could not change that role."));
     } finally {
@@ -215,7 +241,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       selectedMemberIds.includes(member.id),
     );
     if (selectedMembers.some((member) => member.user_id === user?.id)) {
-      setActionError("An organization must keep at least one admin.");
+      setActionError("Use Leave organization to remove yourself.");
       return;
     }
     setRemoveSelectedOpen(true);
@@ -342,7 +368,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
           isAdmin={isAdmin}
           busyMemberId={busyMemberId}
           onRetry={load}
-          onRoleChange={changeRole}
+          onRoleChange={requestRoleChange}
           onRemove={setRemoveMember}
         />
       ) : activeTab === "projects" ? (
@@ -422,6 +448,19 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
         onConfirm={() => void confirmRemoveMember()}
       />
       <ConfirmPopup
+        open={pendingSelfRoleChange !== null}
+        title="Give up admin access?"
+        message="You will lose admin access to this organization and can no longer manage its people, settings or invitations."
+        confirmLabel="Continue"
+        confirmStatus={busyMemberId ? "loading" : "idle"}
+        onCancel={() => setPendingSelfRoleChange(null)}
+        onConfirm={() => {
+          const pending = pendingSelfRoleChange;
+          setPendingSelfRoleChange(null);
+          if (pending) void changeRole(pending.member, pending.role);
+        }}
+      />
+      <ConfirmPopup
         open={removeSelectedOpen}
         title="Remove selected people?"
         message={`${selectedMemberIds.length} selected ${selectedMemberIds.length === 1 ? "member" : "members"} will lose access to this organization.`}
@@ -463,7 +502,7 @@ function PeopleTable({
   isAdmin: boolean;
   busyMemberId: string | null;
   onRetry: () => Promise<void>;
-  onRoleChange: (member: OrgMember, role: OrgRole) => Promise<void>;
+  onRoleChange: (member: OrgMember, role: OrgRole) => void;
   onRemove: (member: OrgMember) => void;
 }) {
   const [roleFilter, setRoleFilter] = useState<OrgRole | null>(null);
@@ -658,7 +697,7 @@ function PeopleTable({
                     label={label}
                     editable={isAdmin}
                     disabled={busyMemberId === member.user_id}
-                    onChange={(role) => void onRoleChange(member, role)}
+                    onChange={(role) => onRoleChange(member, role)}
                   />
                 </TableCell>
                 <TableCell className="w-36">

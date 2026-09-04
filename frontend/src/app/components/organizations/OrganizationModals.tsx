@@ -30,6 +30,20 @@ function friendlyError(error: unknown, fallback: string) {
   return userFacingApiError(error, fallback);
 }
 
+/**
+ * A refresh runs *after* its mutation has already succeeded, so a failing
+ * refresh must never be reported as a failed mutation. Callers await this
+ * outside their mutation's try block; the stale list corrects itself on the
+ * next load.
+ */
+async function refreshQuietly(onChanged: () => Promise<void> | void) {
+  try {
+    await onChanged();
+  } catch (error) {
+    console.error("Failed to refresh organization data", error);
+  }
+}
+
 export function CreateOrganizationModal({
   open,
   onClose,
@@ -93,7 +107,13 @@ export function CreateOrganizationModal({
     <>
       <Modal
         open={open}
-        onClose={onClose}
+        // A create in flight owns the organization's fate: dismissing the
+        // modal (Escape, backdrop, close button) mid-request would strand the
+        // result with nowhere to report it.
+        onClose={() => {
+          if (creating) return;
+          onClose();
+        }}
         breadcrumbs={["Organizations", "New organization"]}
         primaryAction={{
           label: createdOrg
@@ -233,13 +253,13 @@ export function InviteOrganizationMemberModal({
     setNotice(null);
     try {
       await createOrgInvitation(org.id, email, role);
-      setNotice(`Invitation sent to ${email}.`);
-      await onChanged();
-      return true;
     } catch (err) {
       setError(friendlyError(err, "Could not send the invitation."));
       return false;
     }
+    setNotice(`Invitation sent to ${email}.`);
+    await refreshQuietly(onChanged);
+    return true;
   }
 
   async function runInvitationAction(
@@ -249,6 +269,7 @@ export function InviteOrganizationMemberModal({
     setBusyId(invitation.id);
     setError(null);
     setNotice(null);
+    let changed = false;
     try {
       if (action === "resend") {
         await resendOrgInvitation(org.id, invitation.id);
@@ -257,12 +278,13 @@ export function InviteOrganizationMemberModal({
         await cancelOrgInvitation(org.id, invitation.id);
         setNotice(`Invitation to ${invitation.email} cancelled.`);
       }
-      await onChanged();
+      changed = true;
     } catch (err) {
       setError(friendlyError(err, `Could not ${action} the invitation.`));
     } finally {
       setBusyId(null);
     }
+    if (changed) await refreshQuietly(onChanged);
   }
 
   return (
@@ -396,8 +418,15 @@ export function OrganizationSettingsModal({
     if (!open) return;
     setName(org.name);
     setError(null);
-    setConfirmDelete(false);
   }, [open, org.name]);
+
+  useEffect(() => {
+    // The confirmation renders in its own portal, so it must retire with the
+    // modal: otherwise it keeps floating over the page after Escape or a
+    // backdrop click, with a live "Delete" button still wired to this org.
+    if (open) return;
+    setConfirmDelete(false);
+  }, [open]);
 
   async function save() {
     if (!trimmedName || !changed || saving) return;
@@ -480,7 +509,7 @@ export function OrganizationSettingsModal({
         </div>
       </Modal>
       <ConfirmPopup
-        open={confirmDelete}
+        open={open && confirmDelete}
         title={`Delete ${org.name}?`}
         message="This removes the empty organization, its memberships and invitations."
         confirmLabel="Delete"

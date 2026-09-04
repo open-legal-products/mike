@@ -177,6 +177,7 @@ describe("OrganizationWorkspace", () => {
       screen.getByRole("button", { name: "Change role for William Chen" }),
     );
     await user.click(screen.getByRole("menuitem", { name: "Member" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(
       await screen.findByText("An organization must keep at least one admin."),
@@ -225,9 +226,15 @@ describe("OrganizationWorkspace", () => {
       screen.getByRole("menuitem", { name: "Remove all selected" }),
     );
 
+    // The refusal is about the route, not about admin arithmetic: leaving is
+    // a different action, and saying "must keep at least one admin" was wrong
+    // however many admins the organization had.
     expect(
-      await screen.findByText("An organization must keep at least one admin."),
+      await screen.findByText("Use Leave organization to remove yourself."),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText("An organization must keep at least one admin."),
+    ).not.toBeInTheDocument();
     expect(mocks.removeOrgMember).not.toHaveBeenCalled();
   });
 
@@ -248,6 +255,113 @@ describe("OrganizationWorkspace", () => {
     expect(screen.getByLabelText("Organization name")).toHaveValue(
       "Elite Law LLP",
     );
+  });
+
+  it("drops admin-only controls as soon as an admin demotes themselves", async () => {
+    const user = userEvent.setup();
+    mocks.updateOrgMember.mockResolvedValue({});
+    render(<OrganizationWorkspace orgId="org-1" />);
+    await screen.findByText("William Chen");
+
+    await user.click(
+      screen.getByRole("button", { name: "Change role for William Chen" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Member" }));
+
+    // Losing your own admin rights is confirmed before it happens.
+    expect(screen.getByText("Give up admin access?")).toBeInTheDocument();
+    expect(mocks.updateOrgMember).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(mocks.updateOrgMember).toHaveBeenCalledWith(
+        "org-1",
+        "me",
+        "member",
+      ),
+    );
+    // org.role has to follow the membership row, or the page keeps offering
+    // admin actions that now 403 until a reload.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Organization settings" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Change role for Jane Lee" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Only organization admins can add members",
+      }),
+    ).toBeDisabled();
+    expect(mocks.getOrg).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the delete confirmation from outliving its settings modal", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationWorkspace orgId="org-1" />);
+    await screen.findByText("William Chen");
+
+    await user.click(
+      screen.getByRole("button", { name: "Organization settings" }),
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Organization settings" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Delete organization" }),
+    );
+    expect(screen.getByText("Delete Elite Law LLP?")).toBeInTheDocument();
+
+    // Escape dismisses the modal; the confirmation lives in its own portal
+    // and would otherwise stay behind with a live Delete button.
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByText("Delete Elite Law LLP?")).not.toBeInTheDocument();
+    expect(mocks.deleteOrg).not.toHaveBeenCalled();
+  });
+
+  it("does not report a sent invitation as failed when the refresh rejects", async () => {
+    const user = userEvent.setup();
+    mocks.createOrgInvitation.mockResolvedValue({});
+    mocks.listOrgInvitations
+      .mockResolvedValueOnce([])
+      .mockRejectedValue(new Error("refresh failed"));
+    render(<OrganizationWorkspace orgId="org-1" />);
+    await screen.findByText("William Chen");
+
+    await user.click(screen.getByRole("button", { name: "Add member" }));
+    // ModalUI settles focus a frame after the dialog opens (the auto-focused
+    // field keeps it, else the first control); typing across that handoff
+    // loses the tail of the address, so wait for focus to land in the dialog.
+    await waitFor(() => {
+      const dialog = screen.getByRole("dialog");
+      expect(document.activeElement).not.toBe(document.body);
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+    await user.type(
+      screen.getByPlaceholderText("Invite by email…"),
+      "new@firm.example",
+    );
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(mocks.createOrgInvitation).toHaveBeenCalledWith(
+        "org-1",
+        "new@firm.example",
+        "member",
+      ),
+    );
+    expect(
+      await screen.findByText("Invitation sent to new@firm.example."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Could not send the invitation."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Invitation action failed"),
+    ).not.toBeInTheDocument();
   });
 
   it("lets members browse resources but does not load administrative invitations", async () => {
