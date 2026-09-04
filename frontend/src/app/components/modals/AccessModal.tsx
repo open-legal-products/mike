@@ -39,6 +39,7 @@ interface Props {
     resource: SharedResource | null;
     fetchAccess: (id: string) => Promise<ProjectPeople>;
     currentUserEmail?: string | null;
+    currentUserId?: string | null;
     breadcrumb: string[];
     access: AccessControls;
 }
@@ -49,6 +50,7 @@ export function AccessModal({
     resource,
     fetchAccess,
     currentUserEmail,
+    currentUserId,
     breadcrumb,
     access,
 }: Props) {
@@ -213,6 +215,12 @@ export function AccessModal({
         setError(null);
         try {
             await access.onGrant(email, newRole);
+        } catch (cause) {
+            // A refused grant used to escape as an unhandled rejection with no
+            // message; the sibling changeRole/remove paths already report.
+            setError(
+                userFacingApiError(cause, "Could not add this user. Try again."),
+            );
         } finally {
             setBusy(false);
         }
@@ -355,6 +363,7 @@ export function AccessModal({
                     loading={accessLoading || loadedRosterKey !== rosterKey}
                     canManage={canManage}
                     currentUserEmail={currentUserEmail}
+                    currentUserId={currentUserId}
                     busy={busy}
                     pendingEmail={pendingEmail}
                     newRole={newRole}
