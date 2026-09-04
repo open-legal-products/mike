@@ -507,8 +507,14 @@ tabularRouter.post("/", requireAuth, async (req, res) => {
             userEmail,
             db,
         );
-        if (!access.ok || !can(access.projectRole, "content.edit"))
+        // A Viewer can open the project, so "not found" would be a lie; the
+        // read-only tier gets a refusal that names itself.
+        if (!access.ok)
             return void res.status(404).json({ detail: "Project not found" });
+        if (!can(access.projectRole, "content.edit"))
+            return void res.status(403).json({
+                detail: "You do not have permission to write in this project.",
+            });
     }
     const allowedDocumentIds = Array.isArray(document_ids)
         ? await filterAccessibleDocumentIds(document_ids, userId, userEmail, db)
@@ -1262,8 +1268,12 @@ tabularRouter.post(
         if (reviewError || !review)
             return void res.status(404).json({ detail: "Review not found" });
         const access = await ensureReviewAccess(review, userId, userEmail, db);
-        if (!access.ok || !can(access.projectRole, "content.edit"))
+        if (!access.ok)
             return void res.status(404).json({ detail: "Review not found" });
+        if (!can(access.projectRole, "content.edit"))
+            return void res
+                .status(403)
+                .json({ detail: "Only a review editor can regenerate cells" });
         if (isReviewGenerationRunning(review)) {
             return void res.status(409).json({
                 code: "review_running",

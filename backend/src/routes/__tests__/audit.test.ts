@@ -122,14 +122,32 @@ describe("parseQuery", () => {
 /**
  * Chainable Supabase mock.
  *
- * `owned` answers the `projects` lookup (.eq on user_id) and `shared` answers
- * the `project_access_grants` lookup, which is where direct sharing lives.
+ * `owned` answers the personal `projects` lookup, `shared` answers the
+ * `project_access_grants` lookup (where direct sharing lives), and `org`
+ * supplies the third branch: the caller's memberships, that org's projects,
+ * and any per-project deny override.
+ *
+ * The audit scope now delegates to lib/access.listAccessibleProjectIds, which
+ * composes .eq/.in/.is chains over four tables and re-checks every org
+ * project — so the stub answers on the FILTERS applied, not just the table
+ * named.
  */
+type Filters = {
+    eq: Record<string, unknown>;
+    in: Record<string, unknown>;
+    is: Record<string, unknown>;
+};
+
 function makeDb(
     owned: string[],
     shared: string[],
     events: Record<string, unknown>[] = [],
     profiles: Record<string, unknown>[] = [],
+    org: {
+        memberships?: { org_id: string; role: string }[];
+        projects?: { id: string; user_id: string | null; org_id: string }[];
+        denies?: string[];
+    } = {},
 ) {
     const calls: {
         or?: string;
@@ -140,34 +158,58 @@ function makeDb(
         grantEmail?: unknown;
     } = { eq: [] };
 
-    function projectsBuilder() {
-        const b: any = {
-            select: () => b,
-            eq: () => b,
-            then: (resolve: (v: { data: { id: string }[] }) => unknown) =>
-                Promise.resolve({
-                    data: owned.map((id) => ({ id })),
-                }).then(resolve),
-        };
-        return b;
-    }
+    const memberships = org.memberships ?? [];
+    const orgProjects = org.projects ?? [];
+    const denied = new Set(org.denies ?? []);
 
-    function grantsBuilder() {
+    function filterBuilder(resolve: (filters: Filters) => unknown[]) {
+        const filters: Filters = { eq: {}, in: {}, is: {} };
         const b: any = {
             select: () => b,
             eq: (column: string, value: unknown) => {
                 if (column === "email") calls.grantEmail = value;
+                filters.eq[column] = value;
                 return b;
             },
-            then: (
-                resolve: (v: { data: { project_id: string }[] }) => unknown,
-            ) =>
+            in: (column: string, value: unknown) => {
+                filters.in[column] = value;
+                return b;
+            },
+            is: (column: string, value: unknown) => {
+                filters.is[column] = value;
+                return b;
+            },
+            order: () => b,
+            maybeSingle: () =>
                 Promise.resolve({
-                    data: shared.map((id) => ({ project_id: id })),
-                }).then(resolve),
+                    data: resolve(filters)[0] ?? null,
+                    error: null,
+                }),
+            then: (resolveFn: (v: unknown) => unknown) =>
+                Promise.resolve({ data: resolve(filters), error: null }).then(
+                    resolveFn,
+                ),
         };
         return b;
     }
+
+    // Personal-owned, org-scoped, per-id and single-project lookups all hit
+    // `projects`; only the filters tell them apart.
+    const projectsResolver = (filters: Filters): unknown[] => {
+        if (filters.eq.id)
+            return orgProjects.filter(
+                (project) => project.id === filters.eq.id,
+            );
+        if (filters.in.org_id)
+            return orgProjects.filter((project) =>
+                (filters.in.org_id as string[]).includes(project.org_id),
+            );
+        if (filters.in.id)
+            return (filters.in.id as string[])
+                .filter((id) => shared.includes(id))
+                .map((id) => ({ id }));
+        return owned.map((id) => ({ id }));
+    };
 
     function auditBuilder() {
         const b: any = {
@@ -216,8 +258,25 @@ function makeDb(
 
     const db = {
         from(table: string) {
-            if (table === "projects") return projectsBuilder();
-            if (table === "project_access_grants") return grantsBuilder();
+            if (table === "projects") return filterBuilder(projectsResolver);
+            if (table === "project_access_grants")
+                return filterBuilder(() =>
+                    shared.map((id) => ({ project_id: id })),
+                );
+            if (table === "org_members")
+                return filterBuilder((filters) =>
+                    memberships.filter(
+                        (membership) =>
+                            !filters.eq.org_id ||
+                            membership.org_id === filters.eq.org_id,
+                    ),
+                );
+            if (table === "project_org_access_overrides")
+                return filterBuilder((filters) =>
+                    denied.has(filters.eq.project_id as string)
+                        ? [{ role: "deny" }]
+                        : [],
+                );
             if (table === "user_profiles") return profilesBuilder();
             return auditBuilder();
         },
@@ -266,6 +325,44 @@ describe("queryEvents visibility scoping", () => {
         const { db } = makeDb([], ["p-granted"]);
         const visible = await accessibleProjectIds(db, "u1", "u1@example.com");
         expect(visible).toContain("p-granted");
+    });
+
+    // Organization projects carry no access grants by construction, so the
+    // old owner-or-grant query left an org admin's audit history empty for
+    // their own firm's matters — including every project detached by an
+    // account deletion (projects.user_id → NULL).
+    it("admits an organization project the caller does not own", async () => {
+        const { db } = makeDb([], [], [], [], {
+            memberships: [{ org_id: "o1", role: "member" }],
+            projects: [
+                { id: "p-colleague", user_id: "u2", org_id: "o1" },
+                { id: "p-detached", user_id: null, org_id: "o1" },
+            ],
+        });
+
+        const visible = await accessibleProjectIds(db, "u1", "u1@example.com");
+
+        expect(visible).toEqual(
+            expect.arrayContaining(["p-colleague", "p-detached"]),
+        );
+    });
+
+    // The audit trail is a read path like any other: an ethical wall has to
+    // hold here too, or the wall leaks the walled matter's history.
+    it("excludes an organization project the caller is denied on", async () => {
+        const { db } = makeDb([], [], [], [], {
+            memberships: [{ org_id: "o1", role: "member" }],
+            projects: [
+                { id: "p-open", user_id: "u2", org_id: "o1" },
+                { id: "p-walled", user_id: "u2", org_id: "o1" },
+            ],
+            denies: ["p-walled"],
+        });
+
+        const visible = await accessibleProjectIds(db, "u1", "u1@example.com");
+
+        expect(visible).toContain("p-open");
+        expect(visible).not.toContain("p-walled");
     });
 
     it("applies categorical filters and the requested sort", async () => {

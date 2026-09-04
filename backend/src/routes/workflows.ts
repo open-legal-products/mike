@@ -1557,12 +1557,24 @@ workflowsRouter.delete(
         userId: shareId,
       });
       if (!result.ok) return void sendInternalError(res, result.detail);
+      if (!result.removed)
+        return void res
+          .status(404)
+          .json({ detail: "Access override not found" });
     } else {
-      await db
+      // Read the result. Ignoring it made a failed delete and an unknown
+      // share id indistinguishable from a real revocation: both answered
+      // 204, so the client removed the row from its list while the person
+      // it named kept access. Mirrors DELETE /projects/:id/access/:email.
+      const { data: removed, error } = await db
         .from("workflow_shares")
         .delete()
         .eq("id", shareId)
-        .eq("workflow_id", workflowId);
+        .eq("workflow_id", workflowId)
+        .select("id");
+      if (error) return void sendInternalError(res, error);
+      if (((removed ?? []) as unknown[]).length === 0)
+        return void res.status(404).json({ detail: "Access grant not found" });
     }
     res.status(204).send();
   }),
@@ -1620,6 +1632,12 @@ workflowsRouter.post(
         return void res.status(400).json({
           detail: "role must be owner, editor, viewer or deny",
         });
+      // Validate EVERY target before writing ANY override. Interleaving the
+      // two loops meant a rejected third email — a non-member, the creator,
+      // an admin — returned 400 with the first two overrides already
+      // persisted: the caller read "nothing happened" while access had
+      // silently changed for two people.
+      const targets: { userId: string }[] = [];
       for (const email of normalizedEmails) {
         const target = await findOrgMemberByEmail(db, orgId, email);
         if (!target.ok) {
@@ -1635,11 +1653,16 @@ workflowsRouter.post(
           return void res.status(400).json({
             detail: "Organization admins always have owner access",
           });
+        targets.push({ userId: target.member.userId });
+      }
+      // Validation is now complete, so only a database failure can still
+      // stop this half-way — and that answers 500, not a misleading 400.
+      for (const target of targets) {
         const result = await setOrgAccessOverride(db, {
           kind: "workflow",
           resourceId: workflowId,
           orgId,
-          userId: target.member.userId,
+          userId: target.userId,
           role,
           assignedBy: userId,
         });

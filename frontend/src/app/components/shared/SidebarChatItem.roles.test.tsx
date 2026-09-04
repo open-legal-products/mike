@@ -186,6 +186,50 @@ describe("SidebarChatItem role gates", () => {
         ).toBeInTheDocument();
     });
 
+    it("marks a colleague's chat as shared", async () => {
+        // get_chats_overview now lists colleagues' organization-project chats
+        // in the same sidebar list as the caller's own, with nothing in the
+        // row telling them apart — so a rename or a delete could land on
+        // somebody else's thread by mistake.
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: false, access_role: "editor" })}
+                isActive
+                onSelect={vi.fn()}
+            />,
+        );
+
+        expect(screen.getByText("Shared")).toBeInTheDocument();
+        // Plain text, not a pill badge (AGENTS.md: informational labels are
+        // text) — and outside the title button, so the row is still found by
+        // its exact title.
+        expect(
+            screen.getByRole("button", { name: "Quarterly filing" }),
+        ).toBeInTheDocument();
+    });
+
+    it("does not mark the caller's own chat", () => {
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive
+                onSelect={vi.fn()}
+            />,
+        );
+
+        expect(screen.queryByText("Shared")).not.toBeInTheDocument();
+    });
+
+    it("claims nothing about a row that carries no is_owner at all", () => {
+        // A row with no ownership field has told us nothing; "Shared" would
+        // be a claim we cannot make, the same reason roleFrom fails closed.
+        render(
+            <SidebarChatItem chat={chat({})} isActive onSelect={vi.fn()} />,
+        );
+
+        expect(screen.queryByText("Shared")).not.toBeInTheDocument();
+    });
+
     it("surfaces a failed delete instead of swallowing it", async () => {
         deleteChat.mockRejectedValue(new Error("boom"));
         render(

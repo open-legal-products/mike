@@ -6,6 +6,7 @@
 // router would drag in the whole HTTP surface.
 
 import type { createServerSupabase } from "./supabase";
+import { listAccessibleProjectIds } from "./access";
 import { normalizeDisplayName } from "./userLookup";
 
 type Db = ReturnType<typeof createServerSupabase>;
@@ -21,31 +22,20 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /**
  * Which projects' audit rows this user may read.
  *
- * Direct project sharing is resolved from project_access_grants, the same
- * source used by the project access checks.
+ * Delegated to lib/access so the audit trail sees exactly what every other
+ * read path sees: creator, direct grant, organization membership, minus any
+ * per-project deny override. The local query this replaced knew only the
+ * first two, and organization projects carry no grants by construction — so
+ * an org admin's audit history was empty for their own firm's matters, and a
+ * project detached by account deletion (projects.user_id → NULL) dropped out
+ * of the audit trail permanently.
  */
 export async function accessibleProjectIds(
     db: Db,
     userId: string,
     email: string | undefined,
 ): Promise<string[]> {
-    const ids = new Set<string>();
-    const own = await db.from("projects").select("id").eq("user_id", userId);
-    for (const row of (own.data ?? []) as { id: string }[]) ids.add(row.id);
-    if (email) {
-        // Direct sharing is `project_access_grants`: one row per recipient,
-        // keyed on normalized email. This query gates access to an audit trail.
-        const shared = await db
-            .from("project_access_grants")
-            .select("project_id")
-            .eq("email", email.trim().toLowerCase());
-        for (const row of (shared.data ?? []) as {
-            project_id: string | null;
-        }[]) {
-            if (row.project_id) ids.add(row.project_id);
-        }
-    }
-    return [...ids];
+    return listAccessibleProjectIds(userId, email ?? null, db);
 }
 
 export type AuditQuery = {

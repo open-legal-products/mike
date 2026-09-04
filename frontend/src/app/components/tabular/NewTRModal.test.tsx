@@ -175,6 +175,36 @@ describe("NewTRModal", () => {
         await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     });
 
+    it("stays open on a partial failure and lets Create retry it", async () => {
+        // onAdd resolving with a message means the review exists but part of
+        // the request did not happen. Closing here would hide the only account
+        // of it, and reporting the generic create failure would be a lie.
+        const onAdd = vi
+            .fn()
+            .mockResolvedValueOnce(
+                "Review created, but access was not granted to colleague@firm.test: That address is not in your organization.",
+            )
+            .mockResolvedValueOnce(undefined);
+        const onClose = vi.fn();
+        render(<NewTRModal open onClose={onClose} onAdd={onAdd} />);
+
+        fireEvent.change(screen.getByLabelText("Review name"), {
+            target: { value: "Shared review" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Review created, but access was not granted to colleague@firm.test: That address is not in your organization.",
+        );
+        expect(onClose).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+        expect(onAdd).toHaveBeenCalledTimes(2);
+    });
+
     it("stores uploads from a project review in that project", async () => {
         const uploadedDocument = {
             id: "uploaded-document",

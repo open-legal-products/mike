@@ -1483,6 +1483,48 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
         expect(res.body).toHaveProperty("detail");
     });
 
+    // A Viewer can open the project, so answering "Project not found" told
+    // them their matter had vanished. The refusal has to say it is one.
+    it("403s a project Viewer creating a chat in that project", async () => {
+        mockedCreate.mockImplementation(
+            () =>
+                makeRbacDb(null, "colleague-1", {
+                    grantRole: "viewer",
+                    project: { org_id: null },
+                    chat: { org_id: null },
+                }) as never,
+        );
+
+        const res = await request(app)
+            .post("/chat/create")
+            .set("Authorization", "Bearer test")
+            .send({ project_id: "proj-1" });
+
+        expect(res.status).toBe(403);
+        expect(res.body.detail).toBe(
+            "You do not have permission to write in this project.",
+        );
+    });
+
+    it("keeps 404 when the project is invisible to the caller", async () => {
+        mockedCreate.mockImplementation(
+            () =>
+                makeRbacDb(null, "colleague-1", {
+                    grantRole: null,
+                    project: { org_id: null },
+                    chat: { org_id: null },
+                }) as never,
+        );
+
+        const res = await request(app)
+            .post("/chat/create")
+            .set("Authorization", "Bearer test")
+            .send({ project_id: "proj-1" });
+
+        expect(res.status).toBe(404);
+        expect(res.body.detail).toBe("Project not found");
+    });
+
     it("does not elevate a project chat's creator above project access", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb(null, "u1") as never);
 
@@ -1518,6 +1560,27 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
 
         expect(res.status).toBe(200);
         expect(res.body.title).toBe("Generated Title");
+    });
+
+    // The update's error used to be ignored, so a failed write still
+    // answered 200 with the new title: the sidebar renamed the chat and the
+    // next reload silently put the old name back.
+    it("reports a failed title write instead of answering 200", async () => {
+        await seedResolvableModel();
+        mockedCreate.mockImplementation(
+            () =>
+                makeRbacDb("admin", "colleague-1", {
+                    chatWriteError: "title update failed",
+                }) as never,
+        );
+
+        const res = await request(app)
+            .post("/chat/chat-1/generate-title")
+            .set("Authorization", "Bearer test")
+            .send({ message: "hello there" });
+
+        expect(res.status).toBe(500);
+        expect(res.body.detail).toBe("Something went wrong. Please try again.");
     });
 
     it("still lets a project viewer GET the chat (reads stay project.view)", async () => {
@@ -1736,6 +1799,42 @@ describe("chat grants, deletion and roster", () => {
         expect(res.status).toBe(400);
         expect(res.body.detail).toBe(
             "future@example.com does not belong to a Mike user.",
+        );
+    });
+
+    // The creator's email now comes from one filtered row instead of a scan
+    // of every profile in the deployment; this pins that the row it reads is
+    // still the right one, since the "creator already has access" refusal is
+    // the only thing that email decides.
+    it("400s when a grant targets the chat creator's own email", async () => {
+        mockedCreate.mockImplementation(
+            () =>
+                makeRbacDb(null, "colleague-1", {
+                    chat: { project_id: null, org_id: null },
+                    chatGrantRole: "owner",
+                    profiles: [
+                        {
+                            user_id: "decoy",
+                            email: "decoy@example.com",
+                            display_name: "Decoy",
+                        },
+                        {
+                            user_id: "colleague-1",
+                            email: "colleague@example.com",
+                            display_name: "Creator",
+                        },
+                    ],
+                }) as never,
+        );
+
+        const res = await request(app)
+            .post("/chat/chat-1/access")
+            .set("Authorization", "Bearer test")
+            .send({ email: "Colleague@Example.com", role: "viewer" });
+
+        expect(res.status).toBe(400);
+        expect(res.body.detail).toBe(
+            "The chat creator already has owner access",
         );
     });
 

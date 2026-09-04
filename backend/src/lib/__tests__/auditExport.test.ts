@@ -15,6 +15,12 @@ function makeDb(events: Record<string, unknown>[], error?: { message: string }) 
             select: () => b,
             or: () => b,
             eq: () => b,
+            // The project scope resolves through lib/access now, which also
+            // composes .is()/.in() and .maybeSingle(). Every table still
+            // answers "no rows", so the caller sees no accessible projects.
+            is: () => b,
+            in: () => b,
+            maybeSingle: () => Promise.resolve({ data: null, error: null }),
             ilike: () => b,
             gte: () => b,
             lte: () => b,
@@ -103,6 +109,10 @@ function makeProfileDb(
             select: () => b,
             or: () => b,
             eq: () => b,
+            // See makeDb: the project scope's .is() chain runs first and
+            // finds nothing, so only the profile lookup below matters here.
+            is: () => b,
+            maybeSingle: () => Promise.resolve({ data: null, error: null }),
             ilike: () => b,
             gte: () => b,
             lte: () => b,

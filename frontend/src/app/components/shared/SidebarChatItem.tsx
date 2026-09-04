@@ -147,6 +147,23 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                         {chat.title ?? "Untitled chat"}
                     </button>
 
+                    {/* Somebody else's thread. get_chats_overview now lists
+                        colleagues' organization-project chats alongside the
+                        caller's own, and nothing in the row said which was
+                        which — the same list, the same weight, so a rename
+                        or a delete could land on a colleague's work by
+                        mistake. Plain text, not a pill: this is an
+                        informational label (AGENTS.md).
+
+                        Strictly `=== false`: a row that carries no is_owner
+                        at all has told us nothing, and marking it "Shared"
+                        would be a claim we cannot make. */}
+                    {chat.is_owner === false && (
+                        <span className="mr-1 shrink-0 text-[10px] text-gray-400">
+                            Shared
+                        </span>
+                    )}
+
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <button
@@ -220,6 +237,12 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                     </DropdownMenu>
                 </>
             )}
+            {/* TODO(contacts): no `contacts` to pass. The sidebar rows come
+                from get_chats_overview and GET /chat/:id serves only
+                chat + is_owner + access_role, so no ranked admin list
+                reaches a chat surface and the popup's "Ask …" line can never
+                render here. Needs the server to return the shape project
+                detail already returns as `admin_contacts`. */}
             <PermissionDeniedPopup
                 open={!!gate}
                 action={gate?.action}

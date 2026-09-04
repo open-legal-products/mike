@@ -60,6 +60,7 @@ export function OrganizationsOverview() {
   const [orgs, setOrgs] = useState<Org[] | null>(null);
   const [invitations, setInvitations] = useState<OrgInvitation[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [invitationsError, setInvitationsError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [activeFilter, setActiveFilter] =
     useState<OrganizationFilter>("managed");
@@ -70,19 +71,35 @@ export function OrganizationsOverview() {
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   const [invitationError, setInvitationError] = useState<string | null>(null);
 
+  // The two lists fail independently: a broken invitations fetch must not
+  // blank the organizations table, and — the reason this is not a swallowed
+  // `.catch(() => [])` — it must not masquerade as "you have no invitations"
+  // either. Each side keeps its own error so each can offer its own retry.
   const load = useCallback(async () => {
-    try {
-      const [nextOrgs, nextInvitations] = await Promise.all([
-        listOrgs(),
-        listMyOrgInvitations().catch(() => [] as OrgInvitation[]),
-      ]);
-      setOrgs(nextOrgs);
-      setInvitations(nextInvitations);
+    const [orgsResult, invitationsResult] = await Promise.allSettled([
+      listOrgs(),
+      listMyOrgInvitations(),
+    ]);
+    if (orgsResult.status === "fulfilled") {
+      setOrgs(orgsResult.value);
       setLoadError(null);
-    } catch (error) {
-      console.error("Failed to load organizations", error);
+    } else {
+      console.error("Failed to load organizations", orgsResult.reason);
       setLoadError("Could not load organizations.");
       setOrgs([]);
+    }
+    if (invitationsResult.status === "fulfilled") {
+      setInvitations(invitationsResult.value);
+      setInvitationsError(null);
+    } else {
+      console.error("Failed to load invitations", invitationsResult.reason);
+      setInvitations([]);
+      setInvitationsError(
+        userFacingApiError(
+          invitationsResult.reason,
+          "Could not load your invitations.",
+        ),
+      );
     }
   }, []);
 
@@ -179,6 +196,20 @@ export function OrganizationsOverview() {
             {[1, 2, 3].map((row) => (
               <SkeletonLine key={row} className="h-7 w-full" />
             ))}
+          </div>
+        ) : invitationsError ? (
+          <div className="mx-4 mb-3 flex min-h-0 flex-1 items-center justify-center md:mx-8">
+            <EmptyState
+              icon={<OrganizationSkeuoIcon />}
+              title="Invitations"
+              description={invitationsError}
+              tone="error"
+              action={
+                <PillButton tone="black" size="sm" onClick={() => void load()}>
+                  Try again
+                </PillButton>
+              }
+            />
           </div>
         ) : invitations.length === 0 ? (
           <div className="mx-4 mb-3 flex min-h-0 flex-1 items-center justify-center md:mx-8">
@@ -380,7 +411,14 @@ export function OrganizationsOverview() {
 
       <CreateOrganizationModal
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        // A partly failed creation ("created, but some invitations could not
+        // be sent") leaves the modal open on a real organization that never
+        // reached onCreated. Refetching on dismissal is what makes that
+        // organization appear here instead of only after a reload.
+        onClose={() => {
+          setCreateOpen(false);
+          void load();
+        }}
         onCreated={(org) => {
           setCreateOpen(false);
           router.push(`/organizations/${org.id}`);
