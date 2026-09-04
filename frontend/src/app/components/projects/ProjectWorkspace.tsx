@@ -394,14 +394,20 @@ export function ProjectWorkspaceProvider({
                                   title: null,
                                   created_at: now,
                                   // The row the server would have served for
-                                  // a chat we just created: its creator is
-                                  // its admin. Without these the client's
-                                  // `roleFrom` falls back to viewer — fail
-                                  // closed, correct as a default and wrong
-                                  // here — and the author could not rename or
-                                  // delete their own new chat until reload.
-                                  is_owner: true,
-                                  access_role: "owner",
+                                  // a chat we just created. Without these the
+                                  // client's `roleFrom` falls back to viewer
+                                  // — fail closed, correct as a default and
+                                  // wrong here — and the author could not
+                                  // rename their own new chat until reload.
+                                  //
+                                  // The stamp is the caller's role on the
+                                  // PROJECT, which is what the server derives
+                                  // a project chat's role from. Stamping
+                                  // "owner" offered an editor a Delete that
+                                  // came back 403. `content.edit` passed, so
+                                  // the role is known and at least editor.
+                                  is_owner: accessRole === "owner",
+                                  access_role: accessRole ?? "editor",
                               },
                               ...prev,
                           ]
@@ -413,6 +419,7 @@ export function ProjectWorkspaceProvider({
             setCreatingChat(false);
         }
     }, [
+        accessRole,
         canDo,
         denyUnlessLoading,
         profile?.displayName,
@@ -671,6 +678,10 @@ export function ProjectWorkspaceProvider({
                         resource={project}
                         fetchAccess={getProjectPeople}
                         currentUserEmail={user?.email ?? null}
+                        // Both identifiers: a roster row without an email
+                        // would otherwise offer the caller a Remove that locks
+                        // them out of their own project.
+                        currentUserId={user?.id ?? null}
                         breadcrumb={[
                             "Projects",
                             project.name +

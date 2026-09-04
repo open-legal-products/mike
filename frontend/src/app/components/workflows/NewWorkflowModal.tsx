@@ -156,7 +156,13 @@ const CANADA_PROVINCE_OPTIONS = [
 
 interface Props {
     open: boolean;
-    onClose: () => void;
+    /**
+     * `createdWithoutHandoff` is true when the dialog is dismissed after a
+     * workflow was created but never handed to `onCreated` (its access grants
+     * or asset copies failed). The caller should refetch so the new row is
+     * visible.
+     */
+    onClose: (createdWithoutHandoff?: boolean) => void;
     onCreated: (workflow: Workflow) => void;
     editWorkflow?: Workflow;
     readOnly?: boolean;
@@ -187,6 +193,7 @@ export function NewWorkflowModal({
     >(null);
     const [loading, setLoading] = useState(false);
     const [orgs, setOrgs] = useState<Org[]>([]);
+    const [orgsError, setOrgsError] = useState("");
     const [orgId, setOrgId] = useState(PERSONAL_WORKSPACE);
     const [directGrants, setDirectGrants] = useState<PendingDirectGrant[]>([]);
     const [orgOverrides, setOrgOverrides] = useState<PendingOrgOverride[]>([]);
@@ -387,12 +394,23 @@ export function NewWorkflowModal({
     useEffect(() => {
         if (!open) return;
         let cancelled = false;
+        setOrgsError("");
         listOrgs()
             .then((rows) => {
                 if (!cancelled) setOrgs(rows);
             })
-            .catch(() => {
-                if (!cancelled) setOrgs([]);
+            .catch((err: unknown) => {
+                if (cancelled) return;
+                setOrgs([]);
+                // Without this the selector silently offers only "No
+                // organization" and the workflow lands in the personal
+                // workspace by accident.
+                setOrgsError(
+                    userFacingApiError(
+                        err,
+                        "Could not load your organizations.",
+                    ),
+                );
             });
         return () => {
             cancelled = true;
@@ -478,11 +496,38 @@ export function NewWorkflowModal({
                 const recipients = assignments.filter(
                     (assignment) => !ownEmail || assignment.email !== ownEmail,
                 );
+                // Sequential, and one refusal must not take the whole submit
+                // down with it: the workflow already exists, so a rejected
+                // grant is reported against the addresses it applies to
+                // instead of surfacing as "Failed to create workflow". The
+                // share endpoint upserts, so retrying is safe.
+                const grantFailures: { email: string; detail: string }[] = [];
                 for (const assignment of recipients) {
-                    await shareWorkflow(workflow.id, {
-                        emails: [assignment.email],
-                        role: assignment.role,
-                    });
+                    try {
+                        await shareWorkflow(workflow.id, {
+                            emails: [assignment.email],
+                            role: assignment.role,
+                        });
+                    } catch (err: unknown) {
+                        grantFailures.push({
+                            email: assignment.email,
+                            detail: userFacingApiError(
+                                err,
+                                "the request failed",
+                            ),
+                        });
+                    }
+                }
+                if (grantFailures.length > 0) {
+                    // Stay open on THIS dialog: createdWorkflowRef holds the
+                    // workflow, so pressing Create again retries only the
+                    // grants against the same workflow.
+                    setError(
+                        `Workflow created, but access was not granted to ${grantFailures
+                            .map((failure) => failure.email)
+                            .join(", ")}: ${grantFailures[0]!.detail}`,
+                    );
+                    return;
                 }
                 onCreated({
                     ...workflow,
@@ -528,8 +573,17 @@ export function NewWorkflowModal({
     }
 
     function handleClose() {
+        // A create in flight owns the dialog: Escape, the backdrop and the
+        // close button must not dismiss it out from under an in-progress
+        // workflow creation.
+        if (loading) return;
+        // A workflow whose grants (or asset copies) failed was still created,
+        // but it never reached onCreated, so the caller's list has no row for
+        // it. Tell the caller to refetch instead of leaving it invisible
+        // until a page reload.
+        const createdWithoutHandoff = createdWorkflowRef.current !== null;
         resetForm();
-        onClose();
+        onClose(createdWithoutHandoff);
     }
 
     async function handleMarkdownImport(
@@ -923,6 +977,11 @@ export function NewWorkflowModal({
                                     })),
                                 ]}
                             />
+                            {orgsError && (
+                                <p className="mt-2 text-sm text-red-500">
+                                    {orgsError}
+                                </p>
+                            )}
                         </div>
                     </div>
                 )}

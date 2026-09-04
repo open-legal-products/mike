@@ -1795,6 +1795,9 @@ export function TRView({ reviewId, projectId }: Props) {
                 resource={review}
                 fetchAccess={getTabularReviewPeople}
                 currentUserEmail={user?.email ?? null}
+                // Both identifiers, so a roster row without an email still
+                // cannot offer the caller a Remove that locks them out.
+                currentUserId={user?.id ?? null}
                 breadcrumb={[
                     "Tabular Reviews",
                     review?.title || "Untitled Review",
@@ -1806,13 +1809,17 @@ export function TRView({ reviewId, projectId }: Props) {
                     ownerLabel: "Review owners",
                     inheritedFromProjectId: review?.project_id ?? null,
                     canManage: can(reviewRole, "access.manage"),
+                    // The mutation is what AccessModal reports on. Reloading
+                    // the roster afterwards is bookkeeping, so its failure
+                    // must not travel back up as "Could not change that role"
+                    // for a grant the server already accepted.
                     onGrant: async (email, role) => {
                         await grantTabularReviewAccess(reviewId, email, role);
-                        await refreshGrants();
+                        await refreshGrants().catch(() => {});
                     },
                     onRevoke: async (email) => {
                         await revokeTabularReviewAccess(reviewId, email);
-                        await refreshGrants();
+                        await refreshGrants().catch(() => {});
                     },
                 }}
             />

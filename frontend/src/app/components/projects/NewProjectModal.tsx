@@ -31,7 +31,12 @@ const PERSONAL_WORKSPACE = "__personal__";
 
 interface Props {
     open: boolean;
-    onClose: () => void;
+    /**
+     * Dismissal. `createdWithoutHandover` is true when the project exists but
+     * a later step failed, so it never reached `onCreated` — the caller has to
+     * refetch or the new project stays invisible until a reload.
+     */
+    onClose: (createdWithoutHandover?: boolean) => void;
     onCreated: (project: Project) => void;
 }
 
@@ -50,6 +55,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const [orgLoadError, setOrgLoadError] = useState("");
     // A project created with only some of its files attached. The modal holds
     // it until the user has read which files are missing.
     const [pendingProject, setPendingProject] = useState<Project | null>(null);
@@ -60,6 +66,11 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     // reuses the project the user already has instead of creating a second
     // one.
     const createdProjectRef = useRef<Project | null>(null);
+    // Attachment work already done against that project. A retry after a
+    // failed step must not re-upload a file or re-link a document that landed
+    // on the first attempt, or the project ends up with duplicates.
+    const uploadedFilenamesRef = useRef<Set<string>>(new Set());
+    const linkedDocumentIdsRef = useRef<Set<string>>(new Set());
     const { user } = useAuth();
     const { profile } = useUserProfile();
     const preferredPractice =
@@ -74,11 +85,22 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     useEffect(() => {
         if (!open) return;
         let cancelled = false;
+        setOrgLoadError("");
         listOrgs()
             .then((rows) => {
                 if (!cancelled) setOrgs(rows);
             })
-            .catch(() => {});
+            .catch((err: unknown) => {
+                // Silently showing only "No organization" would look like the
+                // caller belongs to no firm, so say the list failed instead.
+                if (!cancelled)
+                    setOrgLoadError(
+                        userFacingApiError(
+                            err,
+                            "Your organizations could not be loaded.",
+                        ),
+                    );
+            });
         return () => {
             cancelled = true;
         };
@@ -146,58 +168,10 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 ));
             createdProjectRef.current = project;
 
-            const linkResults = await Promise.all(
-                selectedDocuments.map((document) =>
-                    addDocumentToProject(project.id, document.id).then(
-                        () => true,
-                        () => false,
-                    ),
-                ),
-            );
-            const linkedCount = linkResults.filter(Boolean).length;
-            const failedLinkNames = selectedDocuments
-                .filter((_, index) => !linkResults[index])
-                .map((document) => document.filename);
-
-            let uploadedCount = 0;
-            let uploadFailure: string | null = null;
-            if (pendingFiles.length > 0) {
-                try {
-                    const outcomes = await uploadProjectDocuments(
-                        project.id,
-                        pendingFiles.map((file) => ({ file })),
-                    );
-                    uploadedCount = outcomes.filter(
-                        (outcome) => outcome.status === "completed",
-                    ).length;
-                    if (uploadedCount < outcomes.length) {
-                        uploadFailure = failedUploadMessage(outcomes);
-                    }
-                } catch (uploadError) {
-                    // Aborts, session-creation failures, and batch validation
-                    // still throw; everything else comes back as outcomes.
-                    uploadFailure =
-                        uploadError instanceof UploadBatchError
-                            ? failedUploadMessage(uploadError.outcomes)
-                            : userFacingApiError(
-                                  uploadError,
-                                  "The attached files could not be uploaded. Please try again.",
-                              );
-                }
-            }
-
-            const attachedCount = linkedCount + uploadedCount;
-            const requestedCount =
-                selectedDocuments.length + pendingFiles.length;
-            const failureMessage = [
-                uploadFailure,
-                failedLinkNames.length > 0
-                    ? `${failedLinkNames.join(", ")} could not be added to the project.`
-                    : null,
-            ]
-                .filter(Boolean)
-                .join(" ");
-
+            // Grants run before the attachment work: a refusal here stops the
+            // submit, and anything already uploaded or linked would otherwise
+            // have to be redone on the retry — which duplicated documents.
+            //
             // Sequential: these are a handful of addresses, and one refusal
             // should be reported with its own message rather than lost in a
             // race. The endpoint upserts, so a retry after a partial failure
@@ -234,6 +208,88 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 // project, so pressing Create again retries only the grants.
                 return;
             }
+
+            // Only documents this modal has not already linked: a retry after
+            // a later failure must not add the same document twice.
+            const documentsToLink = selectedDocuments.filter(
+                (document) => !linkedDocumentIdsRef.current.has(document.id),
+            );
+            const linkResults = await Promise.all(
+                documentsToLink.map((document) =>
+                    addDocumentToProject(project.id, document.id).then(
+                        () => true,
+                        () => false,
+                    ),
+                ),
+            );
+            documentsToLink.forEach((document, index) => {
+                if (linkResults[index])
+                    linkedDocumentIdsRef.current.add(document.id);
+            });
+            const failedLinkNames = documentsToLink
+                .filter((_, index) => !linkResults[index])
+                .map((document) => document.filename);
+
+            // Same for uploads. Filenames are unique inside pendingFiles —
+            // handleFileChange rejects a second file of the same name — and
+            // every outcome carries the filename it was sent under.
+            const filesToUpload = pendingFiles.filter(
+                (file) => !uploadedFilenamesRef.current.has(file.name),
+            );
+            let uploadFailure: string | null = null;
+            if (filesToUpload.length > 0) {
+                try {
+                    const outcomes = await uploadProjectDocuments(
+                        project.id,
+                        filesToUpload.map((file) => ({ file })),
+                    );
+                    for (const outcome of outcomes) {
+                        if (outcome.status === "completed")
+                            uploadedFilenamesRef.current.add(outcome.filename);
+                    }
+                    if (
+                        outcomes.some(
+                            (outcome) => outcome.status !== "completed",
+                        )
+                    ) {
+                        uploadFailure = failedUploadMessage(outcomes);
+                    }
+                } catch (uploadError) {
+                    // Aborts, session-creation failures, and batch validation
+                    // still throw; everything else comes back as outcomes.
+                    if (uploadError instanceof UploadBatchError) {
+                        for (const outcome of uploadError.outcomes) {
+                            if (outcome.status === "completed")
+                                uploadedFilenamesRef.current.add(
+                                    outcome.filename,
+                                );
+                        }
+                    }
+                    uploadFailure =
+                        uploadError instanceof UploadBatchError
+                            ? failedUploadMessage(uploadError.outcomes)
+                            : userFacingApiError(
+                                  uploadError,
+                                  "The attached files could not be uploaded. Please try again.",
+                              );
+                }
+            }
+
+            // Counted across attempts, not just this one, so a retry reports
+            // the project's real document count.
+            const attachedCount =
+                linkedDocumentIdsRef.current.size +
+                uploadedFilenamesRef.current.size;
+            const requestedCount =
+                selectedDocuments.length + pendingFiles.length;
+            const failureMessage = [
+                uploadFailure,
+                failedLinkNames.length > 0
+                    ? `${failedLinkNames.join(", ")} could not be added to the project.`
+                    : null,
+            ]
+                .filter(Boolean)
+                .join(" ");
 
             // POST /projects returns a bare row with no role fields, and
             // the list's fail-closed roleFrom() reads "no role fields" as
@@ -284,6 +340,8 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
     function resetForm() {
         createdProjectRef.current = null;
+        uploadedFilenamesRef.current = new Set();
+        linkedDocumentIdsRef.current = new Set();
         setPendingProject(null);
         setStep("details");
         setName("");
@@ -299,8 +357,15 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     }
 
     function handleClose() {
+        // Escape and the backdrop reach this too: dismissing a create that is
+        // still in flight would leave the outcome unreportable.
+        if (loading) return;
+        // The project exists but never reached onCreated, so the caller's list
+        // does not have it. Say so on the way out instead of leaving the row
+        // invisible until a reload.
+        const createdWithoutHandover = createdProjectRef.current !== null;
         resetForm();
-        onClose();
+        onClose(createdWithoutHandover);
     }
 
     return (
@@ -463,6 +528,11 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                                     })),
                                 ]}
                             />
+                            {orgLoadError && (
+                                <p className="mt-2 text-sm text-red-500">
+                                    {orgLoadError}
+                                </p>
+                            )}
                         </div>
                     </div>
                 ) : step === "access" ? (

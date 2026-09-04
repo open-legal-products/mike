@@ -578,6 +578,9 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
           resource={{ id }}
           fetchAccess={fetchWorkflowAccess}
           currentUserEmail={user?.email ?? null}
+          // Both identifiers, so a roster row without an email still cannot
+          // offer the caller a Remove that locks them out of their own row.
+          currentUserId={user?.id ?? null}
           breadcrumb={["Workflows", workflow.metadata.title, "Access"]}
           access={{
             grants: workflowShares.map((share) => ({
@@ -587,9 +590,14 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
             orgId: workflow.org_id ?? null,
             ownerLabel: "Workflow owners",
             canManage: canShare,
+            // The refresh is deliberately not part of the mutation's result:
+            // AccessModal reports a rejection as "Could not change that role"
+            // / "Could not remove access", so a failing re-read would blame
+            // the grant that actually succeeded. A stale roster is the lesser
+            // problem, and the next open re-reads it.
             onGrant: async (email, role) => {
               await shareWorkflow(id, { emails: [email], role });
-              await fetchWorkflowShares();
+              await fetchWorkflowShares().catch(() => {});
             },
             onRevoke: async (email) => {
               const share = workflowShares.find(
@@ -598,7 +606,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                   email.trim().toLowerCase(),
               );
               if (share) await deleteWorkflowShare(id, share.id);
-              await fetchWorkflowShares();
+              await fetchWorkflowShares().catch(() => {});
             },
           }}
         />
