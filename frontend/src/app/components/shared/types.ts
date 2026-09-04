@@ -626,15 +626,28 @@ export function expandCitationToEntries(a: Citation): CitationQuote[] {
     return getDocumentCitationQuotes(a).flatMap(expandDocumentQuoteEntry);
 }
 
+function normalizedLegalSourceLocator(
+    citation: DocumentCitation,
+): string | null {
+    const type = citation.document?.type;
+    if (type !== "case" && type !== "legislation") return null;
+    return (
+        citation.document?.metadata.find(
+            (item) => item.label.toLowerCase() === "citation",
+        )?.value ?? ""
+    );
+}
+
 /**
  * Format the page(s) of a citation for display, e.g. "Page 3" or "Page 41-42".
- * Spreadsheets have no meaningful page locator, so this returns "" for them —
- * callers join with `.filter(Boolean)` so the locator is simply omitted.
+ * Spreadsheets and normalized legal sources have no meaningful page locator.
  */
 export function formatCitationPage(a: Citation): string {
     if (a.kind === "case") {
         return a.citation || a.case_name || `Case ${a.cluster_id}`;
     }
+    const legalSourceLocator = normalizedLegalSourceLocator(a);
+    if (legalSourceLocator !== null) return legalSourceLocator;
     const quotes = getDocumentCitationQuotes(a);
     // Spreadsheets are located by cell, e.g. "Sheet1!B7" (or several).
     if (isSpreadsheetFilename(a.filename)) {

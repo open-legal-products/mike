@@ -8,6 +8,7 @@ import { resolveRequestedModel } from "../routerModels";
 import { UserFacingError } from "../userFacingError";
 import { createServerSupabase } from "../supabase";
 import { buildUserMcpTools, type McpToolEvent } from "../mcpConnectors";
+import type { ExternalSourceStore } from "../mcp/sourceDocuments";
 import type { SourceDocument } from "../sourceDocuments";
 import {
   COURTLISTENER_TOOLS,
@@ -31,6 +32,7 @@ import {
   parseCitationsWithDiagnostics,
   parsePartialCitationObjects,
   createCitation,
+  boundExternalCitationPayloads,
   CITATIONS_OPEN_TAG,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
@@ -314,6 +316,7 @@ export async function runLLMStream(params: {
   // one assistant response. The guard is invalidated when edit_document
   // changes that document so a post-edit verification read can still happen.
   const turnReadState: TurnReadState = new Map();
+  const externalSourceStore: ExternalSourceStore = new Map();
   const courtlistenerTurnState: CourtlistenerTurnState = {
     casesByClusterId: new Map(),
   };
@@ -342,14 +345,21 @@ export async function runLLMStream(params: {
     const partial = parsePartialCitationObjects(streamingCitationsBuffer);
     if (partial.length <= streamedCitationCount) return;
     streamedCitationCount = partial.length;
-    const citations = partial.map((c) =>
-      createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-        docStore,
-      ),
-    );
+    const citations = partial
+      .filter(
+        (citation) =>
+          citation.kind !== "document" ||
+          !externalSourceStore.has(citation.doc_id),
+      )
+      .map((c) =>
+        createCitation(
+          c,
+          docIndex,
+          courtlistenerTurnState.casesByClusterId,
+          docStore,
+        ),
+      )
+      .filter((citation) => citation !== null);
     emitCitationStreamSnapshot("partial", citations);
   };
 
@@ -561,6 +571,7 @@ export async function runLLMStream(params: {
           courtlistenerTurnState,
           apiKeys,
           nonce,
+          externalSourceStore,
         );
         throwIfAborted(signal);
         for (const r of docsRead) {
@@ -702,14 +713,22 @@ export async function runLLMStream(params: {
     // Custom builders (tabular) bypass document-citation verification.
     citations = buildCitations(fullText);
   } else {
-    const rawCitations = parsedCitations.map((c) =>
-      createCitation(
-        c,
-        docIndex,
-        courtlistenerTurnState.casesByClusterId,
-        docStore,
-      ),
-    );
+    const rawCitations = parsedCitations
+      .map((c) =>
+        createCitation(
+          c,
+          docIndex,
+          courtlistenerTurnState.casesByClusterId,
+          docStore,
+          externalSourceStore,
+        ),
+      )
+      .filter(
+        (
+          citation,
+        ): citation is NonNullable<ReturnType<typeof createCitation>> =>
+          citation !== null,
+      );
     // Server-side quote verification. Fetch each document's extracted source
     // text at most once per turn (memoized by doc_id), reading only bytes
     // already in storage with emitEvents:false. Case citations are matched
@@ -718,21 +737,27 @@ export async function runLLMStream(params: {
     const getSourceText = (docId: string): Promise<string> => {
       let pending = sourceTextByDocId.get(docId);
       if (!pending) {
+        const externalSource = externalSourceStore.get(docId);
         const label = resolveDocLabel(docId, docStore, docIndex);
-        pending = label
-          ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
-              emitEvents: false,
-            })
-          : Promise.resolve("");
+        pending = externalSource
+          ? Promise.resolve(externalSource.text)
+          : label
+            ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
+                emitEvents: false,
+              })
+            : Promise.resolve("");
         sourceTextByDocId.set(docId, pending);
       }
       return pending;
     };
-    citations = await verifyCitations(
-      rawCitations,
-      getSourceText,
-      async (clusterId) =>
-        getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
+    citations = boundExternalCitationPayloads(
+      await verifyCitations(
+        rawCitations,
+        getSourceText,
+        async (clusterId) =>
+          getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
+      ),
+      externalSourceStore,
     );
   }
   devLog("[chat/stream] final citations", {

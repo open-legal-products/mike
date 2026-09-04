@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
     use,
     useCallback,
@@ -38,6 +39,8 @@ import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
 import { ChatInput } from "@/app/components/assistant/ChatInput";
+import { DocPanel } from "@/app/components/assistant/DocPanel";
+import { legalSourceDocumentFromCitation } from "@/app/components/assistant/panelDocumentVersion";
 import type { ChatInputHandle } from "@/app/components/assistant/ChatInput";
 import { ProjectExplorer } from "@/app/components/projects/ProjectExplorer";
 import { PdfView } from "@/app/components/shared/views/PdfView";
@@ -57,6 +60,7 @@ import type {
     Document,
     EditAnnotation,
     Message,
+    PanelDocument,
     Project,
 } from "@/app/components/shared/types";
 import { expandCitationToEntries } from "@/app/components/shared/types";
@@ -78,6 +82,8 @@ type DocTab = {
     filename: string;
     quotes?: CitationQuote[];
     versionId?: string | null;
+    document?: PanelDocument;
+    citation?: Citation;
     refetchKey?: number;
     warning?: string | null;
     scrollTop?: number;
@@ -486,23 +492,34 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         filename: string,
         quotes?: CitationQuote[],
         versionId?: string | null,
+        document?: PanelDocument,
+        citation?: Citation,
     ) {
         setTabs((prev) => {
             const existing = prev.find((t) => t.documentId === docId);
             if (existing) {
-                if (
-                    versionId !== undefined &&
-                    existing.versionId !== versionId
-                ) {
-                    return prev.map((t) =>
-                        t.documentId === docId ? { ...t, versionId } : t,
-                    );
-                }
-                return prev;
+                return prev.map((tab) =>
+                    tab.documentId === docId
+                        ? {
+                              ...tab,
+                              ...(quotes !== undefined ? { quotes } : {}),
+                              ...(versionId !== undefined ? { versionId } : {}),
+                              ...(document ? { document } : {}),
+                              ...(citation ? { citation } : {}),
+                          }
+                        : tab,
+                );
             }
             return [
                 ...prev,
-                { documentId: docId, filename, quotes, versionId },
+                {
+                    documentId: docId,
+                    filename,
+                    quotes,
+                    versionId,
+                    document,
+                    citation,
+                },
             ];
         });
         setActiveTabId(docId);
@@ -533,7 +550,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // ── Handlers ──────────────────────────────────────────────────────────────
     const handleSubmit = useCallback(
         (message: Message) => {
-            if (!activeTab) return handleChat(message);
+            if (!activeTab || activeTab.document)
+                return handleChat(message);
             return handleChat(message, {
                 displayedDoc: {
                     filename: activeTab.filename,
@@ -550,10 +568,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     const handleCitationClick = (citation: Citation) => {
         if (citation.kind === "case") return;
+        const legalSourceDocument = legalSourceDocumentFromCitation(citation);
         openTab(
             citation.document_id,
-            citation.filename,
+            legalSourceDocument?.title ?? citation.filename,
             expandCitationToEntries(citation),
+            undefined,
+            legalSourceDocument ?? undefined,
+            legalSourceDocument ? citation : undefined,
         );
     };
 
@@ -1155,6 +1177,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         ) : (
                             tabs.map((tab) => {
                                 const isActive = tab.documentId === activeTabId;
+                                const legalSourceType =
+                                    tab.document?.type === "case" ||
+                                    tab.document?.type === "legislation"
+                                        ? tab.document.type
+                                        : null;
                                 const ext = tab.filename
                                     .split(".")
                                     .pop()
@@ -1194,9 +1221,24 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                                 : "bg-white hover:bg-gray-50"
                                         }`}
                                     >
-                                        <FileText
-                                            className={`h-3.5 w-3.5 shrink-0 ${iconColor}`}
-                                        />
+                                        {legalSourceType ? (
+                                            <Image
+                                                src={
+                                                    legalSourceType === "case"
+                                                        ? "/icons/legal-sources/case-law.svg"
+                                                        : "/icons/legal-sources/legislation.svg"
+                                                }
+                                                alt=""
+                                                aria-hidden="true"
+                                                width={14}
+                                                height={14}
+                                                className="h-3.5 w-3.5 shrink-0 object-contain"
+                                            />
+                                        ) : (
+                                            <FileText
+                                                className={`h-3.5 w-3.5 shrink-0 ${iconColor}`}
+                                            />
+                                        )}
                                         <span
                                             className={`text-xs truncate ${isActive ? "text-gray-900 font-medium" : "text-gray-500"}`}
                                         >
@@ -1229,7 +1271,16 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                     <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                         {activeTab ? (
-                            activeTabViewType === "docx" ? (
+                            activeTab.document && activeTab.citation ? (
+                                <DocPanel
+                                    document={activeTab.document}
+                                    mode={{
+                                        kind: "citation",
+                                        citation: activeTab.citation,
+                                    }}
+                                    compactActions
+                                />
+                            ) : activeTabViewType === "docx" ? (
                                 <DocxView
                                     key={activeTab.documentId}
                                     documentId={activeTab.documentId}

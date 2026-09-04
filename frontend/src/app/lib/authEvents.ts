@@ -14,7 +14,16 @@ export async function authenticatedFetch(
     });
 
     if (response.status === 401 && typeof window !== "undefined") {
-        window.dispatchEvent(new Event(AUTH_SESSION_INVALIDATED_EVENT));
+        let invalidSession = true;
+        try {
+            const body = (await response.clone().json()) as { code?: unknown };
+            invalidSession = body.code !== "oauth_required";
+        } catch {
+            // A non-JSON 401 is still an authentication failure.
+        }
+        if (invalidSession) {
+            window.dispatchEvent(new Event(AUTH_SESSION_INVALIDATED_EVENT));
+        }
     }
 
     return response;

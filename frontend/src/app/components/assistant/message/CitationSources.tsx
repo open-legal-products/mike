@@ -18,6 +18,14 @@ type CitationSourceRow = {
     entries: { annotation: Citation; index: number }[];
 };
 
+type LegalSourceType = "case" | "legislation";
+
+function legalSourceType(annotation: Citation): LegalSourceType | null {
+    if (annotation.kind === "case") return "case";
+    const type = annotation.document?.type;
+    return type === "case" || type === "legislation" ? type : null;
+}
+
 function citationSourceKey(annotation: Citation): string {
     if (annotation.kind === "case") {
         return `case:${annotation.cluster_id}`;
@@ -32,6 +40,9 @@ function citationSourceLabel(annotation: Citation): string {
         if (caseName && citation) return `${caseName}, ${citation}`;
         return caseName || citation || `Case ${annotation.cluster_id}`;
     }
+    if (legalSourceType(annotation)) {
+        return annotation.document?.title || annotation.filename;
+    }
     return annotation.filename;
 }
 
@@ -44,10 +55,15 @@ export function citationTooltip(annotation: Citation): string {
 }
 
 function CitationSourceIcon({ annotation }: { annotation: Citation }) {
-    if (annotation.kind === "case") {
+    const sourceType = legalSourceType(annotation);
+    if (sourceType) {
         return (
             <Image
-                src="/icons/legal-sources/case-law.svg"
+                src={
+                    sourceType === "case"
+                        ? "/icons/legal-sources/case-law.svg"
+                        : "/icons/legal-sources/legislation.svg"
+                }
                 alt=""
                 aria-hidden="true"
                 width={14}
@@ -57,7 +73,10 @@ function CitationSourceIcon({ annotation }: { annotation: Citation }) {
         );
     }
     return (
-        <FileTypeIcon fileType={annotation.filename} className="h-3.5 w-3.5" />
+        <FileTypeIcon
+            fileType={annotation.kind === "case" ? null : annotation.filename}
+            className="h-3.5 w-3.5"
+        />
     );
 }
 

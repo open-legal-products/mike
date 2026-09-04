@@ -1,4 +1,4 @@
-import type { PanelDocument } from "../shared/types";
+import type { Citation, PanelDocument } from "../shared/types";
 import {
     listDocumentVersions,
     type DocumentVersion,
@@ -9,12 +9,28 @@ type VersionList = {
     versions: DocumentVersion[];
 };
 
+export function legalSourceDocumentFromCitation(
+    citation: Citation,
+): PanelDocument | null {
+    if (citation.kind !== "document") return null;
+    const document = citation.document;
+    return document?.type === "case" || document?.type === "legislation"
+        ? document
+        : null;
+}
+
 export async function resolvePanelDocumentVersion(
     document: PanelDocument,
     loadVersions: (documentId: string) => Promise<VersionList> =
         listDocumentVersions,
 ): Promise<PanelDocument | null> {
-    if (document.type === "case" || document.version_id) return document;
+    if (
+        document.type === "case" ||
+        document.type === "legislation" ||
+        document.version_id
+    ) {
+        return document;
+    }
 
     try {
         const result = await loadVersions(document.document_id);

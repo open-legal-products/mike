@@ -14,6 +14,7 @@ export {
     deleteUserMcpConnector,
     executeMcpToolCall,
     getUserMcpConnector,
+    ensureUserLegalDataHunterConnector,
     listUserMcpConnectors,
     refreshUserMcpConnectorTools,
     setUserMcpToolEnabled,

@@ -4,10 +4,14 @@ import {
     parseCitationsWithDiagnostics,
     parsePartialCitationObjects,
     createCitation,
+    boundExternalCitationPayloads,
+    MAX_EXTERNAL_CITATIONS_PER_RESPONSE,
+    MAX_EXTERNAL_CITATION_PAYLOAD_CHARS,
     CITATIONS_OPEN_TAG,
     CITATIONS_CLOSE_TAG,
 } from "../chat/citations";
 import type { DocIndex, DocStore } from "../chat/types";
+import type { ExternalSourceStore } from "../mcp/sourceDocuments";
 
 function citationsBlock(json: string) {
     return `Answer text.\n${CITATIONS_OPEN_TAG}\n${json}\n${CITATIONS_CLOSE_TAG}`;
@@ -434,5 +438,150 @@ describe("createCitation", () => {
             pdfUrl: null,
             dateFiled: null,
         });
+    });
+
+    it("builds a document citation from a registered MCP legal source", () => {
+        const [parsed] = parseCitations(
+            citationsBlock(
+                '[{"ref": 3, "doc_id": "source-0", "quote": "La Cour rejette le pourvoi."}]',
+            ),
+        );
+        const externalSources: ExternalSourceStore = new Map([
+            [
+                "source-0",
+                {
+                    text: "Attendu que la Cour rejette le pourvoi.",
+                    document: {
+                        document_id: "legal-data-hunter:case:ccass-2025-001",
+                        title: "Cour de cassation, chambre commerciale",
+                        type: "case",
+                        metadata: [
+                            {
+                                label: "Citation",
+                                value: "Pourvoi n° 24-10.001",
+                            },
+                        ],
+                        actions: [
+                            {
+                                type: "link",
+                                url: "https://www.legifrance.gouv.fr/example",
+                                label: "Official source",
+                            },
+                        ],
+                        quotes: [],
+                        subdocuments: [
+                            {
+                                document_id:
+                                    "legal-data-hunter:case:ccass-2025-001:text",
+                                title: "Decision",
+                                type: "html",
+                                text: "Attendu que la Cour rejette le pourvoi.",
+                            },
+                        ],
+                    },
+                },
+            ],
+        ]);
+
+        expect(
+            createCitation(parsed, docIndex, undefined, undefined, externalSources),
+        ).toMatchObject({
+            type: "citation_data",
+            kind: "document",
+            ref: 3,
+            doc_id: "source-0",
+            document_id: "legal-data-hunter:case:ccass-2025-001",
+            filename: "Cour de cassation, chambre commerciale",
+            page: 1,
+            quote: "La Cour rejette le pourvoi.",
+            document: {
+                document_id: "legal-data-hunter:case:ccass-2025-001",
+                title: "Cour de cassation, chambre commerciale",
+                type: "case",
+                quotes: [
+                    {
+                        quote: "La Cour rejette le pourvoi.",
+                        target: {
+                            subdocument_id:
+                                "legal-data-hunter:case:ccass-2025-001:text",
+                        },
+                    },
+                ],
+            },
+        });
+    });
+
+    it("rejects an unregistered source handle instead of fabricating a document", () => {
+        const [parsed] = parseCitations(
+            citationsBlock(
+                '[{"ref": 4, "doc_id": "source-99", "quote": "Untrusted"}]',
+            ),
+        );
+
+        expect(
+            createCitation(parsed, docIndex, undefined, undefined, new Map()),
+        ).toBeNull();
+    });
+
+    it("bounds and deduplicates external citation payloads", () => {
+        const text = "x".repeat(50_000);
+        const externalSources: ExternalSourceStore = new Map([
+            [
+                "source-0",
+                {
+                    text,
+                    document: {
+                        document_id: "mcp:connector-1:legal-data-hunter:case:1",
+                        title: "Large decision",
+                        type: "case",
+                        metadata: [],
+                        actions: [],
+                        quotes: [],
+                        subdocuments: [
+                            {
+                                document_id:
+                                    "mcp:connector-1:legal-data-hunter:case:1:text",
+                                title: "Decision",
+                                type: "html",
+                                text,
+                            },
+                        ],
+                    },
+                },
+            ],
+        ]);
+        const [parsed] = parseCitations(
+            citationsBlock(
+                '[{"ref": 1, "doc_id": "source-0", "quote": "x"}]',
+            ),
+        );
+        const citation = createCitation(
+            parsed,
+            docIndex,
+            undefined,
+            undefined,
+            externalSources,
+        );
+        if (!citation) throw new Error("Expected an external citation");
+
+        const repeated = Array.from(
+            { length: MAX_EXTERNAL_CITATIONS_PER_RESPONSE + 20 },
+            (_, index) => ({ ...citation, ref: index + 1 }),
+        );
+        repeated.push(repeated[0]);
+        const bounded = boundExternalCitationPayloads(
+            repeated,
+            externalSources,
+        );
+
+        expect(bounded.length).toBeLessThanOrEqual(
+            MAX_EXTERNAL_CITATIONS_PER_RESPONSE,
+        );
+        expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(
+            MAX_EXTERNAL_CITATION_PAYLOAD_CHARS,
+        );
+        expect(boundExternalCitationPayloads([citation, citation], externalSources)).toHaveLength(
+            1,
+        );
     });
 });

@@ -10,6 +10,11 @@ import {
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
 import { executeMcpToolCall, type McpToolEvent } from "../../mcpConnectors";
+import {
+  buildExternalSourceCitationReminder,
+  registerExternalLegalSources,
+  type ExternalSourceStore,
+} from "../../mcp/sourceDocuments";
 import { createServerSupabase } from "../../supabase";
 import {
   type DocStore,
@@ -270,6 +275,7 @@ export async function runToolCalls(
   courtlistenerState?: CourtlistenerTurnState,
   apiKeys?: import("../../llm").UserApiKeys,
   nonce?: string,
+  externalSourceStore?: ExternalSourceStore,
 ): Promise<{
   toolResults: unknown[];
   docsRead: {
@@ -436,16 +442,23 @@ export async function runToolCalls(
           name: tc.function.name,
         })}\n\n`,
       );
-      const { content, event } = await executeMcpToolCall(
+      const { content, event, legalSources } = await executeMcpToolCall(
         userId,
         tc.function.name,
         args,
         db,
       );
+      const registeredSources = externalSourceStore
+        ? registerExternalLegalSources(externalSourceStore, legalSources)
+        : [];
+      const citationInstructions =
+        buildExternalSourceCitationReminder(registeredSources);
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content,
+        content: citationInstructions
+          ? `${content}\n\n${citationInstructions}`
+          : content,
       });
       mcpEvents.push(event);
       write(

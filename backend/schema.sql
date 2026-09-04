@@ -391,6 +391,109 @@ create index if not exists idx_user_mcp_tool_audit_logs_user_created
 
 alter table public.user_mcp_tool_audit_logs enable row level security;
 
+-- Built-in Legal Data Hunter provisioning. The function is service-role-only and
+-- serializes one canonical connector per user without discarding existing OAuth.
+create or replace function public.ensure_legal_data_hunter_connector(
+  p_user_id uuid
+)
+returns setof public.user_mcp_connectors
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  selected public.user_mcp_connectors%rowtype;
+begin
+  perform pg_advisory_xact_lock(
+    hashtextextended('mike:legal-data-hunter:' || p_user_id::text, 0)
+  );
+
+  select connector.*
+  into selected
+  from public.user_mcp_connectors as connector
+  where connector.user_id = p_user_id
+    and regexp_replace(
+      split_part(split_part(connector.server_url, '?', 1), '#', 1),
+      '^https://legaldatahunter[.]com[.]?(:0*443)?',
+      '',
+      'i'
+    ) ~ '^/+(m|%6[dD])(c|%63)(p|%70)/*$'
+  order by
+    exists (
+      select 1
+      from public.user_mcp_oauth_tokens as token
+      where token.connector_id = connector.id
+        and (
+          token.encrypted_access_token is not null
+          or token.encrypted_refresh_token is not null
+        )
+    ) desc,
+    connector.enabled desc,
+    connector.updated_at desc,
+    connector.created_at asc
+  limit 1
+  for update;
+
+  if selected.id is null then
+    insert into public.user_mcp_connectors (
+      user_id,
+      name,
+      transport,
+      server_url,
+      auth_type,
+      enabled,
+      tool_policy
+    )
+    values (
+      p_user_id,
+      'Legal Data Hunter',
+      'streamable_http',
+      'https://legaldatahunter.com/mcp',
+      'none',
+      false,
+      '{}'::jsonb
+    )
+    returning * into selected;
+  else
+    update public.user_mcp_connectors
+    set name = 'Legal Data Hunter',
+        server_url = 'https://legaldatahunter.com/mcp',
+        enabled = exists (
+          select 1
+          from public.user_mcp_oauth_tokens as token
+          where token.connector_id = selected.id
+            and (
+              token.encrypted_access_token is not null
+              or token.encrypted_refresh_token is not null
+            )
+        ),
+        updated_at = now()
+    where id = selected.id
+    returning * into selected;
+  end if;
+
+  update public.user_mcp_connectors
+  set enabled = false,
+      updated_at = now()
+  where user_id = p_user_id
+    and regexp_replace(
+      split_part(split_part(server_url, '?', 1), '#', 1),
+      '^https://legaldatahunter[.]com[.]?(:0*443)?',
+      '',
+      'i'
+    ) ~ '^/+(m|%6[dD])(c|%63)(p|%70)/*$'
+    and id <> selected.id
+    and enabled = true;
+
+  return next selected;
+end;
+$$;
+
+revoke all on function public.ensure_legal_data_hunter_connector(uuid)
+  from public, anon, authenticated;
+grant execute on function public.ensure_legal_data_hunter_connector(uuid)
+  to service_role;
+
 -- ---------------------------------------------------------------------------
 -- Projects and documents
 -- ---------------------------------------------------------------------------
