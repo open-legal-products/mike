@@ -47,6 +47,7 @@ vi.mock("../../lib/mcpConnectors", () => ({
     completeUserMcpConnectorOAuth: vi.fn(),
     createUserMcpConnector: vi.fn(),
     deleteUserMcpConnector: vi.fn(),
+    ensureUserLegalDataHunterConnector: vi.fn(),
     getUserMcpConnector: vi.fn(),
     listUserMcpConnectors: vi.fn(),
     McpOAuthRequiredError: class McpOAuthRequiredError extends Error {},

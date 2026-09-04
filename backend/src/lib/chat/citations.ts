@@ -1,4 +1,5 @@
 import { type DocIndex, type DocStore, resolveDoc } from "./types";
+import type { ExternalSourceStore } from "../mcp/sourceDocuments";
 import {
   normalizeCaseDocument,
   sourceDocumentType,
@@ -42,6 +43,9 @@ type ParsedCaseCitation = {
 };
 
 type ParsedCitation = ParsedDocumentCitation | ParsedCaseCitation;
+
+export const MAX_EXTERNAL_CITATIONS_PER_RESPONSE = 12;
+export const MAX_EXTERNAL_CITATION_PAYLOAD_CHARS = 200_000;
 
 function normalizeCitation(raw: unknown): ParsedCitation | null {
   if (!raw || typeof raw !== "object") return null;
@@ -280,6 +284,7 @@ export function createCitation(
   docIndex: DocIndex,
   casesByClusterId?: CasesByClusterId,
   docStore?: DocStore,
+  externalSourceStore?: ExternalSourceStore,
 ) {
   if (citation.kind === "case") {
     const caseRecord = casesByClusterId?.get(citation.cluster_id);
@@ -306,6 +311,36 @@ export function createCitation(
       quotes: citation.quotes,
     };
   }
+
+  const externalSource = externalSourceStore?.get(citation.doc_id);
+  if (externalSource) {
+    const subdocumentId = externalSource.document.subdocuments?.[0]?.document_id;
+    const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
+      quote: quote.quote,
+      target: subdocumentId ? { subdocument_id: subdocumentId } : {},
+    }));
+    return {
+      type: "citation_data",
+      kind: "document",
+      ref: citation.ref,
+      document: {
+        ...externalSource.document,
+        quotes,
+      },
+      doc_id: citation.doc_id,
+      document_id: externalSource.document.document_id,
+      version_id: null,
+      version_number: null,
+      filename: externalSource.document.title,
+      page: citation.page,
+      quote: citation.quote,
+      sheet: citation.sheet,
+      cell: citation.cell,
+      quotes: citation.quotes,
+    };
+  }
+
+  if (/^source-\d+$/.test(citation.doc_id)) return null;
 
   const docInfo = resolveDoc(citation.doc_id, docIndex);
   const requestScopedDocument = docStore?.get(citation.doc_id);
@@ -344,4 +379,46 @@ export function createCitation(
     cell: citation.cell,
     quotes: citation.quotes,
   };
+}
+
+export function boundExternalCitationPayloads<T>(
+  citations: readonly T[],
+  externalSourceStore?: ExternalSourceStore,
+): T[] {
+  if (!externalSourceStore) return [...citations];
+
+  const bounded: T[] = [];
+  const seenExternal = new Set<string>();
+  let externalCount = 0;
+  let externalPayloadChars = 2;
+
+  for (const citation of citations) {
+    const docId =
+      citation && typeof citation === "object" && "doc_id" in citation
+        ? (citation as { doc_id?: unknown }).doc_id
+        : undefined;
+    const isExternal =
+      typeof docId === "string" && externalSourceStore.has(docId);
+    if (!isExternal) {
+      bounded.push(citation);
+      continue;
+    }
+
+    const serialized = JSON.stringify(citation);
+    if (seenExternal.has(serialized)) continue;
+    const addedChars = serialized.length + (externalCount > 0 ? 1 : 0);
+    if (
+      externalCount >= MAX_EXTERNAL_CITATIONS_PER_RESPONSE ||
+      externalPayloadChars + addedChars > MAX_EXTERNAL_CITATION_PAYLOAD_CHARS
+    ) {
+      continue;
+    }
+
+    seenExternal.add(serialized);
+    externalCount += 1;
+    externalPayloadChars += addedChars;
+    bounded.push(citation);
+  }
+
+  return bounded;
 }

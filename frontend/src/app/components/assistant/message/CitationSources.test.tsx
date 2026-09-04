@@ -86,4 +86,48 @@ describe("CitationsBlock verification states", () => {
       screen.getByRole("button", { name: "Citation 1" }),
     ).not.toHaveAttribute("data-active");
   });
+
+  it("uses normalized legislation titles and icons without a fake page", () => {
+    const citation: DocumentCitation = {
+      type: "citation_data",
+      kind: "document",
+      ref: 5,
+      doc_id: "source-0",
+      document_id: "legal-data-hunter:legislation:LEGIARTI000001",
+      filename: "source-0",
+      page: 1,
+      quote: "Les contrats légalement formés tiennent lieu de loi.",
+      quotes: [
+        {
+          page: 1,
+          quote: "Les contrats légalement formés tiennent lieu de loi.",
+        },
+      ],
+      document: {
+        document_id: "legal-data-hunter:legislation:LEGIARTI000001",
+        title: "Code civil, article 1103",
+        type: "legislation",
+        metadata: [{ label: "Citation", value: "Article 1103" }],
+        quotes: [
+          {
+            quote: "Les contrats légalement formés tiennent lieu de loi.",
+            target: {
+              subdocument_id:
+                "legal-data-hunter:legislation:LEGIARTI000001:text",
+            },
+          },
+        ],
+      },
+    };
+
+    const { container } = render(<CitationsBlock citations={[citation]} />);
+
+    expect(screen.getByText("Code civil, article 1103")).toBeInTheDocument();
+    expect(
+      container.querySelector(
+        'img[src*="/icons/legal-sources/legislation.svg"]',
+      ),
+    ).toBeInTheDocument();
+    expect(citationTooltip(citation)).not.toContain("Page 1");
+  });
 });

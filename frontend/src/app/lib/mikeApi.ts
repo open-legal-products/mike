@@ -806,6 +806,13 @@ export async function createMcpConnector(payload: {
     });
 }
 
+export async function ensureLegalDataHunterConnector(): Promise<McpConnectorSummary> {
+    return apiRequest<McpConnectorSummary>(
+        "/user/mcp-connectors/legal-data-hunter/ensure",
+        { method: "POST" },
+    );
+}
+
 export async function updateMcpConnector(
     connectorId: string,
     payload: {

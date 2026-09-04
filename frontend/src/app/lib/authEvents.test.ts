@@ -28,6 +28,34 @@ describe("authenticatedFetch", () => {
         window.removeEventListener(AUTH_SESSION_INVALIDATED_EVENT, listener);
     });
 
+    it("does not invalidate auth for an OAuth-required connector response", async () => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(
+                new Response(
+                    JSON.stringify({
+                        code: "oauth_required",
+                        detail: "OAuth authorization is required.",
+                    }),
+                    {
+                        status: 401,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                ),
+            ),
+        );
+        const listener = vi.fn();
+        window.addEventListener(AUTH_SESSION_INVALIDATED_EVENT, listener);
+
+        const response = await authenticatedFetch(
+            "/api/user/mcp-connectors/connector-id/tools/refresh",
+        );
+
+        expect(response.status).toBe(401);
+        expect(listener).not.toHaveBeenCalled();
+        window.removeEventListener(AUTH_SESSION_INVALIDATED_EVENT, listener);
+    });
+
     it("does not invalidate auth for successful responses", async () => {
         vi.stubGlobal(
             "fetch",

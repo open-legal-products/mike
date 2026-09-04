@@ -137,3 +137,51 @@ describe("case document", () => {
         expect(screen.getByText("Opinion text.")).toBeInTheDocument();
     });
 });
+
+describe("legislation document", () => {
+    it("renders canonical text in the legal-source viewer without an internal PDF", () => {
+        const { container } = render(
+            <DocPanel
+                compactActions={false}
+                mode={{ kind: "document" }}
+                document={{
+                    document_id: "mcp:connector-1:legislation:article-1103",
+                    title: "Code civil, article 1103",
+                    type: "legislation",
+                    metadata: [
+                        { label: "Citation", value: "Article 1103" },
+                    ],
+                    actions: [
+                        {
+                            type: "link",
+                            url: "https://www.legifrance.gouv.fr/example",
+                            label: "Official source",
+                        },
+                    ],
+                    quotes: [],
+                    subdocuments: [
+                        {
+                            document_id:
+                                "mcp:connector-1:legislation:article-1103:text",
+                            title: "Code civil, article 1103",
+                            type: "html",
+                            text: "Les contrats légalement formés tiennent lieu de loi.",
+                        },
+                    ],
+                }}
+            />,
+        );
+
+        expect(
+            screen.getByText(
+                "Les contrats légalement formés tiennent lieu de loi.",
+            ),
+        ).toBeInTheDocument();
+        expect(
+            container.querySelector(
+                'img[src*="/icons/legal-sources/legislation.svg"]',
+            ),
+        ).toBeInTheDocument();
+        expect(container.querySelector("canvas")).not.toBeInTheDocument();
+    });
+});

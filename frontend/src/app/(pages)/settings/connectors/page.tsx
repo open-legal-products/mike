@@ -34,9 +34,13 @@ import {
     listMcpConnectors,
     refreshMcpConnectorTools,
     setMcpToolEnabled,
-    startMcpConnectorOAuth,
     updateMcpConnector,
 } from "@/app/lib/mikeApi";
+import {
+    customMcpConnectors,
+    isLegalDataHunterConnector,
+} from "@/app/lib/legalDataHunterConnector";
+import { authorizeMcpConnector } from "@/app/lib/mcpOAuthPopup";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { settingsGlassIconButtonClassName } from "../settingsStyles";
 import { SettingsSection } from "../SettingsSection";
@@ -74,13 +78,6 @@ const emptyAddDraft: AddDraft = {
     serverUrl: "",
     bearerToken: "",
     customHeaders: "",
-};
-
-type McpOAuthPopupMessage = {
-    type?: string;
-    success?: boolean;
-    connectorId?: string;
-    detail?: string;
 };
 
 function parseCustomHeaders(raw: string): Record<string, string> | undefined {
@@ -151,7 +148,8 @@ export default function ConnectorsPage() {
         setLoading(true);
         setError(null);
         try {
-            setConnectors(await listMcpConnectors());
+            const connectors = await listMcpConnectors();
+            setConnectors(customMcpConnectors(connectors));
         } catch (err) {
             setError(
                 userFacingApiError(err, "Failed to load connectors."),
@@ -188,6 +186,15 @@ export default function ConnectorsPage() {
         connector: McpConnectorSummary,
         options: { preserveToolsOnEmpty?: boolean } = {},
     ) => {
+        if (isLegalDataHunterConnector(connector)) {
+            setConnectors((prev) =>
+                prev.filter((item) => item.id !== connector.id),
+            );
+            setSelectedConnectorDetails((current) =>
+                current?.id === connector.id ? null : current,
+            );
+            return;
+        }
         const mergeConnector = (current: McpConnectorSummary) => {
             if (
                 options.preserveToolsOnEmpty &&
@@ -275,80 +282,20 @@ export default function ConnectorsPage() {
     const connectConnectorOAuth = async (
         connectorId: string,
     ): Promise<McpConnectorSummary | null> => {
-        const popup = window.open(
-            "about:blank",
-            "mike_mcp_oauth",
-            "popup,width=560,height=720,menubar=no,toolbar=no,location=no,status=no",
-        );
-        const { authorizationUrl, alreadyAuthorized, callbackOrigin } =
-            await startMcpConnectorOAuth(connectorId);
-        if (alreadyAuthorized) {
-            popup?.close();
-            const refreshed = await refreshMcpConnectorTools(connectorId);
-            replaceConnector(refreshed);
-            return refreshed;
-        }
-        if (!authorizationUrl) {
-            popup?.close();
-            throw new Error("OAuth authorization URL was not returned.");
-        }
-        const expectedCallbackOrigin = new URL(callbackOrigin).origin;
-        if (!popup) {
-            window.location.assign(authorizationUrl);
-            return null;
-        }
-        popup.location.href = authorizationUrl;
-
-        await new Promise<void>((resolve, reject) => {
-            const timeout = window.setTimeout(() => {
-                cleanup();
-                reject(new Error("OAuth authorization timed out."));
-            }, 5 * 60 * 1000);
-            const poll = window.setInterval(() => {
-                if (popup.closed) {
-                    cleanup();
-                    reject(new Error("OAuth authorization window was closed."));
-                }
-            }, 700);
-            const cleanup = () => {
-                window.clearTimeout(timeout);
-                window.clearInterval(poll);
-                window.removeEventListener("message", onMessage);
-            };
-            const onMessage = (event: MessageEvent<McpOAuthPopupMessage>) => {
-                if (event.origin !== expectedCallbackOrigin) return;
-                if (event.data?.type !== "mcp_oauth_result") return;
-                if (
-                    event.data.connectorId &&
-                    event.data.connectorId !== connectorId
-                ) {
-                    return;
-                }
-                const sourceWindow = event.source as Window | null;
-                sourceWindow?.postMessage(
-                    { type: "mcp_oauth_result_ack" },
-                    event.origin,
-                );
-                cleanup();
-                if (event.data.success) {
-                    resolve();
-                    return;
-                }
-                reject(
-                    new Error(
-                        event.data.detail || "OAuth authorization failed.",
-                    ),
-                );
-            };
-            window.addEventListener("message", onMessage);
-        });
-
+        const result = await authorizeMcpConnector(connectorId);
+        if (result === "redirecting") return null;
         const refreshed = await refreshMcpConnectorTools(connectorId);
         replaceConnector(refreshed);
         return refreshed;
     };
 
     const handleCreate = async () => {
+        if (isLegalDataHunterConnector({ serverUrl: addDraft.serverUrl })) {
+            setAddError(
+                "Enable Legal Data Hunter in Settings → Features instead.",
+            );
+            return;
+        }
         await runSensitiveAction({ type: "create" }, async () => {
             setBusyKey("create");
             setAddStep("working");
@@ -417,6 +364,15 @@ export default function ConnectorsPage() {
 
     const handleSaveSelectedConnector = async () => {
         if (!selectedConnector) return;
+        if (
+            detailDraft &&
+            isLegalDataHunterConnector({ serverUrl: detailDraft.serverUrl })
+        ) {
+            setDetailError(
+                "Enable Legal Data Hunter in Settings → Features instead.",
+            );
+            return;
+        }
         await runSensitiveAction(
             { type: "save", connectorId: selectedConnector.id },
             async () => {

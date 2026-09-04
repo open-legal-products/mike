@@ -34,6 +34,7 @@ import {
     completeUserMcpConnectorOAuth,
     createUserMcpConnector,
     deleteUserMcpConnector,
+    ensureUserLegalDataHunterConnector,
     getUserMcpConnector,
     listUserMcpConnectors,
     McpOAuthRequiredError,
@@ -1393,6 +1394,27 @@ userRouter.get("/mcp-connectors", requireAuth, async (_req, res) => {
         sendInternalError(res, err);
     }
 });
+
+// POST /user/mcp-connectors/legal-data-hunter/ensure
+userRouter.post(
+    "/mcp-connectors/legal-data-hunter/ensure",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (_req, res) => {
+        const userId = res.locals.userId as string;
+        const db = createServerSupabase();
+        try {
+            res.json(await ensureUserLegalDataHunterConnector(userId, db));
+        } catch (err) {
+            const detail = errorMessage(err);
+            console.error("[user/mcp-connectors] LDH ensure failed", {
+                userId,
+                error: detail,
+            });
+            sendInternalError(res, err);
+        }
+    },
+);
 
 // GET /user/mcp-connectors/:connectorId
 userRouter.get(
