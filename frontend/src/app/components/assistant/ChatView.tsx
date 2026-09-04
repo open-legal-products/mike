@@ -35,7 +35,10 @@ import { useSidebar } from "@/app/contexts/SidebarContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { usePageChrome } from "@/app/contexts/PageChromeContext";
 import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
-import { resolvePanelDocumentVersion } from "./panelDocumentVersion";
+import {
+    resolvePanelDocumentVersion,
+    resolvePanelDocumentVersionResult,
+} from "./panelDocumentVersion";
 import { LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS } from "@/app/components/ui/liquid-surface";
 import { HeaderButtonUI, HeaderButtonsUI } from "@/shared/ui/HeaderButtonsUI";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
@@ -66,8 +69,12 @@ interface Props {
      * Whether the caller may write in this chat. The server serves the
      * standing on GET /chat/:id; surfaces that know it must pass it, so a
      * read-only caller gets the disabled composer instead of a 403 on send.
+     *
+     * `null` is the third answer: not known yet. It closes the composer like
+     * `false` does, but says nothing about the caller's access, so the page
+     * does not accuse an owner of being a viewer for the length of a fetch.
      */
-    canSend?: boolean;
+    canSend?: boolean | null;
 }
 
 const ASSISTANT_PANEL_TRANSITION_MS = 500;
@@ -107,6 +114,11 @@ export function ChatView({
     const [actionGate, setActionGate] = useState<{
         action: string;
         requiredRole: "owner" | "editor";
+        /** Overrides the role-derived heading/body for refusals that are
+         *  not about the caller's role on THIS chat — the shared-chat
+         *  citation case, where the documents were simply not shared. */
+        title?: string;
+        message?: string;
     } | null>(null);
     const [actionError, setActionError] = useState<{
         title: string;
@@ -283,10 +295,28 @@ export function ChatView({
     const openCitation = useCallback(
         async (citation: Citation, options?: { showQuotes?: boolean }) => {
             const showQuotes = options?.showQuotes ?? true;
-            const document = await resolvePanelDocumentVersion(
+            const resolution = await resolvePanelDocumentVersionResult(
                 panelDocumentFromCitation(citation, showQuotes),
             );
-            if (!document) return;
+            if (resolution.status !== "resolved") {
+                // A chat can be shared without its documents, and that is the
+                // common case for a standalone chat: the recipient's version
+                // lookup 404s. Silently returning made every citation pill a
+                // dead control with no hint why. Widening the document grant
+                // is the server's business, not this click's; saying so is
+                // the whole fix.
+                if (resolution.status === "denied") {
+                    setActionGate({
+                        action: "open this document",
+                        requiredRole: "editor",
+                        title: "Document not shared",
+                        message:
+                            "The person who shared this chat has not shared its documents.",
+                    });
+                }
+                return;
+            }
+            const document = resolution.document;
             if (!showQuotes) {
                 upsertTab({
                     kind: "document",
@@ -1060,10 +1090,18 @@ export function ChatView({
                 />
             ) : null}
 
+            {/* TODO(contacts): GET /chat/:id (backend/src/routes/chat.ts)
+                serves chat + is_owner + access_role and no ranked contact
+                list, so there is nothing to thread into `contacts` here and
+                the "Ask …" line cannot render on chat surfaces. Needs a
+                server change (the shape project detail already returns as
+                `admin_contacts`) before this popup can name anybody. */}
             <PermissionDeniedPopup
                 open={!!actionGate}
                 action={actionGate?.action}
                 requiredRole={actionGate?.requiredRole}
+                title={actionGate?.title}
+                message={actionGate?.message}
                 onClose={() => setActionGate(null)}
             />
 

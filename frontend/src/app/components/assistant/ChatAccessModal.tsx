@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { AccessModal } from "@/app/components/modals/AccessModal";
 import { useAuth } from "@/app/contexts/AuthContext";
 import {
@@ -34,23 +34,29 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
         setAccessState({ chatId: chat.id, value: nextAccess });
     }, [chat.id]);
 
-    useEffect(() => {
-        if (!open || !canManage) return;
-        let cancelled = false;
-        getChatAccess(chat.id)
-            .then((nextAccess) => {
-                if (!cancelled) {
-                    setAccessState({ chatId: chat.id, value: nextAccess });
-                }
-            })
-            .catch(() => {
-                // The people roster remains useful if the management-only
-                // access request fails. Controls stay disabled until it succeeds.
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [canManage, chat.id, open]);
+    /**
+     * Load the roster and, for a manager, the grants — as one request from
+     * AccessModal's point of view, so both share its error channel.
+     *
+     * The owner-only grant fetch used to run in its own effect whose
+     * `.catch` was a comment. When it failed, `access` stayed null,
+     * `canManage && access !== null` fell to false, and the owner got a
+     * modal that was silently read-only with nothing on screen saying why —
+     * indistinguishable from genuinely not being allowed to manage it.
+     * Rejecting here instead routes the failure into the modal's own error
+     * line (userFacingApiError, so a 4xx shows the server's wording).
+     */
+    const loadPeople = useCallback(
+        async (chatId: string) => {
+            const people = await getChatPeople(chatId);
+            if (canManage) {
+                const nextAccess = await getChatAccess(chatId);
+                setAccessState({ chatId, value: nextAccess });
+            }
+            return people;
+        },
+        [canManage],
+    );
 
     return (
         <AccessModal
@@ -60,7 +66,7 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                 id: chat.id,
                 owner_display_name: chat.creator_display_name ?? null,
             }}
-            fetchAccess={getChatPeople}
+            fetchAccess={loadPeople}
             currentUserEmail={user?.email ?? null}
             breadcrumb={[
                 "Assistant",
