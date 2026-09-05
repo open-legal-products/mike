@@ -46,18 +46,18 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@stryker-mutator/core": "^9.6.1",
-    "@stryker-mutator/vitest-runner": "^9.6.1",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/html-to-text": "9.0.4",
-    "@types/node": "^22.14.1",
+    "@types/node": "^26.4.1",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "^4.1.9",
     "prettier": "^3.8.1",
     "supertest": "^7.2.2",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   },
   "license": "AGPL-3.0-only"
