@@ -1,5 +1,4 @@
 -- Migration date: 2026-07-10
-
 alter table public.documents
   add column if not exists library_kind text default 'file';
 

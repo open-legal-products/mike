@@ -3,6 +3,10 @@
 -- Workflows overview read model.
 -- Returns owned and shared workflows in one database call.
 
+-- Later migrations add output columns. DROP first because CREATE OR REPLACE
+-- cannot alter a function's RETURNS TABLE row type.
+DROP FUNCTION IF EXISTS public.get_workflows_overview(text, text, text);
+
 create or replace function public.get_workflows_overview(
   p_user_id text,
   p_user_email text default null,

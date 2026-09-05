@@ -4,6 +4,11 @@
 -- Returns the project list, owner display name, and per-project counts in one
 -- database call for the /projects table.
 
+-- Later migrations extend this function's output columns. PostgreSQL cannot
+-- replace a RETURNS TABLE row type in place, so remove that later shape before
+-- replaying this historical definition.
+DROP FUNCTION IF EXISTS public.get_projects_overview(text, text);
+
 create or replace function public.get_projects_overview(
   p_user_id text,
   p_user_email text default null
