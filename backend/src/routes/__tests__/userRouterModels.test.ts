@@ -27,7 +27,10 @@ vi.mock("../../middleware/auth", () => ({
 
 // user.ts only needs the model constants + resolveModel from the llm barrel;
 // importing the real barrel would load every provider adapter.
-vi.mock("../../lib/llm", async () => vi.importActual("../../lib/llm/models"));
+vi.mock("../../lib/llm", async () => ({
+    ...(await vi.importActual("../../lib/llm/models")),
+    streamChatWithTools: vi.fn(),
+}));
 
 vi.mock("../../lib/audit", () => ({ recordAudit: vi.fn() }));
 vi.mock("../../lib/userLookup", () => ({ findProfileUserByEmail: vi.fn() }));

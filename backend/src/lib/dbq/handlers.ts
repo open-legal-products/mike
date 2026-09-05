@@ -11,6 +11,8 @@
 //                      expires, instead of on the request that needs it
 //   document.precompute_text — extract a legacy Office file's text once, so
 //                      read_document stops paying for LibreOffice per call
+//   memory.consolidate — curate scoped Markdown after chat inactivity
+//   memory.candidate_cleanup — reclaim an uncommitted memory object upload
 
 import {
     chatTurnAuditEvents,
@@ -36,6 +38,7 @@ import {
     loadActiveVersion,
 } from "../documentVersions";
 import {
+    assertStorageConfigured,
     deleteFile,
     downloadFile,
     extractedTextKey,
@@ -62,6 +65,10 @@ import type { ConversionJobData } from "../queue/conversionQueue";
 import type { ExtractionJobData } from "../queue/extractionQueue";
 import { DB_JOB_FAILURE_HOOKS } from "./runner";
 import type { Db, DbJob, DbJobHandlers } from "./types";
+import {
+    handleMemoryConsolidation,
+    markMemoryConsolidationFailed,
+} from "../memory/curator";
 
 /** The export types a client may request; anything else is a 400 upstream. */
 export const EXPORT_TYPES = [
@@ -147,6 +154,14 @@ export async function handleAccountDelete(db: Db, job: DbJob): Promise<void> {
             `${artifactFailures}/${exportRows.length} export artifact deletes failed`,
         );
     }
+    const { data: actorMemoryJobs, error: actorMemoryJobsError } = await db
+        .from("db_jobs")
+        .select("payload")
+        .eq("kind", "memory.consolidate")
+        .filter("payload->>actorUserId", "eq", userId);
+    if (actorMemoryJobsError) {
+        throw new Error("Failed to load account memory jobs");
+    }
     const purges = [
         await db
             .from("db_jobs")
@@ -158,12 +173,65 @@ export async function handleAccountDelete(db: Db, job: DbJob): Promise<void> {
             .delete()
             .filter("payload->base->>userId", "eq", userId)
             .neq("id", job.id),
+        // Memory consolidation payloads intentionally use actorUserId: in a
+        // shared project chat the actor is the owner of the app-memory pass.
+        // storage.cleanup rows have no actorUserId and must survive erasure so
+        // their already-durable object deletion can still complete.
+        await db
+            .from("db_jobs")
+            .delete()
+            .eq("kind", "memory.consolidate")
+            .filter("payload->>actorUserId", "eq", userId)
+            .neq("id", job.id),
     ];
     for (const purge of purges) {
         if (purge.error) {
             throw new Error(
                 `Failed to purge queue rows: ${purge.error.message}`,
             );
+        }
+    }
+
+    // Deleting this actor's queued app pass also removes any project pass it
+    // carried. Recompute surviving organization-project status after those
+    // rows are gone so their UI cannot remain permanently "scheduled".
+    const projectEpochs = new Map<string, number>();
+    for (const row of (actorMemoryJobs ?? []) as Array<{
+        payload?: Record<string, unknown>;
+    }>) {
+        const projectId = row.payload?.projectId;
+        const epoch = Number(row.payload?.projectEpoch);
+        if (
+            typeof projectId === "string" &&
+            projectId &&
+            Number.isSafeInteger(epoch) &&
+            epoch >= 0
+        ) {
+            projectEpochs.set(projectId, epoch);
+        }
+    }
+    for (const [projectId, epoch] of projectEpochs) {
+        const { data: file, error: fileError } = await db
+            .from("memory_files")
+            .select("id")
+            .eq("scope", "project")
+            .eq("project_id", projectId)
+            .eq("epoch", epoch)
+            .maybeSingle();
+        if (fileError) throw new Error("Failed to refresh project memory status");
+        if (!file?.id) continue;
+        const { error: refreshError } = await db.rpc(
+            "refresh_memory_file_status",
+            {
+                p_memory_file_id: file.id,
+                p_expected_epoch: epoch,
+                p_current_job_id: job.id,
+                p_requested_status: "idle",
+                p_error_code: null,
+            },
+        );
+        if (refreshError) {
+            throw new Error("Failed to refresh project memory status");
         }
     }
 
@@ -194,6 +262,8 @@ export async function handleStorageCleanup(db: Db, job: DbJob): Promise<void> {
     const keys = (job.payload.keys as string[] | undefined) ?? [];
     const prefixes = (job.payload.prefixes as string[] | undefined) ?? [];
 
+    if (keys.length > 0 || prefixes.length > 0) assertStorageConfigured();
+
     const targets = new Set(keys.filter((k) => typeof k === "string" && k));
     for (const prefix of prefixes) {
         if (typeof prefix !== "string" || !prefix) continue;
@@ -214,6 +284,42 @@ export async function handleStorageCleanup(db: Db, job: DbJob): Promise<void> {
         throw new Error(
             `[storage.cleanup] ${failures}/${targets.size} deletes failed`,
         );
+    }
+}
+
+export async function handleMemoryCandidateCleanup(
+    db: Db,
+    job: DbJob,
+): Promise<void> {
+    const candidateId = job.payload.candidateId;
+    if (typeof candidateId !== "string" || !candidateId) return;
+    assertStorageConfigured();
+    // Atomic claim changes uploading/abandoned -> cleaning under the same row
+    // lock advance_memory_file uses. Once claimed, promotion cannot race the
+    // object delete and create a live head whose object has disappeared.
+    const { data, error } = await db.rpc("claim_memory_upload_candidate", {
+        p_candidate_id: candidateId,
+    });
+    if (error) throw new Error("Memory candidate cleanup could not claim state");
+    const claim = Array.isArray(data) ? data[0] : data;
+    if (!claim || claim.claim_status === "missing") return;
+    if (claim.claim_status !== "claimed" || !claim.candidate_storage_path) {
+        // A wipe can move cleanup_after after a worker has claimed its queue
+        // row. Retrying retains both the job and durable candidate pointer.
+        throw new Error("Memory candidate cleanup is not due");
+    }
+    try {
+        await deleteFile(String(claim.candidate_storage_path));
+    } catch {
+        throw new Error("Memory candidate object cleanup failed");
+    }
+    const { error: deleteError } = await db
+        .from("memory_object_candidates")
+        .delete()
+        .eq("id", candidateId)
+        .in("status", ["cleaning", "abandoned"]);
+    if (deleteError) {
+        throw new Error("Memory candidate cleanup could not finalize");
     }
 }
 
@@ -541,13 +647,19 @@ DB_JOB_FAILURE_HOOKS["extraction.extract"] = async (db, job) => {
     });
 };
 
+DB_JOB_FAILURE_HOOKS["memory.consolidate"] = async (db, job) => {
+    await markMemoryConsolidationFailed(db, job);
+};
+
 export const DB_JOB_HANDLERS: DbJobHandlers = {
     "audit.chat_turn": handleChatTurnAudit,
     "account.delete": handleAccountDelete,
     "storage.cleanup": handleStorageCleanup,
+    "memory.candidate_cleanup": handleMemoryCandidateCleanup,
     "export.build": handleExportBuild,
     "conversion.convert": handleConversionConvert,
     "extraction.extract": handleExtractionExtract,
     "mcp.refresh_token": handleMcpRefreshToken,
     "document.precompute_text": handleDocumentPrecomputeText,
+    "memory.consolidate": handleMemoryConsolidation,
 };

@@ -1,5 +1,10 @@
 import { createServerSupabase } from "./supabase";
-import { deleteFile, extractedTextKey, listFiles } from "./storage";
+import {
+    assertStorageConfigured,
+    deleteFile,
+    extractedTextKey,
+    listFiles,
+} from "./storage";
 import { enqueueStorageCleanup } from "./dbq/enqueue";
 import { removeGrantsForEmail } from "./projectAccess";
 import { removeContentGrantsForEmail } from "./contentAccess";
@@ -46,6 +51,43 @@ async function deleteWhereIn(
             .delete()
             .in(column, batch);
         await throwIfError(error, `Failed to delete ${table}`);
+    }
+}
+
+/**
+ * Fence and purge scoped memory before its owner row cascades away. The
+ * database function durably records every object key in a storage.cleanup job
+ * in the same transaction that removes version metadata, so account/project
+ * deletion cannot orphan private Markdown objects by losing their pointers.
+ */
+async function wipeMemoryForOwners(
+    db: Db,
+    scope: "user" | "project",
+    ownerIds: string[],
+) {
+    const uniqueOwnerIds = uniqueStrings(ownerIds);
+    if (uniqueOwnerIds.length === 0) return;
+    const ownerColumn = scope === "user" ? "user_id" : "project_id";
+
+    for (const ownerBatch of chunks(uniqueOwnerIds)) {
+        const { data, error } = await db
+            .from("memory_files")
+            .select("id")
+            .eq("scope", scope)
+            .in(ownerColumn, ownerBatch);
+        await throwIfError(error, `Failed to load ${scope} memory files`);
+
+        for (const row of (data ?? []) as { id?: unknown }[]) {
+            if (typeof row.id !== "string" || !row.id) continue;
+            const result = await db.rpc("wipe_memory_file", {
+                p_memory_file_id: row.id,
+                p_enabled: false,
+                p_updated_by: null,
+                p_source: "wipe",
+                p_require_no_candidates: false,
+            });
+            await throwIfError(result.error, `Failed to purge ${scope} memory`);
+        }
     }
 }
 
@@ -567,6 +609,58 @@ async function deleteUserExportArtifacts(userId: string) {
 }
 
 /**
+ * Final account-erasure sweep for private memory objects. Referenced versions
+ * already have a durable cleanup job from wipe_memory_file; this prefix pass
+ * also catches an uncommitted immutable candidate whose inline cleanup and
+ * fallback enqueue were both interrupted. Nothing under a user's memory
+ * prefix can belong to another account or a shared project.
+ */
+async function deleteUserMemoryArtifacts(userId: string) {
+    let paths: string[];
+    try {
+        paths = await listFiles(`memories/users/${userId}/`);
+    } catch (err) {
+        throw new Error(
+            `Failed to list memory artifacts: ${
+                err instanceof Error ? err.message : "unknown error"
+            }`,
+        );
+    }
+    let failures = 0;
+    for (const path of paths) {
+        try {
+            await deleteFile(path);
+        } catch {
+            failures += 1;
+        }
+    }
+    if (failures > 0) {
+        throw new Error(
+            `Failed to delete ${failures}/${paths.length} memory artifacts`,
+        );
+    }
+}
+
+async function deleteProjectMemoryArtifacts(projectIds: string[]) {
+    for (const projectId of projectIds) {
+        const paths = await listFiles(`memories/projects/${projectId}/`);
+        let failures = 0;
+        for (const path of paths) {
+            try {
+                await deleteFile(path);
+            } catch {
+                failures += 1;
+            }
+        }
+        if (failures > 0) {
+            throw new Error(
+                `Failed to delete ${failures}/${paths.length} project memory artifacts`,
+            );
+        }
+    }
+}
+
+/**
  * Tear down a user's organization footprint on account deletion.
  *
  * An organization is a durable owner in its own right, not an extension of
@@ -712,6 +806,10 @@ export async function deleteUserOrganizations(
 }
 
 export async function deleteAllUserChats(db: Db, userId: string) {
+    // Conversation BEFORE DELETE triggers fence in-flight curator promotion
+    // in the same transaction, including Word chats removed by document
+    // cascades. No pre-enumeration is needed, so new children cannot slip
+    // between a scan and deletion.
     const [assistantChats, tabularChats, wordDocuments] = await Promise.all([
         db.from("chats").delete().eq("user_id", userId),
         db.from("tabular_review_chats").delete().eq("user_id", userId),
@@ -735,24 +833,8 @@ export async function deleteAllUserTabularReviews(db: Db, userId: string) {
     );
     if (reviewIds.length === 0) return 0;
 
-    const { data: reviewChats, error: reviewChatsError } = await db
-        .from("tabular_review_chats")
-        .select("id")
-        .in("review_id", reviewIds);
-    await throwIfError(reviewChatsError, "Failed to load tabular review chats");
-
-    const reviewChatIds = uniqueStrings(
-        ((reviewChats ?? []) as { id: string | null }[]).map((row) => row.id),
-    );
-
-    await deleteWhereIn(
-        db,
-        "tabular_review_chat_messages",
-        "chat_id",
-        reviewChatIds,
-    );
-    await deleteWhereIn(db, "tabular_review_chats", "review_id", reviewIds);
-    await deleteWhereIn(db, "tabular_cells", "review_id", reviewIds);
+    // The parent delete is atomic. Its FK cascades fire the conversation
+    // fence trigger for every child chat, including one created concurrently.
     await deleteByIds(db, "tabular_reviews", reviewIds);
 
     return reviewIds.length;
@@ -767,86 +849,40 @@ export async function deleteAllUserTabularReviews(db: Db, userId: string) {
 export async function deleteProjectsByIds(db: Db, projectIds: string[]) {
     const ownedProjectIds = uniqueStrings(projectIds);
     if (ownedProjectIds.length === 0) return 0;
+    const queueDisabled = process.env.DB_JOBS_ENABLED === "false";
+    if (queueDisabled) assertStorageConfigured();
 
-    const [projectDocs, projectChats, projectReviews, projectFolders] =
-        await Promise.all([
-            db.from("documents").select("id").in("project_id", ownedProjectIds),
-            db.from("chats").select("id").in("project_id", ownedProjectIds),
-            db
-                .from("tabular_reviews")
-                .select("id")
-                .in("project_id", ownedProjectIds),
-            db
-                .from("project_subfolders")
-                .select("id")
-                .in("project_id", ownedProjectIds),
-        ]);
+    const projectDocs = await db
+        .from("documents")
+        .select("id")
+        .in("project_id", ownedProjectIds);
 
     await throwIfError(projectDocs.error, "Failed to load project documents");
-    await throwIfError(projectChats.error, "Failed to load project chats");
-    await throwIfError(
-        projectReviews.error,
-        "Failed to load project tabular reviews",
-    );
-    await throwIfError(projectFolders.error, "Failed to load project folders");
 
     const documentIds = uniqueStrings(
         ((projectDocs.data ?? []) as { id: string | null }[]).map(
             (row) => row.id,
         ),
     );
-    const chatIds = uniqueStrings(
-        ((projectChats.data ?? []) as { id: string | null }[]).map(
-            (row) => row.id,
-        ),
-    );
-    const reviewIds = uniqueStrings(
-        ((projectReviews.data ?? []) as { id: string | null }[]).map(
-            (row) => row.id,
-        ),
-    );
-    const folderIds = uniqueStrings(
-        ((projectFolders.data ?? []) as { id: string | null }[]).map(
-            (row) => row.id,
-        ),
-    );
-
-    const { data: reviewChats, error: reviewChatsError } =
-        reviewIds.length > 0
-            ? await db
-                  .from("tabular_review_chats")
-                  .select("id")
-                  .in("review_id", reviewIds)
-            : { data: [], error: null };
-    await throwIfError(reviewChatsError, "Failed to load project review chats");
-
-    const reviewChatIds = uniqueStrings(
-        ((reviewChats ?? []) as { id: string | null }[]).map((row) => row.id),
-    );
-
     // Collect the storage keys BEFORE the version rows go away, but delete
     // the files AFTER the rows via the durable storage.cleanup job: if any
     // row delete below fails, no file has been touched; if the process dies
     // after them, the queued job still removes the files (the old inline
     // Promise.all died with the request and leaked on any storage error).
     const storagePaths = await collectDocumentVersionPaths(db, documentIds);
-    await deleteWhereIn(
-        db,
-        "tabular_review_chat_messages",
-        "chat_id",
-        reviewChatIds,
-    );
-    await deleteWhereIn(db, "tabular_review_chats", "review_id", reviewIds);
-    await deleteWhereIn(db, "tabular_cells", "review_id", reviewIds);
-    await deleteByIds(db, "tabular_reviews", reviewIds);
-    await deleteWhereIn(db, "chat_messages", "chat_id", chatIds);
-    await deleteByIds(db, "chats", chatIds);
-    await deleteByIds(db, "documents", documentIds);
-    await deleteByIds(db, "project_subfolders", folderIds);
+    // One parent DELETE owns all relational cascades. Conversation triggers
+    // fence curator promotion for every child; the memory_files trigger also
+    // records current versions and in-flight candidate paths in durable,
+    // delayed cleanup jobs inside this same transaction.
     await deleteByIds(db, "projects", ownedProjectIds);
     // Only now, with every row that pointed at them gone, do the bytes go.
 
     await enqueueStorageCleanup(db, storagePaths);
+    if (queueDisabled) {
+        // The owner no longer exists, so no writer can create a new object
+        // under this prefix while the synchronous escape-hatch sweep runs.
+        await deleteProjectMemoryArtifacts(ownedProjectIds);
+    }
 
     return ownedProjectIds.length;
 }
@@ -909,6 +945,7 @@ export async function deleteUserAccountData(
     userId: string,
     userEmail?: string | null,
 ) {
+    if (process.env.DB_JOBS_ENABLED === "false") assertStorageConfigured();
     const { personal: personalProjectIds, org: createdOrgProjectIds } =
         await partitionOwnedProjects(db, userId);
     // Retention follows the organization's projects, not this user's. Their
@@ -971,7 +1008,6 @@ export async function deleteUserAccountData(
         // Audit rows carry the user's id, email, chat/document titles and prompt
         // excerpts, so account erasure must remove them as well.
         db.from("audit_events").delete().eq("user_id", userId),
-        db.from("projects").delete().eq("user_id", userId),
         db.from("quick_actions").delete().eq("user_id", userId),
         db
             .from("default_workflow_installations")
@@ -989,6 +1025,15 @@ export async function deleteUserAccountData(
         .delete()
         .eq("user_id", userId);
     await throwIfError(workflowsError, "Failed to delete workflows");
+
+    // `wipe_memory_file` writes the storage cleanup job before deleting the
+    // only version-path records. Organization project memory is deliberately
+    // excluded: it belongs to the surviving project, not its departing author.
+    await wipeMemoryForOwners(db, "user", [userId]);
+    // This helper atomically fences every remaining project/review chat before
+    // deleting the project and destructively purges its scoped memory.
+    await deleteProjectsByIds(db, personalProjectIds);
+    await deleteUserMemoryArtifacts(userId);
 
     // Every doomed row is gone; now the bytes they pointed at may follow.
     // Doing this earlier — before the row deletions — meant any failure in

@@ -9,6 +9,8 @@ export async function reserveAssistantMessage(args: {
   table: AssistantMessageTable;
   id: string;
   chatId: string;
+  inputMessageId: string;
+  authorUserId: string;
 }): Promise<unknown | null> {
   const { error } = await args.db.from(args.table).insert({
     id: args.id,
@@ -16,6 +18,8 @@ export async function reserveAssistantMessage(args: {
     role: "assistant",
     content: null,
     citations: null,
+    author_user_id: args.authorUserId,
+    memory_input_message_id: args.inputMessageId,
   });
   return error;
 }

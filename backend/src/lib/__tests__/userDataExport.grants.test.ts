@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { buildUserAccountExport } from "../userDataExport";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const downloadFileStrict = vi.fn();
+vi.mock("../storage", () => ({
+    downloadFileStrict: (...args: unknown[]) => downloadFileStrict(...args),
+}));
+
+import {
+    buildProjectExportManifest,
+    buildUserAccountExport,
+} from "../userDataExport";
 
 type Row = Record<string, unknown>;
 
@@ -60,6 +69,14 @@ function makeDb(tables: Record<string, Row[]>) {
     return { db: { from: (t: string) => query(t) } as any, reads };
 }
 
+function markdownBytes(value: string): ArrayBuffer {
+    return new TextEncoder().encode(value).buffer as ArrayBuffer;
+}
+
+beforeEach(() => {
+    downloadFileStrict.mockReset();
+});
+
 describe("account export: shared projects", () => {
     const tables = {
         projects: [
@@ -93,5 +110,127 @@ describe("account export: shared projects", () => {
         const shared = (exported as any).shared_access.projects as Row[];
         expect(shared.map((p) => p.id)).toEqual(["granted-p"]);
         expect(reads.filter((r) => r.startsWith("projects."))).toEqual([]);
+    });
+});
+
+describe("memory exports", () => {
+    const markdown = "# Memory\n\n- Prefers concise drafts.\n";
+    const hash =
+        "6adb5e098c8e2d456cd117d73fbdb23cdf1b50f3bebb5f96e2e02acde6d24c83";
+
+    it("includes the current app memory and retained Markdown revisions", async () => {
+        const { db } = makeDb({
+            memory_files: [
+                {
+                    id: "memory-user",
+                    scope: "user",
+                    user_id: "u1",
+                    enabled: true,
+                    epoch: 2,
+                    version: 1,
+                    current_version_id: "memory-version-1",
+                    status: "idle",
+                    created_at: "2026-09-05T00:00:00Z",
+                    updated_at: "2026-09-05T00:01:00Z",
+                },
+            ],
+            memory_file_versions: [
+                {
+                    id: "memory-version-1",
+                    memory_file_id: "memory-user",
+                    version: 1,
+                    storage_path:
+                        "memories/users/u1/versions/memory-version-1/memory.md",
+                    content_sha256: hash,
+                    size_bytes: new TextEncoder().encode(markdown).byteLength,
+                    source: "manual",
+                    updated_by: "u1",
+                    model: null,
+                    source_surface: null,
+                    source_chat_id: null,
+                    source_turn_id: null,
+                    created_at: "2026-09-05T00:01:00Z",
+                },
+            ],
+        });
+        downloadFileStrict.mockResolvedValue(markdownBytes(markdown));
+
+        const exported = await buildUserAccountExport(
+            db,
+            "u1",
+            "u1@example.com",
+        );
+
+        expect(exported.memory).toMatchObject({
+            enabled: true,
+            version: 1,
+            current_version_id: "memory-version-1",
+            current: {
+                id: "memory-version-1",
+                content_sha256: hash,
+                markdown,
+            },
+        });
+        expect(exported.memory.versions).toHaveLength(1);
+        expect(downloadFileStrict).toHaveBeenCalledWith(
+            "memories/users/u1/versions/memory-version-1/memory.md",
+        );
+    });
+
+    it("includes project memory in the signed project manifest", async () => {
+        const { db } = makeDb({
+            projects: [
+                {
+                    id: "p1",
+                    name: "Matter",
+                    cm_number: null,
+                    created_at: "2026-09-05T00:00:00Z",
+                },
+            ],
+            documents: [],
+            memory_files: [
+                {
+                    id: "memory-project",
+                    scope: "project",
+                    project_id: "p1",
+                    enabled: true,
+                    epoch: 0,
+                    version: 1,
+                    current_version_id: "memory-version-1",
+                    status: "idle",
+                },
+            ],
+            memory_file_versions: [
+                {
+                    id: "memory-version-1",
+                    memory_file_id: "memory-project",
+                    version: 1,
+                    storage_path:
+                        "memories/projects/p1/versions/memory-version-1/memory.md",
+                    content_sha256: hash,
+                    size_bytes: new TextEncoder().encode(markdown).byteLength,
+                    source: "curator",
+                    updated_by: "u1",
+                    model: "gpt-5-mini",
+                    source_surface: "chat",
+                    source_chat_id: "chat-1",
+                    source_turn_id: "turn-1",
+                    created_at: "2026-09-05T00:01:00Z",
+                },
+            ],
+        });
+        downloadFileStrict.mockResolvedValue(markdownBytes(markdown));
+
+        const manifest = await buildProjectExportManifest(db, "p1");
+
+        expect(manifest.memory).toMatchObject({
+            enabled: true,
+            current: {
+                markdown,
+                source: "curator",
+                source_surface: "chat",
+            },
+        });
+        expect(manifest.digest.value).toMatch(/^[0-9a-f]{64}$/);
     });
 });

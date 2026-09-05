@@ -307,6 +307,7 @@ export async function streamWithProvider(
     if (
       providerForModel(params.model) === "ollama" &&
       params.tools?.length &&
+      !params.requireTools &&
       /does not support tools/i.test(
         error instanceof Error ? error.message : String(error),
       )

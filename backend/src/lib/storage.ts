@@ -92,6 +92,14 @@ function requireStorageConfig(): void {
   }
 }
 
+/**
+ * Fail closed for workflows where treating an unconfigured object store as an
+ * empty/successful operation would discard the only durable deletion pointer.
+ */
+export function assertStorageConfigured(): void {
+  requireStorageConfig();
+}
+
 // ---------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------
@@ -253,6 +261,36 @@ export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
       error: error,
     });
     return null;
+  }
+}
+
+/**
+ * Read an object without collapsing an operational storage failure into a
+ * missing file. Memory uses this stricter contract because treating a timeout
+ * as an empty memory.md could make a curator overwrite durable context.
+ */
+export async function downloadFileStrict(
+  key: string,
+): Promise<ArrayBuffer | null> {
+  requireStorageConfig();
+  try {
+    const response = (await getClient().send(
+      new GetObjectCommand({ Bucket: BUCKET, Key: key }),
+    )) as any;
+    if (!response.Body) {
+      throw new StorageOperationError("download");
+    }
+    const bytes = await response.Body.transformToByteArray();
+    return bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer;
+  } catch (error) {
+    const status = (error as { $metadata?: { httpStatusCode?: number } })
+      .$metadata?.httpStatusCode;
+    if (status === 404) return null;
+    if (error instanceof StorageOperationError) throw error;
+    throw new StorageOperationError("download", { cause: error });
   }
 }
 

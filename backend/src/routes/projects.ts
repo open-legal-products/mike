@@ -62,6 +62,36 @@ function normalizeOptionalString(value: unknown) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+async function attachProjectMemoryEnabled<
+  T extends { id: string; memory_enabled?: boolean },
+>(
+  db: ReturnType<typeof createServerSupabase>,
+  projects: T[],
+): Promise<{ rows: T[]; error: unknown | null }> {
+  if (projects.length === 0) return { rows: projects, error: null };
+  const { data, error } = await db
+    .from("memory_files")
+    .select("project_id, enabled")
+    .eq("scope", "project")
+    .in(
+      "project_id",
+      projects.map((project) => project.id),
+    );
+  if (error) return { rows: projects, error };
+  const enabledByProject = new Map(
+    (data ?? []).map((row) => [row.project_id as string, row.enabled === true]),
+  );
+  return {
+    rows: projects.map((project) => ({
+      ...project,
+      // Creation writes the row atomically. Missing/corrupt legacy state is
+      // fail-closed so an explicit historical opt-out cannot turn itself on.
+      memory_enabled: enabledByProject.get(project.id) ?? false,
+    })),
+    error: null,
+  };
+}
+
 function normalizeDocumentFilename(nextName: unknown, currentName: string) {
   if (typeof nextName !== "string") return null;
   const trimmed = nextName.trim().slice(0, 200);
@@ -288,7 +318,12 @@ projectsRouter.get("/", requireAuth, async (req, res) => {
       p_offset: pagination.offset,
     });
     if (error) return void sendInternalError(res, error);
-    return void res.json(data ?? []);
+    const withMemory = await attachProjectMemoryEnabled(
+      db,
+      ((data ?? []) as { id: string }[]),
+    );
+    if (withMemory.error) return void sendInternalError(res, withMemory.error);
+    return void res.json(withMemory.rows);
   }
 
   const hasPaginationParams = PROJECT_PAGINATION_QUERY_KEYS.some(
@@ -320,7 +355,9 @@ projectsRouter.get("/", requireAuth, async (req, res) => {
   );
   if (accessSummary.error)
     return void sendInternalError(res, accessSummary.error);
-  const projects = accessSummary.rows;
+  const withMemory = await attachProjectMemoryEnabled(db, accessSummary.rows);
+  if (withMemory.error) return void sendInternalError(res, withMemory.error);
+  const projects = withMemory.rows;
   if (!includeDocuments || projects.length === 0) {
     return void res.json(projects);
   }
@@ -391,14 +428,18 @@ projectsRouter.post("/", requireAuth, async (req, res) => {
       detail:
         "shared_with is no longer supported; use the project access endpoints.",
     });
-  const { name, cm_number, practice, org_id } = req.body as {
+  const { name, cm_number, practice, org_id, memory_enabled } = req.body as {
     name: string;
     cm_number?: string;
     practice?: string;
     org_id?: string | null;
+    memory_enabled?: boolean;
   };
   if (!name?.trim())
     return void res.status(400).json({ detail: "name is required" });
+  if (memory_enabled !== undefined && typeof memory_enabled !== "boolean") {
+    return void res.status(400).json({ detail: "memory_enabled must be a boolean" });
+  }
   const db = createServerSupabase();
 
   // Tenant assignment: an explicit org_id must be one the caller belongs to.
@@ -414,20 +455,22 @@ projectsRouter.post("/", requireAuth, async (req, res) => {
     resolvedOrgId = org_id;
   }
 
-  const { data, error } = await db
-    .from("projects")
-    .insert({
-      user_id: userId,
-      name: name.trim(),
-      cm_number: normalizeOptionalString(cm_number),
-      practice: normalizeOptionalString(practice),
-      org_id: resolvedOrgId,
-    })
-    .select("*")
-    .single();
-  if (error) return void sendInternalError(res, error);
+  const resolvedMemoryEnabled = memory_enabled ?? true;
+  // The explicit opt-in/out and the project row are one transaction. A crash
+  // can never leave an opted-out project without its fail-closed setting.
+  const { data: created, error } = await db.rpc("create_project_with_memory", {
+    p_user_id: userId,
+    p_name: name.trim(),
+    p_cm_number: normalizeOptionalString(cm_number),
+    p_practice: normalizeOptionalString(practice),
+    p_org_id: resolvedOrgId,
+    p_memory_enabled: resolvedMemoryEnabled,
+  });
+  const data = Array.isArray(created) ? created[0] : created;
+  if (error || !data) return void sendInternalError(res, error);
   res.status(201).json({
     ...data,
+    memory_enabled: resolvedMemoryEnabled,
     documents: [],
     is_owner: true,
     access_role: "owner",
@@ -710,8 +753,10 @@ projectsRouter.get("/:projectId", requireAuth, async (req, res) => {
   const adminContacts = await listProjectAdminContacts(db, access.project);
   const creatorContact =
     adminContacts.find((c) => c.source === "creator") ?? null;
+  const withMemory = await attachProjectMemoryEnabled(db, [project]);
+  if (withMemory.error) return void sendInternalError(res, withMemory.error);
   res.json({
-    ...project,
+    ...withMemory.rows[0],
     is_owner: access.isCreator,
     access_role: access.projectRole,
     org_role: access.orgRole,
@@ -1066,7 +1111,13 @@ projectsRouter.patch("/:projectId", requireAuth, async (req, res) => {
   }[];
   await attachActiveVersionPaths(db, docsTyped);
   await attachDocumentOwnerLabels(db, docsTyped);
-  res.json({ ...data, documents: docsTyped, folders: folderData ?? [] });
+  const withMemory = await attachProjectMemoryEnabled(db, [data]);
+  if (withMemory.error) return void sendInternalError(res, withMemory.error);
+  res.json({
+    ...withMemory.rows[0],
+    documents: docsTyped,
+    folders: folderData ?? [],
+  });
 });
 
 // DELETE /projects/:projectId

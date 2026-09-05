@@ -12,6 +12,8 @@
 
 ## Features and clients
 
+- [Scoped memory](memory.md) — app and project Markdown memory, permissions,
+  asynchronous learning, deletion, and operations
 - [CourtListener integration](courtlistener.md) — live US case-law tools and
   optional bulk data
 - [Microsoft Word add-in](../word-addin/README.md) — concise setup and command

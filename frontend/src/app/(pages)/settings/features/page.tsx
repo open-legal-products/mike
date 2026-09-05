@@ -5,6 +5,7 @@ import { ApiKeyField } from "@/app/components/settings/ApiKeyField";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsToggle } from "../SettingsToggle";
+import { MemorySettingsSection } from "@/app/components/settings/MemorySettingsSection";
 
 export default function FeaturesPage() {
     const {
@@ -84,6 +85,8 @@ export default function FeaturesPage() {
                     </div>
                 </SettingsSection>
             </section>
+
+            <MemorySettingsSection />
 
             <section className="space-y-3">
                 <div className="flex items-center gap-2">

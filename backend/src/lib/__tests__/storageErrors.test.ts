@@ -34,6 +34,7 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
 }));
 
 let downloadFile: typeof import("../storage").downloadFile;
+let downloadFileStrict: typeof import("../storage").downloadFileStrict;
 let createFileReadStream: typeof import("../storage").createFileReadStream;
 let getSignedUrl: typeof import("../storage").getSignedUrl;
 let getSignedUploadUrl: typeof import("../storage").getSignedUploadUrl;
@@ -48,6 +49,7 @@ beforeAll(async () => {
   ({
     createFileReadStream,
     downloadFile,
+    downloadFileStrict,
     getSignedUploadUrl,
     getSignedUrl,
     uploadFileFromPath,
@@ -140,6 +142,31 @@ describe("storage error logging", () => {
       }),
     });
     log.mockRestore();
+  });
+
+  it("returns only the bytes exposed by a strict object download", async () => {
+    const backing = Uint8Array.from([9, 9, 1, 2, 3, 9]);
+    const bytes = backing.subarray(2, 5);
+    mocks.send.mockResolvedValue({
+      Body: { transformToByteArray: vi.fn().mockResolvedValue(bytes) },
+    });
+
+    const downloaded = await downloadFileStrict("memories/u1/memory.md");
+
+    expect(Array.from(new Uint8Array(downloaded!))).toEqual([1, 2, 3]);
+  });
+
+  it("keeps strict storage failures distinct from a missing object", async () => {
+    mocks.send.mockRejectedValue(new Error("temporary storage failure"));
+
+    await expect(
+      downloadFileStrict("memories/u1/memory.md"),
+    ).rejects.toMatchObject({ name: "StorageOperationError" });
+
+    mocks.send.mockRejectedValue({ $metadata: { httpStatusCode: 404 } });
+    await expect(
+      downloadFileStrict("memories/u1/missing.md"),
+    ).resolves.toBeNull();
   });
 
   it("logs signed-URL failures with the object key and a safe error", async () => {

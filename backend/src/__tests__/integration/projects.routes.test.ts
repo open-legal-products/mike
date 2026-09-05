@@ -204,6 +204,7 @@ describe("projects.routes", () => {
                     org_id: "org-1",
                     access_scope: "organization",
                     organization_name: "Elite Law LLP",
+                    memory_enabled: false,
                 },
             ]);
         });
@@ -237,6 +238,7 @@ describe("projects.routes", () => {
                     org_id: "org-1",
                     access_scope: "organization",
                     organization_name: "Elite Law LLP",
+                    memory_enabled: false,
                 },
             ]);
         });
@@ -346,7 +348,7 @@ describe("projects.routes", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual([
-        { id: "p1", name: "Recently updated" },
+        { id: "p1", name: "Recently updated", memory_enabled: false },
       ]);
       expect(captured.name).toBe("get_project_summaries");
       expect(captured.args).toEqual({
@@ -750,7 +752,7 @@ describe("projects.routes", () => {
         });
 
         it("creates the project with normalized project details", async () => {
-            supabaseState.tables.projects = {
+            supabaseState.rpc = {
                 data: {
                     id: "p9",
                     name: "Gamma",
@@ -775,17 +777,40 @@ describe("projects.routes", () => {
                 organization_name: null,
             });
 
-            const insert = supabaseState.inserts.find(
-                (i) => i.table === "projects",
-            );
-            expect(insert?.payload).toMatchObject({
-                name: "Gamma",
-                practice: "litigation",
+            const db = vi.mocked(createServerSupabase).mock.results.at(-1)
+                ?.value as ReturnType<typeof mockSupabase>;
+            expect(db.rpc).toHaveBeenCalledWith("create_project_with_memory", {
+                p_user_id: "u1",
+                p_name: "Gamma",
+                p_cm_number: null,
+                p_practice: "litigation",
+                p_org_id: null,
+                p_memory_enabled: true,
             });
         });
 
+        it("commits an explicit memory opt-out in the same project transaction", async () => {
+            supabaseState.rpc = {
+                data: { id: "p10", name: "Private", user_id: "u1" },
+                error: null,
+            };
+            const res = await request(app)
+                .post("/projects")
+                .set(...AUTH)
+                .send({ name: "Private", memory_enabled: false });
+            expect(res.status).toBe(201);
+            expect(res.body.memory_enabled).toBe(false);
+            const db = vi.mocked(createServerSupabase).mock.results.at(-1)
+                ?.value as ReturnType<typeof mockSupabase>;
+            expect(db.rpc).toHaveBeenCalledWith(
+                "create_project_with_memory",
+                expect.objectContaining({ p_memory_enabled: false }),
+            );
+            expect(supabaseState.inserts).toEqual([]);
+        });
+
         it("returns 500 when the insert errors", async () => {
-            supabaseState.tables.projects = {
+            supabaseState.rpc = {
                 data: null,
                 error: { message: "insert failed" },
             };

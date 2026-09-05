@@ -56,6 +56,12 @@ import {
     resolveEffectiveReasoningLevel,
     titleModelForChat,
 } from "../lib/modelSelection";
+import {
+  beginMemoryConversationTurn,
+  releaseMemoryConversationTurn,
+  scheduleMemoryConsolidation,
+  type MemoryConversationTurn,
+} from "../lib/memory/schedule";
 
 export const chatRouter = Router();
 
@@ -720,6 +726,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     // Reserve a stable assistant identity before streaming. This lets clients
     // associate streamed UI with the same durable message after a reload.
     const assistantMessageId = askInputsResponse ? null : randomUUID();
+    const inputMessageId = askInputsResponse ? null : randomUUID();
 
     devLog("[chat/stream] incoming request", {
         userId,
@@ -736,6 +743,9 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     let chatModel: string | null = null;
     let chatReasoningLevel: string | null = null;
     let resolvedProjectId: string | null = parsedProjectId.value.projectId;
+    let canReadProjectMemory = false;
+    let canCurateProjectMemory = false;
+    let memorySharedAudience = false;
     // Whether the document-writing tools are offered this turn. A standalone
     // chat writes into the caller's own library, so it keeps them; a project
     // chat writes into the PROJECT, and that is a question about the caller's
@@ -767,6 +777,12 @@ chatRouter.post("/", requireAuth, async (req, res) => {
                 .json({ detail: "project_id does not match chat" });
         }
         resolvedProjectId = existingProjectId;
+        // A collaborator's private app memory may guide their response, but
+        // the model must know that the persisted turn is visible to others.
+        // An owner initiating a directly shared chat has explicitly chosen
+        // that audience; project conversations are always shared contexts.
+        memorySharedAudience =
+            existingProjectId !== null || existing.user_id !== userId;
         chatTitle = existing.title;
         chatModel = existing.model;
         chatReasoningLevel = existing.reasoning_level;
@@ -779,9 +795,11 @@ chatRouter.post("/", requireAuth, async (req, res) => {
                 userEmail,
                 db,
             );
-            allowDocumentMutation =
+            canReadProjectMemory = projectAccess.ok;
+            canCurateProjectMemory =
                 projectAccess.ok &&
                 can(projectAccess.projectRole, "content.edit");
+            allowDocumentMutation = canCurateProjectMemory;
         }
     }
 
@@ -836,6 +854,9 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             return void res
                 .status(projectAccess.status)
                 .json({ detail: projectAccess.detail });
+        canReadProjectMemory = resolvedProjectId !== null;
+        canCurateProjectMemory = resolvedProjectId !== null;
+        memorySharedAudience = resolvedProjectId !== null;
 
         const resolvedOrg = await resolveContentOrgId(db, {
             projectId: resolvedProjectId,
@@ -872,22 +893,49 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     devLog("[chat/stream] resolved chatId", chatId);
 
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  let completedTurnPersisted = true;
+  let memoryTurn: MemoryConversationTurn | null = null;
+  let memoryTurnScheduled = false;
     if (askInputsResponse) {
+    completedTurnPersisted =
         await appendAskInputsResponseToLastAssistantMessage(
             db,
             chatId,
             askInputsResponse,
+        userId,
         );
+    if (!completedTurnPersisted) {
+      return void res.status(500).json({ detail: "Failed to save message" });
+    }
     } else if (lastUser) {
-        await db.from("chat_messages").insert({
+    const { error: userMessageError } = await db.from("chat_messages").insert({
+      id: inputMessageId,
             chat_id: chatId,
             role: "user",
             content: lastUser.content,
             files: lastUser.files ?? null,
             workflow: lastUser.workflow ?? null,
+      author_user_id: userId,
+    });
+    if (userMessageError) {
+      return void sendInternalError(res, userMessageError);
+    }
+  }
+
+  if (askInputsResponse || lastUser) {
+    try {
+      memoryTurn = await beginMemoryConversationTurn({
+        db,
+        surface: "chat",
+        conversationId: chatId,
+        actorUserId: userId,
         });
+    } catch (error) {
+      return void sendInternalError(res, error);
+    }
     }
 
+  try {
     const { docIndex, docStore } = await buildDocContext(
         messages,
         userId,
@@ -945,6 +993,8 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             table: "chat_messages",
             id: assistantMessageId,
             chatId,
+        inputMessageId: inputMessageId as string,
+        authorUserId: userId,
         });
         if (reserveError) {
             console.error(
@@ -1034,6 +1084,9 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             apiKeys,
             signal: stream.signal,
             projectId: resolvedProjectId,
+            includeMemory: true,
+            memoryProjectId: canReadProjectMemory ? resolvedProjectId : null,
+            memorySharedAudience,
             nonce,
             // This route first makes the advertised assistant ID durable.
             // It emits [DONE] only after the reserved row has been populated.
@@ -1067,12 +1120,13 @@ chatRouter.post("/", requireAuth, async (req, res) => {
 
         const persistedEvents = stripTransientAssistantEvents(events);
         if (askInputsResponse) {
-            await appendAssistantEventsToLastAssistantMessage(
+        const appended = await appendAssistantEventsToLastAssistantMessage(
                 db,
                 chatId,
                 persistedEvents,
                 citations,
             );
+        completedTurnPersisted = completedTurnPersisted && appended;
         } else {
             const saveError = await updateReservedAssistantMessage(
                 persistedEvents.length ? persistedEvents : null,
@@ -1107,6 +1161,42 @@ chatRouter.post("/", requireAuth, async (req, res) => {
                 );
             }
         }
+
+      // ask_inputs is an intentional pause, not a completed conversation.
+      // A continuation reuses the preceding assistant row, so resolve that
+      // durable identity only when there is no newly reserved message id.
+      if (
+        completedTurnPersisted &&
+        !persistedEvents.some(
+          (event) => event.type === "ask_inputs" || event.type === "error",
+        )
+      ) {
+        let completedTurnId = assistantMessageId;
+        if (!completedTurnId) {
+          const { data: latestAssistant } = await db
+            .from("chat_messages")
+            .select("id")
+            .eq("chat_id", chatId)
+            .eq("role", "assistant")
+            .not("content", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          completedTurnId = latestAssistant?.id ?? null;
+        }
+        if (completedTurnId) {
+          const scheduled = await scheduleMemoryConsolidation({
+            db,
+            surface: "chat",
+            conversationId: chatId,
+            actorUserId: userId,
+            projectId: canCurateProjectMemory ? resolvedProjectId : null,
+            turnId: completedTurnId,
+            turn: memoryTurn,
+          });
+          memoryTurnScheduled = scheduled != null;
+        }
+      }
         void enqueueChatTurnAudit(
             db,
             {
@@ -1204,4 +1294,20 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     } finally {
         stream.finish();
     }
+  } finally {
+    if (memoryTurn && !memoryTurnScheduled) {
+      try {
+        await releaseMemoryConversationTurn({
+          db,
+          surface: "chat",
+          conversationId: chatId,
+          turn: memoryTurn,
+        });
+      } catch {
+        console.warn("[memory] chat activity release failed", {
+          chatId,
+        });
+      }
+    }
+  }
 });

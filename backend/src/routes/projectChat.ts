@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import { enqueueChatTurnAudit } from "../lib/audit";
@@ -42,6 +43,13 @@ import {
     resolveEffectiveReasoningLevel,
     titleModelForChat,
 } from "../lib/modelSelection";
+import {
+  beginMemoryConversationTurn,
+  releaseMemoryConversationTurn,
+  scheduleMemoryConsolidation,
+  type MemoryConversationTurn,
+} from "../lib/memory/schedule";
+import { sendInternalError } from "../lib/httpError";
 
 const PROJECT_SYSTEM_PROMPT_EXTRA = `PROJECT CONTEXT:
 You are operating within a project folder that contains a collection of legal documents the user has organised for a single matter. The user's questions will usually refer to one or more documents in this project — your job is to find the relevant files to work on. Use list_documents to see what is available and fetch_documents / read_document to pull in any documents you need before answering.
@@ -105,6 +113,8 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     const displayed_doc = parsedDisplayedDoc.value;
     const attached_documents = parsedAttachedDocuments.value;
     const askInputsResponse = parsedAskInputsResponse.value;
+  const assistantMessageId = askInputsResponse ? null : randomUUID();
+  const inputMessageId = askInputsResponse ? null : randomUUID();
 
     const db = createServerSupabase();
 
@@ -272,22 +282,49 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     }
 
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  let completedTurnPersisted = true;
+  let memoryTurn: MemoryConversationTurn | null = null;
+  let memoryTurnScheduled = false;
     if (askInputsResponse) {
+    completedTurnPersisted =
         await appendAskInputsResponseToLastAssistantMessage(
             db,
             chatId,
             askInputsResponse,
+        userId,
         );
+    if (!completedTurnPersisted) {
+      return void res.status(500).json({ detail: "Failed to save message" });
+    }
     } else if (lastUser) {
-        await db.from("chat_messages").insert({
+    const { error: userMessageError } = await db.from("chat_messages").insert({
+      id: inputMessageId,
             chat_id: chatId,
             role: "user",
             content: lastUser.content,
             files: lastUser.files ?? null,
             workflow: lastUser.workflow ?? null,
+      author_user_id: userId,
         });
+    if (userMessageError) {
+      return void sendInternalError(res, userMessageError);
+    }
     }
 
+  if (askInputsResponse || lastUser) {
+    try {
+      memoryTurn = await beginMemoryConversationTurn({
+        db,
+        surface: "chat",
+        conversationId: chatId,
+        actorUserId: userId,
+      });
+    } catch (error) {
+      return void sendInternalError(res, error);
+    }
+  }
+
+  try {
     const { docIndex, docStore, folderPaths } = await buildProjectDocContext(
         projectId,
         userId,
@@ -460,25 +497,46 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             apiKeys,
             signal: streamAbort.signal,
             projectId,
+            includeMemory: true,
+            memoryProjectId: projectId,
+            memorySharedAudience: true,
             nonce,
             emitDone: false,
         });
 
         const persistedEvents = stripTransientAssistantEvents(events);
         if (askInputsResponse) {
-            await appendAssistantEventsToLastAssistantMessage(
+        const appended = await appendAssistantEventsToLastAssistantMessage(
                 db,
                 chatId,
                 persistedEvents,
                 citations,
             );
+        completedTurnPersisted = completedTurnPersisted && appended;
         } else {
-            await db.from("chat_messages").insert({
+        const { error: saveError } = await db.from("chat_messages").insert({
+          id: assistantMessageId,
                 chat_id: chatId,
                 role: "assistant",
                 content: persistedEvents.length ? persistedEvents : null,
                 citations: citations.length ? citations : null,
+          author_user_id: userId,
+          memory_input_message_id: inputMessageId,
             });
+        if (saveError) {
+          console.error(
+            "[project-chat/stream] failed to save assistant response",
+            saveError,
+          );
+          write(
+            `data: ${JSON.stringify({
+              type: "error",
+              message: "The response was generated but could not be saved.",
+            })}\n\n`,
+          );
+          write("data: [DONE]\n\n");
+          return;
+        }
         }
 
         await titlePromise;
@@ -493,6 +551,42 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
                 );
             }
         }
+
+      // A completed, durable assistant turn is the debounce trigger for the
+      // asynchronous memory curator. ask_inputs is a pause, so continuations
+      // resolve the existing assistant row and only schedule once it closes.
+      if (
+        completedTurnPersisted &&
+        !persistedEvents.some(
+          (event) => event.type === "ask_inputs" || event.type === "error",
+        )
+      ) {
+        let completedTurnId = assistantMessageId;
+        if (!completedTurnId) {
+          const { data: latestAssistant } = await db
+            .from("chat_messages")
+            .select("id")
+            .eq("chat_id", chatId)
+            .eq("role", "assistant")
+            .not("content", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          completedTurnId = latestAssistant?.id ?? null;
+        }
+        if (completedTurnId) {
+          const scheduled = await scheduleMemoryConsolidation({
+            db,
+            surface: "chat",
+            conversationId: chatId,
+            actorUserId: userId,
+            projectId: allowDocumentMutation ? projectId : null,
+            turnId: completedTurnId,
+            turn: memoryTurn,
+          });
+          memoryTurnScheduled = scheduled != null;
+        }
+      }
 
         void enqueueChatTurnAudit(
             db,
@@ -523,6 +617,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
                     ? null
                     : (
                           await db.from("chat_messages").insert({
+                  id: assistantMessageId,
                               chat_id: chatId,
                               role: "assistant",
                               content: partial.events.length
@@ -531,6 +626,8 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
                               citations: partial.citations.length
                                   ? partial.citations
                                   : null,
+                  author_user_id: userId,
+                  memory_input_message_id: inputMessageId,
                           })
                       ).error;
                 if (askInputsResponse) {
@@ -564,10 +661,13 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
                 ? null
                 : (
                       await db.from("chat_messages").insert({
+                id: assistantMessageId,
                           chat_id: chatId,
                           role: "assistant",
                           content: errorEvents.length ? errorEvents : null,
                           citations: citations.length ? citations : null,
+                author_user_id: userId,
+                memory_input_message_id: inputMessageId,
                       })
                   ).error;
             if (askInputsResponse) {
@@ -599,4 +699,20 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
         streamFinished = true;
         res.end();
     }
+  } finally {
+    if (memoryTurn && !memoryTurnScheduled) {
+      try {
+        await releaseMemoryConversationTurn({
+          db,
+          surface: "chat",
+          conversationId: chatId,
+          turn: memoryTurn,
+        });
+      } catch {
+        console.warn("[memory] project chat activity release failed", {
+          chatId,
+        });
+      }
+    }
+  }
 });

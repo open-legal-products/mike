@@ -17,7 +17,12 @@ import { createServerSupabase } from "../supabase";
 import { deleteFile } from "../storage";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
-import type { Db, DbJob, DbJobHandlers } from "./types";
+import {
+    DbJobDeferredError,
+    type Db,
+    type DbJob,
+    type DbJobHandlers,
+} from "./types";
 
 /**
  * Poll cadence depends on the driver: with Redis configured, BullMQ delivers
@@ -37,6 +42,10 @@ const STALE_SECONDS = 600;
 const DONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SWEEP_EVERY_MS = 60 * 60 * 1000;
+const RETRY_UNTIL_SUCCESS_KINDS = new Set([
+    "storage.cleanup",
+    "memory.candidate_cleanup",
+]);
 
 /**
  * Exponential backoff for retries: 30s, 90s, 270s, ... capped at 30 min.
@@ -96,8 +105,9 @@ export async function processClaimedJob(
             .eq("attempts", job.attempts)
             .eq("claimed_at", job.claimed_at);
 
+    const retryUntilSuccess = RETRY_UNTIL_SUCCESS_KINDS.has(job.kind);
     const handler = handlers[job.kind];
-    if (!handler) {
+    if (!handler && !retryUntilSuccess) {
         await fence(
             db.from("db_jobs").update({
                 status: "failed",
@@ -110,6 +120,7 @@ export async function processClaimedJob(
     }
 
     try {
+        if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
         const result = await handler(db, job);
         await fence(
             db.from("db_jobs").update({
@@ -122,8 +133,23 @@ export async function processClaimedJob(
     } catch (err) {
         const message =
             err instanceof Error ? err.message : String(err ?? "unknown");
-        const spent = job.attempts >= job.max_attempts;
-        const delayMs = retryDelayMs(job.attempts);
+        // Destructive memory operations remove version metadata only after a
+        // cleanup job owns the object path. That job is the last durable
+        // pointer, so storage cleanup must retry until success rather than
+        // becoming a finite-attempt failed row that a later sweep can erase.
+        const deferred = err instanceof DbJobDeferredError;
+        const spent =
+            !deferred &&
+            job.attempts >= job.max_attempts &&
+            !retryUntilSuccess;
+        const deferredAt = deferred ? Date.parse(err.runAt) : Number.NaN;
+        const delayMs = deferred
+            ? Math.max(
+                  1_000,
+                  (Number.isFinite(deferredAt) ? deferredAt : Date.now() + 60_000) -
+                      Date.now(),
+              )
+            : retryDelayMs(job.attempts);
         await fence(
             db.from("db_jobs").update(
                 spent
@@ -132,10 +158,18 @@ export async function processClaimedJob(
                           finished_at: new Date().toISOString(),
                           last_error: message,
                       }
-                    : {
+                      : {
                           status: "pending",
-                          run_at: new Date(Date.now() + delayMs).toISOString(),
+                          run_at: deferred && Number.isFinite(deferredAt)
+                              ? new Date(deferredAt).toISOString()
+                              : new Date(Date.now() + delayMs).toISOString(),
                           last_error: message,
+                          ...(deferred
+                              ? { attempts: Math.max(0, job.attempts - 1) }
+                              : {}),
+                          ...(retryUntilSuccess
+                              ? { max_attempts: 2_147_483_647 }
+                              : {}),
                       },
             ),
         );
@@ -171,9 +205,11 @@ export async function processClaimedJob(
             }
         }
         console.error(
-            spent
-                ? "[dbq] job permanently failed"
-                : "[dbq] job failed; will retry",
+            deferred
+                ? "[dbq] job deferred"
+                : spent
+                  ? "[dbq] job permanently failed"
+                  : "[dbq] job failed; will retry",
             { id: job.id, kind: job.kind, attempts: job.attempts, message },
         );
     }
@@ -267,6 +303,8 @@ export async function runDbJobRetentionSweep(
         .from("db_jobs")
         .delete()
         .eq("status", "failed")
+        .neq("kind", "storage.cleanup")
+        .neq("kind", "memory.candidate_cleanup")
         .lt("finished_at", failedCutoff);
 }
 

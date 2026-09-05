@@ -448,15 +448,18 @@ export async function appendAskInputsResponseToLastAssistantMessage(
   db: ReturnType<typeof createServerSupabase>,
   chatId: string,
   response: AskInputsResponseRequest,
+  authorUserId?: string,
   messageTable = "chat_messages",
 ) {
-  await appendAssistantEventsToLastAssistantMessage(
+  return appendAssistantEventsToLastAssistantMessage(
     db,
     chatId,
     [
       {
         type: "ask_inputs_response" as const,
         responses: response.responses,
+        ...(authorUserId ? { author_user_id: authorUserId } : {}),
+        recorded_at: new Date().toISOString(),
       },
     ],
     undefined,
@@ -472,7 +475,7 @@ export async function appendAssistantEventsToLastAssistantMessage(
   messageTable = "chat_messages",
 ) {
   if (events.length === 0 && (!citations || citations.length === 0)) {
-    return;
+    return true;
   }
   // Skip streaming reservations (content = null, see routeStreaming) so
   // events are appended to the real last assistant message, not onto an
@@ -492,7 +495,7 @@ export async function appendAssistantEventsToLastAssistantMessage(
         selectError,
       );
     }
-    return;
+    return false;
   }
 
   const row = rows[0] as {
@@ -519,7 +522,9 @@ export async function appendAssistantEventsToLastAssistantMessage(
       "[assistant-events] failed to update assistant message",
       updateError,
     );
+    return false;
   }
+  return true;
 }
 
 export function appendCancelledAssistantEvent(events: AssistantEvent[]) {

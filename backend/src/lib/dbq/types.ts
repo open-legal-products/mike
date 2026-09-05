@@ -19,6 +19,17 @@ export interface DbJob {
     created_at: string;
 }
 
+/** A domain handler can defer a claimed job without consuming retry budget. */
+export class DbJobDeferredError extends Error {
+    readonly runAt: string;
+
+    constructor(runAt: string, code = "job_deferred") {
+        super(code);
+        this.name = "DbJobDeferredError";
+        this.runAt = runAt;
+    }
+}
+
 /**
  * A job handler. Runs with at-least-once semantics: it MUST be idempotent
  * (a crash after partial work re-runs the whole job) and it signals a

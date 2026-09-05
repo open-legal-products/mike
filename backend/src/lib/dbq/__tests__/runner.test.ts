@@ -9,7 +9,7 @@ import {
     runDbJobTick,
     runDbJobRetentionSweep,
 } from "../runner";
-import type { DbJob } from "../types";
+import { DbJobDeferredError, type DbJob } from "../types";
 
 type Update = {
     table: string;
@@ -49,7 +49,14 @@ function makeDb(opts?: {
                 return b;
             },
             neq(col: string, val: unknown) {
-                state.filters[`neq:${col}`] = val;
+                const key = `neq:${col}`;
+                const previous = state.filters[key];
+                state.filters[key] =
+                    previous === undefined
+                        ? val
+                        : Array.isArray(previous)
+                          ? [...previous, val]
+                          : [previous, val];
                 return b;
             },
             lt(col: string, val: unknown) {
@@ -212,6 +219,26 @@ describe("processClaimedJob", () => {
         expect(runAt - Date.now()).toBeLessThan(35_000);
     });
 
+    it("defers a quiet-period job without consuming its retry attempt", async () => {
+        const db = makeDb();
+        const runAt = new Date(Date.now() + 120_000).toISOString();
+        await processClaimedJob(
+            db as never,
+            {
+                "test.kind": async () => {
+                    throw new DbJobDeferredError(runAt, "memory_quiet_period");
+                },
+            },
+            JOB({ attempts: 2, max_attempts: 3 }),
+        );
+        expect(db.updates[0].payload).toMatchObject({
+            status: "pending",
+            attempts: 1,
+            run_at: runAt,
+            last_error: "memory_quiet_period",
+        });
+    });
+
     it("fails terminally once attempts are exhausted", async () => {
         const db = makeDb();
         await processClaimedJob(
@@ -226,11 +253,48 @@ describe("processClaimedJob", () => {
         expect(db.updates[0].payload).toMatchObject({ status: "failed" });
     });
 
+    it.each(["storage.cleanup", "memory.candidate_cleanup"])(
+        "keeps %s pending with an effectively unbounded retry budget",
+        async (kind) => {
+            const db = makeDb();
+            await processClaimedJob(
+                db as never,
+                {
+                    [kind]: async () => {
+                        throw new Error("storage unavailable");
+                    },
+                },
+                JOB({ kind, attempts: 8, max_attempts: 8 }),
+            );
+            expect(db.updates[0].payload).toMatchObject({
+                status: "pending",
+                max_attempts: 2_147_483_647,
+            });
+        },
+    );
+
     it("fails an unknown kind immediately — retrying cannot fix it", async () => {
         const db = makeDb();
         await processClaimedJob(db as never, {}, JOB({ kind: "nope" }));
         expect(db.updates[0].payload).toMatchObject({ status: "failed" });
         expect(db.updates[0].payload.last_error).toContain("unknown job kind");
+    });
+
+    it("keeps an unknown cleanup kind retryable during rolling deploys", async () => {
+        const db = makeDb();
+        await processClaimedJob(
+            db as never,
+            {},
+            JOB({
+                kind: "memory.candidate_cleanup",
+                attempts: 20,
+                max_attempts: 20,
+            }),
+        );
+        expect(db.updates[0].payload).toMatchObject({
+            status: "pending",
+            max_attempts: 2_147_483_647,
+        });
     });
 });
 
@@ -312,5 +376,17 @@ describe("runDbJobRetentionSweep", () => {
         );
         expect(donePurge).toBeDefined();
         expect(donePurge?.["neq:kind"]).toBe("export.build");
+    });
+
+    it("never sweeps failed cleanup rows that own private object pointers", async () => {
+        const db = makeDb();
+        await runDbJobRetentionSweep(db as never);
+        const failedPurge = db.deletes.find(
+            (d) => d.status === "failed" && "lt:finished_at" in d,
+        );
+        expect(failedPurge?.["neq:kind"]).toEqual([
+            "storage.cleanup",
+            "memory.candidate_cleanup",
+        ]);
     });
 });

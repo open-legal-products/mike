@@ -14,6 +14,8 @@ import {
     listOrgMembers,
     listOrgs,
     lookupUserByEmail,
+  setProjectMemoryEnabled,
+  uploadProjectDocuments,
 } from "@/app/lib/mikeApi";
 import { NewProjectModal } from "./NewProjectModal";
 
@@ -33,6 +35,8 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     listOrgs: vi.fn(),
     listOrgMembers: vi.fn(),
     lookupUserByEmail: vi.fn(),
+  setProjectMemoryEnabled: vi.fn(),
+  uploadProjectDocuments: vi.fn(),
 }));
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({ user: { id: "me", email: "me@firm.test" } }),
@@ -57,6 +61,7 @@ const CREATED = {
     practice: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+  memory_enabled: true,
 };
 
 async function fillAndAdd(
@@ -91,9 +96,7 @@ async function submit(user: ReturnType<typeof userEvent.setup>) {
     }
     if (!screen.queryByRole("button", { name: "Create project" })) {
         await waitFor(() =>
-            expect(
-                screen.getByRole("dialog", { name: "Access" }),
-            ).toBeVisible(),
+      expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible(),
         );
         expect(screen.getByText("Share Access")).toBeInTheDocument();
         await user.click(screen.getByRole("button", { name: "Next" }));
@@ -115,6 +118,17 @@ describe("NewProjectModal sharing", () => {
         vi.mocked(listOrgMembers).mockResolvedValue([]);
         vi.mocked(createProject).mockResolvedValue(CREATED as never);
         vi.mocked(grantProjectAccess).mockResolvedValue({} as never);
+    vi.mocked(setProjectMemoryEnabled).mockResolvedValue({
+      enabled: false,
+      content: "",
+      version: 1,
+      hash: null,
+      updated_at: null,
+      updated_by: null,
+      source: "settings",
+      status: "idle",
+    });
+    vi.mocked(uploadProjectDocuments).mockResolvedValue([]);
         vi.mocked(lookupUserByEmail).mockImplementation(async (email) => ({
             exists: true,
             email,
@@ -133,6 +147,48 @@ describe("NewProjectModal sharing", () => {
             "Corporate and M&A",
         );
     });
+
+  it("creates new projects with memory enabled by default", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderModal();
+
+    expect(
+      screen.getByRole("switch", { name: "Enable project memory" }),
+    ).toBeChecked();
+    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    await submit(user);
+
+    await waitFor(() =>
+      expect(createProject).toHaveBeenCalledWith(
+        "P",
+        undefined,
+        undefined,
+        undefined,
+        true,
+      ),
+    );
+  });
+
+  it("honours an explicit project-memory opt-out", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderModal();
+
+    await user.click(
+      screen.getByRole("switch", { name: "Enable project memory" }),
+    );
+    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    await submit(user);
+
+    await waitFor(() =>
+      expect(createProject).toHaveBeenCalledWith(
+        "P",
+        undefined,
+        undefined,
+        undefined,
+        false,
+      ),
+    );
+  });
 
     it("shares with an existing user at the chosen role", async () => {
         const user = userEvent.setup({ delay: null });
@@ -199,10 +255,7 @@ describe("NewProjectModal sharing", () => {
         const user = userEvent.setup({ delay: null });
         const onCreated = renderModal();
 
-        await user.type(
-            screen.getByPlaceholderText("Add project name"),
-            "Matter",
-        );
+    await user.type(screen.getByPlaceholderText("Add project name"), "Matter");
         await user.click(screen.getByRole("button", { name: "Next" }));
         expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible();
         expect(createProject).not.toHaveBeenCalled();
@@ -211,9 +264,7 @@ describe("NewProjectModal sharing", () => {
         const accessNext = screen.getByRole("button", { name: "Next" });
         expect(accessNext).toHaveAttribute("type", "button");
         await user.click(accessNext);
-        expect(
-            screen.getByRole("dialog", { name: "Add Documents" }),
-        ).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Add Documents" })).toBeVisible();
         expect(createProject).not.toHaveBeenCalled();
         expect(onCreated).not.toHaveBeenCalled();
 
@@ -314,21 +365,100 @@ describe("NewProjectModal sharing", () => {
         expect(onCreated).not.toHaveBeenCalled();
 
         // Retry: the project already exists, so it must not be created twice.
-        await user.click(
-            screen.getByRole("button", { name: "Create project" }),
-        );
+    await user.click(screen.getByRole("button", { name: "Create project" }));
         await waitFor(() => expect(onCreated).toHaveBeenCalled());
         expect(createProject).toHaveBeenCalledTimes(1);
         expect(grantProjectAccess).toHaveBeenCalledTimes(2);
     });
 
+  it("persists a changed memory opt-out before retrying a created project", async () => {
+    const user = userEvent.setup({ delay: null });
+    const onCreated = renderModal();
+    vi.mocked(grantProjectAccess).mockRejectedValueOnce(
+      new MikeApiError({
+        status: 400,
+        message: "Sharing failed",
+      }),
+    );
+
+    await fillAndAdd(user, "counsel@firm.test", "editor");
+    await submit(user);
+    await screen.findByText(/Project created, but access was not granted/);
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(
+      screen.getByRole("switch", { name: "Enable project memory" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Create project" }));
+
+    await waitFor(() =>
+      expect(setProjectMemoryEnabled).toHaveBeenCalledWith("p1", false),
+    );
+    expect(createProject).toHaveBeenCalledTimes(1);
+    expect(onCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ memory_enabled: false }),
+    );
+  });
+
+  it("persists a changed memory opt-out before continuing after a partial upload", async () => {
+    const user = userEvent.setup({ delay: null });
+    const onCreated = renderModal();
+    vi.mocked(uploadProjectDocuments).mockResolvedValue([
+      {
+        clientId: "one",
+        filename: "saved.pdf",
+        status: "completed",
+        result: { id: "doc-1", filename: "saved.pdf" } as never,
+        errorCode: null,
+      },
+      {
+        clientId: "two",
+        filename: "failed.pdf",
+        status: "error",
+        result: null,
+        errorCode: "processing_failed",
+      },
+    ]);
+
+    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    const fileInput =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    fireEvent.change(fileInput!, {
+      target: {
+        files: [
+          new File(["saved"], "saved.pdf"),
+          new File(["failed"], "failed.pdf"),
+        ],
+      },
+    });
+    await submit(user);
+    await screen.findByRole("button", { name: "Continue" });
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(
+      screen.getByRole("switch", { name: "Enable project memory" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(setProjectMemoryEnabled).toHaveBeenCalledWith("p1", false),
+    );
+    expect(onCreated).toHaveBeenCalledWith(
+      expect.objectContaining({ memory_enabled: false }),
+    );
+  });
+
     it("shows direct sharing only on step two with Owner, Editor and Viewer", async () => {
         const user = userEvent.setup({ delay: null });
         renderModal();
-        await user.type(
-            screen.getByPlaceholderText("Add project name"),
-            "Matter",
-        );
+    await user.type(screen.getByPlaceholderText("Add project name"), "Matter");
         expect(
             screen.queryByPlaceholderText("Add by email..."),
         ).not.toBeInTheDocument();
@@ -392,10 +522,7 @@ describe("NewProjectModal sharing", () => {
         await user.click(
             await screen.findByRole("menuitem", { name: "Elite Law LLP" }),
         );
-        await user.type(
-            screen.getByPlaceholderText("Add project name"),
-            "Matter",
-        );
+    await user.type(screen.getByPlaceholderText("Add project name"), "Matter");
         await user.click(screen.getByRole("button", { name: "Next" }));
         expect(
             screen.getByRole("dialog", { name: "Organisational Access" }),
@@ -453,9 +580,7 @@ describe("NewProjectModal sharing", () => {
             name: "Deny list entries",
         });
         expect(within(ownerList).getByText("Project Lead")).toBeInTheDocument();
-        expect(
-            within(ownerList).getByText("Project Creator"),
-        ).toBeInTheDocument();
+    expect(within(ownerList).getByText("Project Creator")).toBeInTheDocument();
         expect(within(ownerList).getByText("lead@elite.test")).toHaveClass(
             "justify-self-end",
         );
@@ -464,9 +589,7 @@ describe("NewProjectModal sharing", () => {
                 name: "Remove me@firm.test",
             }),
         ).not.toBeInTheDocument();
-        expect(
-            within(denyList).getByText("Blocked Member"),
-        ).toBeInTheDocument();
+    expect(within(denyList).getByText("Blocked Member")).toBeInTheDocument();
         expect(ownerList.parentElement).toHaveClass("h-28", "overflow-y-auto");
         expect(denyList.parentElement).toHaveClass("h-28", "overflow-y-auto");
         expect(

@@ -17,6 +17,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     getProject: vi.fn(() => new Promise(() => {})),
     getProjectPeople: vi.fn(),
     listProjectChats: vi.fn(),
+    setProjectMemoryEnabled: vi.fn(),
     updateProject: vi.fn(),
 }));
 

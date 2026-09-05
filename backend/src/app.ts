@@ -22,6 +22,10 @@ import { sourceDocumentsRouter } from "./routes/sourceDocuments";
 import { auditRouter } from "./routes/audit";
 import { authRouter } from "./routes/auth";
 import { uploadSessionsRouter } from "./routes/uploadSessions";
+import {
+  projectMemoryRouter,
+  userMemoryRouter,
+} from "./routes/memory";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import {
   handleUnhandledError,
@@ -285,6 +289,7 @@ app.use("/auth", authRouter);
 app.use("/chat", chatRouter);
 app.use("/word-chat", wordChatRouter);
 app.use("/models", modelsRouter);
+app.use("/projects/:projectId/memory", projectMemoryRouter);
 app.use("/projects", projectsRouter);
 app.use("/orgs", orgsRouter);
 app.use("/projects/:projectId/chat", projectChatRouter);
@@ -294,6 +299,7 @@ app.use("/tabular-review", tabularRouter);
 app.use("/workflows", workflowsRouter);
 app.use("/quick-actions", quickActionsRouter);
 app.use("/workflow-addons", workflowAddonsRouter);
+app.use("/user/memory", userMemoryRouter);
 app.use("/user", userRouter);
 app.use("/users", userRouter);
 app.use("/download", downloadsRouter);

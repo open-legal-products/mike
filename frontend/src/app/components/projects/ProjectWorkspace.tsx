@@ -22,6 +22,7 @@ import {
     grantProjectAccess,
     listProjectChats,
     revokeProjectAccess,
+    setProjectMemoryEnabled,
     updateProject,
     type ProjectGrant,
 } from "@/app/lib/mikeApi";
@@ -158,6 +159,7 @@ function activeSectionFromSegments(
 ): ProjectWorkspaceSection {
     if (segments[0] === "assistant") return "assistant";
     if (segments[0] === "tabular-reviews") return "reviews";
+    if (segments[0] === "memory") return "memory";
     return "documents";
 }
 
@@ -165,7 +167,11 @@ function shouldShowWorkspaceShell(segments: string[]) {
     if (segments.length === 0) return true;
     if (segments.length === 2 && segments[0] === "folders") return true;
     if (segments.length !== 1) return false;
-    return segments[0] === "assistant" || segments[0] === "tabular-reviews";
+    return (
+        segments[0] === "assistant" ||
+        segments[0] === "tabular-reviews" ||
+        segments[0] === "memory"
+    );
 }
 
 export function ProjectWorkspaceProvider({
@@ -180,7 +186,7 @@ export function ProjectWorkspaceProvider({
     const [projectLoading, setProjectLoading] = useState(true);
     const [searchBySection, setSearchBySection] = useState<
         Record<ProjectWorkspaceSection, string>
-    >({ documents: "", assistant: "", reviews: "" });
+    >({ documents: "", assistant: "", reviews: "", memory: "" });
     const [projectChats, setProjectChats] = useState<Chat[] | null>(null);
     const [projectChatsLoading, setProjectChatsLoading] = useState(false);
     const [accessModalOpen, setAccessModalOpen] = useState(false);
@@ -502,6 +508,22 @@ export function ProjectWorkspaceProvider({
         );
     }
 
+    async function handleProjectMemoryEnabledChange(enabled: boolean) {
+        if (!canDo("access.manage")) {
+            denyUnlessLoading({
+                action: "manage project memory",
+                requiredRole: "owner",
+            });
+            return;
+        }
+        const memory = await setProjectMemoryEnabled(projectId, enabled);
+        setProject((current) =>
+            current
+                ? { ...current, memory_enabled: memory.enabled }
+                : current,
+        );
+    }
+
     function requestProjectDelete() {
         if (!canDo("container.delete")) {
             denyUnlessLoading("delete this project");
@@ -636,6 +658,9 @@ export function ProjectWorkspaceProvider({
                     canEdit={canDo("access.manage")}
                     onClose={() => setProjectDetailsOpen(false)}
                     onSave={handleProjectDetailsSave}
+                    onMemoryEnabledChange={
+                        handleProjectMemoryEnabledChange
+                    }
                     onShareProject={() => {
                         setProjectDetailsOpen(false);
                         setAccessModalOpen(true);
@@ -723,6 +748,7 @@ export function ProjectSectionToolbar({
                           { id: "documents", label: "Documents" },
                           { id: "assistant", label: "Chats" },
                           { id: "reviews", label: "Tabular Reviews" },
+                          { id: "memory", label: "Memory" },
                       ]
             }
             active={activeSection}
@@ -732,7 +758,9 @@ export function ProjectSectionToolbar({
                         ? `/projects/${projectId}`
                         : next === "assistant"
                           ? `/projects/${projectId}/assistant`
-                          : `/projects/${projectId}/tabular-reviews`;
+                          : next === "reviews"
+                            ? `/projects/${projectId}/tabular-reviews`
+                            : `/projects/${projectId}/memory`;
                 router.push(href);
             }}
             leading={
