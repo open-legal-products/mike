@@ -1,19 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Brain,
   Download,
   History,
   Loader2,
   RotateCcw,
   Save,
-  Settings,
+  Trash2,
 } from "lucide-react";
-import { PageHeader } from "@/app/components/shared/PageHeader";
+import { SettingsSection } from "@/app/(pages)/settings/SettingsSection";
+import { SettingsToggle } from "@/app/(pages)/settings/SettingsToggle";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { EmptyState } from "@/app/components/ui/empty-state";
 import { GlassCard } from "@/app/components/ui/glass-card";
 import { MarkdownEditor } from "@/app/components/ui/markdown-editor";
 import { PillButton } from "@/app/components/ui/pill-button";
@@ -23,11 +21,15 @@ import {
   getUserMemory,
   listUserMemoryVersions,
   restoreUserMemoryVersion,
+  setUserMemoryEnabled,
   updateUserMemory,
+  wipeUserMemory,
   type MemoryCurrent,
   type MemoryVersion,
 } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+
+type ConfirmAction = "disable" | "wipe";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString(undefined, {
@@ -69,8 +71,15 @@ function currentSource(source: MemoryCurrent["source"]) {
   return null;
 }
 
+function enabledStatus(memory: MemoryCurrent) {
+  if (!memory.enabled) return "Off";
+  if (memory.status === "scheduled") return "On · review scheduled";
+  if (memory.status === "processing") return "On · updating";
+  if (memory.status === "failed") return "On · latest review failed";
+  return "On";
+}
+
 export function UserMemoryPage() {
-  const router = useRouter();
   const [memory, setMemory] = useState<MemoryCurrent | null>(null);
   const [versions, setVersions] = useState<MemoryVersion[]>([]);
   const [draft, setDraft] = useState("");
@@ -86,6 +95,11 @@ export function UserMemoryPage() {
   const [conflict, setConflict] = useState<MemoryCurrent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [settingsMutation, setSettingsMutation] = useState<
+    "enable" | "disable" | "wipe" | null
+  >(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const historyRequestRef = useRef(0);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -108,25 +122,32 @@ export function UserMemoryPage() {
       if (!signal?.aborted) setLoading(false);
     }
 
+    const historyRequest = ++historyRequestRef.current;
     setHistoryLoading(true);
     try {
       const history = await listUserMemoryVersions(signal);
-      if (signal?.aborted) return;
+      if (signal?.aborted || historyRequest !== historyRequestRef.current)
+        return;
       setVersions(history);
       setHistoryError(false);
     } catch {
-      if (!signal?.aborted) setHistoryError(true);
+      if (!signal?.aborted && historyRequest === historyRequestRef.current)
+        setHistoryError(true);
     } finally {
-      if (!signal?.aborted) setHistoryLoading(false);
+      if (!signal?.aborted && historyRequest === historyRequestRef.current)
+        setHistoryLoading(false);
     }
   }, []);
 
   const refreshVersions = useCallback(async () => {
+    const historyRequest = ++historyRequestRef.current;
     try {
-      setVersions(await listUserMemoryVersions());
+      const history = await listUserMemoryVersions();
+      if (historyRequest !== historyRequestRef.current) return;
+      setVersions(history);
       setHistoryError(false);
     } catch {
-      setHistoryError(true);
+      if (historyRequest === historyRequestRef.current) setHistoryError(true);
     }
   }, []);
 
@@ -137,13 +158,20 @@ export function UserMemoryPage() {
   }, [load]);
 
   const dirty = !!memory && draft !== memory.content;
+  const interactionLocked =
+    saving ||
+    restoring ||
+    settingsMutation !== null ||
+    confirmAction !== null ||
+    restoreCandidate !== null;
 
   useEffect(() => {
     if (
       !memory?.enabled ||
       (memory.status !== "scheduled" && memory.status !== "processing") ||
       dirty ||
-      conflict
+      conflict ||
+      interactionLocked
     ) {
       return;
     }
@@ -166,7 +194,7 @@ export function UserMemoryPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [conflict, dirty, memory, refreshVersions]);
+  }, [conflict, dirty, interactionLocked, memory, refreshVersions]);
 
   async function resolveConflict(cause: unknown) {
     if (
@@ -187,7 +215,18 @@ export function UserMemoryPage() {
   }
 
   async function saveMemory() {
-    if (!memory || !memory.enabled || !dirty || saving || conflict) return;
+    if (
+      !memory ||
+      !memory.enabled ||
+      !dirty ||
+      saving ||
+      restoring ||
+      conflict ||
+      confirmAction ||
+      restoreCandidate ||
+      settingsMutation
+    )
+      return;
     setSaving(true);
     setError(null);
     setSavedNotice(null);
@@ -212,7 +251,16 @@ export function UserMemoryPage() {
   }
 
   async function restoreVersion() {
-    if (!memory || !restoreCandidate || restoring || conflict) return;
+    if (
+      !memory ||
+      !restoreCandidate ||
+      restoring ||
+      saving ||
+      conflict ||
+      confirmAction ||
+      settingsMutation
+    )
+      return;
     setRestoring(true);
     setError(null);
     setSavedNotice(null);
@@ -242,7 +290,8 @@ export function UserMemoryPage() {
   }
 
   async function downloadMemory() {
-    if (!memory || memory.hash === null || downloading) return;
+    if (!memory || memory.hash === null || downloading || interactionLocked)
+      return;
     setDownloading(true);
     setError(null);
     try {
@@ -290,188 +339,369 @@ export function UserMemoryPage() {
     setSavedNotice(null);
   }
 
-  const pageActions = [
-    {
-      icon: <Settings aria-hidden="true" className="h-4 w-4" />,
-      label: "Settings",
-      title: "Settings",
-      onClick: () => router.push("/settings/features#memory"),
-    },
-    {
-      icon: downloading ? (
-        <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
-      ) : (
-        <Download aria-hidden="true" className="h-4 w-4" />
-      ),
-      label: downloading ? "Downloading…" : "Download memory.md",
-      title: downloading ? "Downloading…" : "Download memory.md",
-      disabled: !memory?.enabled || memory.hash === null || downloading,
-      onClick: () => void downloadMemory(),
-    },
-    {
-      label: "Cancel",
-      title: "Cancel",
-      disabled: !dirty || saving,
-      onClick: cancelDraft,
-    },
-    {
-      icon: saving ? (
-        <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
-      ) : (
-        <Save aria-hidden="true" className="h-4 w-4" />
-      ),
-      label: saving ? "Saving…" : "Save",
-      title: saving ? "Saving…" : "Save",
-      disabled: !memory?.enabled || !dirty || saving || conflict !== null,
-      onClick: () => void saveMemory(),
-    },
-  ];
+  function syncSettingsMutation(
+    current: MemoryCurrent,
+    notice: string,
+  ) {
+    historyRequestRef.current += 1;
+    setMemory(current);
+    setDraft(current.content);
+    setVersions([]);
+    setHistoryLoading(false);
+    setHistoryError(false);
+    setConflict(null);
+    setRestoreCandidate(null);
+    setError(null);
+    setSavedNotice(notice);
+  }
+
+  async function enableMemory() {
+    if (interactionLocked) return;
+    setSettingsMutation("enable");
+    setError(null);
+    setSavedNotice(null);
+    try {
+      syncSettingsMutation(
+        await setUserMemoryEnabled(true),
+        "App-wide memory enabled",
+      );
+    } catch (cause) {
+      setError(
+        userFacingApiError(
+          cause,
+          "App-wide memory could not be turned on. Please try again.",
+        ),
+      );
+    } finally {
+      setSettingsMutation(null);
+    }
+  }
+
+  async function confirmSettingsMutation() {
+    if (
+      !confirmAction ||
+      settingsMutation ||
+      saving ||
+      restoring ||
+      restoreCandidate
+    )
+      return;
+    const action = confirmAction;
+    setSettingsMutation(action);
+    setError(null);
+    setSavedNotice(null);
+    try {
+      const current =
+        action === "disable"
+          ? await setUserMemoryEnabled(false)
+          : await wipeUserMemory();
+      syncSettingsMutation(
+        current,
+        action === "disable"
+          ? "App-wide memory turned off and deleted"
+          : "Memory and version history deleted",
+      );
+      setConfirmAction(null);
+    } catch (cause) {
+      setError(
+        userFacingApiError(
+          cause,
+          action === "disable"
+            ? "App-wide memory could not be turned off. Please try again."
+            : "App-wide memory could not be wiped. Please try again.",
+        ),
+      );
+      setConfirmAction(null);
+    } finally {
+      setSettingsMutation(null);
+    }
+  }
+
+  const confirmIsDisable = confirmAction === "disable";
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <PageHeader actions={pageActions} loading={loading} shrink>
-        <h1 className="font-serif text-2xl font-medium text-gray-900">
-          Memory
-        </h1>
-      </PageHeader>
+    <div className="space-y-8">
+      <section
+        className="space-y-3"
+        aria-labelledby="app-memory-settings-heading"
+      >
+        <div className="space-y-1">
+          <h2
+            id="app-memory-settings-heading"
+            className="font-serif text-2xl font-medium text-gray-900"
+          >
+            Memory
+          </h2>
+          <p className="text-sm text-gray-500">
+            Control what Mike remembers across your conversations and edit the
+            underlying Markdown file.
+          </p>
+        </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 md:px-8">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+        <SettingsSection>
           {loading ? (
-            <MemoryPageSkeleton />
+            <div
+              className="flex items-center justify-between gap-3 px-4 py-5"
+              aria-label="Loading memory settings"
+            >
+              <div className="space-y-2">
+                <div className="h-4 w-36 animate-pulse rounded bg-gray-200" />
+                <div className="h-3 w-72 max-w-full animate-pulse rounded bg-gray-100" />
+              </div>
+              <div className="h-5 w-9 animate-pulse rounded-full bg-gray-200" />
+            </div>
           ) : loadError || !memory ? (
-            <GlassCard>
-              <EmptyState
-                icon={<Brain />}
-                title="Memory could not be loaded"
-                description="Try again to inspect or edit your app-wide memory."
-                tone="error"
-                className="px-5 py-8"
-                action={
-                  <PillButton
-                    tone="black"
-                    size="sm"
-                    onClick={() => void load()}
-                  >
-                    Retry
-                  </PillButton>
-                }
-              />
-            </GlassCard>
-          ) : !memory.enabled ? (
-            <GlassCard>
-              <EmptyState
-                icon={<Brain />}
-                title="App-wide memory is off"
-                description="Turning memory off deletes its Markdown file and history. You can start again from Memory settings."
-                className="px-5 py-8"
-                action={
-                  <PillButton
-                    tone="black"
-                    size="sm"
-                    onClick={() => router.push("/settings/features#memory")}
-                  >
-                    Open settings
-                  </PillButton>
-                }
-              />
-            </GlassCard>
+            <div className="flex flex-col gap-3 px-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-gray-700">
+                  Memory settings are unavailable
+                </p>
+                <p className="text-sm text-red-600" role="alert">
+                  Could not load memory settings. Please try again.
+                </p>
+              </div>
+              <PillButton tone="white" size="sm" onClick={() => void load()}>
+                Retry
+              </PillButton>
+            </div>
           ) : (
             <>
-              <GlassCard>
-                <div className="space-y-1 px-4 py-4">
+              <div className="flex flex-col gap-3 px-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
                   <p className="text-sm font-medium text-gray-700">
-                    Your private app-wide memory
+                    App-wide memory
                   </p>
-                  <p className="max-w-3xl text-sm text-gray-500">
-                    Mike may curate this Markdown file after saved
-                    conversations. It can influence future answers, and changes
-                    may appear after a short delay. You can review and edit it
-                    at any time.
+                  <p className="max-w-xl text-sm text-gray-500">
+                    Let Mike curate useful details after saved conversations and
+                    use them in future answers.
                   </p>
-                  <p
-                    className={
-                      memory.status === "failed"
-                        ? "pt-1 text-xs text-red-600"
-                        : "pt-1 text-xs text-gray-400"
-                    }
-                    role={memory.status === "failed" ? "alert" : "status"}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span
+                    className="text-xs font-medium text-gray-500"
+                    role="status"
+                    aria-live="polite"
                   >
-                    {currentStatus(memory)}
-                    {memory.hash !== null ? ` · Version ${memory.version}` : ""}
-                    {memory.hash !== null && currentSource(memory.source)
-                      ? ` · ${currentSource(memory.source)}`
-                      : ""}
-                  </p>
+                    {enabledStatus(memory)}
+                  </span>
+                  <SettingsToggle
+                    checked={memory.enabled}
+                    loading={settingsMutation === "enable"}
+                    disabled={interactionLocked}
+                    size="md"
+                    ariaLabel="App-wide memory"
+                    onChange={(enabled) => {
+                      if (enabled) void enableMemory();
+                      else setConfirmAction("disable");
+                    }}
+                  />
                 </div>
-              </GlassCard>
-
-              {conflict ? (
-                <div
-                  className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900"
-                  role="alert"
-                >
-                  <p className="font-medium">
-                    Memory changed while you were editing
-                  </p>
-                  <p className="mt-1 text-xs text-amber-800">
-                    Reload the latest version or keep your draft and save it
-                    against the new version.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <PillButton
-                      tone="white"
-                      size="sm"
-                      onClick={useLatestConflict}
-                    >
-                      Reload latest
-                    </PillButton>
-                    <PillButton
-                      tone="black"
-                      size="sm"
-                      onClick={keepDraftAfterConflict}
-                    >
-                      Keep my draft
-                    </PillButton>
-                  </div>
-                </div>
-              ) : null}
-
-              {error ? (
-                <p className="text-sm text-red-600" role="alert">
-                  {error}
-                </p>
-              ) : savedNotice ? (
-                <p className="text-sm text-gray-500" role="status">
-                  {savedNotice}
-                </p>
-              ) : null}
-
-              <div className="min-h-[24rem]">
-                <MarkdownEditor
-                  value={draft}
-                  onChange={(value) => {
-                    setDraft(value);
-                    setSavedNotice(null);
-                  }}
-                  ariaLabel="App-wide memory"
-                  className="min-h-[24rem]"
-                />
               </div>
 
-              <MemoryVersionHistory
-                versions={versions}
-                currentVersion={memory.version}
-                loading={historyLoading}
-                disabled={restoring || conflict !== null}
-                error={historyError}
-                onRetry={() => void refreshVersions()}
-                onRestore={setRestoreCandidate}
-              />
+              {memory.enabled ? (
+                <div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-gray-700">
+                      Wipe memory
+                    </p>
+                    <p className="max-w-xl text-sm text-gray-500">
+                      Delete the file and its history while keeping memory
+                      turned on for future conversations.
+                    </p>
+                  </div>
+                  <PillButton
+                    tone="danger"
+                    size="sm"
+                    disabled={
+                      interactionLocked ||
+                      (memory.hash === null && memory.status === "idle")
+                    }
+                    onClick={() => setConfirmAction("wipe")}
+                  >
+                    <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
+                    Wipe memory
+                  </PillButton>
+                </div>
+              ) : null}
             </>
           )}
-        </div>
-      </div>
+        </SettingsSection>
+
+        {error ? (
+          <p className="text-sm text-red-600" role="alert">
+            {error}
+          </p>
+        ) : savedNotice ? (
+          <p className="text-sm text-gray-500" role="status">
+            {savedNotice}
+          </p>
+        ) : null}
+      </section>
+
+      {loading ? (
+        <MemoryEditorSkeleton />
+      ) : memory?.enabled ? (
+        <>
+          <section
+            className="space-y-3"
+            aria-labelledby="app-memory-file-heading"
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div className="space-y-1">
+                <h2
+                  id="app-memory-file-heading"
+                  className="font-serif text-2xl font-medium text-gray-900"
+                >
+                  Memory file
+                </h2>
+                <p className="max-w-3xl text-sm text-gray-500">
+                  Mike may curate this private Markdown file after saved
+                  conversations. You can review and edit it at any time.
+                </p>
+                <p
+                  className={
+                    memory.status === "failed"
+                      ? "pt-1 text-xs text-red-600"
+                      : "pt-1 text-xs text-gray-400"
+                  }
+                  role={memory.status === "failed" ? "alert" : "status"}
+                >
+                  {currentStatus(memory)}
+                  {memory.hash !== null ? ` · Version ${memory.version}` : ""}
+                  {memory.hash !== null && currentSource(memory.source)
+                    ? ` · ${currentSource(memory.source)}`
+                    : ""}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <PillButton
+                  tone="white"
+                  size="sm"
+                  disabled={
+                    memory.hash === null ||
+                    downloading ||
+                    interactionLocked
+                  }
+                  onClick={() => void downloadMemory()}
+                >
+                  {downloading ? (
+                    <Loader2
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 animate-spin"
+                    />
+                  ) : (
+                    <Download aria-hidden="true" className="h-3.5 w-3.5" />
+                  )}
+                  {downloading ? "Downloading…" : "Download memory.md"}
+                </PillButton>
+                <PillButton
+                  tone="white"
+                  size="sm"
+                  disabled={!dirty || interactionLocked}
+                  onClick={cancelDraft}
+                >
+                  Cancel
+                </PillButton>
+                <PillButton
+                  tone="black"
+                  size="sm"
+                  disabled={
+                    !dirty || conflict !== null || interactionLocked
+                  }
+                  onClick={() => void saveMemory()}
+                >
+                  {saving ? (
+                    <Loader2
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 animate-spin"
+                    />
+                  ) : (
+                    <Save aria-hidden="true" className="h-3.5 w-3.5" />
+                  )}
+                  {saving ? "Saving…" : "Save"}
+                </PillButton>
+              </div>
+            </div>
+
+            {conflict ? (
+              <div
+                className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                role="alert"
+              >
+                <p className="font-medium">
+                  Memory changed while you were editing
+                </p>
+                <p className="mt-1 text-xs text-amber-800">
+                  Reload the latest version or keep your draft and save it
+                  against the new version.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <PillButton
+                    tone="white"
+                    size="sm"
+                    onClick={useLatestConflict}
+                  >
+                    Reload latest
+                  </PillButton>
+                  <PillButton
+                    tone="black"
+                    size="sm"
+                    onClick={keepDraftAfterConflict}
+                  >
+                    Keep my draft
+                  </PillButton>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="min-h-[24rem]">
+              <MarkdownEditor
+                value={draft}
+                onChange={(value) => {
+                  setDraft(value);
+                  setSavedNotice(null);
+                }}
+                ariaLabel="App-wide memory"
+                className="min-h-[24rem]"
+                readOnly={interactionLocked}
+              />
+            </div>
+          </section>
+
+          <MemoryVersionHistory
+            versions={versions}
+            currentVersion={memory.version}
+            loading={historyLoading}
+            disabled={
+              conflict !== null || interactionLocked
+            }
+            error={historyError}
+            onRetry={() => void refreshVersions()}
+            onRestore={setRestoreCandidate}
+          />
+        </>
+      ) : null}
+
+      <ConfirmPopup
+        open={confirmAction !== null}
+        title={
+          confirmIsDisable
+            ? "Turn off and delete app-wide memory?"
+            : "Wipe app-wide memory?"
+        }
+        message={
+          confirmIsDisable
+            ? `This permanently deletes memory.md, its version history${dirty ? ", and your unsaved draft" : ""}, and cancels pending memory updates. Memory will remain off until you turn it on again. This cannot be undone.`
+            : `This permanently deletes memory.md, its version history${dirty ? ", and your unsaved draft" : ""}, and cancels pending memory updates. Memory stays on and can be rebuilt from future conversations. This cannot be undone.`
+        }
+        confirmLabel={confirmIsDisable ? "Disable" : "Wipe memory"}
+        confirmVariant="danger"
+        confirmStatus={settingsMutation ? "loading" : "idle"}
+        onConfirm={() => void confirmSettingsMutation()}
+        onCancel={() => {
+          if (!settingsMutation) setConfirmAction(null);
+        }}
+      />
 
       <ConfirmPopup
         open={restoreCandidate !== null}
@@ -596,16 +826,13 @@ function MemoryVersionHistory({
   );
 }
 
-function MemoryPageSkeleton() {
+function MemoryEditorSkeleton() {
   return (
-    <div className="space-y-4" aria-label="Loading memory">
-      <GlassCard>
-        <div className="space-y-2 px-4 py-5">
-          <div className="h-4 w-48 animate-pulse rounded bg-gray-200" />
-          <div className="h-3 w-full max-w-xl animate-pulse rounded bg-gray-100" />
-          <div className="h-3 w-40 animate-pulse rounded bg-gray-100" />
-        </div>
-      </GlassCard>
+    <div className="space-y-3" aria-label="Loading memory editor">
+      <div className="space-y-2">
+        <div className="h-7 w-36 animate-pulse rounded bg-gray-200" />
+        <div className="h-3 w-full max-w-xl animate-pulse rounded bg-gray-100" />
+      </div>
       <div className="h-96 animate-pulse rounded-2xl bg-app-surface" />
     </div>
   );

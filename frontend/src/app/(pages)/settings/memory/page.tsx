@@ -1,5 +1,5 @@
 import { UserMemoryPage } from "@/app/components/memory/UserMemoryPage";
 
-export default function MemoryPage() {
+export default function MemorySettingsPage() {
     return <UserMemoryPage />;
 }

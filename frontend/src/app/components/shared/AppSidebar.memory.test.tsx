@@ -67,7 +67,7 @@ describe("AppSidebar memory navigation", () => {
 
         await user.click(memory);
 
-        expect(push).toHaveBeenCalledWith("/memory");
+        expect(push).toHaveBeenCalledWith("/settings/memory");
         expect(
             screen.queryByRole("button", { name: "Memory" }),
         ).not.toBeInTheDocument();
