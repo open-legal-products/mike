@@ -54,6 +54,7 @@ vi.mock("@/app/contexts/AuthContext", () => ({
 
 vi.mock("@/app/lib/mikeApi", () => ({
     getProjectFilterOptions: vi.fn(() => new Promise(() => {})),
+    setProjectMemoryEnabled: vi.fn(),
     updateProject: vi.fn(),
     deleteProject: vi.fn(),
 }));

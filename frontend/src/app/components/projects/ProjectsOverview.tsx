@@ -6,6 +6,7 @@ import { ChevronDown } from "lucide-react";
 import {
     getProjectFilterOptions,
     type ProjectFilterOptions,
+    setProjectMemoryEnabled,
     updateProject,
     deleteProject,
 } from "@/app/lib/mikeApi";
@@ -404,6 +405,33 @@ export function ProjectsOverview() {
         );
         setDetailsProject((current) =>
             current?.id === updated.id ? { ...current, ...updated } : current,
+        );
+    }
+
+    async function handleProjectMemoryEnabledChange(enabled: boolean) {
+        if (!detailsProject) return;
+        if (!can(roleFrom(detailsProject), "access.manage")) {
+            setOwnerOnlyAction({
+                action: "manage project memory",
+                contacts: detailsProject.admin_contacts,
+            });
+            return;
+        }
+        const memory = await setProjectMemoryEnabled(
+            detailsProject.id,
+            enabled,
+        );
+        setProjects((current) =>
+            current.map((project) =>
+                project.id === detailsProject.id
+                    ? { ...project, memory_enabled: memory.enabled }
+                    : project,
+            ),
+        );
+        setDetailsProject((current) =>
+            current
+                ? { ...current, memory_enabled: memory.enabled }
+                : current,
         );
     }
 
@@ -947,6 +975,7 @@ export function ProjectsOverview() {
                 }
                 onClose={() => setDetailsProject(null)}
                 onSave={handleProjectDetailsSave}
+                onMemoryEnabledChange={handleProjectMemoryEnabledChange}
             />
 
             <PermissionDeniedPopup

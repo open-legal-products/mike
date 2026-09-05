@@ -6,6 +6,7 @@ type QueryResult = { data: unknown; error: QueryError };
 type RecordedQuery = {
   table: string;
   filters: { column: string; value: unknown }[];
+  payload?: unknown;
 };
 
 const { dbState, recordedQueries } = vi.hoisted(() => ({
@@ -27,6 +28,23 @@ const { dbState, recordedQueries } = vi.hoisted(() => ({
     editDetail: QueryResult;
   },
   recordedQueries: [] as RecordedQuery[],
+}));
+
+const {
+  runLLMStream,
+  beginMemoryConversationTurn,
+  releaseMemoryConversationTurn,
+  scheduleMemoryConsolidation,
+} = vi.hoisted(() => ({
+  runLLMStream: vi.fn(),
+  beginMemoryConversationTurn: vi.fn().mockResolvedValue({
+    activityId: "activity-1",
+  }),
+  releaseMemoryConversationTurn: vi.fn().mockResolvedValue(undefined),
+  scheduleMemoryConsolidation: vi.fn().mockResolvedValue({
+    job_id: "job-1",
+    generation: 1,
+  }),
 }));
 
 function resultForAwaitedQuery(table: string): QueryResult {
@@ -51,7 +69,6 @@ function makeQuery(table: string) {
   const query: Record<string, unknown> = {};
   const chain = [
     "select",
-    "insert",
     "update",
     "delete",
     "upsert",
@@ -71,6 +88,10 @@ function makeQuery(table: string) {
     "contains",
   ];
   for (const method of chain) query[method] = vi.fn(() => query);
+  query.insert = vi.fn((payload: unknown) => {
+    recorded.payload = payload;
+    return query;
+  });
   query.eq = vi.fn((column: string, value: unknown) => {
     recorded.filters.push({ column, value });
     return query;
@@ -96,6 +117,44 @@ function mockSupabase() {
 
 vi.mock("../../lib/supabase", () => ({
   createServerSupabase: vi.fn(() => mockSupabase()),
+}));
+
+vi.mock("../../lib/memory/schedule", () => ({
+  beginMemoryConversationTurn: (...args: unknown[]) =>
+    beginMemoryConversationTurn(...args),
+  releaseMemoryConversationTurn: (...args: unknown[]) =>
+    releaseMemoryConversationTurn(...args),
+  scheduleMemoryConsolidation: (...args: unknown[]) =>
+    scheduleMemoryConsolidation(...args),
+}));
+
+vi.mock("../../lib/chat", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/chat")>();
+  return {
+    ...actual,
+    buildDocContext: vi.fn(async () => ({
+      docIndex: {},
+      docStore: new Map(),
+    })),
+    enrichWithPriorEvents: vi.fn(async (messages: unknown) => messages),
+    buildWorkflowStore: vi.fn(async () => new Map()),
+    buildMessages: vi.fn(() => []),
+    runLLMStream: (...args: unknown[]) => runLLMStream(...args),
+  };
+});
+
+vi.mock("../../lib/userSettings", () => ({
+  getUserModelSettings: vi.fn(async () => ({
+    legal_research_us: false,
+    title_model: "test-model",
+    tabular_model: "test-model",
+    last_selected_chat_model: null,
+    last_selected_reasoning_level: null,
+    api_keys: { gemini: "test-key" },
+    personalisation: null,
+  })),
+  persistLastSelectedChatModel: vi.fn(async () => null),
+  persistLastSelectedReasoningLevel: vi.fn(async () => null),
 }));
 
 vi.mock("../../middleware/auth", () => ({
@@ -397,9 +456,8 @@ describe("POST /word-chat/tool-result", () => {
   });
 
   it("delivers a pending call's result to the awaiting stream", async () => {
-    const { waitForClientToolResult } = await import(
-      "../../lib/chat/tools/wordClientTools"
-    );
+    const { waitForClientToolResult } =
+      await import("../../lib/chat/tools/wordClientTools");
     const pending = waitForClientToolResult({
       callId: TOOL_CALL_ID,
       userId: "u1",
@@ -420,9 +478,8 @@ describe("POST /word-chat/tool-result", () => {
   });
 
   it("does not deliver results across users", async () => {
-    const { waitForClientToolResult, submitClientToolResult } = await import(
-      "../../lib/chat/tools/wordClientTools"
-    );
+    const { waitForClientToolResult, submitClientToolResult } =
+      await import("../../lib/chat/tools/wordClientTools");
     const pending = waitForClientToolResult({
       callId: TOOL_CALL_ID,
       userId: "someone-else",
@@ -439,5 +496,129 @@ describe("POST /word-chat/tool-result", () => {
     // Settle the pending promise so the test leaves no dangling timer.
     submitClientToolResult(TOOL_CALL_ID, "someone-else", {});
     await pending;
+  });
+});
+
+describe("POST /word-chat — local storage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    recordedQueries.length = 0;
+    resetDbState();
+    runLLMStream.mockResolvedValue({
+      events: [{ type: "content", text: "Response" }],
+      citations: [],
+    });
+  });
+
+  it("does not schedule memory consolidation without a durable transcript", async () => {
+    const res = await request(app)
+      .post("/word-chat")
+      .set(...AUTH)
+      .send({
+        messages: [{ role: "user", content: "Revise this clause" }],
+        document_id: DOCUMENT_ID,
+        document_name: "Contract.docx",
+        storage: "local",
+        model: "gemini-3-flash-preview",
+      });
+
+    expect(res.status).toBe(200);
+    expect(runLLMStream).toHaveBeenCalledTimes(1);
+    expect(beginMemoryConversationTurn).not.toHaveBeenCalled();
+    expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+  });
+
+  it("schedules memory after a durable cloud turn", async () => {
+    const chatLib = await import("../../lib/chat");
+    dbState.chatDetail = {
+      data: { id: CHAT_ID, title: null, user_id: "u1" },
+      error: null,
+    };
+
+    const res = await request(app)
+      .post("/word-chat")
+      .set(...AUTH)
+      .send({
+        messages: [{ role: "user", content: "Revise this clause" }],
+        document_id: DOCUMENT_ID,
+        document_name: "Contract.docx",
+        storage: "cloud",
+        model: "gemini-3-flash-preview",
+      });
+
+    expect(res.status).toBe(200);
+    expect(beginMemoryConversationTurn).toHaveBeenCalledWith({
+      db: expect.anything(),
+      surface: "word",
+      conversationId: CHAT_ID,
+      actorUserId: "u1",
+    });
+    const userInsert = recordedQueries.find(
+      ({ table, payload }) =>
+        table === "word_chat_messages" &&
+        (payload as { role?: unknown } | undefined)?.role === "user",
+    );
+    const assistantInsert = recordedQueries.find(
+      ({ table, payload }) =>
+        table === "word_chat_messages" &&
+        (payload as { role?: unknown } | undefined)?.role === "assistant",
+    );
+    const inputMessageId = (
+      userInsert?.payload as { id?: string } | undefined
+    )?.id;
+    expect(inputMessageId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(assistantInsert?.payload).toMatchObject({
+      author_user_id: "u1",
+      memory_input_message_id: inputMessageId,
+    });
+    expect(
+      beginMemoryConversationTurn.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      vi.mocked(chatLib.buildDocContext).mock.invocationCallOrder[0],
+    );
+    expect(scheduleMemoryConsolidation).toHaveBeenCalledWith({
+      db: expect.anything(),
+      surface: "word",
+      conversationId: CHAT_ID,
+      actorUserId: "u1",
+      projectId: null,
+      turnId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+      turn: { activityId: "activity-1" },
+    });
+    expect(releaseMemoryConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("releases the cloud turn lease when the model fails", async () => {
+    dbState.chatDetail = {
+      data: { id: CHAT_ID, title: null, user_id: "u1" },
+      error: null,
+    };
+    runLLMStream.mockRejectedValueOnce(new Error("provider failed"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/word-chat")
+      .set(...AUTH)
+      .send({
+        messages: [{ role: "user", content: "Revise this clause" }],
+        document_id: DOCUMENT_ID,
+        document_name: "Contract.docx",
+        storage: "cloud",
+        model: "gemini-3-flash-preview",
+      });
+
+    expect(res.status).toBe(200);
+    expect(releaseMemoryConversationTurn).toHaveBeenCalledWith({
+      db: expect.anything(),
+      surface: "word",
+      conversationId: CHAT_ID,
+      turn: { activityId: "activity-1" },
+    });
+    expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

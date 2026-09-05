@@ -12,6 +12,7 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/app/lib/mikeApi", () => ({
     deleteProject: vi.fn(async () => {}),
+    setProjectMemoryEnabled: vi.fn(),
     updateProject: vi.fn(),
     getProjectFilterOptions: vi.fn(async () => ({
         practices: [],

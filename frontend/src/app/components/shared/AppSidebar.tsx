@@ -9,6 +9,7 @@ import {
     type UIEvent,
 } from "react";
 import {
+  Brain,
   PanelLeft,
   ChevronsUpDown,
   ChevronDown,
@@ -557,11 +558,14 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     {user && (
                         <div className="relative">
                             <button
+                                type="button"
+                                aria-expanded={isDropdownOpen}
+                                aria-controls="account-dropdown"
                                 onClick={() =>
                                     setIsDropdownOpen(!isDropdownOpen)
                                 }
                                 className={cn(
-                                    "flex w-full items-center rounded-xl px-2.5 py-3 transition-colors",
+                                    "flex w-full items-center rounded-xl px-2.5 py-3 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
                                     !isOpen ? "hidden md:flex" : "",
                                     pathname.startsWith("/settings") ||
                                         pathname === "/history" ||
@@ -597,6 +601,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
 
                             {isDropdownOpen && (
                                 <div
+                                    id="account-dropdown"
                                     className={cn(
                                         "absolute bottom-full left-0 z-50 mb-1 p-1 whitespace-nowrap",
                                         isOpen ? "right-0" : "w-56",
@@ -604,6 +609,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     )}
                                 >
                                     <button
+                                        type="button"
                                         onClick={() => {
                                             router.push("/history");
                                             setIsDropdownOpen(false);
@@ -619,6 +625,26 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         History
                                     </button>
                                     <button
+                                        type="button"
+                                        onClick={() => {
+                                            router.push("/settings/memory");
+                                            setIsDropdownOpen(false);
+                                        }}
+                                        className={cn(
+                                            "flex w-full items-center gap-2 rounded-md px-4 py-2 text-left text-sm text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                                            LIQUID_GLASS_HOVER_CLASS,
+                                            pathname === "/settings/memory" &&
+                                                LIQUID_GLASS_SELECTED_CLASS,
+                                        )}
+                                    >
+                                        <Brain
+                                            aria-hidden="true"
+                                            className="h-4 w-4"
+                                        />
+                                        Memory
+                                    </button>
+                                    <button
+                                        type="button"
                                         onClick={() => {
                                             router.push("/settings");
                                             setIsDropdownOpen(false);
@@ -632,6 +658,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         Settings
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={() => {
                                             router.push("/organizations");
                                             setIsDropdownOpen(false);
@@ -645,6 +672,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         Organizations
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={() => {
                                             setIsDropdownOpen(false);
                                             void signOut()

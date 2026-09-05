@@ -24,7 +24,11 @@ import {
     tableTreeCellStyle,
 } from "@/app/components/shared/TablePrimitive";
 
-export type ProjectWorkspaceSection = "documents" | "assistant" | "reviews";
+export type ProjectWorkspaceSection =
+    | "documents"
+    | "assistant"
+    | "reviews"
+    | "memory";
 
 export type ProjectContextMenu = {
     x: number;
@@ -407,7 +411,7 @@ export function ProjectPageHeader({
         onClick: () => void;
     }>;
 }) {
-    const sectionAction: PageHeaderAction =
+    const sectionAction: PageHeaderAction | null =
         activeSection === "documents"
             ? {
                   type: "custom",
@@ -431,7 +435,8 @@ export function ProjectPageHeader({
                     label: <span className="hidden sm:inline">Chat</span>,
                     title: "Create chat",
                 }
-              : {
+              : activeSection === "reviews"
+                ? {
                     onClick: onNewReview,
                     disabled: creatingReview || !roleKnown,
                     icon: creatingReview ? (
@@ -441,7 +446,8 @@ export function ProjectPageHeader({
                     ),
                     label: <span className="hidden sm:inline">Review</span>,
                     title: "Create review",
-                };
+                  }
+                : null;
 
     return (
         <PageHeader
@@ -467,16 +473,20 @@ export function ProjectPageHeader({
                     ? [{ label: "Chats" }]
                     : activeSection === "reviews"
                       ? [{ label: "Tabular Reviews" }]
+                      : activeSection === "memory"
+                        ? [{ label: "Memory" }]
                       : (documentFolderBreadcrumbs ?? [])),
             ]}
             actionGroups={[
                 [
-                    {
-                        type: "search",
-                        value: search,
-                        onChange: onSearchChange,
-                        placeholder: "Search…",
-                    },
+                    activeSection === "memory"
+                        ? null
+                        : {
+                              type: "search",
+                              value: search,
+                              onChange: onSearchChange,
+                              placeholder: "Search…",
+                          },
                     {
                         onClick: onOpenAccess,
                         iconOnly: true,

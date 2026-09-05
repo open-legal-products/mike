@@ -49,6 +49,10 @@ import {
   type TurnReadState,
 } from "./tools/documentOps";
 import { verifyCitations } from "./verifyCitations";
+import {
+  buildMemoryPromptContext,
+  MEMORY_SYSTEM_POLICY,
+} from "../memory/context";
 
 export type AssistantEvent =
   | { type: "reasoning"; text: string }
@@ -56,6 +60,10 @@ export type AssistantEvent =
   | {
       type: "ask_inputs_response";
       responses: AskInputResponseItem[];
+      /** User who supplied this continuation, for scoped-memory attribution. */
+      author_user_id?: string;
+      /** Immutable evidence time used by memory wipe/enable cutoffs. */
+      recorded_at?: string;
     }
   | {
       type: "doc_read";
@@ -258,6 +266,12 @@ export async function runLLMStream(params: {
   signal?: AbortSignal;
   /** Let a route persist the completed turn before it signals stream success. */
   emitDone?: boolean;
+  /** Add read-only app/project memory as an earliest untrusted reference turn. */
+  includeMemory?: boolean;
+  /** Memory scope is independent from generated-document destination. */
+  memoryProjectId?: string | null;
+  /** Tell the memory policy whether other people can see the persisted turn. */
+  memorySharedAudience?: boolean;
   /**
    * If set, generate_docx will attach created docs to this project so
    * they appear in the project sidebar. Leave null for general chats —
@@ -292,6 +306,9 @@ export async function runLLMStream(params: {
     apiKeys,
     signal,
     projectId,
+    includeMemory = false,
+    memoryProjectId,
+    memorySharedAudience = false,
     nonce,
   } = params;
   const write = (chunk: string) =>
@@ -319,14 +336,34 @@ export async function runLLMStream(params: {
   // Extract system prompt; pass remaining turns to the adapter as
   // plain user/assistant messages.
   const rawMsgs = apiMessages as { role: string; content: string | null }[];
-  const systemPrompt =
+  const baseSystemPrompt =
     rawMsgs[0]?.role === "system" ? (rawMsgs[0].content ?? "") : "";
+  const memoryPrompt = includeMemory
+    ? await buildMemoryPromptContext({
+        db,
+        userId,
+        projectId: memoryProjectId,
+        sharedAudience: memorySharedAudience,
+      })
+    : "";
+  const memoryAudiencePolicy = memorySharedAudience
+    ? "CURRENT MEMORY AUDIENCE: SHARED. Other people can see the persisted response. Never reveal, quote, summarize, or otherwise expose any detail found only in the active user's private app memory."
+    : "CURRENT MEMORY AUDIENCE: PRIVATE TO THE ACTIVE USER.";
+  const systemPrompt = memoryPrompt
+    ? `${baseSystemPrompt}\n\n${MEMORY_SYSTEM_POLICY}\n${memoryAudiencePolicy}`
+    : baseSystemPrompt;
   const chatMessages: LlmMessage[] = rawMsgs
     .filter((m) => m.role !== "system")
     .map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
       content: m.content ?? "",
     }));
+  if (memoryPrompt) {
+    // Markdown controlled by a user/project editor must never gain system-role
+    // authority. Put it before all real turns so newer conversation evidence
+    // naturally has higher precedence.
+    chatMessages.unshift({ role: "user", content: memoryPrompt });
+  }
 
   const events: AssistantEvent[] = [];
   // One assistant turn produces at most one document_versions row per

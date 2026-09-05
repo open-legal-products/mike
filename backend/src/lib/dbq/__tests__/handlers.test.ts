@@ -51,7 +51,8 @@ const ACTIVE_VERSION = {
 };
 
 const ensureDocAccess = vi.fn(async (..._a: unknown[]) => ({ ok: true }));
-vi.mock("../../access", () => ({
+vi.mock("../../access", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../access")>()),
     ensureDocAccess: (...a: unknown[]) => ensureDocAccess(...a),
 }));
 
@@ -72,6 +73,7 @@ const deleteFile = vi.fn(async () => {});
 const listFiles = vi.fn(async () => [] as string[]);
 const downloadFile = vi.fn(async (..._a: unknown[]) => new Uint8Array([1, 2, 3]));
 vi.mock("../../storage", () => ({
+    assertStorageConfigured: vi.fn(),
     uploadFile: (...a: unknown[]) => uploadFile(...a),
     deleteFile: (...a: unknown[]) => deleteFile(...a),
     listFiles: (...a: unknown[]) => listFiles(...a),
@@ -81,6 +83,7 @@ vi.mock("../../storage", () => ({
 import {
     handleChatTurnAudit,
     handleAccountDelete,
+    handleMemoryCandidateCleanup,
     handleStorageCleanup,
     handleExportBuild,
     MAX_ZIP_EXPORT_DOCUMENTS,
@@ -229,10 +232,16 @@ describe("handleAccountDelete", () => {
             JOB("account.delete", { userId: "u1", userEmail: "u@x.test" }),
         );
         expect(deleteUserAccountData).toHaveBeenCalledWith(db, "u1", "u@x.test");
-        // Two purge deletes (payload->>userId and payload->base->>userId),
-        // both excluding the running job's own row.
-        expect(db.deletes).toHaveLength(2);
+        // Three purge deletes (direct user, audit base, and memory actor),
+        // all excluding the running job's own row.
+        expect(db.deletes).toHaveLength(3);
         for (const d of db.deletes) expect(d["neq:id"]).toBe("job-1");
+        expect(db.deletes).toContainEqual(
+            expect.objectContaining({
+                kind: "memory.consolidate",
+                "payload->>actorUserId": "u1",
+            }),
+        );
     });
 
     // documents.user_id references auth.users ON DELETE CASCADE, and
@@ -359,6 +368,65 @@ describe("handleStorageCleanup", () => {
                 JOB("storage.cleanup", { keys: ["a.pdf", "b.pdf"] }),
             ),
         ).rejects.toThrow(/1\/2 deletes failed/);
+    });
+});
+
+describe("handleMemoryCandidateCleanup", () => {
+    it("atomically claims before deleting an unpromoted object", async () => {
+        const trace: string[] = [];
+        const db = {
+            rpc: vi.fn(async () => {
+                trace.push("claim");
+                return {
+                    data: [
+                        {
+                            claim_status: "claimed",
+                            candidate_storage_path: "memories/candidate.md",
+                        },
+                    ],
+                    error: null,
+                };
+            }),
+            from: vi.fn(() => ({
+                delete: () => ({
+                    eq: () => ({
+                        in: async () => {
+                            trace.push("row-delete");
+                            return { error: null };
+                        },
+                    }),
+                }),
+            })),
+        };
+        deleteFile.mockImplementationOnce(async () => {
+            trace.push("object-delete");
+        });
+
+        await handleMemoryCandidateCleanup(
+            db as never,
+            JOB("memory.candidate_cleanup", { candidateId: "candidate-1" }),
+        );
+
+        expect(db.rpc).toHaveBeenCalledWith("claim_memory_upload_candidate", {
+            p_candidate_id: "candidate-1",
+        });
+        expect(trace).toEqual(["claim", "object-delete", "row-delete"]);
+    });
+
+    it("does not touch storage when a delayed candidate is not due", async () => {
+        const db = {
+            rpc: vi.fn(async () => ({
+                data: [{ claim_status: "not_due", candidate_storage_path: null }],
+                error: null,
+            })),
+        };
+        await expect(
+            handleMemoryCandidateCleanup(
+                db as never,
+                JOB("memory.candidate_cleanup", { candidateId: "candidate-1" }),
+            ),
+        ).rejects.toThrow("Memory candidate cleanup is not due");
+        expect(deleteFile).not.toHaveBeenCalled();
     });
 });
 

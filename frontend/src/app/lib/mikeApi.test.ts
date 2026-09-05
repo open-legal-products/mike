@@ -33,6 +33,8 @@ import {
     deleteWorkflowAsset,
     deleteWorkflowShare,
     downloadDocumentsZip,
+    downloadProjectMemoryMarkdown,
+    downloadUserMemoryMarkdown,
     downloadUserExport,
     exportAccountData,
     exportAuditHistory,
@@ -59,6 +61,7 @@ import {
     getOpenRouterModels,
     getVercelModels,
     getProject,
+    getProjectMemory,
     getProjectDirectoryLevel,
     getProjectFilterOptions,
     getProjectPeople,
@@ -68,6 +71,7 @@ import {
     getTabularReviewAccess,
     getTabularReviewPeople,
     getUserExportStatus,
+    getUserMemory,
     getUserProfile,
     getWorkflow,
     getWorkflowPeople,
@@ -105,6 +109,7 @@ import {
     listMcpConnectors,
     listProjectChats,
     listProjectIds,
+    listProjectMemoryVersions,
     listProjectSummaries,
     listProjects,
     listProjectsPage,
@@ -118,6 +123,7 @@ import {
     listWorkflowShares,
     listWorkflows,
     listWorkflowsPage,
+    listUserMemoryVersions,
     lookupUserByEmail,
     mapTRMessages,
     workflowAddonAssetDisplayUrl,
@@ -143,6 +149,8 @@ import {
     searchProjectDirectory,
     searchLibraryDocuments,
     setMcpToolEnabled,
+    setProjectMemoryEnabled,
+    setUserMemoryEnabled,
     shareWorkflow,
     startMcpConnectorOAuth,
     startUserExport,
@@ -157,6 +165,7 @@ import {
     unhideWorkflow,
     updateMcpConnector,
     updateProject,
+    updateProjectMemory,
     updateChatModel,
     updateChatReasoningLevel,
     updateLastSelectedChatSettings,
@@ -167,9 +176,14 @@ import {
     updateUserProfile,
     updateWorkflow,
     updateQuickAction,
+    updateUserMemory,
     deleteQuickAction,
     importWorkflowAddon,
     listQuickActions,
+    restoreUserMemoryVersion,
+    restoreProjectMemoryVersion,
+    wipeProjectMemory,
+    wipeUserMemory,
 } from "./mikeApi";
 
 const fetchMock = vi.fn();
@@ -436,6 +450,46 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
 });
 
 describe("blob requests (exportAccountData)", () => {
+    it("downloads the app-wide memory Markdown file", async () => {
+        fetchMock.mockResolvedValue(
+            new Response("# Preferences", {
+                status: 200,
+                headers: {
+                    "content-type": "text/markdown; charset=utf-8",
+                    "content-disposition":
+                        'attachment; filename="memory.md"',
+                },
+            }),
+        );
+
+        const { blob, filename } = await downloadUserMemoryMarkdown();
+
+        expect(lastFetchCall().url).toBe("/api/user/memory/memory.md");
+        expect(filename).toBe("memory.md");
+        expect(await blob.text()).toBe("# Preferences");
+    });
+
+    it("downloads the project memory Markdown file", async () => {
+        fetchMock.mockResolvedValue(
+            new Response("# Matter", {
+                status: 200,
+                headers: {
+                    "content-type": "text/markdown; charset=utf-8",
+                    "content-disposition": 'attachment; filename="memory.md"',
+                },
+            }),
+        );
+
+        const { blob, filename } =
+            await downloadProjectMemoryMarkdown("project/1");
+
+        expect(lastFetchCall().url).toBe(
+            "/api/projects/project%2F1/memory/memory.md",
+        );
+        expect(filename).toBe("memory.md");
+        expect(await blob.text()).toBe("# Matter");
+    });
+
     it("returns the blob and the filename from content-disposition", async () => {
         fetchMock.mockResolvedValue(
             new Response("zip-bytes", {
@@ -1866,6 +1920,20 @@ describe("thin endpoint wrappers", () => {
             },
         },
         {
+            name: "createProject (with project memory disabled)",
+            call: () =>
+                createProject(
+                    "No-memory matter",
+                    undefined,
+                    undefined,
+                    undefined,
+                    false,
+                ),
+            url: "/projects",
+            method: "POST",
+            body: { name: "No-memory matter", memory_enabled: false },
+        },
+        {
             name: "deleteAccount",
             call: () => deleteAccount(),
             url: "/user/account",
@@ -1882,6 +1950,81 @@ describe("thin endpoint wrappers", () => {
             call: () => deleteAllTabularReviews(),
             url: "/user/tabular-reviews",
             method: "DELETE",
+        },
+        {
+            name: "getUserMemory",
+            call: () => getUserMemory(),
+            url: "/user/memory",
+        },
+        {
+            name: "updateUserMemory",
+            call: () => updateUserMemory("# Preferences", 3),
+            url: "/user/memory",
+            method: "PUT",
+            body: { content: "# Preferences", expected_version: 3 },
+        },
+        {
+            name: "setUserMemoryEnabled",
+            call: () => setUserMemoryEnabled(false),
+            url: "/user/memory/settings",
+            method: "PATCH",
+            body: { enabled: false },
+        },
+        {
+            name: "wipeUserMemory",
+            call: () => wipeUserMemory(),
+            url: "/user/memory",
+            method: "DELETE",
+        },
+        {
+            name: "listUserMemoryVersions",
+            call: () => listUserMemoryVersions(),
+            url: "/user/memory/versions",
+        },
+        {
+            name: "restoreUserMemoryVersion",
+            call: () => restoreUserMemoryVersion("version/3", 4),
+            url: "/user/memory/versions/version%2F3/restore",
+            method: "POST",
+            body: { expected_version: 4 },
+        },
+        {
+            name: "getProjectMemory",
+            call: () => getProjectMemory("project/1"),
+            url: "/projects/project%2F1/memory",
+        },
+        {
+            name: "updateProjectMemory",
+            call: () => updateProjectMemory("project/1", "# Matter", 7),
+            url: "/projects/project%2F1/memory",
+            method: "PUT",
+            body: { content: "# Matter", expected_version: 7 },
+        },
+        {
+            name: "setProjectMemoryEnabled",
+            call: () => setProjectMemoryEnabled("project/1", false),
+            url: "/projects/project%2F1/memory/settings",
+            method: "PATCH",
+            body: { enabled: false },
+        },
+        {
+            name: "wipeProjectMemory",
+            call: () => wipeProjectMemory("project/1"),
+            url: "/projects/project%2F1/memory",
+            method: "DELETE",
+        },
+        {
+            name: "listProjectMemoryVersions",
+            call: () => listProjectMemoryVersions("project/1"),
+            url: "/projects/project%2F1/memory/versions",
+        },
+        {
+            name: "restoreProjectMemoryVersion",
+            call: () =>
+                restoreProjectMemoryVersion("project/1", "version/3", 8),
+            url: "/projects/project%2F1/memory/versions/version%2F3/restore",
+            method: "POST",
+            body: { expected_version: 8 },
         },
         {
             name: "updateUserProfile",

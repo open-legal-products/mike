@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Users } from "lucide-react";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
+import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import {
     FieldLabel,
     FormTextInput,
@@ -11,6 +12,7 @@ import {
 import type { Project } from "@/app/components/shared/types";
 import { listOrgs, type Org } from "@/app/lib/mikeApi";
 import { ProjectPracticeField } from "./ProjectPracticeField";
+import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
 
 const PERSONAL_WORKSPACE = "__personal__";
 
@@ -19,7 +21,12 @@ interface ProjectDetailsModalProps {
     project: Project | null;
     canEdit: boolean;
     onClose: () => void;
-    onSave: (values: { name: string; cmNumber: string; practice: string }) => Promise<void>;
+    onSave: (values: {
+        name: string;
+        cmNumber: string;
+        practice: string;
+    }) => Promise<void>;
+    onMemoryEnabledChange?: (enabled: boolean) => Promise<void>;
     onShareProject?: () => void;
 }
 
@@ -29,6 +36,7 @@ export function ProjectDetailsModal({
     canEdit,
     onClose,
     onSave,
+    onMemoryEnabledChange,
     onShareProject,
 }: ProjectDetailsModalProps) {
     const [nameDraft, setNameDraft] = useState("");
@@ -38,15 +46,40 @@ export function ProjectDetailsModal({
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [memoryEnabled, setMemoryEnabled] = useState(false);
+    const [memorySaving, setMemorySaving] = useState(false);
+    const [disableMemoryConfirmOpen, setDisableMemoryConfirmOpen] =
+        useState(false);
+    const projectId = project?.id ?? null;
+    const projectName = project?.name ?? "";
+    const projectCmNumber = project?.cm_number ?? "";
+    const projectPractice = project?.practice ?? "";
+    const projectMemoryEnabled = project?.memory_enabled ?? false;
 
     useEffect(() => {
-        if (!open || !project) return;
-        setNameDraft(project.name);
-        setCmDraft(project.cm_number ?? "");
-        setPracticeDraft(project.practice ?? "");
+        if (!open || !projectId) return;
+        setNameDraft(projectName);
+        setCmDraft(projectCmNumber);
+        setPracticeDraft(projectPractice);
+        setDisableMemoryConfirmOpen(false);
+        setMemorySaving(false);
         setSaved(false);
         setError(null);
-    }, [open, project]);
+    }, [
+        open,
+        projectId,
+        projectName,
+        projectCmNumber,
+        projectPractice,
+    ]);
+
+    // Memory is persisted independently from the details form. Syncing this
+    // field must not reset unsaved name, CM number, or practice edits when the
+    // parent replaces its project object with the PATCH response.
+    useEffect(() => {
+        if (!open || !projectId) return;
+        setMemoryEnabled(projectMemoryEnabled);
+    }, [open, projectId, projectMemoryEnabled]);
 
     useEffect(() => {
         if (!open) return;
@@ -97,6 +130,35 @@ export function ProjectDetailsModal({
         } finally {
             setSaving(false);
         }
+    }
+
+    async function persistMemoryEnabled(enabled: boolean) {
+        if (!canEdit || memorySaving || !onMemoryEnabledChange) return;
+        setMemorySaving(true);
+        setSaved(false);
+        setError(null);
+        try {
+            await onMemoryEnabledChange(enabled);
+            setMemoryEnabled(enabled);
+            setDisableMemoryConfirmOpen(false);
+            setSaved(true);
+        } catch {
+            setError(
+                enabled
+                    ? "Could not enable project memory."
+                    : "Could not disable and delete project memory.",
+            );
+        } finally {
+            setMemorySaving(false);
+        }
+    }
+
+    function handleMemoryEnabledChange(enabled: boolean) {
+        if (!enabled) {
+            setDisableMemoryConfirmOpen(true);
+            return;
+        }
+        void persistMemoryEnabled(true);
     }
 
     return (
@@ -206,7 +268,40 @@ export function ProjectDetailsModal({
                         ]}
                     />
                 </div>
+
+                <div>
+                    <FieldLabel as="p">Project memory</FieldLabel>
+                    <ToggleSwitch
+                        checked={memoryEnabled}
+                        onCheckedChange={handleMemoryEnabledChange}
+                        disabled={
+                            !canEdit || memorySaving || !onMemoryEnabledChange
+                        }
+                        aria-label="Enable project memory"
+                        aria-busy={memorySaving}
+                    >
+                        Let Mike remember shared project context
+                    </ToggleSwitch>
+                    <p className="mt-1 text-xs text-gray-400">
+                        {memoryEnabled
+                            ? "Turning this off permanently deletes memory.md and its version history."
+                            : "When enabled, Mike can curate a shared project memory.md after conversations."}
+                    </p>
+                </div>
             </div>
+
+            <ConfirmPopup
+                open={disableMemoryConfirmOpen}
+                title="Turn off project memory?"
+                message="This permanently deletes the project's memory.md and its complete version history. This cannot be undone."
+                confirmLabel="Disable"
+                confirmVariant="danger"
+                confirmStatus={memorySaving ? "loading" : "idle"}
+                onCancel={() => {
+                    if (!memorySaving) setDisableMemoryConfirmOpen(false);
+                }}
+                onConfirm={() => void persistMemoryEnabled(false)}
+            />
         </Modal>
     );
 }

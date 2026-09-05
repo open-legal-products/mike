@@ -14,12 +14,25 @@ const {
     filterAccessibleDocumentIds,
     getUserModelSettings,
     resolveContentOrgId,
+    runLLMStream,
+    beginMemoryConversationTurn,
+    releaseMemoryConversationTurn,
+    scheduleMemoryConsolidation,
 } = vi.hoisted(() => ({
     ensureReviewAccess: vi.fn(),
     checkProjectAccess: vi.fn(),
     filterAccessibleDocumentIds: vi.fn(),
     getUserModelSettings: vi.fn(),
     resolveContentOrgId: vi.fn(),
+    runLLMStream: vi.fn(),
+    beginMemoryConversationTurn: vi.fn().mockResolvedValue({
+        activityId: "activity-1",
+    }),
+    releaseMemoryConversationTurn: vi.fn().mockResolvedValue(undefined),
+    scheduleMemoryConsolidation: vi.fn().mockResolvedValue({
+        job_id: "job-1",
+        generation: 1,
+    }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -157,6 +170,20 @@ vi.mock("../../middleware/auth", () => ({
         next(),
 }));
 
+vi.mock("../../lib/chat", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/chat")>()),
+    runLLMStream: (...args: unknown[]) => runLLMStream(...args),
+}));
+
+vi.mock("../../lib/memory/schedule", () => ({
+    beginMemoryConversationTurn: (...args: unknown[]) =>
+        beginMemoryConversationTurn(...args),
+    releaseMemoryConversationTurn: (...args: unknown[]) =>
+        releaseMemoryConversationTurn(...args),
+    scheduleMemoryConsolidation: (...args: unknown[]) =>
+        scheduleMemoryConsolidation(...args),
+}));
+
 vi.mock("../../lib/access", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../lib/access")>()),
     ensureReviewAccess: (...args: unknown[]) => ensureReviewAccess(...args),
@@ -218,6 +245,11 @@ describe("tabular.routes", () => {
             last_selected_reasoning_level: "high",
             legal_research_us: false,
             api_keys: { claude: "sk-test" },
+        });
+        runLLMStream.mockResolvedValue({
+            fullText: "Answer",
+            events: [{ type: "content", text: "Answer" }],
+            citations: [],
         });
     });
 
@@ -1665,6 +1697,172 @@ describe("tabular.routes", () => {
 
             expect(res.status).toBe(422);
             expect(res.body.code).toBe("missing_api_key");
+        });
+
+        it("schedules app memory but not project memory for a direct review grant", async () => {
+            supabaseState.tables.tabular_reviews = {
+                data: {
+                    id: "r1",
+                    user_id: "other",
+                    project_id: "p1",
+                    title: "Shared review",
+                    columns_config: [],
+                },
+                error: null,
+            };
+            supabaseState.tables.tabular_cells = { data: [], error: null };
+            supabaseState.tables.tabular_review_rows = {
+                data: [],
+                error: null,
+            };
+            supabaseState.tables.tabular_review_chats = {
+                data: {
+                    id: "review-chat-1",
+                    title: "Existing title",
+                    review_id: "r1",
+                    user_id: "u1",
+                    model: "claude-sonnet-5",
+                    reasoning_level: "high",
+                },
+                error: null,
+            };
+            supabaseState.tables.tabular_review_chat_messages = {
+                data: null,
+                error: null,
+            };
+            ensureReviewAccess.mockResolvedValue({
+                ok: true,
+                isCreator: false,
+                orgRole: null,
+                projectRole: "editor",
+            });
+            checkProjectAccess.mockResolvedValue({
+                ok: true,
+                isCreator: false,
+                orgRole: null,
+                projectRole: "viewer",
+                project: { id: "p1", user_id: "other" },
+            });
+
+            const res = await request(app)
+                .post("/tabular-review/r1/chat")
+                .set(...AUTH)
+                .send({
+                    messages: [{ role: "user", content: "Summarise" }],
+                    model: "claude-sonnet-5",
+                });
+
+            expect(res.status).toBe(200);
+            expect(runLLMStream).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    memoryProjectId: "p1",
+                    memorySharedAudience: true,
+                }),
+            );
+            const userInsert = supabaseState.inserts.find(
+                ({ table, payload }) =>
+                    table === "tabular_review_chat_messages" &&
+                    (payload as { role?: unknown }).role === "user",
+            );
+            const inputMessageId = (
+                userInsert?.payload as { id?: string } | undefined
+            )?.id;
+            const assistantInsert = supabaseState.inserts.find(
+                ({ table, payload }) =>
+                    table === "tabular_review_chat_messages" &&
+                    (payload as { role?: unknown }).role === "assistant",
+            );
+            const assistantMessageId = (
+                assistantInsert?.payload as { id?: string } | undefined
+            )?.id;
+            expect(assistantMessageId).toMatch(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            );
+            expect(inputMessageId).toMatch(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            );
+            expect(assistantInsert?.payload).toMatchObject({
+                author_user_id: "u1",
+                memory_input_message_id: inputMessageId,
+            });
+            expect(beginMemoryConversationTurn).toHaveBeenCalledWith({
+                db: expect.anything(),
+                surface: "tabular",
+                conversationId: "review-chat-1",
+                actorUserId: "u1",
+            });
+            expect(scheduleMemoryConsolidation).toHaveBeenCalledWith({
+                db: expect.anything(),
+                surface: "tabular",
+                conversationId: "review-chat-1",
+                actorUserId: "u1",
+                projectId: null,
+                turnId: assistantMessageId,
+                turn: { activityId: "activity-1" },
+            });
+            expect(scheduleMemoryConsolidation).toHaveBeenCalledTimes(1);
+            expect(releaseMemoryConversationTurn).not.toHaveBeenCalled();
+        });
+
+        it("releases the memory lease when tabular chat streaming fails", async () => {
+            supabaseState.tables.tabular_reviews = {
+                data: {
+                    id: "r1",
+                    user_id: "u1",
+                    project_id: null,
+                    title: "Review",
+                    columns_config: [],
+                },
+                error: null,
+            };
+            supabaseState.tables.tabular_cells = { data: [], error: null };
+            supabaseState.tables.tabular_review_rows = {
+                data: [],
+                error: null,
+            };
+            supabaseState.tables.tabular_review_chats = {
+                data: {
+                    id: "review-chat-1",
+                    title: "Existing title",
+                    review_id: "r1",
+                    user_id: "u1",
+                    model: "claude-sonnet-5",
+                    reasoning_level: "high",
+                },
+                error: null,
+            };
+            supabaseState.tables.tabular_review_chat_messages = {
+                data: null,
+                error: null,
+            };
+            ensureReviewAccess.mockResolvedValue({
+                ok: true,
+                isCreator: true,
+                orgRole: null,
+                projectRole: "owner",
+            });
+            runLLMStream.mockRejectedValueOnce(new Error("provider failed"));
+            const errorSpy = vi
+                .spyOn(console, "error")
+                .mockImplementation(() => {});
+
+            const res = await request(app)
+                .post("/tabular-review/r1/chat")
+                .set(...AUTH)
+                .send({
+                    messages: [{ role: "user", content: "Summarise" }],
+                    model: "claude-sonnet-5",
+                });
+
+            expect(res.status).toBe(200);
+            expect(releaseMemoryConversationTurn).toHaveBeenCalledWith({
+                db: expect.anything(),
+                surface: "tabular",
+                conversationId: "review-chat-1",
+                turn: { activityId: "activity-1" },
+            });
+            expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
+            errorSpy.mockRestore();
         });
     });
 

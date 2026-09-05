@@ -103,6 +103,14 @@ function makeDb(
                     tables.org_members = (tables.org_members ?? []).filter(
                         (m) => !goneOrgIds.has(m.org_id),
                     );
+                } else if (table === "projects") {
+                    // Production uses ON DELETE CASCADE for the project tree;
+                    // the cleanup now deliberately performs one atomic parent
+                    // delete rather than an unsafe child-by-child pre-delete.
+                    const goneProjectIds = new Set(matched.map((r) => r.id));
+                    tables.documents = (tables.documents ?? []).filter(
+                        (document) => !goneProjectIds.has(document.project_id),
+                    );
                 }
                 return Promise.resolve({ data: matched, error: null });
             }

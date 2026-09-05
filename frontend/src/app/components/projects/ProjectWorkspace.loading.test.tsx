@@ -23,6 +23,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     grantProjectAccess: vi.fn(),
     listProjectChats: vi.fn(async () => []),
     revokeProjectAccess: vi.fn(),
+    setProjectMemoryEnabled: vi.fn(),
     updateProject: vi.fn(),
 }));
 vi.mock("@/app/components/tabular/NewTRModal", () => ({

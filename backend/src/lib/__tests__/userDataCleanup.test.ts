@@ -36,7 +36,148 @@ function makeDb(
     for (const [name, rows] of Object.entries(initialTables)) {
         tables[name] = rows.map((row) => ({ ...row }));
     }
+
+    const removeRows = (
+        table: string,
+        predicate: (row: Row) => boolean,
+    ): Row[] => {
+        const rows = tables[table] ?? [];
+        const removed = rows.filter(predicate);
+        tables[table] = rows.filter((row) => !predicate(row));
+        return removed;
+    };
+
+    // The production schema uses FK cascades for project/review/chat trees.
+    // Model those cascades here so a parent-only DELETE exercises the same
+    // behavior without reintroducing unsafe pre-delete child enumeration.
+    const cascadeDelete = (table: string, removed: Row[]) => {
+        const removedIds = removed
+            .map((row) => row.id)
+            .filter((id): id is string => typeof id === "string");
+        if (removedIds.length === 0) return;
+
+        if (table === "projects") {
+            cascadeDelete(
+                "documents",
+                removeRows("documents", (row) =>
+                    removedIds.includes(String(row.project_id)),
+                ),
+            );
+            cascadeDelete(
+                "chats",
+                removeRows("chats", (row) =>
+                    removedIds.includes(String(row.project_id)),
+                ),
+            );
+            cascadeDelete(
+                "tabular_reviews",
+                removeRows("tabular_reviews", (row) =>
+                    removedIds.includes(String(row.project_id)),
+                ),
+            );
+            removeRows("project_subfolders", (row) =>
+                removedIds.includes(String(row.project_id)),
+            );
+            cascadeDelete(
+                "memory_files",
+                removeRows("memory_files", (row) =>
+                    removedIds.includes(String(row.project_id)),
+                ),
+            );
+        } else if (table === "documents") {
+            removeRows("document_versions", (row) =>
+                removedIds.includes(String(row.document_id)),
+            );
+        } else if (table === "chats") {
+            removeRows("chat_messages", (row) =>
+                removedIds.includes(String(row.chat_id)),
+            );
+        } else if (table === "tabular_reviews") {
+            cascadeDelete(
+                "tabular_review_chats",
+                removeRows("tabular_review_chats", (row) =>
+                    removedIds.includes(String(row.review_id)),
+                ),
+            );
+            removeRows("tabular_cells", (row) =>
+                removedIds.includes(String(row.review_id)),
+            );
+            removeRows("tabular_review_rows", (row) =>
+                removedIds.includes(String(row.review_id)),
+            );
+        } else if (table === "tabular_review_chats") {
+            removeRows("tabular_review_chat_messages", (row) =>
+                removedIds.includes(String(row.chat_id)),
+            );
+        } else if (table === "word_documents") {
+            cascadeDelete(
+                "word_chats",
+                removeRows("word_chats", (row) =>
+                    removedIds.includes(String(row.document_id)),
+                ),
+            );
+        } else if (table === "word_chats") {
+            removeRows("word_chat_messages", (row) =>
+                removedIds.includes(String(row.chat_id)),
+            );
+        } else if (table === "memory_files") {
+            const versions = removeRows("memory_file_versions", (row) =>
+                removedIds.includes(String(row.memory_file_id)),
+            );
+            const paths = versions
+                .map((row) => row.storage_path)
+                .filter((path): path is string => typeof path === "string");
+            if (paths.length > 0) {
+                const jobs = tables.db_jobs ?? (tables.db_jobs = []);
+                jobs.push({
+                    id: `cleanup-cascade-${removedIds.join("-")}`,
+                    kind: "storage.cleanup",
+                    payload: { keys: paths, prefixes: [] },
+                });
+            }
+            removeRows("memory_object_candidates", (row) =>
+                removedIds.includes(String(row.memory_file_id)),
+            );
+        }
+    };
     const db = {
+        async rpc(name: string, args: Record<string, unknown>) {
+            if (name !== "wipe_memory_file") {
+                return { data: null, error: { message: `unknown rpc: ${name}` } };
+            }
+            const file = (tables.memory_files ?? []).find(
+                (row) => row.id === args.p_memory_file_id,
+            );
+            if (!file) {
+                return { data: null, error: { message: "memory_file_not_found" } };
+            }
+            const versions = (tables.memory_file_versions ?? []).filter(
+                (row) => row.memory_file_id === file.id,
+            );
+            const paths = versions
+                .map((row) => row.storage_path)
+                .filter((path): path is string => typeof path === "string");
+            if (paths.length > 0) {
+                const jobs = tables.db_jobs ?? (tables.db_jobs = []);
+                jobs.push({
+                    id: `cleanup-${String(file.id)}`,
+                    kind: "storage.cleanup",
+                    payload: { keys: paths, prefixes: [] },
+                });
+            }
+            tables.memory_file_versions = (
+                tables.memory_file_versions ?? []
+            ).filter((row) => row.memory_file_id !== file.id);
+            Object.assign(file, {
+                enabled: args.p_enabled,
+                version: 0,
+                current_version_id: null,
+            });
+            return {
+                data: [{ storage_paths: paths, new_epoch: 1 }],
+                error: null,
+            };
+        },
         from(table: string) {
             const rowsOf = () => tables[table] ?? (tables[table] = []);
             let predicate: (row: Row) => boolean = () => true;
@@ -104,6 +245,7 @@ function makeDb(
                             tables[table] = rowsOf().filter(
                                 (row) => !predicate(row),
                             );
+                            cascadeDelete(table, removed);
                             // Supabase returns the deleted rows when the call
                             // chains .select(); the grant cleanup uses that to
                             // learn which projects need their mirror rebuilt.
@@ -201,7 +343,7 @@ describe("deleteAllUserTabularReviews", () => {
             ],
         });
 
-    it("cascades messages, chats, and cells before the reviews", async () => {
+    it("atomically cascades messages, chats, and cells with the reviews", async () => {
         const { db, tables } = fixture();
         await expect(deleteAllUserTabularReviews(db, "u1")).resolves.toBe(2);
         expect(ids(tables.tabular_reviews)).toEqual(["r-other"]);
@@ -277,6 +419,40 @@ describe("deleteUserProjects", () => {
                 { id: "f1", project_id: "p1" },
                 { id: "f-other", project_id: "p-other" },
             ],
+            memory_files: [
+                {
+                    id: "memory-p1",
+                    scope: "project",
+                    project_id: "p1",
+                    enabled: true,
+                },
+                {
+                    id: "memory-p2",
+                    scope: "project",
+                    project_id: "p2",
+                    enabled: true,
+                },
+                {
+                    id: "memory-other",
+                    scope: "project",
+                    project_id: "p-other",
+                    enabled: true,
+                },
+            ],
+            memory_file_versions: [
+                {
+                    id: "memory-version-p1",
+                    memory_file_id: "memory-p1",
+                    storage_path:
+                        "memories/projects/p1/versions/v1/memory.md",
+                },
+                {
+                    id: "memory-version-other",
+                    memory_file_id: "memory-other",
+                    storage_path:
+                        "memories/projects/p-other/versions/v1/memory.md",
+                },
+            ],
         }, options);
 
     it("cascades project contents and storage files for owned projects", async () => {
@@ -292,6 +468,18 @@ describe("deleteUserProjects", () => {
         expect(ids(tables.tabular_review_chat_messages)).toEqual(["rm-other"]);
         expect(ids(tables.tabular_cells)).toEqual(["cell-other"]);
         expect(ids(tables.project_subfolders)).toEqual(["f-other"]);
+        expect(ids(tables.memory_file_versions)).toEqual([
+            "memory-version-other",
+        ]);
+        expect(tables.db_jobs).toContainEqual(
+            expect.objectContaining({
+                kind: "storage.cleanup",
+                payload: {
+                    keys: ["memories/projects/p1/versions/v1/memory.md"],
+                    prefixes: [],
+                },
+            }),
+        );
 
         const deletedPaths = deleteFileMock.mock.calls.map(([path]) => path);
         expect(deletedPaths.sort()).toEqual([
@@ -331,7 +519,7 @@ describe("deleteUserProjects", () => {
         // failed cascade leaves rows AND bytes for the retry instead of
         // surviving documents whose versions all 404.
         const { db } = fixture({
-            deleteErrors: { documents: "connection reset" },
+            deleteErrors: { projects: "connection reset" },
         });
 
         await expect(deleteUserProjects(db, "u1")).rejects.toThrow();
@@ -458,6 +646,46 @@ describe("deleteUserAccountData", () => {
                 { id: "a2", user_id: "u1" },
                 { id: "a-other", user_id: "u2" },
             ],
+            memory_files: [
+                {
+                    id: "memory-u1",
+                    scope: "user",
+                    user_id: "u1",
+                    enabled: true,
+                },
+                {
+                    id: "memory-p1",
+                    scope: "project",
+                    project_id: "p1",
+                    enabled: true,
+                },
+                {
+                    id: "memory-p-other",
+                    scope: "project",
+                    project_id: "p-other",
+                    enabled: true,
+                },
+            ],
+            memory_file_versions: [
+                {
+                    id: "memory-version-u1",
+                    memory_file_id: "memory-u1",
+                    storage_path:
+                        "memories/users/u1/versions/v1/memory.md",
+                },
+                {
+                    id: "memory-version-p1",
+                    memory_file_id: "memory-p1",
+                    storage_path:
+                        "memories/projects/p1/versions/v1/memory.md",
+                },
+                {
+                    id: "memory-version-p-other",
+                    memory_file_id: "memory-p-other",
+                    storage_path:
+                        "memories/projects/p-other/versions/v1/memory.md",
+                },
+            ],
         }, options);
 
     it("removes the user's rows, files, and share references everywhere", async () => {
@@ -467,6 +695,8 @@ describe("deleteUserAccountData", () => {
                 ? ["documents/u1/orphan.bin"]
                 : prefix === "exports/u1/"
                   ? ["exports/u1/e1-account.json"]
+                  : prefix === "memories/users/u1/"
+                    ? ["memories/users/u1/versions/orphan/memory.md"]
                   : [],
         );
 
@@ -486,6 +716,24 @@ describe("deleteUserAccountData", () => {
         // Audit rows carry PII (email, titles, prompt excerpts) and must be
         // purged on account deletion — only the other user's row survives.
         expect(ids(tables.audit_events)).toEqual(["a-other"]);
+
+        // Private app memory and personal-project memory are fenced and
+        // queued for object deletion before their owner rows cascade. A
+        // colleague's surviving project memory is not this account's data.
+        expect(ids(tables.memory_file_versions)).toEqual([
+            "memory-version-p-other",
+        ]);
+        expect(
+            (tables.db_jobs ?? [])
+                .filter((job) => job.kind === "storage.cleanup")
+                .flatMap((job) =>
+                    ((job.payload as { keys?: string[] })?.keys ?? []),
+                )
+                .sort(),
+        ).toEqual([
+            "memories/projects/p1/versions/v1/memory.md",
+            "memories/users/u1/versions/v1/memory.md",
+        ]);
 
         // Shares by the user and shares to the user's email are both removed.
         expect(ids(tables.workflow_shares)).toEqual(["ws-keep"]);
@@ -516,9 +764,13 @@ describe("deleteUserAccountData", () => {
             // account erasure would leak them without this.
             "extracted-text/v-guest.txt",
             "extracted-text/v1.txt",
+            // Account erasure also catches immutable memory candidates that
+            // were never committed to version metadata.
+            "memories/users/u1/versions/orphan/memory.md",
         ]);
         expect(listFilesMock).toHaveBeenCalledWith("documents/u1/");
         expect(listFilesMock).toHaveBeenCalledWith("exports/u1/");
+        expect(listFilesMock).toHaveBeenCalledWith("memories/users/u1/");
     });
 
     it("treats document/workflow prefix cleanup as best-effort", async () => {
@@ -526,7 +778,11 @@ describe("deleteUserAccountData", () => {
         // Orphan sweep failing is tolerable: version-linked files were
         // already deleted (throwing) via the document_versions walk.
         listFilesMock.mockImplementation(async (prefix: string) => {
-            if (prefix === "exports/u1/") return [];
+            if (
+                prefix === "exports/u1/" ||
+                prefix === "memories/users/u1/"
+            )
+                return [];
             throw new Error("storage unavailable");
         });
         await expect(
@@ -565,6 +821,33 @@ describe("deleteUserAccountData", () => {
         await expect(
             deleteUserAccountData(db, "u1", "u1@example.com"),
         ).rejects.toThrow(/export/i);
+    });
+
+    it("propagates a memory-prefix listing failure so account erasure retries", async () => {
+        const { db } = fixture();
+        listFilesMock.mockImplementation(async (prefix: string) => {
+            if (prefix === "memories/users/u1/") {
+                throw new Error("storage unavailable");
+            }
+            return [];
+        });
+        await expect(
+            deleteUserAccountData(db, "u1", "u1@example.com"),
+        ).rejects.toThrow(/memory/i);
+    });
+
+    it("propagates a memory-object delete failure so account erasure retries", async () => {
+        const { db } = fixture();
+        const path = "memories/users/u1/versions/orphan/memory.md";
+        listFilesMock.mockImplementation(async (prefix: string) =>
+            prefix === "memories/users/u1/" ? [path] : [],
+        );
+        deleteFileMock.mockImplementation(async (candidate: string) => {
+            if (candidate === path) throw new Error("storage unavailable");
+        });
+        await expect(
+            deleteUserAccountData(db, "u1", "u1@example.com"),
+        ).rejects.toThrow(/memory/i);
     });
 
     it("keeps every storage byte until the last doomed row is gone", async () => {

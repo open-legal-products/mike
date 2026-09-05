@@ -52,8 +52,10 @@ export function SettingsToggle({
             disabled={disabled || loading}
             onClick={() => onChange(!checked)}
             className={cn(
-                "flex shrink-0 items-center rounded-full transition-colors",
-                checked ? "bg-emerald-600" : "bg-gray-200",
+                "flex shrink-0 items-center rounded-full outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                checked
+                    ? "bg-emerald-600"
+                    : "bg-gray-300 ring-1 ring-inset ring-gray-400",
                 "disabled:cursor-not-allowed disabled:opacity-40",
                 sizes.track,
             )}

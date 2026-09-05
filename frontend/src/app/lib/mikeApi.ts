@@ -393,11 +393,18 @@ export async function createProject(
     cm_number?: string,
     practice?: string,
     org_id?: string,
+    memory_enabled?: boolean,
 ): Promise<Project> {
     return apiRequest<Project>("/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, cm_number, practice, org_id }),
+        body: JSON.stringify({
+            name,
+            cm_number,
+            practice,
+            org_id,
+            memory_enabled,
+        }),
     });
 }
 
@@ -415,6 +422,185 @@ export async function deleteAllProjects(): Promise<void> {
 
 export async function deleteAllTabularReviews(): Promise<void> {
     return apiRequest<void>("/user/tabular-reviews", { method: "DELETE" });
+}
+
+export type MemoryStatus = "idle" | "scheduled" | "processing" | "failed";
+
+export interface MemoryCurrent {
+    enabled: boolean;
+    content: string;
+    version: number;
+    hash: string | null;
+    updated_at: string | null;
+    /** Actor provenance only. The endpoint deliberately does not expose email. */
+    updated_by: string | null;
+    source: "manual" | "curator" | "restore" | "wipe" | "settings" | null;
+    status: MemoryStatus;
+}
+
+export interface MemoryVersion {
+    id: string;
+    version: number;
+    hash: string;
+    size_bytes: number;
+    created_at: string;
+    updated_by: string | null;
+    source: "manual" | "curator" | "restore";
+    model: string | null;
+    source_surface: "chat" | "word" | "tabular" | null;
+    source_chat_id: string | null;
+    source_turn_id: string | null;
+    change_summary: string | null;
+}
+
+export async function getUserMemory(
+    signal?: AbortSignal,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>("/user/memory", { signal });
+}
+
+export async function updateUserMemory(
+    content: string,
+    expectedVersion: number,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>("/user/memory", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            content,
+            expected_version: expectedVersion,
+        }),
+    });
+}
+
+export async function setUserMemoryEnabled(
+    enabled: boolean,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>("/user/memory/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+    });
+}
+
+export async function wipeUserMemory(): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>("/user/memory", { method: "DELETE" });
+}
+
+export async function listUserMemoryVersions(
+    signal?: AbortSignal,
+): Promise<MemoryVersion[]> {
+    const response = await apiRequest<{ versions: MemoryVersion[] }>(
+        "/user/memory/versions",
+        { signal },
+    );
+    return response.versions;
+}
+
+export async function restoreUserMemoryVersion(
+    versionId: string,
+    expectedVersion: number,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>(
+        `/user/memory/versions/${encodeURIComponent(versionId)}/restore`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ expected_version: expectedVersion }),
+        },
+    );
+}
+
+export async function downloadUserMemoryMarkdown(): Promise<{
+    blob: Blob;
+    filename: string | null;
+}> {
+    return apiBlobRequest("/user/memory/memory.md");
+}
+
+export async function getProjectMemory(
+    projectId: string,
+    signal?: AbortSignal,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>(
+        `/projects/${encodeURIComponent(projectId)}/memory`,
+        { signal },
+    );
+}
+
+export async function updateProjectMemory(
+    projectId: string,
+    content: string,
+    expectedVersion: number,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>(
+        `/projects/${encodeURIComponent(projectId)}/memory`,
+        {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                content,
+                expected_version: expectedVersion,
+            }),
+        },
+    );
+}
+
+export async function setProjectMemoryEnabled(
+    projectId: string,
+    enabled: boolean,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>(
+        `/projects/${encodeURIComponent(projectId)}/memory/settings`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
+    );
+}
+
+export async function wipeProjectMemory(
+    projectId: string,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>(
+        `/projects/${encodeURIComponent(projectId)}/memory`,
+        { method: "DELETE" },
+    );
+}
+
+export async function listProjectMemoryVersions(
+    projectId: string,
+    signal?: AbortSignal,
+): Promise<MemoryVersion[]> {
+    const response = await apiRequest<{ versions: MemoryVersion[] }>(
+        `/projects/${encodeURIComponent(projectId)}/memory/versions`,
+        { signal },
+    );
+    return response.versions;
+}
+
+export async function restoreProjectMemoryVersion(
+    projectId: string,
+    versionId: string,
+    expectedVersion: number,
+): Promise<MemoryCurrent> {
+    return apiRequest<MemoryCurrent>(
+        `/projects/${encodeURIComponent(projectId)}/memory/versions/${encodeURIComponent(versionId)}/restore`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ expected_version: expectedVersion }),
+        },
+    );
+}
+
+export async function downloadProjectMemoryMarkdown(
+    projectId: string,
+): Promise<{ blob: Blob; filename: string | null }> {
+    return apiBlobRequest(
+        `/projects/${encodeURIComponent(projectId)}/memory/memory.md`,
+    );
 }
 
 export async function exportAccountData(): Promise<{

@@ -286,16 +286,21 @@ describe("null-content assistant reservations", () => {
         ];
         const { db, updates } = makeFakeMessagesDb(rows);
 
-        await appendAskInputsResponseToLastAssistantMessage(db, "chat-1", {
-            responses: [
-                {
-                    id: "choice-1",
-                    kind: "choice",
-                    question: "Continue?",
-                    answer: "Yes",
-                },
-            ],
-        });
+        await appendAskInputsResponseToLastAssistantMessage(
+            db,
+            "chat-1",
+            {
+                responses: [
+                    {
+                        id: "choice-1",
+                        kind: "choice",
+                        question: "Continue?",
+                        answer: "Yes",
+                    },
+                ],
+            },
+            "user-1",
+        );
 
         expect(updates).toHaveLength(1);
         expect(updates[0].id).toBe("assistant-real");
@@ -303,6 +308,8 @@ describe("null-content assistant reservations", () => {
             { type: "ask_inputs", items: [] },
             {
                 type: "ask_inputs_response",
+                author_user_id: "user-1",
+                recorded_at: expect.any(String),
                 responses: [
                     {
                         id: "choice-1",

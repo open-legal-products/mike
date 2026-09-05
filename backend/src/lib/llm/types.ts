@@ -74,6 +74,12 @@ export type StreamChatParams = {
     runTools?: (calls: NormalizedToolCall[]) => Promise<NormalizedToolResult[]>;
     apiKeys?: UserApiKeys;
     /**
+     * Require the selected provider to preserve tool calling. Curator jobs set
+     * this so a provider capability error is retryable instead of silently
+     * degrading into a tool-less response that looks like "no change".
+     */
+    requireTools?: boolean;
+    /**
      * AI SDK reasoning effort. Bulk extraction jobs should leave this unset;
      * the SDK adapter maps an omitted level to "none" to save tokens and
      * latency.

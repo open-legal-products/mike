@@ -45,6 +45,13 @@ import {
   WORD_EDIT_FORMATS,
   type WordEditApplyMode,
 } from "../lib/chat/wordDocumentEdits";
+import {
+  beginMemoryConversationTurn,
+  releaseMemoryConversationTurn,
+  scheduleMemoryConsolidation,
+  type MemoryConversationTurn,
+} from "../lib/memory/schedule";
+import { sendInternalError } from "../lib/httpError";
 
 export const wordChatRouter = Router();
 
@@ -967,15 +974,20 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
   const lastUser = [...messages]
     .reverse()
     .find((message) => message.role === "user");
+  const inputMessageId = persistChat ? randomUUID() : null;
+  let memoryTurn: MemoryConversationTurn | null = null;
+  let memoryTurnScheduled = false;
   if (lastUser && persistChat) {
     // Persist only the user's actual message. The Word edit contract is added
     // later as a system prompt and therefore cannot leak into chat history.
     const { error } = await db.from("word_chat_messages").insert({
+      id: inputMessageId,
       chat_id: chatId,
       role: "user",
       content: lastUser.content,
       files: lastUser.files ?? null,
       workflow: lastUser.workflow ?? null,
+      author_user_id: userId,
     });
     if (error) {
       return void res
@@ -984,6 +996,20 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
     }
   }
 
+  if (lastUser && persistChat) {
+    try {
+      memoryTurn = await beginMemoryConversationTurn({
+        db,
+        surface: "word",
+        conversationId: chatId,
+        actorUserId: userId,
+      });
+    } catch (activityError) {
+      return void sendInternalError(res, activityError);
+    }
+  }
+
+  try {
   const { docIndex, docStore } = await buildDocContext(
     messages,
     userId,
@@ -1055,6 +1081,8 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
       table: "word_chat_messages",
       id: assistantMessageId,
       chatId,
+        inputMessageId: inputMessageId as string,
+        authorUserId: userId,
     });
     if (error) {
       console.error("[word-chat] failed to reserve assistant message", error);
@@ -1147,6 +1175,8 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
       reasoning: selectedReasoningLevel,
       apiKeys,
       signal: stream.signal,
+        includeMemory: true,
+        memoryProjectId: null,
       nonce,
       emitDone: false,
     });
@@ -1170,6 +1200,27 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
       write("data: [DONE]\n\n");
       return;
     }
+      // Local Word chats deliberately have no durable transcript. Only a cloud
+      // turn can be curated later, once its reserved assistant row is complete.
+      if (
+        persistChat &&
+        !persistedEvents.some((event) =>
+          typeof event === "object" && event !== null && "type" in event
+            ? event.type === "error" || event.type === "ask_inputs"
+            : false,
+        )
+      ) {
+        const scheduled = await scheduleMemoryConsolidation({
+          db,
+          surface: "word",
+          conversationId: chatId,
+          actorUserId: userId,
+          projectId: null,
+          turnId: assistantMessageId,
+          turn: memoryTurn,
+        });
+        memoryTurnScheduled = scheduled != null;
+      }
     // Word turns used to be audited nowhere, unlike routes/chat.ts and
     // routes/projectChat.ts. chatId/projectId stay null because a Word chat
     // lives in word_chats — neither chats.id nor projects.id is a legal value
@@ -1262,5 +1313,19 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
     }
   } finally {
     stream.finish();
+  }
+  } finally {
+    if (memoryTurn && !memoryTurnScheduled) {
+      try {
+        await releaseMemoryConversationTurn({
+          db,
+          surface: "word",
+          conversationId: chatId,
+          turn: memoryTurn,
+        });
+      } catch {
+        console.warn("[memory] Word activity release failed", { chatId });
+      }
+    }
   }
 });
