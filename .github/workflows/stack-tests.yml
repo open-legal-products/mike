@@ -45,7 +45,7 @@ jobs:
 
       # Pinned so a CLI release can't silently change what CI proves; bump
       # deliberately (this is also the harness you re-run on image bumps).
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: 2.108.0
 

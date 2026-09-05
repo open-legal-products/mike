@@ -139,7 +139,7 @@ jobs:
       # repository's own fresh-database schema — exactly what the README tells a
       # human to run on a new database (backend/schema.sql).
       - name: Start local Supabase
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           # Keep CI reproducible and avoid the GitHub API call needed to resolve
           # `latest`, which can fail when the shared runner hits its rate limit.

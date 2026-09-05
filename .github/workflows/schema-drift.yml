@@ -70,7 +70,7 @@ jobs:
 
       # Pinned to match stack-tests.yml so both workflows test against the
       # same Postgres; bump the two together.
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: 2.108.0
 
