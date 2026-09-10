@@ -18,6 +18,33 @@ describe("maxOutputTokensFor", () => {
     ).toBe(65_536);
   });
 
+  it("gives the other thinking families their real ceilings", () => {
+    expect(
+      maxOutputTokensFor("openrouter", "openrouter/qwen/qwen3.8-flash"),
+    ).toBe(131_072);
+    expect(maxOutputTokensFor("openrouter", "qwen/qwen3.8-max-0902")).toBe(
+      131_072,
+    );
+    // The same weights served by a local OpenAI-compatible proxy.
+    expect(maxOutputTokensFor("ollama", "ollama/qwen3.8:27b")).toBe(131_072);
+    expect(maxOutputTokensFor("openrouter", "z-ai/glm-5.3-flash")).toBe(
+      128_000,
+    );
+    expect(maxOutputTokensFor("openrouter", "z-ai/glm-5")).toBe(128_000);
+  });
+
+  it("does not lend one version's ceiling to its siblings", () => {
+    // qwen3.5-35b-a3b really does cap at 16,384; asking for 131,072 on its
+    // behalf is a hard 400, so the pattern must stay version-scoped.
+    expect(maxOutputTokensFor("openrouter", "qwen/qwen3.5-35b-a3b")).toBe(
+      16_384,
+    );
+    expect(maxOutputTokensFor("openrouter", "qwen/qwen3.7-flash")).toBe(16_384);
+    expect(maxOutputTokensFor("openrouter", "z-ai/glm-5.9-future")).toBe(
+      16_384,
+    );
+  });
+
   it("leaves every other model on the conservative default", () => {
     expect(maxOutputTokensFor("claude", "claude-opus-5")).toBe(16_384);
     expect(maxOutputTokensFor("openai", "gpt-5.6-sol")).toBe(16_384);

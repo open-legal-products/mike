@@ -20,21 +20,34 @@ import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 
 /**
- * Gemini's ceiling. Every Gemini 2.5 and 3 model accepts 65,536 output tokens
- * (the figure @ai-sdk/google uses for its own thinking-budget math).
+ * Models that spend *thinking* tokens out of maxOutputTokens, paired with the
+ * ceiling each one actually accepts. This is not a nicety: a budget sized for
+ * the prose alone lets a long deliberation consume the whole thing, and the
+ * turn then ends with no text and no tool call — which surfaces as a silently
+ * empty answer, not as an error.
  *
- * This is not a nicety: Gemini counts *thinking* tokens against
- * maxOutputTokens, so a ceiling sized for the prose alone lets a long
- * deliberation consume the whole budget. The turn then ends with no text and
- * no tool call — which surfaces as a silently empty answer, not as an error.
+ * Entries are version-scoped on purpose. Ceilings vary *within* a vendor's
+ * lineup, so a family-wide pattern would over-promise: qwen3.5-35b-a3b caps at
+ * 16,384 while qwen3.8-flash accepts 131,072, and asking for more than a model
+ * allows is a hard 400 rather than a clamp. Widen a pattern only against a
+ * checked figure.
+ *
+ * Router ids carry the upstream model, so one reached through OpenRouter, the
+ * Vercel gateway or a local OpenAI-compatible proxy matches the same entry as
+ * a native one.
  */
-const GEMINI_MAX_OUTPUT_TOKENS = 65_536;
+const MAX_OUTPUT_TOKENS_BY_MODEL: ReadonlyArray<readonly [RegExp, number]> = [
+  // Every Gemini 2.5 and 3 model: the figure @ai-sdk/google uses for its own
+  // thinking-budget math.
+  [/(?:^|\/)gemini-/, 65_536],
+  // The whole qwen3.8 line — flash, max and the 27b — reports 131,072.
+  [/(?:^|\/)qwen3\.8(?![\d.])/, 131_072],
+  // glm-5 through glm-5.3 report 128,000-131,072; take the floor of the range.
+  [/(?:^|\/)glm-5(?:\.[0-3])?(?![\d.])/, 128_000],
+];
 
-/**
- * Router ids carry the upstream model, so a Gemini reached through OpenRouter
- * or the Vercel gateway gets the same ceiling as a native one.
- */
-const GEMINI_MODEL_ID = /(?:^|\/)gemini-/;
+/** Gemini is also reachable natively, where the id alone may not say so. */
+const GEMINI_PROVIDER_CEILING = 65_536;
 
 /**
  * A model that ships after this code does still needs a way to raise its own
@@ -43,9 +56,10 @@ const GEMINI_MODEL_ID = /(?:^|\/)gemini-/;
 export function maxOutputTokensFor(provider: Provider, modelId: string): number {
   const override = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
   if (Number.isSafeInteger(override) && override > 0) return override;
-  if (provider === "gemini" || GEMINI_MODEL_ID.test(modelId)) {
-    return GEMINI_MAX_OUTPUT_TOKENS;
+  for (const [pattern, ceiling] of MAX_OUTPUT_TOKENS_BY_MODEL) {
+    if (pattern.test(modelId)) return ceiling;
   }
+  if (provider === "gemini") return GEMINI_PROVIDER_CEILING;
   return DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
