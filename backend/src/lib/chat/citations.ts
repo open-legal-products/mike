@@ -185,6 +185,30 @@ function normalizeCaseCitationQuotes(c: Record<string, unknown>) {
 export const CITATIONS_BLOCK_RE = /<CITATIONS>\s*([\s\S]*?)\s*<\/CITATIONS>/;
 export const CITATIONS_OPEN_TAG = "<CITATIONS>";
 export const CITATIONS_CLOSE_TAG = "</CITATIONS>";
+export const MAX_PARSED_CITATIONS = 50;
+export const MAX_CITATION_PAYLOAD_BYTES = 5_000_000;
+
+export function limitCitationPayload(citations: unknown[]): unknown[] {
+  const limited: unknown[] = [];
+  let totalBytes = 2; // JSON array brackets.
+  for (const citation of citations) {
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(citation);
+    } catch {
+      continue;
+    }
+    if (serialized === undefined) continue;
+    const citationBytes = Buffer.byteLength(serialized, "utf8");
+    const separatorBytes = limited.length ? 1 : 0;
+    if (totalBytes + separatorBytes + citationBytes > MAX_CITATION_PAYLOAD_BYTES) {
+      continue;
+    }
+    limited.push(citation);
+    totalBytes += separatorBytes + citationBytes;
+  }
+  return limited;
+}
 
 type CitationParseDiagnostics = {
   hasBlock: boolean;
@@ -210,7 +234,10 @@ export function parseCitationsWithDiagnostics(text: string): {
       };
     }
     return {
-      citations: parsed.map(normalizeCitation).filter((c): c is ParsedCitation => c !== null),
+      citations: parsed
+        .slice(0, MAX_PARSED_CITATIONS)
+        .map(normalizeCitation)
+        .filter((c): c is ParsedCitation => c !== null),
       diagnostics: { hasBlock: true, rawLength: raw.length, error: null },
     };
   } catch (error) {
@@ -257,6 +284,7 @@ export function parsePartialCitationObjects(text: string): ParsedCitation[] {
           const raw = JSON.parse(beforeClose.slice(objectStart, i + 1));
           const citation = normalizeCitation(raw);
           if (citation) parsed.push(citation);
+          if (parsed.length >= MAX_PARSED_CITATIONS) break;
         } catch { /* ignore incomplete/malformed partial object */ }
         objectStart = -1;
       }
@@ -312,27 +340,33 @@ export function createCitation(
   const documentId = docInfo?.document_id ?? citation.doc_id;
   const filename =
     docInfo?.filename ?? requestScopedDocument?.filename ?? citation.doc_id;
+  const panelDocument = requestScopedDocument?.panel_document;
+  const subdocumentId = panelDocument?.subdocuments?.[0]?.document_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
     quote: quote.quote,
-    target: {
-      page: quote.page,
-      ...(quote.sheet ? { sheet: quote.sheet } : {}),
-      ...(quote.cell ? { cell: quote.cell } : {}),
-    },
+    target: subdocumentId
+      ? { subdocument_id: subdocumentId }
+      : {
+          page: quote.page,
+          ...(quote.sheet ? { sheet: quote.sheet } : {}),
+          ...(quote.cell ? { cell: quote.cell } : {}),
+        },
   }));
   return {
     type: "citation_data",
     kind: "document",
     ref: citation.ref,
-    document: {
-      document_id: documentId,
-      title: filename,
-      type: sourceDocumentType(filename),
-      metadata: [],
-      quotes,
-      version_id: docInfo?.version_id ?? null,
-      version_number: docInfo?.version_number ?? null,
-    },
+    document: panelDocument
+      ? { ...panelDocument, quotes }
+      : {
+          document_id: documentId,
+          title: filename,
+          type: sourceDocumentType(filename),
+          metadata: [],
+          quotes,
+          version_id: docInfo?.version_id ?? null,
+          version_number: docInfo?.version_number ?? null,
+        },
     doc_id: citation.doc_id,
     document_id: docInfo?.document_id,
     version_id: docInfo?.version_id ?? null,

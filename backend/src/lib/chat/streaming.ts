@@ -37,6 +37,7 @@ import {
   parsePartialCitationObjects,
   createCitation,
   CITATIONS_OPEN_TAG,
+  limitCitationPayload,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
 import {
@@ -813,6 +814,7 @@ export async function runLLMStream(params: {
         getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
     );
   }
+  citations = limitCitationPayload(citations);
   devLog("[chat/stream] final citations", {
     hasCitationsBlock: citationDiagnostics.hasBlock,
     citationsBlockLength: citationDiagnostics.rawLength,

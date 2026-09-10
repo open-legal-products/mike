@@ -4,6 +4,9 @@ import {
     parseCitationsWithDiagnostics,
     parsePartialCitationObjects,
     createCitation,
+    limitCitationPayload,
+    MAX_CITATION_PAYLOAD_BYTES,
+    MAX_PARSED_CITATIONS,
     CITATIONS_OPEN_TAG,
     CITATIONS_CLOSE_TAG,
 } from "../chat/citations";
@@ -13,11 +16,41 @@ function citationsBlock(json: string) {
     return `Answer text.\n${CITATIONS_OPEN_TAG}\n${json}\n${CITATIONS_CLOSE_TAG}`;
 }
 
+describe("limitCitationPayload", () => {
+    it("drops entries that would exceed the serialized payload budget", () => {
+        const retained = { ref: 2, quote: "small" };
+
+        expect(
+            limitCitationPayload([
+                { body: "x".repeat(MAX_CITATION_PAYLOAD_BYTES) },
+                retained,
+            ]),
+        ).toEqual([retained]);
+    });
+});
+
 // ---------------------------------------------------------------------------
 // parseCitationsWithDiagnostics
 // ---------------------------------------------------------------------------
 
 describe("parseCitationsWithDiagnostics", () => {
+    it("caps the number of parsed citations", () => {
+        const citations = Array.from(
+            { length: MAX_PARSED_CITATIONS + 1 },
+            (_, index) => ({
+                ref: index + 1,
+                doc_id: "doc-1",
+                quote: "quoted text",
+            }),
+        );
+
+        expect(
+            parseCitationsWithDiagnostics(
+                citationsBlock(JSON.stringify(citations)),
+            ).citations,
+        ).toHaveLength(MAX_PARSED_CITATIONS);
+    });
+
     it("reports no block when the tags are absent", () => {
         const { citations, diagnostics } =
             parseCitationsWithDiagnostics("plain answer");
@@ -433,6 +466,53 @@ describe("createCitation", () => {
             url: null,
             pdfUrl: null,
             dateFiled: null,
+        });
+    });
+
+    it("keeps a request-scoped source document body in the citation", () => {
+        const [parsed] = parseCitations(
+            citationsBlock(
+                '[{"ref":1,"doc_id":"doc-0","quote":"Exact text"}]',
+            ),
+        );
+        const panelDocument = {
+            document_id: "source-1",
+            title: "Article 1",
+            type: "legislation" as const,
+            metadata: [],
+            quotes: [],
+            subdocuments: [
+                {
+                    document_id: "source-1:text",
+                    title: "Article 1",
+                    type: "html" as const,
+                    text: "Exact text",
+                },
+            ],
+        };
+        const docStore: DocStore = new Map([
+            [
+                "doc-0",
+                {
+                    storage_path: "",
+                    file_type: "text/plain",
+                    filename: "Article 1",
+                    inline_text: "Exact text",
+                    panel_document: panelDocument,
+                },
+            ],
+        ]);
+
+        const citation = createCitation(parsed, {}, undefined, docStore);
+
+        expect(citation.document).toMatchObject({
+            ...panelDocument,
+            quotes: [
+                {
+                    quote: "Exact text",
+                    target: { subdocument_id: "source-1:text" },
+                },
+            ],
         });
     });
 });
