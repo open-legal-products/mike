@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { createServerSupabase } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
 import { sendInternalError } from "../lib/httpError";
@@ -110,7 +111,7 @@ function getAdminClient(res: Response) {
 }
 
 export async function requireAuth(
-  req: Request,
+  req: Request<ParamsFlatDictionary>,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
@@ -185,7 +186,7 @@ export async function requireAuth(
 }
 
 export async function requireMfaIfEnrolled(
-  req: Request,
+  req: Request<ParamsFlatDictionary>,
   res: Response,
   next: NextFunction,
 ): Promise<void> {

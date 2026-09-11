@@ -4,6 +4,7 @@ import {
   type Request,
   type Response,
 } from "express";
+import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
@@ -141,10 +142,17 @@ type WorkflowAccess = {
   isOwner: boolean;
 } | null;
 
-type AsyncRoute = (req: Request, res: Response) => Promise<unknown>;
+type AsyncRoute = (
+  req: Request<ParamsFlatDictionary>,
+  res: Response,
+) => Promise<unknown>;
 
 function asyncRoute(handler: AsyncRoute) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return (
+    req: Request<ParamsFlatDictionary>,
+    res: Response,
+    next: NextFunction,
+  ) => {
     void handler(req, res).catch(next);
   };
 }
@@ -728,7 +736,10 @@ workflowsRouter.post(
   }),
 );
 
-async function handleWorkflowUpdate(req: Request, res: Response) {
+async function handleWorkflowUpdate(
+  req: Request<ParamsFlatDictionary>,
+  res: Response,
+) {
   const userId = res.locals.userId as string;
   const userEmail = res.locals.userEmail as string | undefined;
   const { workflowId } = req.params;

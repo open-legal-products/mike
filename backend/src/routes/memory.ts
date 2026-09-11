@@ -4,6 +4,7 @@ import {
   type Request,
   type Response,
 } from "express";
+import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { checkProjectAccess } from "../lib/access";
 import { sendInternalError } from "../lib/httpError";
 import {
@@ -41,7 +42,7 @@ type MemoryRequestContext = {
 };
 
 async function userContext(
-  _req: Request,
+  _req: Request<ParamsFlatDictionary>,
   res: Response,
 ): Promise<MemoryRequestContext | null> {
   const ownerId = res.locals.userId as string;
@@ -52,7 +53,7 @@ async function userContext(
 
 function projectContext(required: Capability) {
   return async (
-    req: Request,
+    req: Request<ParamsFlatDictionary>,
     res: Response,
   ): Promise<MemoryRequestContext | null> => {
     const userId = res.locals.userId as string;
@@ -125,19 +126,19 @@ async function sendMemoryError(
 function installMemoryRoutes(
   router: Router,
   readContext: (
-    req: Request,
+    req: Request<ParamsFlatDictionary>,
     res: Response,
   ) => Promise<MemoryRequestContext | null>,
   writeContext: (
-    req: Request,
+    req: Request<ParamsFlatDictionary>,
     res: Response,
   ) => Promise<MemoryRequestContext | null>,
   settingsContext: (
-    req: Request,
+    req: Request<ParamsFlatDictionary>,
     res: Response,
   ) => Promise<MemoryRequestContext | null>,
   wipeContext?: (
-    req: Request,
+    req: Request<ParamsFlatDictionary>,
     res: Response,
   ) => Promise<MemoryRequestContext | null>,
 ) {
