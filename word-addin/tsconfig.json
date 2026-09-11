@@ -4,28 +4,28 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "baseUrl": ".",
+    "types": ["node", "office-js", "office-runtime", "react", "react-dom"],
     "paths": {
       "react": [
-        "node_modules/@types/react/index.d.ts"
+        "./node_modules/@types/react/index.d.ts"
       ],
       "react/jsx-runtime": [
-        "node_modules/@types/react/jsx-runtime.d.ts"
+        "./node_modules/@types/react/jsx-runtime.d.ts"
       ],
       "react-dom": [
-        "node_modules/@types/react-dom/index.d.ts"
+        "./node_modules/@types/react-dom/index.d.ts"
       ],
       "lucide-react": [
-        "node_modules/lucide-react"
+        "./node_modules/lucide-react"
       ],
       "clsx": [
-        "node_modules/clsx"
+        "./node_modules/clsx"
       ],
       "tailwind-merge": [
-        "node_modules/tailwind-merge"
+        "./node_modules/tailwind-merge"
       ],
       "@radix-ui/react-dropdown-menu": [
-        "node_modules/@radix-ui/react-dropdown-menu"
+        "./node_modules/@radix-ui/react-dropdown-menu"
       ],
       "@mike/edit-card-ui": [
         "../frontend/src/shared/ui/EditCardUI.tsx"
@@ -89,6 +89,7 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": false,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
     "forceConsistentCasingInFileNames": true,

@@ -59,7 +59,8 @@
     "style-loader": "^4.0.0",
     "tailwindcss": "^4.1.18",
     "ts-loader": "^9.5.1",
-    "typescript": "^7.0.2",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
     "webpack": "^5.110.3",
     "webpack-cli": "^7.2.3",
     "webpack-dev-server": "^6.0.0"
