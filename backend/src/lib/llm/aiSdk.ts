@@ -12,7 +12,70 @@ import type {
 } from "./types";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
-const MAX_OUTPUT_TOKENS = 16_384;
+/**
+ * Conservative output ceiling, used for any model whose real ceiling we do not
+ * know. Kept at the previous shared value so unlisted models behave exactly as
+ * they did before this change.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+
+/**
+ * Per-model output ceilings, replacing one shared 16,384 applied to every
+ * model and provider.
+ *
+ * 16,384 was never a considered figure for most of these: it entered in the
+ * OpenAI Responses adapter, was matched in the Anthropic adapter (where
+ * max_tokens is a required request field), and then the AI SDK migration
+ * applied it to Gemini, Ollama and OpenRouter — three streaming paths that
+ * had previously sent no output limit at all. This restores headroom those
+ * paths used to have.
+ *
+ * Scope note: this is a headroom/correctness change, not a fix for an
+ * observed truncation. Instrumented runs across several of these models have
+ * not produced a `finish_reason: "length"`, so no failure here is known to be
+ * caused by the old cap.
+ *
+ * Entries are version-scoped on purpose. Ceilings vary *within* a vendor's
+ * lineup — qwen3.5-35b-a3b caps at 16,384 and deepseek-r1 at 16,000, while
+ * qwen3.8-flash accepts 131,072 — and provider behaviour on an over-large
+ * value is not uniform: @ai-sdk/anthropic clamps to the model maximum and
+ * warns, while @ai-sdk/google and @ai-sdk/openai-compatible pass the value
+ * straight through to an upstream whose response is unverified here. Widen a
+ * pattern only against a checked figure.
+ *
+ * Router ids carry the upstream model, so one reached through OpenRouter, the
+ * Vercel gateway or a local OpenAI-compatible proxy matches the same entry as
+ * a native one.
+ */
+const MAX_OUTPUT_TOKENS_BY_MODEL: ReadonlyArray<readonly [RegExp, number]> = [
+  // Every Gemini 2.5 and 3 model: the figure @ai-sdk/google uses for its own
+  // thinking-budget math.
+  [/(?:^|\/)gemini-/, 65_536],
+  // The whole qwen3.8 line — flash, max and the 27b — reports 131,072.
+  [/(?:^|\/)qwen3\.8(?![\d.])/, 131_072],
+  // glm-5 through glm-5.3 report 128,000-131,072; take the floor of the range.
+  [/(?:^|\/)glm-5(?:\.[0-3])?(?![\d.])/, 128_000],
+  // deepseek-v4 and v4.1 report 384,000 and up; take the floor. Note v3.1 is
+  // 32,768 and r1 is 16,000 — another lineup this pattern must not reach.
+  [/(?:^|\/)deepseek-v4(?:\.1)?(?![\d.])/, 384_000],
+];
+
+/** Gemini is also reachable natively, where the id alone may not say so. */
+const GEMINI_PROVIDER_CEILING = 65_536;
+
+/**
+ * A model that ships after this code does still needs a way to raise its own
+ * ceiling. LLM_MAX_OUTPUT_TOKENS overrides every value here.
+ */
+export function maxOutputTokensFor(provider: Provider, modelId: string): number {
+  const override = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
+  if (Number.isSafeInteger(override) && override > 0) return override;
+  for (const [pattern, ceiling] of MAX_OUTPUT_TOKENS_BY_MODEL) {
+    if (pattern.test(modelId)) return ceiling;
+  }
+  if (provider === "gemini") return GEMINI_PROVIDER_CEILING;
+  return DEFAULT_MAX_OUTPUT_TOKENS;
+}
 
 /** Ensure a proxy-closed final SSE event is still visible to SDK parsers. */
 export async function aiSdkFetch(
@@ -275,7 +338,7 @@ export async function streamAiSdk(
       system: params.systemPrompt,
       messages: params.messages,
       tools,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens: maxOutputTokensFor(config.provider, config.modelId),
       stopWhen: sdk.stepCountIs(params.maxIterations ?? 10),
       abortSignal: params.abortSignal,
       reasoning:
