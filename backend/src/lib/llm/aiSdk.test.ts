@@ -7,8 +7,8 @@ afterEach(() => {
 
 describe("maxOutputTokensFor", () => {
   it("gives Gemini its real ceiling, natively and through a router", () => {
-    // Thinking tokens count against this ceiling, so the conservative default
-    // truncates a long deliberation before the model emits its tool call.
+    // 65,536 is the figure @ai-sdk/google uses for its own thinking-budget
+    // math, and the ceiling OpenRouter reports for the routed models.
     expect(maxOutputTokensFor("gemini", "gemini-3.8-flash")).toBe(65_536);
     expect(
       maxOutputTokensFor("openrouter", "openrouter/google/gemini-3.8-flash"),
@@ -40,8 +40,8 @@ describe("maxOutputTokensFor", () => {
   });
 
   it("does not lend one version's ceiling to its siblings", () => {
-    // qwen3.5-35b-a3b really does cap at 16,384; asking for 131,072 on its
-    // behalf is a hard 400, so the pattern must stay version-scoped.
+    // qwen3.5-35b-a3b really does cap at 16,384, so the pattern must stay
+    // version-scoped rather than matching the whole qwen lineup.
     expect(maxOutputTokensFor("openrouter", "qwen/qwen3.5-35b-a3b")).toBe(
       16_384,
     );

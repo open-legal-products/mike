@@ -14,23 +14,34 @@ import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
 /**
  * Conservative output ceiling, used for any model whose real ceiling we do not
- * know. Kept low because exceeding a model's own limit is a hard provider
- * error, not a truncation.
+ * know. Kept at the previous shared value so unlisted models behave exactly as
+ * they did before this change.
  */
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
 
 /**
- * Models that spend *thinking* tokens out of maxOutputTokens, paired with the
- * ceiling each one actually accepts. This is not a nicety: a budget sized for
- * the prose alone lets a long deliberation consume the whole thing, and the
- * turn then ends with no text and no tool call — which surfaces as a silently
- * empty answer, not as an error.
+ * Per-model output ceilings, replacing one shared 16,384 applied to every
+ * model and provider.
+ *
+ * 16,384 was never a considered figure for most of these: it entered in the
+ * OpenAI Responses adapter, was matched in the Anthropic adapter (where
+ * max_tokens is a required request field), and then the AI SDK migration
+ * applied it to Gemini, Ollama and OpenRouter — three streaming paths that
+ * had previously sent no output limit at all. This restores headroom those
+ * paths used to have.
+ *
+ * Scope note: this is a headroom/correctness change, not a fix for an
+ * observed truncation. Instrumented runs across several of these models have
+ * not produced a `finish_reason: "length"`, so no failure here is known to be
+ * caused by the old cap.
  *
  * Entries are version-scoped on purpose. Ceilings vary *within* a vendor's
- * lineup, so a family-wide pattern would over-promise: qwen3.5-35b-a3b caps at
- * 16,384 while qwen3.8-flash accepts 131,072, and asking for more than a model
- * allows is a hard 400 rather than a clamp. Widen a pattern only against a
- * checked figure.
+ * lineup — qwen3.5-35b-a3b caps at 16,384 and deepseek-r1 at 16,000, while
+ * qwen3.8-flash accepts 131,072 — and provider behaviour on an over-large
+ * value is not uniform: @ai-sdk/anthropic clamps to the model maximum and
+ * warns, while @ai-sdk/google and @ai-sdk/openai-compatible pass the value
+ * straight through to an upstream whose response is unverified here. Widen a
+ * pattern only against a checked figure.
  *
  * Router ids carry the upstream model, so one reached through OpenRouter, the
  * Vercel gateway or a local OpenAI-compatible proxy matches the same entry as
