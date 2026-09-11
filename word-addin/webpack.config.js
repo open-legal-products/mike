@@ -145,9 +145,7 @@ module.exports = async (_env, options) => {
         "react$": require.resolve("react"),
         "react/jsx-runtime$": require.resolve("react/jsx-runtime"),
         "react-dom$": require.resolve("react-dom"),
-        "lucide-react$": require.resolve(
-          "lucide-react/dist/esm/lucide-react.js",
-        ),
+        "lucide-react$": require.resolve("lucide-react"),
         // The frontend's public icon set is canonical. Webpack imports those
         // same SVGs and emits content-hashed copies for the add-in bundle.
         "@icons": path.resolve(__dirname, "..", "frontend", "public", "icons"),
