@@ -221,9 +221,10 @@ token or request Google Drive or Gmail access.
 ## Enterprise SSO (SAML)
 
 Self-hosted Mike can use SAML providers registered in Supabase Auth (GoTrue),
-including Okta, Microsoft Entra ID, and Google Workspace SAML. The login and
-signup pages offer SSO when enabled. The existing email/password and Google
-methods remain available; this feature does not enforce SSO-only access.
+including Okta, Microsoft Entra ID, and Google Workspace SAML. The login page
+offers an SSO entry point; the backend permits the flow only when SSO is
+enabled. The existing email/password and Google methods remain available; this
+feature does not enforce SSO-only access.
 
 ### Configure GoTrue
 
@@ -309,17 +310,16 @@ the backend. No frontend rebuild is needed:
 
 ```dotenv
 SSO_ENABLED=true
-SSO_DEFAULT_DOMAIN=example.com
-SSO_BUTTON_LABEL=Single sign-on
 SSO_ALLOWED_DOMAINS=example.com
 ```
 
 `SSO_ENABLED` defaults to false and enables only with `true` (case-insensitive).
-Omit `SSO_DEFAULT_DOMAIN` to show a domain input. Domains are trimmed and
-normalized to lowercase; use DNS names, or punycode for international domains,
-not email addresses or URLs. `SSO_ALLOWED_DOMAINS` is an optional comma-separated
-list of exact domains; it also applies to the default. Invalid domain settings
-fail closed. Omitting the allowlist permits any domain registered in GoTrue.
+The SSO screen asks for a company email and uses its normalized domain to find
+the matching provider; the email itself is not sent to GoTrue during provider
+discovery. `SSO_ALLOWED_DOMAINS` is an optional comma-separated list of exact
+domains. Use DNS names, or punycode for international domains, without URLs or
+wildcards. Invalid domain settings fail closed. Omitting the allowlist permits
+any domain registered in GoTrue.
 The allowlist controls Mike's sign-in initiation, not account authorization or
 direct access to GoTrue; enforce membership and access policy at the IdP and
 Auth service.

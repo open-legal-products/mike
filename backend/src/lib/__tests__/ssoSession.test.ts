@@ -1,5 +1,4 @@
-import express from "express";
-import request from "supertest";
+import type { Request, Response as ExpressResponse } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRequestSupabase } from "../authSession";
 
@@ -21,24 +20,31 @@ describe("SSO PKCE session", () => {
       }),
     );
     vi.stubGlobal("fetch", upstream);
-    const app = express();
-    app.post("/sso", async (req, res) => {
-      const client = createRequestSupabase(req, res);
-      const { data, error } = await client.auth.signInWithSSO({
-        domain: "example.com",
-        options: {
-          redirectTo: "https://app.example.test/auth/callback",
-          skipBrowserRedirect: true,
-        },
-      });
-      if (error) return res.status(500).end();
-      return res.json(data);
+    const cookies: string[] = [];
+    const req = {
+      headers: { cookie: "" },
+      get: vi.fn((name: string) =>
+        name.toLowerCase() === "origin"
+          ? "https://app.example.test"
+          : undefined,
+      ),
+    } as unknown as Request;
+    const res = {
+      append: vi.fn((name: string, value: string) => {
+        if (name === "Set-Cookie") cookies.push(value);
+      }),
+      setHeader: vi.fn(),
+    } as unknown as ExpressResponse;
+    const client = createRequestSupabase(req, res);
+    const { data, error } = await client.auth.signInWithSSO({
+      domain: "example.com",
+      options: {
+        redirectTo: "https://app.example.test/auth/callback",
+        skipBrowserRedirect: true,
+      },
     });
-    const response = await request(app)
-      .post("/sso")
-      .set("Origin", "https://app.example.test");
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ url: "https://idp.example/saml" });
+    expect(error).toBeNull();
+    expect(data).toEqual({ url: "https://idp.example/saml" });
     expect(upstream).toHaveBeenCalledTimes(1);
     const [url, init] = upstream.mock.calls[0];
     expect(url).toBe("https://auth.example.test/auth/v1/sso");
@@ -52,7 +58,6 @@ describe("SSO PKCE session", () => {
     expect(body.redirect_to).toContain(
       "https://app.example.test/auth/callback",
     );
-    const cookies = response.headers["set-cookie"] as unknown as string[];
     const verifier = cookies.find((cookie) =>
       cookie.includes("-code-verifier="),
     );

@@ -20,7 +20,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/lib/authApi", () => ({
     login,
     startGoogleOAuth,
-    getAuthConfiguration: vi.fn().mockResolvedValue({ ssoEnabled: false }),
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
@@ -65,15 +64,20 @@ describe("LoginPage", () => {
         expect(push).toHaveBeenCalledWith("/onboarding/profile");
     });
 
-    it("places Google login after the primary login action", () => {
+    it("places Google and SSO after the primary login action", () => {
         render(<LoginPage />);
 
         const login = screen.getByRole("button", { name: "Log in" });
         const google = screen.getByRole("button", {
             name: "Continue with Google",
         });
+        const sso = screen.getByRole("button", { name: "Continue with SSO" });
         expect(
             login.compareDocumentPosition(google) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(
+            google.compareDocumentPosition(sso) &
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
     });

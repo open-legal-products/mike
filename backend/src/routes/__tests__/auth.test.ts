@@ -80,12 +80,7 @@ describe("auth routes", () => {
     process.env.FRONTEND_URL = origin;
     process.env.NODE_ENV = "production";
     delete process.env.WORD_ADDIN_URL;
-    for (const key of [
-      "SSO_ENABLED",
-      "SSO_DEFAULT_DOMAIN",
-      "SSO_ALLOWED_DOMAINS",
-      "SSO_BUTTON_LABEL",
-    ])
+    for (const key of ["SSO_ENABLED", "SSO_ALLOWED_DOMAINS"])
       delete process.env[key];
     createRequestSupabase.mockReset().mockReturnValue(authClient);
     clearRequestAuthCookies.mockReset();
@@ -160,42 +155,28 @@ describe("auth routes", () => {
     });
   });
 
-  it("disables SSO by default and exposes only public settings", async () => {
-    const config = await request(app).get("/auth/config");
-    expect(config.body).toEqual({
-      ssoEnabled: false,
-      ssoButtonLabel: "Single sign-on",
-      ssoDomainRequired: false,
-    });
-    expect(config.headers["cache-control"]).toBe("private, no-store");
+  it("disables SSO initiation by default", async () => {
     const response = await request(app)
       .post("/auth/oauth")
       .set("Origin", origin)
-      .send({ provider: "sso", domain: "example.com" });
+      .send({ provider: "sso", email: "lawyer@example.com" });
     expect(response.status).toBe(403);
     expect(createRequestSupabase).not.toHaveBeenCalled();
   });
 
-  it("uses a normalized default domain and the shared callback", async () => {
+  it("extracts a normalized email domain and uses the shared callback", async () => {
     process.env.SSO_ENABLED = "true";
-    process.env.SSO_DEFAULT_DOMAIN = " Example.COM ";
     process.env.SSO_ALLOWED_DOMAINS = "example.com, other.example";
-    process.env.SSO_BUTTON_LABEL = "Company login";
     authClient.auth.signInWithSSO.mockResolvedValue({
       data: { url: "https://idp.example/saml" },
       error: null,
-    });
-    const config = await request(app).get("/auth/config");
-    expect(config.body).toEqual({
-      ssoEnabled: true,
-      ssoButtonLabel: "Company login",
-      ssoDomainRequired: false,
     });
     const response = await request(app)
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({
         provider: "sso",
+        email: " Lawyer@Example.COM ",
         next: "//attacker.example",
         callbackPath: "https://attacker.example",
       });
@@ -209,17 +190,13 @@ describe("auth routes", () => {
     });
   });
 
-  it("requests a domain when no default exists and allows a permitted override", async () => {
+  it("requires a company email and permits an allowed email domain", async () => {
     process.env.SSO_ENABLED = "true";
-    expect(
-      (await request(app).get("/auth/config")).body.ssoDomainRequired,
-    ).toBe(true);
     const missing = await request(app)
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({ provider: "sso" });
-    expect(missing.body.code).toBe("sso_domain_required");
-    process.env.SSO_DEFAULT_DOMAIN = "default.example";
+    expect(missing.body.code).toBe("invalid_request");
     process.env.SSO_ALLOWED_DOMAINS = "default.example,other.example";
     authClient.auth.signInWithSSO.mockResolvedValue({
       data: { url: "https://idp.example/saml" },
@@ -228,7 +205,11 @@ describe("auth routes", () => {
     const response = await request(app)
       .post("/auth/oauth")
       .set("Origin", origin)
-      .send({ provider: "sso", domain: " OTHER.EXAMPLE ", next: "/projects" });
+      .send({
+        provider: "sso",
+        email: " Lawyer@OTHER.EXAMPLE ",
+        next: "/projects",
+      });
     expect(response.status).toBe(200);
     expect(authClient.auth.signInWithSSO).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -242,21 +223,21 @@ describe("auth routes", () => {
 
   it.each([
     "",
-    "user@example.com",
+    "example.com",
     "https://example.com",
     "*.example.com",
-    "example.com:443",
-    "-bad.example",
-    "example..com",
+    "user@example.com:443",
+    "user@-bad.example",
+    "user@example..com",
     123,
     null,
-    "a".repeat(64) + ".com",
-  ])("rejects invalid SSO domain %s", async (domain) => {
+    `user@${"a".repeat(64)}.com`,
+  ])("rejects invalid SSO email %s", async (email) => {
     process.env.SSO_ENABLED = "true";
     const response = await request(app)
       .post("/auth/oauth")
       .set("Origin", origin)
-      .send({ provider: "sso", domain });
+      .send({ provider: "sso", email });
     expect(response.status).toBe(400);
     expect(createRequestSupabase).not.toHaveBeenCalled();
   });
@@ -264,38 +245,34 @@ describe("auth routes", () => {
   it("enforces exact domain allowlisting and trusted origins", async () => {
     process.env.SSO_ENABLED = "true";
     process.env.SSO_ALLOWED_DOMAINS = "example.com";
-    for (const domain of [
-      "other.example",
-      "sub.example.com",
-      "example.com.evil.test",
+    for (const email of [
+      "lawyer@other.example",
+      "lawyer@sub.example.com",
+      "lawyer@example.com.evil.test",
     ]) {
       const response = await request(app)
         .post("/auth/oauth")
         .set("Origin", origin)
-        .send({ provider: "sso", domain });
+        .send({ provider: "sso", email });
       expect(response.body.code).toBe("sso_domain_not_allowed");
     }
     const response = await request(app)
       .post("/auth/oauth")
       .set("Origin", "https://attacker.example")
-      .send({ provider: "sso", domain: "example.com" });
+      .send({ provider: "sso", email: "lawyer@example.com" });
     expect(response.status).toBe(403);
     expect(createRequestSupabase).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { SSO_DEFAULT_DOMAIN: "https://bad.example" },
-    { SSO_ALLOWED_DOMAINS: "example.com,,other.example" },
-    { SSO_DEFAULT_DOMAIN: "other.example", SSO_ALLOWED_DOMAINS: "example.com" },
-  ])("fails closed for invalid configuration %s", async (env) => {
-    Object.assign(process.env, env, { SSO_ENABLED: "true" });
+  it("fails closed for an invalid domain allowlist", async () => {
+    process.env.SSO_ENABLED = "true";
+    process.env.SSO_ALLOWED_DOMAINS = "example.com,,other.example";
     const response = await request(app)
       .post("/auth/oauth")
       .set("Origin", origin)
-      .send({ provider: "sso", domain: "example.com" });
+      .send({ provider: "sso", email: "lawyer@example.com" });
     expect(response.status).toBe(500);
     expect(response.body.code).toBe("internal_error");
-    expect((await request(app).get("/auth/config")).status).toBe(500);
     expect(createRequestSupabase).not.toHaveBeenCalled();
   });
 
@@ -310,7 +287,7 @@ describe("auth routes", () => {
       const response = await request(app)
         .post("/auth/oauth")
         .set("Origin", origin)
-        .send({ provider: "sso", domain: "example.com" });
+        .send({ provider: "sso", email: "lawyer@example.com" });
       expect(response.status).toBe(status < 500 ? 400 : 500);
       expect(response.text).not.toContain("private provider diagnostics");
     },
@@ -329,7 +306,7 @@ describe("auth routes", () => {
       const response = await request(app)
         .post("/auth/oauth")
         .set("Origin", origin)
-        .send({ provider: "sso", domain: "example.com" });
+        .send({ provider: "sso", email: "lawyer@example.com" });
       expect(response.status).toBe(500);
       expect(response.text).not.toContain("private diagnostics");
     }

@@ -19,7 +19,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/lib/authApi", () => ({
     signup,
     startGoogleOAuth,
-    getAuthConfiguration: vi.fn().mockResolvedValue({ ssoEnabled: false }),
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
@@ -75,7 +74,7 @@ describe("SignupPage", () => {
         expect(push).toHaveBeenCalledWith("/signup/check-email");
     });
 
-    it("places Google signup after the primary signup action", () => {
+    it("places Google after the primary signup action without offering SSO", () => {
         render(<SignupPage />);
 
         const signup = screen.getByRole("button", { name: "Sign up" });
@@ -86,5 +85,8 @@ describe("SignupPage", () => {
             signup.compareDocumentPosition(google) &
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
+        expect(
+            screen.queryByRole("button", { name: "Continue with SSO" }),
+        ).not.toBeInTheDocument();
     });
 });

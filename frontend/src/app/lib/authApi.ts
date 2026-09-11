@@ -84,20 +84,10 @@ export async function startGoogleOAuth(next: string) {
     });
 }
 
-export interface AuthConfiguration {
-    ssoEnabled: boolean;
-    ssoButtonLabel: string;
-    ssoDomainRequired: boolean;
-}
-
-export function getAuthConfiguration() {
-    return authRequest<AuthConfiguration>("/config");
-}
-
-export function startSso(next: string, domain?: string) {
+export function startSso(next: string, email: string) {
     return authRequest<{ url: string }>("/oauth", {
         method: "POST",
-        body: JSON.stringify({ provider: "sso", next, domain }),
+        body: JSON.stringify({ provider: "sso", next, email }),
     });
 }
 

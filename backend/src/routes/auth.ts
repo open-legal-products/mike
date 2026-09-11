@@ -186,24 +186,9 @@ authRouter.post("/signup", async (req, res) => {
   }
 });
 
-// Public presentation settings only; provider administration remains in GoTrue.
-authRouter.get("/config", (_req, res) => {
-  try {
-    const config = ssoConfiguration();
-    res.json({
-      ssoEnabled: config.enabled,
-      ssoButtonLabel: config.buttonLabel,
-      ssoDomainRequired: config.enabled && !config.defaultDomain,
-    });
-  } catch {
-    // Do not pass configuration values or provider diagnostics to the logger.
-    sendInternalError(res, new Error("Invalid SSO configuration"));
-  }
-});
-
 const ssoRequestSchema = z.object({
   provider: z.literal("sso"),
-  domain: ssoDomainSchema.optional(),
+  email: z.string().trim().toLowerCase().email().max(320),
 });
 
 async function startSso(req: Request, res: Response) {
@@ -219,15 +204,12 @@ async function startSso(req: Request, res: Response) {
     }
     const parsed = ssoRequestSchema.safeParse(req.body);
     if (!parsed.success) return invalidBody(res);
-    const domain = parsed.data.domain ?? config.defaultDomain;
-    if (!domain) {
-      return res
-        .status(400)
-        .json({
-          code: "sso_domain_required",
-          detail: "Enter your organization's domain.",
-        });
-    }
+    const emailDomain = parsed.data.email.slice(
+      parsed.data.email.lastIndexOf("@") + 1,
+    );
+    const parsedDomain = ssoDomainSchema.safeParse(emailDomain);
+    if (!parsedDomain.success) return invalidBody(res);
+    const domain = parsedDomain.data;
     if (config.allowedDomains && !config.allowedDomains.includes(domain)) {
       return res
         .status(400)

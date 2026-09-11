@@ -18,6 +18,7 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     // a password (they'd stay locked out of their account forever).
     const isAuthTransitionRoute =
         pathname === "/login" ||
+        pathname === "/login/sso" ||
         pathname === "/signup" ||
         pathname === "/signup/check-email" ||
         pathname === "/auth/callback" ||

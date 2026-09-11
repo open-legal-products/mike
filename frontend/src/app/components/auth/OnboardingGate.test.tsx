@@ -79,7 +79,12 @@ describe("OnboardingGate", () => {
         expect(state.replace).not.toHaveBeenCalled();
     });
 
-    it.each(["/reset-password", "/forgot-password", "/verify-mfa"])(
+    it.each([
+        "/login/sso",
+        "/reset-password",
+        "/forgot-password",
+        "/verify-mfa",
+    ])(
         "lets incomplete users reach the credential-recovery page %s",
         (path) => {
             state.pathname = path;
