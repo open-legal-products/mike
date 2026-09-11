@@ -44,6 +44,9 @@ const MAX_OUTPUT_TOKENS_BY_MODEL: ReadonlyArray<readonly [RegExp, number]> = [
   [/(?:^|\/)qwen3\.8(?![\d.])/, 131_072],
   // glm-5 through glm-5.3 report 128,000-131,072; take the floor of the range.
   [/(?:^|\/)glm-5(?:\.[0-3])?(?![\d.])/, 128_000],
+  // deepseek-v4 and v4.1 report 384,000 and up; take the floor. Note v3.1 is
+  // 32,768 and r1 is 16,000 — another lineup this pattern must not reach.
+  [/(?:^|\/)deepseek-v4(?:\.1)?(?![\d.])/, 384_000],
 ];
 
 /** Gemini is also reachable natively, where the id alone may not say so. */

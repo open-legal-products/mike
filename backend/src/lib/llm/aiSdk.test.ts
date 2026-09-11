@@ -31,6 +31,12 @@ describe("maxOutputTokensFor", () => {
       128_000,
     );
     expect(maxOutputTokensFor("openrouter", "z-ai/glm-5")).toBe(128_000);
+    expect(
+      maxOutputTokensFor("openrouter", "deepseek/deepseek-v4.1-flash"),
+    ).toBe(384_000);
+    expect(maxOutputTokensFor("openrouter", "deepseek/deepseek-v4-pro")).toBe(
+      384_000,
+    );
   });
 
   it("does not lend one version's ceiling to its siblings", () => {
@@ -43,6 +49,14 @@ describe("maxOutputTokensFor", () => {
     expect(maxOutputTokensFor("openrouter", "z-ai/glm-5.9-future")).toBe(
       16_384,
     );
+    // deepseek-r1 really is 16,000 and v3.1-terminus 32,768; neither may
+    // inherit the v4 ceiling.
+    expect(maxOutputTokensFor("openrouter", "deepseek/deepseek-r1")).toBe(
+      16_384,
+    );
+    expect(
+      maxOutputTokensFor("openrouter", "deepseek/deepseek-v3.1-terminus"),
+    ).toBe(16_384);
   });
 
   it("leaves every other model on the conservative default", () => {
