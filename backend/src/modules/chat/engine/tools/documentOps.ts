@@ -1372,10 +1372,17 @@ export function duplicateReadDocumentResult(identity: {
     doc_id: identity.docLabel,
     document_id: identity.documentId,
     version_id: identity.versionId ?? null,
-    content:
-      "This document/version was already read earlier in this response. The full text is not repeated to avoid unnecessary token use.",
+    // Deliberately no "content" key. It used to hold the explanation below,
+    // which put an English sentence exactly where document text belongs —
+    // models read that as a malfunction ("returning placeholder text"), called
+    // read_document again, got the same sentence, and looped until the step
+    // cap ended the turn with no answer. One Gemini turn read a single file 29
+    // times this way. Say plainly that retrying cannot help.
+    status: "full_text_omitted_already_returned",
+    explanation:
+      "This exact document/version was already returned IN FULL earlier in this response. The text is withheld here only to avoid re-sending it. This is not a truncation, an error, an excerpt, or a placeholder, and the document is not empty.",
     next_required_action:
-      "Use the prior read_document/fetch_documents result, call find_in_document for targeted checks, or proceed to edit_document.",
+      "Use the full text from the earlier read_document/fetch_documents result in this same response, call find_in_document for a targeted lookup, or proceed to edit_document. Do NOT call read_document for this document again — every retry returns this same notice.",
   });
 }
 

@@ -490,7 +490,11 @@ export async function runLLMStream(params: {
       systemPrompt,
       messages: chatMessages,
       tools: activeTools as OpenAIToolSchema[],
-      maxIterations: params.maxIterations ?? 10,
+      // Keep in step with DEFAULT_MAX_ITERATIONS in llm/aiSdk.ts. Deliberately
+      // a literal, not an import: tests mock the "../llm" barrel, and reaching
+      // past it into llm/aiSdk loads the real SDK module into suites that only
+      // ever wanted the mock, which broke unrelated tests at random.
+      maxIterations: params.maxIterations ?? 16,
       apiKeys,
       reasoning: params.reasoning ?? "high",
       abortSignal: signal,

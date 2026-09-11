@@ -15,6 +15,41 @@ import { asInvalidApiKeyError } from "./apiKeyErrors";
 
 const MAX_OUTPUT_TOKENS = 16_384;
 
+/**
+ * Tool-call rounds allowed per turn before `stopWhen` halts the run.
+ *
+ * 16, matching what the Word pane already passes. Document-heavy turns spend
+ * several rounds just reading before any real work starts, and when this cap
+ * fires the run simply ends — no error, no partial answer — so a value that is
+ * merely "usually enough" fails invisibly. Callers may still override it.
+ */
+export const DEFAULT_MAX_ITERATIONS = 16;
+
+/**
+ * User-facing explanation for a turn that ended without finishing, or "" when
+ * it ended normally.
+ *
+ * Exported for tests: the conditions are easy to get subtly wrong, and wrong
+ * here means either a spurious warning under every good answer or silence
+ * under every bad one.
+ */
+export function stopNotice(
+  iterations: number,
+  maxIterations: number,
+  finishReason: string | undefined,
+): string {
+  if (finishReason === "length") {
+    return "\n\n_Stopped early: this response reached the model's output limit. Asking for one part at a time will get the rest._";
+  }
+  // Reaching the last round while still asking for tools means the model was
+  // mid-work when stopWhen cut it off. Reaching it on "stop" means it had
+  // finished and the round count is a coincidence, so say nothing.
+  if (iterations >= maxIterations && finishReason !== "stop") {
+    return `\n\n_Stopped after ${maxIterations} tool-call rounds without finishing. This is a step limit, not a length limit — narrowing the request, or pointing at fewer documents, usually resolves it._`;
+  }
+  return "";
+}
+
 /** Ensure a proxy-closed final SSE event is still visible to SDK parsers. */
 export async function aiSdkFetch(
   input: RequestInfo | URL,
@@ -322,6 +357,8 @@ export async function streamAiSdk(
   let fullText = "";
   let iteration = 0;
   const openReasoningBlocks = new Set<string>();
+  const maxIterations = params.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+  let lastFinishReason: string | undefined;
 
   try {
     const result = sdk.streamText({
@@ -333,7 +370,7 @@ export async function streamAiSdk(
         : {}),
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
-      stopWhen: sdk.stepCountIs(params.maxIterations ?? 10),
+      stopWhen: sdk.stepCountIs(maxIterations),
       abortSignal: params.abortSignal,
       reasoning:
         config.supportsReasoning === false
@@ -406,6 +443,9 @@ export async function streamAiSdk(
           params.callbacks?.onToolCallStart?.(call);
           break;
         }
+        case "finish-step":
+          lastFinishReason = part.finishReason;
+          break;
         // A tool's own failure is not the model provider's: a search tool
         // answering 401 says nothing about our LLM key, so this path keeps the
         // plain message rather than blaming the user's credentials.
@@ -424,6 +464,16 @@ export async function streamAiSdk(
     for (const id of openReasoningBlocks) {
       openReasoningBlocks.delete(id);
       params.callbacks?.onReasoningBlockEnd?.();
+    }
+    // A run halted by stopWhen, or cut off at the output ceiling, otherwise
+    // ends exactly like a finished one: streamText just stops and this
+    // function returns whatever text happened to accumulate. That renders as
+    // a bare "Completed in N steps" with no answer and no error, which is
+    // indistinguishable from the model having nothing to say. Name it instead.
+    const notice = stopNotice(iteration, maxIterations, lastFinishReason);
+    if (notice) {
+      fullText += notice;
+      params.callbacks?.onContentDelta?.(notice);
     }
     await rawStreamRecorder?.flush("completed");
     return { fullText };
