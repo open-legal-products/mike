@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
     normalizeEmail,
     normalizeDisplayName,
+    profileAttributionName,
     loadProfileUsersByEmail,
     findProfileUserByEmail,
     findMissingUserEmails,
@@ -117,6 +118,39 @@ describe("normalizeDisplayName", () => {
         expect(normalizeDisplayName("")).toBeNull();
         expect(normalizeDisplayName(null)).toBeNull();
         expect(normalizeDisplayName(7)).toBeNull();
+    });
+});
+
+describe("profileAttributionName", () => {
+    it("prefers a trimmed display name", () => {
+        expect(
+            profileAttributionName(
+                {
+                    display_name: "  Ada Lovelace  ",
+                    email: "ADA@EXAMPLE.COM",
+                },
+                "Mike",
+            ),
+        ).toBe("Ada Lovelace");
+    });
+
+    it("uses a normalized email when the display name is unavailable", () => {
+        expect(
+            profileAttributionName(
+                { display_name: "   ", email: "  ADA@EXAMPLE.COM  " },
+                "Mike",
+            ),
+        ).toBe("ada@example.com");
+    });
+
+    it("uses the fallback when the profile has no usable identity", () => {
+        expect(
+            profileAttributionName(
+                { display_name: null, email: "   " },
+                "Mike",
+            ),
+        ).toBe("Mike");
+        expect(profileAttributionName(null, "Mike")).toBe("Mike");
     });
 });
 

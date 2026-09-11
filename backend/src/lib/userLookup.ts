@@ -16,6 +16,17 @@ export function normalizeDisplayName(value: unknown) {
     return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+export function profileAttributionName(
+    profile: { display_name?: unknown; email?: unknown } | null | undefined,
+    fallback: string,
+) {
+    return (
+        normalizeDisplayName(profile?.display_name) ||
+        normalizeEmail(profile?.email) ||
+        fallback
+    );
+}
+
 export async function loadProfileUsersByEmail(db: Db) {
     const { data, error } = await db
         .from("user_profiles")
