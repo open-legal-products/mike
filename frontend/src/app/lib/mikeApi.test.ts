@@ -48,6 +48,7 @@ import {
     getAuditHistory,
     getPanelDocument,
     getDocument,
+    getDocumentFile,
     getDocumentUrl,
     getLibrary,
     getLibraryLevels,
@@ -1685,6 +1686,34 @@ describe("tabular cell operations", () => {
 });
 
 describe("query and payload defaults", () => {
+    it("getDocumentFile appends version_id only when a version is requested", async () => {
+        fetchMock
+            .mockResolvedValueOnce(
+                new Response("current", {
+                    status: 200,
+                    headers: {
+                        "content-disposition":
+                            'attachment; filename="current.docx"',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response("selected", { status: 200 }),
+            );
+
+        const current = await getDocumentFile("d1");
+        expect(lastFetchCall().url).toBe("/api/single-documents/d1/file");
+        expect(current.filename).toBe("current.docx");
+        expect(await current.blob.text()).toBe("current");
+
+        const selected = await getDocumentFile("d1", "v 1");
+        expect(lastFetchCall().url).toBe(
+            "/api/single-documents/d1/file?version_id=v%201",
+        );
+        expect(selected.filename).toBeNull();
+        expect(await selected.blob.text()).toBe("selected");
+    });
+
     it("getDocumentUrl appends version_id only when a version is requested", async () => {
         fetchMock.mockImplementation(() =>
             Promise.resolve(
