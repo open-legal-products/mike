@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { AssistantMessage } from "./AssistantMessage";
 import type { AssistantEvent } from "../shared/types";
 
@@ -11,18 +12,20 @@ const reasoning = (text: string): AssistantEvent => ({
 describe("AssistantMessage timeline", () => {
     it("folds a run of reasoning events into one thinking block", () => {
         render(
-            <AssistantMessage
-                events={[
-                    reasoning("First I check the parties."),
-                    reasoning("Then the termination clause."),
-                    reasoning("Finally the governing law."),
-                ]}
-            />,
+            withIntl(
+                <AssistantMessage
+                    events={[
+                        reasoning("First I check the parties."),
+                        reasoning("Then the termination clause."),
+                        reasoning("Finally the governing law."),
+                    ]}
+                />,
+            ),
         );
 
         // One block, not three stacked on the timeline.
         const toggles = screen.getAllByRole("button", {
-            name: /Thought process/,
+            name: /Processo de raciocínio/,
         });
         expect(toggles).toHaveLength(1);
 
@@ -34,42 +37,46 @@ describe("AssistantMessage timeline", () => {
 
     it("keeps reasoning separated by other work in its own blocks", () => {
         render(
-            <AssistantMessage
-                events={[
-                    reasoning("Before the search."),
-                    {
-                        type: "doc_read",
-                        filename: "lease.pdf",
-                        document_id: "d1",
-                        version_id: "v1",
-                        version_number: 1,
-                    },
-                    reasoning("After the search."),
-                ]}
-            />,
+            withIntl(
+                <AssistantMessage
+                    events={[
+                        reasoning("Before the search."),
+                        {
+                            type: "doc_read",
+                            filename: "lease.pdf",
+                            document_id: "d1",
+                            version_id: "v1",
+                            version_number: 1,
+                        },
+                        reasoning("After the search."),
+                    ]}
+                />,
+            ),
         );
 
         expect(
-            screen.getAllByRole("button", { name: /Thought process/ }),
+            screen.getAllByRole("button", { name: /Processo de raciocínio/ }),
         ).toHaveLength(2);
     });
 
     it("does not mark the response failed when a single tool call fails", () => {
         const { container } = render(
-            <AssistantMessage
-                events={[
-                    {
-                        type: "mcp_tool_call",
-                        connector_id: "c1",
-                        connector_name: "Drive",
-                        tool_name: "search",
-                        openai_tool_name: "drive_search",
-                        status: "error",
-                        error: "Connector unavailable",
-                    },
-                    { type: "content", text: "Here is what I found anyway." },
-                ]}
-            />,
+            withIntl(
+                <AssistantMessage
+                    events={[
+                        {
+                            type: "mcp_tool_call",
+                            connector_id: "c1",
+                            connector_name: "Drive",
+                            tool_name: "search",
+                            openai_tool_name: "drive_search",
+                            status: "error",
+                            error: "Connector unavailable",
+                        },
+                        { type: "content", text: "Here is what I found anyway." },
+                    ]}
+                />,
+            ),
         );
 
         // The response is not branded an error…
@@ -87,15 +94,17 @@ describe("AssistantMessage timeline", () => {
 
     it("marks the response failed for a top-level error event", () => {
         render(
-            <AssistantMessage
-                events={[
-                    {
-                        type: "error",
-                        message: "The response was interrupted.",
-                        safe_to_display: true,
-                    } as AssistantEvent,
-                ]}
-            />,
+            withIntl(
+                <AssistantMessage
+                    events={[
+                        {
+                            type: "error",
+                            message: "The response was interrupted.",
+                            safe_to_display: true,
+                        } as AssistantEvent,
+                    ]}
+                />,
+            ),
         );
 
         expect(

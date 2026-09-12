@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState, useSyncExternalStore } from "react";
+import { useTranslations } from "next-intl";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import type { MemoryCurrent } from "@/app/lib/mikeApi";
 
@@ -25,6 +26,7 @@ export function MemoryUpdateFailedPopup({
   scopeKey: string;
 }) {
   const storageKey = `${DISMISSAL_PREFIX}${scopeKey}`;
+  const t = useTranslations("memoria");
   const currentFailureId = failureId(memory);
   const [sessionDismissedFailureId, setSessionDismissedFailureId] = useState<
     string | null
@@ -76,9 +78,7 @@ export function MemoryUpdateFailedPopup({
       }
       onClose={dismiss}
       message={
-        <span role="alert">
-          The latest automatic update failed. Existing memory is unchanged.
-        </span>
+        <span role="alert">{t("avisoAtualizacaoFalhou")}</span>
       }
     />
   );

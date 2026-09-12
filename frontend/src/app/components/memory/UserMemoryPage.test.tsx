@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { withIntl } from "@/test/withIntl";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MikeApiError,
@@ -9,6 +10,14 @@ import {
   type MemoryCurrent,
 } from "@/app/lib/mikeApi";
 import { UserMemoryPage } from "./UserMemoryPage";
+
+// The popups.aviso namespace lands with this translation batch; the shared
+// catalog still does not carry it.
+const mensagensPopup = {
+    popups: {
+        aviso: { descartar: "Descartar aviso" },
+    },
+};
 
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
@@ -91,12 +100,12 @@ describe("UserMemoryPage", () => {
 
   it("loads the current file independently and autosaves editor changes", async () => {
     const user = userEvent.setup();
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
-    const toggle = screen.getByRole("switch", { name: "App-wide memory" });
+    const toggle = screen.getByRole("switch", { name: "Memória do aplicativo" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     expect(toggle).toHaveClass("focus-visible:ring-2");
     expect(editor).toHaveValue("# Preferences");
@@ -110,25 +119,25 @@ describe("UserMemoryPage", () => {
     await user.clear(editor);
     await user.type(editor, "# Saved");
     expect(updateUserMemory).not.toHaveBeenCalled();
-    expect(screen.getByText("Saving…")).toBeVisible();
+    expect(screen.getByText("Salvando…")).toBeVisible();
 
     await waitFor(
       () => expect(updateUserMemory).toHaveBeenCalledWith("# Saved", 2),
       { timeout: 2000 },
     );
-    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(await screen.findByText("Salvo")).toBeVisible();
   });
 
   it("adopts server-normalized Markdown without repeatedly saving it", async () => {
     vi.mocked(updateUserMemory).mockResolvedValue(
       current({ content: "# Normalized", revision: 3, hash: "hash-3" }),
     );
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
-    await screen.findByRole("switch", { name: "App-wide memory" });
+    await screen.findByRole("switch", { name: "Memória do aplicativo" });
 
     vi.useFakeTimers();
     try {
@@ -157,10 +166,10 @@ describe("UserMemoryPage", () => {
       }),
     );
     const user = userEvent.setup();
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
     await user.clear(editor);
     await user.type(editor, "# Pending");
@@ -171,7 +180,7 @@ describe("UserMemoryPage", () => {
     );
     expect(editor).not.toHaveAttribute("readonly");
     expect(
-      screen.getByRole("switch", { name: "App-wide memory" }),
+      screen.getByRole("switch", { name: "Memória do aplicativo" }),
     ).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
 
@@ -215,17 +224,17 @@ describe("UserMemoryPage", () => {
         current({ content: "# My draft", revision: 4, hash: "hash-4" }),
       );
     const user = userEvent.setup();
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
     await user.clear(editor);
     await user.type(editor, "# My draft");
 
     expect(
       await screen.findByText(
-        "Memory changed while you were editing",
+        "A memória foi alterada enquanto você editava",
         {},
         {
           timeout: 2000,
@@ -234,7 +243,7 @@ describe("UserMemoryPage", () => {
     ).toBeVisible();
     expect(editor).toHaveValue("# My draft");
 
-    await user.click(screen.getByRole("button", { name: "Keep my draft" }));
+    await user.click(screen.getByRole("button", { name: "Manter meu rascunho" }));
 
     await waitFor(
       () => expect(updateUserMemory).toHaveBeenLastCalledWith("# My draft", 3),
@@ -245,38 +254,38 @@ describe("UserMemoryPage", () => {
   it("keeps a failed autosave draft and lets the user retry it", async () => {
     vi.mocked(updateUserMemory).mockRejectedValueOnce(new Error("offline"));
     const user = userEvent.setup();
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
     await user.clear(editor);
     await user.type(editor, "# Still here");
 
     expect(
       await screen.findByText(
-        "Memory could not be saved. Your draft has been kept.",
+        "Não foi possível salvar a memória. Seu rascunho foi mantido.",
         {},
         { timeout: 2000 },
       ),
     ).toBeVisible();
     expect(editor).toHaveValue("# Still here");
 
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
     await waitFor(
       () =>
         expect(updateUserMemory).toHaveBeenLastCalledWith("# Still here", 2),
       { timeout: 2000 },
     );
-    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(await screen.findByText("Salvo")).toBeVisible();
   });
 
   it("flushes a pending autosave when the settings page unmounts", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<UserMemoryPage />);
+    const { unmount } = render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
     await user.clear(editor);
     await user.type(editor, "# Save on leave");
@@ -301,14 +310,14 @@ describe("UserMemoryPage", () => {
       }),
     );
     const user = userEvent.setup();
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const toggle = await screen.findByRole("switch", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(
-      screen.queryByRole("textbox", { name: "App-wide memory" }),
+      screen.queryByRole("textbox", { name: "Memória do aplicativo" }),
     ).not.toBeInTheDocument();
 
     await user.click(toggle);
@@ -317,42 +326,42 @@ describe("UserMemoryPage", () => {
       expect(setUserMemoryEnabled).toHaveBeenCalledWith(true),
     );
     expect(
-      await screen.findByRole("textbox", { name: "App-wide memory" }),
+      await screen.findByRole("textbox", { name: "Memória do aplicativo" }),
     ).toHaveValue("");
   });
 
   it("confirms disable and warns about the unsaved draft", async () => {
     const user = userEvent.setup();
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const editor = await screen.findByRole("textbox", {
-      name: "App-wide memory",
+      name: "Memória do aplicativo",
     });
     await user.clear(editor);
     await user.type(editor, "# Unsaved");
-    await user.click(screen.getByRole("switch", { name: "App-wide memory" }));
+    await user.click(screen.getByRole("switch", { name: "Memória do aplicativo" }));
 
     expect(setUserMemoryEnabled).not.toHaveBeenCalled();
     expect(
-      screen.getByText("Turn off and delete app-wide memory?"),
+      screen.getByText("Desativar e excluir a memória do aplicativo?"),
     ).toBeVisible();
     expect(
-      screen.getByText(/delete the existing app-wide memory\.md file/i),
+      screen.getByText(/arquivo memory\.md do aplicativo/i),
     ).toBeVisible();
-    expect(screen.getByText(/and your unsaved draft/i)).toBeVisible();
-    expect(screen.getByText(/cancel pending memory updates/i)).toBeVisible();
-    expect(screen.getByText(/stop future memory updates/i)).toBeVisible();
+    expect(screen.getByText(/e o seu rascunho não salvo/i)).toBeVisible();
+    expect(screen.getByText(/cancelará atualizações de memória pendentes/i)).toBeVisible();
+    expect(screen.getByText(/interromperá atualizações futuras/i)).toBeVisible();
     expect(editor).toHaveAttribute("readonly");
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(updateUserMemory).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("button", { name: "Disable" }));
+    await user.click(screen.getByRole("button", { name: "Desativar" }));
 
     await waitFor(() =>
       expect(setUserMemoryEnabled).toHaveBeenCalledWith(false),
     );
     expect(
-      screen.queryByRole("textbox", { name: "App-wide memory" }),
+      screen.queryByRole("textbox", { name: "Memória do aplicativo" }),
     ).not.toBeInTheDocument();
   });
 
@@ -367,9 +376,9 @@ describe("UserMemoryPage", () => {
       }),
     );
 
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
-    await screen.findByRole("textbox", { name: "App-wide memory" });
+    await screen.findByRole("textbox", { name: "Memória do aplicativo" });
     expect(
       screen.queryByRole("button", { name: "Download memory.md" }),
     ).toBeNull();
@@ -382,29 +391,29 @@ describe("UserMemoryPage", () => {
     const user = userEvent.setup();
     vi.mocked(getUserMemory).mockResolvedValue(current({ status: "failed" }));
 
-    const { unmount } = render(<UserMemoryPage />);
+    const { unmount } = render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     expect(
       await screen.findByRole("alert", {
         name: undefined,
       }),
-    ).toHaveTextContent("The latest automatic update failed");
+    ).toHaveTextContent("A última atualização automática falhou");
 
-    await user.click(screen.getByRole("button", { name: "Dismiss warning" }));
+    await user.click(screen.getByRole("button", { name: "Descartar aviso" }));
     expect(screen.queryByRole("alert")).toBeNull();
 
     unmount();
-    render(<UserMemoryPage />);
-    await screen.findByRole("textbox", { name: "App-wide memory" });
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
+    await screen.findByRole("textbox", { name: "Memória do aplicativo" });
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("saves the account default applied to new projects", async () => {
     const user = userEvent.setup();
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     const toggle = await screen.findByRole("switch", {
-      name: "Project memory for new projects",
+      name: "Memória de projetos para novos projetos",
     });
     expect(toggle).toHaveAttribute("aria-checked", "true");
 
@@ -424,13 +433,13 @@ describe("UserMemoryPage", () => {
     profileState.projectMemoryDefault = false;
     vi.mocked(getUserMemory).mockRejectedValue(new Error("unavailable"));
 
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     expect(
-      await screen.findByText("Memory settings are unavailable"),
+      await screen.findByText("Configurações de memória indisponíveis"),
     ).toBeVisible();
     expect(
-      screen.getByRole("switch", { name: "Project memory for new projects" }),
+      screen.getByRole("switch", { name: "Memória de projetos para novos projetos" }),
     ).toHaveAttribute("aria-checked", "false");
   });
 
@@ -439,11 +448,11 @@ describe("UserMemoryPage", () => {
       current({ status: "scheduled" }),
     );
 
-    render(<UserMemoryPage />);
+    render(withIntl(<UserMemoryPage />, mensagensPopup));
 
     // The toggle carries no on/off label of its own, so this stamp is the
     // only place the pending review is announced.
-    expect(await screen.findByText(/Memory review scheduled/)).toBeVisible();
+    expect(await screen.findByText(/Revisão da memória agendada/)).toBeVisible();
     expect(screen.queryByText(/^On\b/)).toBeNull();
   });
 });

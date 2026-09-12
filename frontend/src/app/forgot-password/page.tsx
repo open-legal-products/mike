@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Input } from "@/app/components/ui/input";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { SiteLogo } from "@/app/components/site-logo";
@@ -13,6 +14,7 @@ import { requestPasswordReset } from "@/app/lib/authApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
 
 export default function ForgotPasswordPage() {
+    const t = useTranslations("auth.recuperarSenha");
     const [email, setEmail] = useState("");
     const [loading, setLoading] = useState(false);
     const [submitted, setSubmitted] = useState(false);
@@ -48,12 +50,10 @@ export default function ForgotPasswordPage() {
                     {submitted ? (
                         <div>
                             <h1 className="text-2xl font-medium font-serif text-gray-950">
-                                Check your email
+                                {t("tituloEnviado")}
                             </h1>
                             <p className="mt-3 text-sm leading-relaxed text-gray-600">
-                                If an account exists for {email.trim()}, we sent
-                                a password-reset link. The link expires and can
-                                only be used once.
+                                {t("mensagemEnviada", { email: email.trim() })}
                             </p>
                             <PillButton
                                 asChild
@@ -61,17 +61,16 @@ export default function ForgotPasswordPage() {
                                 size="normal"
                                 className="mt-6"
                             >
-                                <Link href="/login">Return to login</Link>
+                                <Link href="/login">{t("voltarLogin")}</Link>
                             </PillButton>
                         </div>
                     ) : (
                         <>
                             <h1 className="text-2xl font-medium font-serif text-gray-950">
-                                Reset your password
+                                {t("titulo")}
                             </h1>
                             <p className="mt-2 text-sm leading-relaxed text-gray-500">
-                                Enter your account email and we will send you a
-                                secure reset link.
+                                {t("descricao")}
                             </p>
                             <form
                                 onSubmit={handleSubmit}
@@ -79,7 +78,7 @@ export default function ForgotPasswordPage() {
                             >
                                 <div>
                                     <FieldLabel htmlFor="email">
-                                        Email
+                                        {t("labelEmail")}
                                     </FieldLabel>
                                     <Input
                                         id="email"
@@ -101,8 +100,8 @@ export default function ForgotPasswordPage() {
                                     className="w-full"
                                 >
                                     {loading
-                                        ? "Sending reset link..."
-                                        : "Send reset link"}
+                                        ? t("botaoEnviando")
+                                        : t("botaoEnviar")}
                                 </PillButton>
                             </form>
                             <div className="mt-5 text-center">
@@ -110,7 +109,7 @@ export default function ForgotPasswordPage() {
                                     href="/login"
                                     className="text-sm font-medium text-gray-500 transition-colors hover:text-gray-950"
                                 >
-                                    Return to login
+                                    {t("voltarLogin")}
                                 </Link>
                             </div>
                         </>

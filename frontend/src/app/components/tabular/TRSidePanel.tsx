@@ -10,6 +10,7 @@ import {
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useTranslations } from "next-intl";
 import {
     ChevronDown,
     ChevronLeft,
@@ -118,6 +119,7 @@ export function TRSidePanel({
     citationDocumentId,
     citationRef,
 }: Props) {
+    const t = useTranslations("tabular.painelLateral");
     const sortedColumns = [...columns].sort((a, b) => a.index - b.index);
     const currentPos = sortedColumns.findIndex((c) => c.index === column.index);
     const previousColumn =
@@ -337,7 +339,7 @@ export function TRSidePanel({
                         onPointerUp={handleDocumentResizePointerEnd}
                         onPointerCancel={handleDocumentResizePointerEnd}
                         className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-blue-400/60"
-                        title="Resize document pane"
+                        title={t("redimensionarPainelDocumento")}
                     />
                     {/* Doc header */}
                     <div className="flex min-h-11 shrink-0 items-center gap-3">
@@ -362,8 +364,10 @@ export function TRSidePanel({
                                     {
                                         id: citationKey(cell.id, docCitation),
                                         quote: docCitation.quote,
-                                        quoteLabel:
-                                            formatCitationLocation(docCitation),
+                                        quoteLabel: formatCitationLocation(
+                                            docCitation,
+                                            t,
+                                        ),
                                     },
                                 ]}
                                 activeQuoteId={citationKey(
@@ -426,13 +430,13 @@ export function TRSidePanel({
                             )}
                             aria-label={
                                 documentPaneOpen
-                                    ? "Collapse document pane"
-                                    : "Expand document pane"
+                                    ? t("recolherPainelDocumento")
+                                    : t("expandirPainelDocumento")
                             }
                             title={
                                 documentPaneOpen
-                                    ? "Collapse document pane"
-                                    : "Expand document pane"
+                                    ? t("recolherPainelDocumento")
+                                    : t("expandirPainelDocumento")
                             }
                             aria-pressed={documentPaneOpen}
                         >
@@ -451,7 +455,7 @@ export function TRSidePanel({
                                 }
                             }}
                             disabled={regenerating}
-                            title="Regenerate"
+                            title={t("regenerar")}
                             className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 disabled:opacity-40"
                         >
                             {regenerating ? (
@@ -461,7 +465,7 @@ export function TRSidePanel({
                             )}
                         </button>
                     )}
-                    <GlassIconButton onClick={onClose} aria-label="Close">
+                    <GlassIconButton onClick={onClose} aria-label={t("fechar")}>
                         <X className="h-3.5 w-3.5" />
                     </GlassIconButton>
                 </div>
@@ -473,7 +477,7 @@ export function TRSidePanel({
                             <>
                                 <div className="mb-4">
                                     <div className="mb-3 text-xs font-medium text-gray-900">
-                                        Document
+                                        {t("documento")}
                                     </div>
                                     <div className="flex min-h-6 items-center gap-1.5">
                                         <FileTypeIcon
@@ -492,7 +496,7 @@ export function TRSidePanel({
                                 </div>
                                 <div>
                                     <div className="mb-3 text-xs font-medium text-gray-900">
-                                        Version
+                                        {t("versao")}
                                     </div>
                                     <div className="min-h-6 text-xs leading-6 text-gray-800">
                                         V{activeVersionNumber}
@@ -505,8 +509,8 @@ export function TRSidePanel({
                                 <div className="mb-4">
                                     <div className="mb-3 text-xs font-medium text-gray-900">
                                         {row.row_type === "folder"
-                                            ? "Folder"
-                                            : "Document"}
+                                            ? t("pasta")
+                                            : t("documento")}
                                     </div>
                                     {row.row_type === "folder" ? (
                                         <div>
@@ -605,7 +609,7 @@ export function TRSidePanel({
                                 {/* Column field */}
                                 <div className="mb-4">
                                     <div className="mb-3 text-xs font-medium text-gray-900">
-                                        Column
+                                        {t("coluna")}
                                     </div>
                                     <div className="min-h-6 truncate text-xs leading-6 text-gray-800">
                                         {column.name}
@@ -616,7 +620,7 @@ export function TRSidePanel({
                                 {cell.content?.flag && (
                                     <div className="mb-5">
                                         <h4 className="mb-2 text-xs font-medium text-gray-900">
-                                            Flag
+                                            {t("sinalizacao")}
                                         </h4>
                                         <span
                                             className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${FLAG_BADGE[cell.content.flag] ?? FLAG_BADGE.grey}`}
@@ -632,7 +636,7 @@ export function TRSidePanel({
                                 {/* Results */}
                                 <div className="mb-6">
                                     <h4 className="mb-2 text-xs font-medium text-gray-900">
-                                        Results
+                                        {t("resultados")}
                                     </h4>
                                     <div className="text-xs leading-relaxed text-gray-700">
                                         <MarkdownContent
@@ -649,7 +653,7 @@ export function TRSidePanel({
                                 {cell.content?.reasoning && (
                                     <div>
                                         <h4 className="mb-2 text-xs font-medium text-gray-900">
-                                            Reasoning
+                                            {t("raciocinio")}
                                         </h4>
                                         <div className="text-xs leading-relaxed text-gray-700">
                                             <MarkdownContent
@@ -677,7 +681,7 @@ export function TRSidePanel({
                         <div className="grid grid-cols-3 grid-rows-3 gap-0.5">
                             <CellNavigatorButton
                                 className="col-start-2 row-start-1"
-                                label="Previous row"
+                                label={t("linhaAnterior")}
                                 title={previousRow?.label}
                                 disabled={!previousRow}
                                 onClick={() =>
@@ -689,7 +693,7 @@ export function TRSidePanel({
                             </CellNavigatorButton>
                             <CellNavigatorButton
                                 className="col-start-1 row-start-2"
-                                label="Previous column"
+                                label={t("colunaAnterior")}
                                 title={previousColumn?.name}
                                 disabled={!previousColumn}
                                 onClick={() =>
@@ -702,7 +706,7 @@ export function TRSidePanel({
                             <div className="col-start-2 row-start-2 h-7 w-7 rounded-md bg-white/35" />
                             <CellNavigatorButton
                                 className="col-start-3 row-start-2"
-                                label="Next column"
+                                label={t("proximaColuna")}
                                 title={nextColumn?.name}
                                 disabled={!nextColumn}
                                 onClick={() =>
@@ -714,7 +718,7 @@ export function TRSidePanel({
                             </CellNavigatorButton>
                             <CellNavigatorButton
                                 className="col-start-2 row-start-3"
-                                label="Next row"
+                                label={t("proximaLinha")}
                                 title={nextRow?.label}
                                 disabled={!nextRow}
                                 onClick={() =>
@@ -770,11 +774,17 @@ function CellNavigatorButton({
 // Markdown renderer
 // ---------------------------------------------------------------------------
 
-function formatCitationLocation(citation: ParsedCitation): string {
+function formatCitationLocation(
+    citation: ParsedCitation,
+    t: ReturnType<typeof useTranslations>,
+): string {
     if (citation.sheet && citation.cell) {
-        return `${citation.sheet}, cell ${citation.cell}`;
+        return t("localPlanilha", {
+            sheet: citation.sheet,
+            cell: citation.cell,
+        });
     }
-    return `Page ${citation.page ?? 1}`;
+    return t("pagina", { page: citation.page ?? 1 });
 }
 
 function citationKey(cellId: string, citation: ParsedCitation): string {
@@ -793,6 +803,7 @@ function CitationBadge({
     citation: ParsedCitation;
     onClick: (citation: TRPanelCitation) => void;
 }) {
+    const t = useTranslations("tabular.painelLateral");
     return (
         <CitationPillUI
             data-page={citation.page}
@@ -800,7 +811,7 @@ function CitationBadge({
             data-cell={citation.cell}
             data-document-id={citation.documentId}
             data-quote={citation.quote}
-            title={`${formatCitationLocation(citation)}: "${citation.quote}"`}
+            title={`${formatCitationLocation(citation, t)}: "${citation.quote}"`}
             onClick={() =>
                 onClick({
                     quote: citation.quote,

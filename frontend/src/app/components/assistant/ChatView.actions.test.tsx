@@ -6,6 +6,7 @@ import {
     within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import type { Chat, Message } from "@/app/components/shared/types";
 import { ChatView } from "./ChatView";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
@@ -88,22 +89,24 @@ function renderView(
     mobileActionsContainer: HTMLElement | null = null,
 ) {
     render(
-        <PageChromeContext.Provider value={{ mobileActionsContainer }}>
-            <ChatView
-                chatId="chat-1"
-                chat={activeChat}
-                messages={messages}
-                isResponseLoading={false}
-                handleChat={vi.fn().mockResolvedValue("chat-1")}
-                cancel={cancel}
-            />
-        </PageChromeContext.Provider>,
+        withIntl(
+            <PageChromeContext.Provider value={{ mobileActionsContainer }}>
+                <ChatView
+                    chatId="chat-1"
+                    chat={activeChat}
+                    messages={messages}
+                    isResponseLoading={false}
+                    handleChat={vi.fn().mockResolvedValue("chat-1")}
+                    cancel={cancel}
+                />
+            </PageChromeContext.Provider>,
+        ),
     );
     return { cancel };
 }
 
 function openActions() {
-    const trigger = screen.getByRole("button", { name: "Chat actions" });
+    const trigger = screen.getByRole("button", { name: "Ações da conversa" });
     fireEvent.pointerDown(
         trigger,
         new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
@@ -134,7 +137,9 @@ describe("ChatView header actions", () => {
             document.querySelector('[data-slot="chat-messages-content"]'),
         ).toHaveStyle({ paddingTop: "76px" });
 
-        fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+        fireEvent.click(
+            screen.getByRole("button", { name: "Nova Conversa" }),
+        );
 
         expect(cancel).toHaveBeenCalled();
         expect(setCurrentChatId).toHaveBeenCalledWith(null);
@@ -158,7 +163,7 @@ describe("ChatView header actions", () => {
     it("opens chat access from Share", async () => {
         renderView();
         openActions();
-        fireEvent.click(await screen.findByText("Share"));
+        fireEvent.click(await screen.findByText("Compartilhar"));
 
         expect(await screen.findByText("Chat access modal")).toBeInTheDocument();
     });
@@ -170,12 +175,12 @@ describe("ChatView header actions", () => {
 
         expect(
             within(mobileHeaderActions).getByRole("button", {
-                name: "New chat",
+                name: "Nova Conversa",
             }),
         ).toBeInTheDocument();
         expect(
             within(mobileHeaderActions).getByRole("button", {
-                name: "Chat actions",
+                name: "Ações da conversa",
             }),
         ).toBeInTheDocument();
     });
@@ -185,13 +190,13 @@ describe("ChatView header actions", () => {
         renderView();
 
         openActions();
-        fireEvent.click(await screen.findByText("Rename"));
+        fireEvent.click(await screen.findByText("Renomear"));
         await waitFor(() =>
             expect(renameChat).toHaveBeenCalledWith("chat-1", "Renamed chat"),
         );
 
         openActions();
-        fireEvent.click(await screen.findByText("Delete"));
+        fireEvent.click(await screen.findByText("Excluir"));
         await waitFor(() => expect(deleteChat).toHaveBeenCalledWith("chat-1"));
         expect(push).toHaveBeenCalledWith("/assistant");
     });

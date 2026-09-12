@@ -6,6 +6,7 @@ import {
     useRef,
     useState,
 } from "react";
+import { useTranslations } from "next-intl";
 import { Loader2, Plus, Upload } from "lucide-react";
 import type {
     ColumnConfig,
@@ -107,6 +108,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
     },
     ref,
 ) {
+    const t = useTranslations("tabular");
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const lastScrollLeftRef = useRef(0);
     const [scrollCloseSignal, setScrollCloseSignal] = useState(0);
@@ -126,7 +128,9 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
         documents.map((document) => [document.id, document]),
     );
     const firstColumnLabel =
-        documentGrouping === "folder" ? "Folder / Document" : "Document";
+        documentGrouping === "folder"
+            ? t("table.pastaDocumento")
+            : t("table.documento");
     const totalContentWidth =
         DOC_COL_W_PX + sortedColumns.length * DATA_COL_W_PX + 32;
     const skeletonContentWidth =
@@ -267,8 +271,8 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                     <EmptyState
                         className="mx-auto w-full max-w-xs flex-1 justify-center"
                         icon={<TabularReviewSkeuoIcon />}
-                        title="Tabular Review"
-                        description="Add columns and documents to get started."
+                        title={t("table.revisaoTabular")}
+                        description={t("table.instrucaoVazia")}
                         action={
                             <div className="flex items-center gap-2">
                                 <PillButton
@@ -277,7 +281,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                     onClick={onAddColumn}
                                 >
                                     <Plus className="h-3.5 w-3.5" />
-                                    Add Columns
+                                    {t("table.botaoAdicionarColunas")}
                                 </PillButton>
                                 <PillButton
                                     tone="white"
@@ -285,7 +289,7 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                     onClick={onAddDocuments}
                                 >
                                     <Upload className="h-3.5 w-3.5" />
-                                    Add Documents
+                                    {t("table.adicionarDocumentos")}
                                 </PillButton>
                             </div>
                         }
@@ -317,7 +321,9 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                             }}
                             onChange={toggleAll}
                             className={TABLE_CHECKBOX_CLASS}
-                            aria-label={`Select all ${firstColumnLabel.toLowerCase()}`}
+                            aria-label={t("table.selecionarTudo", {
+                                label: firstColumnLabel,
+                            })}
                         />
                         <span>{firstColumnLabel}</span>
                     </div>
@@ -368,7 +374,9 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                                 type="checkbox"
                                 disabled
                                 className="mr-3 h-2.5 w-2.5 shrink-0 rounded border-gray-200 cursor-default accent-black disabled:opacity-100"
-                                aria-label={`Select ${filename}`}
+                                aria-label={t("table.selecionarArquivo", {
+                                    filename,
+                                })}
                             />
                             <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin shrink-0" />
                             <span className="line-clamp-1" title={filename}>

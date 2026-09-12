@@ -2,6 +2,7 @@
 
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import { deleteChat, renameChat } from "@/app/lib/mikeApi";
 import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
@@ -60,6 +61,7 @@ export default function ProjectAssistantPage({ params }: Props) {
     use(params);
     const workspace = useProjectWorkspace();
     const router = useRouter();
+    const tPermissao = useTranslations("popups.permissao");
     const searchParams = useSearchParams();
     const { user } = useAuth();
     const previewEmptyStates = searchParams.get("emptyStates") === "1";
@@ -131,7 +133,7 @@ export default function ProjectAssistantPage({ params }: Props) {
     // who may not delete anything.
     async function handleDeleteChatRow(chat: Chat) {
         if (!can(roleFrom(chat), "container.delete")) {
-            setOwnerOnlyAction("delete this chat");
+            setOwnerOnlyAction(tPermissao("acaoExcluir"));
             return;
         }
         // Await first, remove after: a refusal or an outage used to make the

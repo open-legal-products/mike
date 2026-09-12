@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
@@ -18,9 +19,11 @@ function fieldStatus(
   field: PersonalisationField,
   savingField: PersonalisationField | null,
   savedField: PersonalisationField | null,
+  salvando: string,
+  salvo: string,
 ) {
-  if (savingField === field) return "Saving...";
-  if (savedField === field) return "Saved";
+  if (savingField === field) return salvando;
+  if (savedField === field) return salvo;
   return null;
 }
 
@@ -38,6 +41,8 @@ function PersonalisationForm({
 }: {
   initial: ReturnType<typeof personalisationInitialValues>;
 }) {
+  const t = useTranslations("configuracoes.personalizacao");
+  const tModelos = useTranslations("pages.modelos");
   const { updatePersonalisation } = useUserProfile();
   const [pendingField, setPendingField] = useState<PersonalisationField | null>(
     null,
@@ -108,7 +113,7 @@ function PersonalisationForm({
         setSavingField((current) => (current === field ? null : current));
         if (latestSnapshotRef.current !== snapshot) return;
         if (!success) {
-          setError("Unable to save your personalisation settings");
+          setError(t("erroSalvar"));
           return;
         }
         setSavedField(field);
@@ -127,6 +132,7 @@ function PersonalisationForm({
     form.invalidGroups,
     pendingField,
     retryVersion,
+    t,
     updatePersonalisation,
   ]);
 
@@ -143,16 +149,23 @@ function PersonalisationForm({
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Personalisation</SettingsHeading>
+        <SettingsHeading>{t("titulo")}</SettingsHeading>
         <SettingsDescription>
-          Tell Mike about your role and practice so responses can be tailored to
-          your professional context.
+          {t("descricao")}
         </SettingsDescription>
         <SettingsCard>
           <SettingsPersonalisationFields
             form={form}
-            practiceAreasAriaLabel="Practice areas"
-            statusFor={(field) => fieldStatus(field, savingField, savedField)}
+            practiceAreasAriaLabel={t("labelAreasPratica")}
+            statusFor={(field) =>
+              fieldStatus(
+                field,
+                savingField,
+                savedField,
+                tModelos("salvando"),
+                tModelos("salvo"),
+              )
+            }
           />
 
           {form.validationError && !error && (
@@ -182,7 +195,7 @@ function PersonalisationForm({
                   onClick={() => setRetryVersion((current) => current + 1)}
                   className="font-medium text-gray-700 hover:text-gray-950"
                 >
-                  Retry
+                  {t("tentarNovamente")}
                 </button>
               </div>
             </SettingsRow>

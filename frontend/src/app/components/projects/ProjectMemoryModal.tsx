@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Brain } from "lucide-react";
 import {
     MemoryConflictNotice,
     MemorySaveStatus,
-    memoryActivityLabel,
+    useMemoryActivityLabel,
 } from "@/app/components/memory/MemoryEditorState";
 import { MemoryUpdateFailedPopup } from "@/app/components/memory/MemoryUpdateFailedPopup";
 import { useMemoryFileController } from "@/app/components/memory/useMemoryFileController";
@@ -46,6 +47,8 @@ export function ProjectMemoryModal({
     /** Report the file's enabled flag back to the surface that opened it. */
     onMemoryEnabledChange?: (enabled: boolean) => void;
 }) {
+    const t = useTranslations("modals.memoriaProjeto");
+    const tPagina = useTranslations("projects.pagina");
     const [settingsMutation, setSettingsMutation] = useState<
         "enable" | "disable" | null
     >(null);
@@ -93,16 +96,14 @@ export function ProjectMemoryModal({
             settingsMutation !== null ||
             disableMemoryConfirmOpen ||
             discardConfirmOpen,
-        pollBlocked: closing,
-        flushOnUnmount: open && canEdit && settingsMutation === null,
+        pollBlocked: closing,        flushOnUnmount: open && canEdit && settingsMutation === null,
         loadMemory,
         saveMemory,
-        conflictLoadError:
-            "Project memory changed while you were editing. Reopen memory before saving again.",
-        saveError:
-            "Project memory could not be saved. Your draft has been kept.",
+        conflictLoadError: t("conflitoEdicao"),
+        saveError: t("erroSalvar"),
         onCurrentChange: handleCurrentChange,
     });
+    const atividadeMemoria = useMemoryActivityLabel(memory);
 
     useEffect(() => {
         if (!open) {
@@ -124,14 +125,14 @@ export function ProjectMemoryModal({
             const current = await setProjectMemoryEnabled(projectId, enabled);
             syncCurrent(current);
             setDisableMemoryConfirmOpen(false);
-            setSavedNotice(enabled ? "Project memory enabled" : null);
+            setSavedNotice(enabled ? t("habilitada") : null);
         } catch (cause) {
             setError(
                 userFacingApiError(
                     cause,
                     enabled
-                        ? "Project memory could not be enabled. Please try again."
-                        : "Project memory could not be disabled. Please try again.",
+                        ? t("erroHabilitar")
+                        : t("erroDesabilitar"),
                 ),
             );
             setDisableMemoryConfirmOpen(false);
@@ -177,14 +178,14 @@ export function ProjectMemoryModal({
             open={open}
             onClose={requestClose}
             breadcrumbs={[
-                "Projects",
-                projectName ?? "Project",
-                "Project Memory",
+                tPagina("projetos"),
+                projectName ?? t("projeto"),
+                t("memoriaProjeto"),
             ]}
             headerAction={
-                memory?.enabled && memoryActivityLabel(memory) ? (
+                memory?.enabled && atividadeMemoria ? (
                     <p className="text-xs text-gray-400" role="status">
-                        {memoryActivityLabel(memory)}
+                        {atividadeMemoria}
                     </p>
                 ) : undefined
             }
@@ -209,7 +210,7 @@ export function ProjectMemoryModal({
                 ) : null
             }
             primaryAction={{
-                label: "Done",
+                label: t("concluido"),
                 type: "button",
                 onClick: () => void requestClose(),
                 disabled: closing || settingsMutation !== null,
@@ -223,8 +224,8 @@ export function ProjectMemoryModal({
                     <GlassCard>
                         <EmptyState
                             icon={<Brain />}
-                            title="Project memory could not be loaded"
-                            description="Try again to inspect this project's shared memory."
+                            title={t("erroCarregar")}
+                            description={t("erroCarregarDescricao")}
                             tone="error"
                             className="px-5 py-8"
                             action={
@@ -233,7 +234,7 @@ export function ProjectMemoryModal({
                                     size="sm"
                                     onClick={() => void load()}
                                 >
-                                    Retry
+                                    {t("repetir")}
                                 </PillButton>
                             }
                         />
@@ -242,10 +243,9 @@ export function ProjectMemoryModal({
                     <>
                         <div className="flex items-start justify-between gap-4">
                             <div>
-                                <FieldLabel as="p">Project memory</FieldLabel>
+                                <FieldLabel as="p">{t("titulo")}</FieldLabel>
                                 <p className="text-sm text-gray-500">
-                                    Consists of shared project context curated
-                                    from chats in this project.
+                                    {t("descricao")}
                                 </p>
                             </div>
                             <ToggleSwitch
@@ -267,7 +267,7 @@ export function ProjectMemoryModal({
                                     disableMemoryConfirmOpen ||
                                     discardConfirmOpen
                                 }
-                                aria-label="Enable project memory"
+                                aria-label={t("habilitarAria")}
                                 aria-busy={settingsMutation !== null}
                             />
                         </div>
@@ -276,11 +276,11 @@ export function ProjectMemoryModal({
                             <GlassCard>
                                 <EmptyState
                                     icon={<Brain />}
-                                    title="Project memory is off"
+                                    title={t("desligadaTitulo")}
                                     description={
                                         canManage
-                                            ? "Turn it on to start a new shared project memory.md for future conversations."
-                                            : "A project owner can enable memory for future project conversations."
+                                            ? t("desligadaGerenciavel")
+                                            : t("desligadaSomenteLeitura")
                                     }
                                     className="px-5 py-8"
                                 />
@@ -317,7 +317,7 @@ export function ProjectMemoryModal({
                                             disableMemoryConfirmOpen ||
                                             discardConfirmOpen
                                         }
-                                        ariaLabel="Project memory"
+                                        ariaLabel={t("memoriaProjeto")}
                                         className="h-full"
                                         allowTables={false}
                                     />
@@ -330,9 +330,13 @@ export function ProjectMemoryModal({
 
             <ConfirmPopup
                 open={disableMemoryConfirmOpen}
-                title="Turn off project memory?"
-                message={`This will delete the existing project memory.md file${dirty ? " and your unsaved draft" : ""}, cancel pending memory updates, and stop future memory updates until you turn project memory on again.`}
-                confirmLabel="Disable"
+                title={t("desligarTitulo")}
+                message={
+                    dirty
+                        ? t("desligarMensagemRascunho")
+                        : t("desligarMensagem")
+                }
+                confirmLabel={t("desabilitar")}
                 confirmVariant="danger"
                 confirmStatus={
                     settingsMutation === "disable" ? "loading" : "idle"
@@ -345,9 +349,9 @@ export function ProjectMemoryModal({
 
             <ConfirmPopup
                 open={discardConfirmOpen}
-                title="Close without saving?"
-                message="The latest changes could not be saved to this project's memory.md. Closing now discards them."
-                confirmLabel="Close without saving"
+                title={t("fecharTitulo")}
+                message={t("fecharMensagem")}
+                confirmLabel={t("fecharSemSalvar")}
                 confirmVariant="danger"
                 onConfirm={() => {
                     autosave.cancelPending();
@@ -365,8 +369,9 @@ export function ProjectMemoryModal({
 }
 
 function ProjectMemorySkeleton() {
+    const t = useTranslations("modals.memoriaProjeto");
     return (
-        <div className="space-y-4" aria-label="Loading project memory">
+        <div className="space-y-4" aria-label={t("carregando")}>
             <div className="space-y-2">
                 <div className="h-3 w-full max-w-xl animate-pulse rounded bg-gray-100" />
                 <div className="h-3 w-40 animate-pulse rounded bg-gray-100" />

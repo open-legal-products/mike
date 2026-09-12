@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { authGlassCardClassName } from "@/app/components/auth/authStyles";
 import { SiteLogo } from "@/app/components/site-logo";
@@ -10,6 +11,7 @@ import { PillButton } from "@/app/components/ui/pill-button";
 import { useAuth } from "@/app/contexts/AuthContext";
 
 export default function SignupCheckEmailPage() {
+    const t = useTranslations("auth.confirmaEmail");
     const router = useRouter();
     const { isAuthenticated, authLoading } = useAuth();
 
@@ -31,11 +33,10 @@ export default function SignupCheckEmailPage() {
                     ) : (
                         <>
                             <h1 className="font-serif text-2xl font-medium text-gray-950">
-                                Check your email
+                                {t("titulo")}
                             </h1>
                             <p className="mt-3 text-sm leading-relaxed text-gray-600">
-                                We sent a confirmation link to your email
-                                address. Confirm your address before logging in.
+                                {t("mensagem")}
                             </p>
                             <PillButton
                                 asChild
@@ -43,7 +44,7 @@ export default function SignupCheckEmailPage() {
                                 size="normal"
                                 className="mt-6"
                             >
-                                <Link href="/login">Return to login</Link>
+                                <Link href="/login">{t("voltarLogin")}</Link>
                             </PillButton>
                         </>
                     )}

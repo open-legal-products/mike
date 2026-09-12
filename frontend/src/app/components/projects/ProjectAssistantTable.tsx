@@ -7,6 +7,7 @@ import {
     type Dispatch,
     type SetStateAction,
 } from "react";
+import { useTranslations } from "next-intl";
 import {
     RowActionMenuItems,
     RowActions,
@@ -88,6 +89,8 @@ export function ProjectAssistantTable({
     setRenameChatValue: Dispatch<SetStateAction<string>>;
     loading?: boolean;
 }) {
+    const tPagina = useTranslations("projects.pagina");
+    const tPermissao = useTranslations("popups.permissao");
     const [creatorFilter, setCreatorFilter] = useState<string | null>(null);
     const [sort, setSort] = useState<{
         key: ProjectChatSortKey;
@@ -296,7 +299,9 @@ export function ProjectAssistantTable({
                                                       )
                                                   ) {
                                                       onOwnerOnlyAction({
-                                                          action: "rename this chat",
+                                                          action: tPermissao(
+                                                              "acaoRenomear",
+                                                          ),
                                                           requiredRole:
                                                               "editor",
                                                       });
@@ -316,7 +321,7 @@ export function ProjectAssistantTable({
                                     }
                                     deleteLabel={
                                         appliesToSelection
-                                            ? `Delete ${actionIds.length} chats`
+                                            ? tPagina("excluirNConversas", { count: actionIds.length })
                                             : undefined
                                     }
                                 />
@@ -401,7 +406,9 @@ export function ProjectAssistantTable({
                                             )
                                         ) {
                                             onOwnerOnlyAction({
-                                                action: "rename this chat",
+                                                action: tPermissao(
+                                                    "acaoRenomear",
+                                                ),
                                                 requiredRole: "editor",
                                             });
                                             return;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { withIntl } from "@/test/withIntl";
 import { deleteProject } from "@/app/lib/mikeApi";
 import { usePaginatedProjects } from "@/app/hooks/usePaginatedProjects";
 import type { Project } from "@/app/components/shared/types";
@@ -70,8 +71,8 @@ function mockHook(rows: Project[], selected: string[], ownerIds: Record<string, 
 }
 
 async function bulkDelete() {
-    fireEvent.click(screen.getByText("Actions"));
-    fireEvent.click(screen.getByText("Delete"));
+    fireEvent.click(screen.getByText("Ações"));
+    fireEvent.click(screen.getByText("Excluir"));
 }
 
 describe("ProjectsOverview bulk delete", () => {
@@ -99,7 +100,7 @@ describe("ProjectsOverview bulk delete", () => {
             ["mine", "unknown-row"],
             { "unknown-row": null },
         );
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
         await bulkDelete();
 
@@ -110,7 +111,7 @@ describe("ProjectsOverview bulk delete", () => {
 
     it("still deletes an unloaded row the caller demonstrably created", async () => {
         mockHook([], ["off-page"], { "off-page": "me" });
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
         await bulkDelete();
 
@@ -132,13 +133,13 @@ describe("ProjectsOverview bulk delete", () => {
             ],
             ["theirs"],
         );
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
         await bulkDelete();
 
         await waitFor(() =>
             expect(
-                screen.getByText(/only a project owner can delete a project/),
+                screen.getByText(/Somente o proprietário pode excluir o projeto selecionado/),
             ).toBeInTheDocument(),
         );
         expect(

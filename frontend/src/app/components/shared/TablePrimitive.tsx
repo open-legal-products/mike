@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/app/lib/utils";
 import {
     DropdownMenu,
@@ -465,6 +466,7 @@ export function TablePrimaryCell({
     onEditCommit?: () => void;
     onEditCancel?: () => void;
 }) {
+    const t = useTranslations("shell.tabela");
     const content =
         label !== undefined ? (
             editing ? (
@@ -509,7 +511,7 @@ export function TablePrimaryCell({
                         aria-label={
                             checkboxTitle ??
                             (typeof label === "string"
-                                ? `Select ${label}`
+                                ? t("selecionar", { item: label })
                                 : undefined)
                         }
                     />

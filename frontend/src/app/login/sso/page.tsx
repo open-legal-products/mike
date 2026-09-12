@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
@@ -16,16 +17,14 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { startSso } from "@/app/lib/authApi";
 import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
 
-const SSO_ERROR_MESSAGES = {
-    invalid_request: "Enter a valid company email address.",
-    sso_domain_not_allowed:
-        "Single sign-on is not available for this email domain.",
-    sso_disabled: "Single sign-on is not enabled.",
-    sso_unavailable:
-        "Unable to start single sign-on for this email domain.",
-} as const;
-
 export default function SsoLoginPage() {
+    const t = useTranslations("auth.sso");
+    const ssoErrorMessages: Record<string, string> = {
+        invalid_request: t("erroEmailInvalido"),
+        sso_domain_not_allowed: t("erroDominioNaoPermitido"),
+        sso_disabled: t("erroSsoDesativado"),
+        sso_unavailable: t("erroSsoIndisponivel"),
+    };
     const router = useRouter();
     const { isAuthenticated, authLoading } = useAuth();
     const [email, setEmail] = useState("");
@@ -53,8 +52,8 @@ export default function SsoLoginPage() {
             setError(
                 knownErrorCodeMessage(
                     caught,
-                    SSO_ERROR_MESSAGES,
-                    "Unable to start single sign-on. Please try again.",
+                    ssoErrorMessages,
+                    t("erroPadrao"),
                 ),
             );
             setLoading(false);
@@ -70,14 +69,14 @@ export default function SsoLoginPage() {
                 <div className={authGlassCardClassName}>
                     <div className="mb-6">
                         <h1 className="font-serif text-2xl font-medium text-gray-950">
-                            SSO Login
+                            {t("titulo")}
                         </h1>
                     </div>
 
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div>
                             <FieldLabel htmlFor="sso-email">
-                                Email
+                                {t("labelEmail")}
                             </FieldLabel>
                             <Input
                                 id="sso-email"
@@ -85,7 +84,7 @@ export default function SsoLoginPage() {
                                 autoComplete="email"
                                 autoCapitalize="none"
                                 spellCheck={false}
-                                placeholder="you@company.com"
+                                placeholder={t("placeholderEmail")}
                                 value={email}
                                 onChange={(event) =>
                                     setEmail(event.target.value)
@@ -120,7 +119,7 @@ export default function SsoLoginPage() {
                                         className="h-4 w-4 animate-spin"
                                     />
                                 )}
-                                {loading ? "Continuing…" : "Continue"}
+                                {loading ? t("botaoContinuando") : t("botaoContinuarAcao")}
                             </PillButton>
                         </div>
                     </form>
@@ -131,7 +130,7 @@ export default function SsoLoginPage() {
                         href="/login"
                         className="font-medium transition-colors hover:text-gray-950"
                     >
-                        Back to login
+                        {t("voltarLogin")}
                     </Link>
                 </div>
             </div>

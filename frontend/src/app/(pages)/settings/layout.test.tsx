@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import SettingsLayout from "./layout";
 
 const push = vi.fn();
@@ -27,16 +28,16 @@ describe("SettingsLayout", () => {
     it("exposes Memory as a dedicated settings page and marks it current", async () => {
         const user = userEvent.setup();
         render(
-            <SettingsLayout>
+            withIntl(<SettingsLayout>
                 <div>Memory content</div>
-            </SettingsLayout>,
+            </SettingsLayout>),
         );
 
-        const memoryTab = screen.getByRole("button", { name: "Memory" });
+        const memoryTab = screen.getByRole("button", { name: "Memória" });
         expect(memoryTab).toHaveAttribute("aria-current", "page");
         expect(screen.getByText("Memory content")).toBeVisible();
 
-        await user.click(screen.getByRole("button", { name: "Features" }));
+        await user.click(screen.getByRole("button", { name: "Recursos" }));
         expect(push).toHaveBeenCalledWith("/settings/features");
     });
 });

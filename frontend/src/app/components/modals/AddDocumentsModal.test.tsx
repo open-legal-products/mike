@@ -35,6 +35,7 @@ vi.mock("../shared/FileDirectory", () => ({
     ),
 }));
 
+import { withIntl } from "@/test/withIntl";
 import { AddDocumentsModal } from "./AddDocumentsModal";
 
 function document(id: string, filename: string) {
@@ -87,12 +88,14 @@ describe("AddDocumentsModal upload progress", () => {
         );
 
         const { container } = render(
-            <AddDocumentsModal
-                open
-                onClose={vi.fn()}
-                onSelect={vi.fn()}
-                breadcrumb={["Documents"]}
-            />,
+            withIntl(
+                <AddDocumentsModal
+                    open
+                    onClose={vi.fn()}
+                    onSelect={vi.fn()}
+                    breadcrumb={["Documents"]}
+                />,
+            ),
         );
         const input = container.querySelector('input[type="file"]');
         expect(input).not.toBeNull();
@@ -168,7 +171,7 @@ describe("AddDocumentsModal upload progress", () => {
             breadcrumb: ["Remount test", crypto.randomUUID()],
             uploadStateId: crypto.randomUUID(),
         };
-        const firstRender = render(<AddDocumentsModal {...props} />);
+        const firstRender = render(withIntl(<AddDocumentsModal {...props} />));
         const input = firstRender.container.querySelector('input[type="file"]');
         fireEvent.change(input!, {
             target: {
@@ -186,7 +189,7 @@ describe("AddDocumentsModal upload progress", () => {
         });
 
         firstRender.unmount();
-        render(<AddDocumentsModal {...props} />);
+        render(withIntl(<AddDocumentsModal {...props} />));
         expect(screen.getByTestId("loading-files")).toHaveTextContent(
             "survives.pdf",
         );
@@ -215,13 +218,15 @@ describe("AddDocumentsModal upload progress", () => {
         // store entry and its documents never reach the selection.
         const projectId = crypto.randomUUID();
         const firstRender = render(
-            <AddDocumentsModal
-                open
-                onClose={vi.fn()}
-                onSelect={vi.fn()}
-                projectId={projectId}
-                breadcrumb={["Projects", "Original name", "Add Documents"]}
-            />,
+            withIntl(
+                <AddDocumentsModal
+                    open
+                    onClose={vi.fn()}
+                    onSelect={vi.fn()}
+                    projectId={projectId}
+                    breadcrumb={["Projects", "Original name", "Add Documents"]}
+                />,
+            ),
         );
         fireEvent.change(
             firstRender.container.querySelector('input[type="file"]')!,
@@ -243,13 +248,15 @@ describe("AddDocumentsModal upload progress", () => {
 
         firstRender.unmount();
         render(
-            <AddDocumentsModal
-                open
-                onClose={vi.fn()}
-                onSelect={vi.fn()}
-                projectId={projectId}
-                breadcrumb={["Projects", "Renamed project", "Add Documents"]}
-            />,
+            withIntl(
+                <AddDocumentsModal
+                    open
+                    onClose={vi.fn()}
+                    onSelect={vi.fn()}
+                    projectId={projectId}
+                    breadcrumb={["Projects", "Renamed project", "Add Documents"]}
+                />,
+            ),
         );
 
         expect(screen.getByTestId("loading-files")).toHaveTextContent(

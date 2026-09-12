@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import PersonalisationPage from "./page";
 
 const { updatePersonalisation } = vi.hoisted(() => ({
@@ -27,25 +28,27 @@ describe("PersonalisationPage", () => {
 
   it("updates the user's professional profile", async () => {
     const user = userEvent.setup();
-    const { container } = render(<PersonalisationPage />);
+    const { container } = render(withIntl(<PersonalisationPage />));
 
     expect(
       container.querySelectorAll('[data-slot="settings-row"]'),
     ).toHaveLength(4);
 
-    await user.click(screen.getByRole("button", { name: "Title" }));
+    await user.click(screen.getByRole("button", { name: "Título" }));
     await user.click(
       screen.getByRole("menuitemradio", { name: "General Counsel" }),
     );
     await user.click(
-      screen.getByRole("button", { name: "Professional setting" }),
+      screen.getByRole("button", { name: "Ambiente profissional" }),
     );
-    await user.click(screen.getByRole("menuitemradio", { name: "In-house" }));
     await user.click(
-      screen.getByRole("button", { name: "Jurisdiction of practice" }),
+      screen.getByRole("menuitemradio", { name: "Jurídico interno (in-house)" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Jurisdição de atuação" }),
     );
     await user.click(screen.getByRole("menuitemradio", { name: "Australia" }));
-    await user.click(screen.getByRole("button", { name: "Practice areas" }));
+    await user.click(screen.getByRole("button", { name: "Áreas de atuação" }));
     const practiceAreaOption = screen.getByRole("menuitemcheckbox", {
       name: "Data Protection and Privacy",
     });
@@ -65,24 +68,24 @@ describe("PersonalisationPage", () => {
         practiceAreas: ["Litigation", "Data Protection and Privacy"],
       }),
     );
-    expect(screen.getByText("Practice areas").parentElement).toHaveTextContent(
-      "Saved",
+    expect(screen.getByText("Áreas de atuação").parentElement).toHaveTextContent(
+      "Salvo",
     );
     expect(screen.queryByText("(optional)")).not.toBeInTheDocument();
   });
 
   it("still saves unrelated fields while an Other box is empty, and says why", async () => {
     const user = userEvent.setup();
-    render(<PersonalisationPage />);
+    render(withIntl(<PersonalisationPage />));
 
-    await user.click(screen.getByRole("button", { name: "Practice areas" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Other" }));
+    await user.click(screen.getByRole("button", { name: "Áreas de atuação" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Outra" }));
     await user.keyboard("{Escape}");
     expect(
-      screen.getByText("Enter your other practice area"),
+      screen.getByText("Digite sua outra área de atuação"),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Title" }));
+    await user.click(screen.getByRole("button", { name: "Título" }));
     await user.click(screen.getByRole("menuitemradio", { name: "Partner" }));
     await waitFor(() =>
       expect(updatePersonalisation).toHaveBeenCalledWith({
@@ -97,14 +100,14 @@ describe("PersonalisationPage", () => {
 
   it("does not drop an earlier pending edit when an Other box turns invalid", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<PersonalisationPage />);
+    const { unmount } = render(withIntl(<PersonalisationPage />));
 
     // Title edit is pending (still inside the debounce window)...
-    await user.click(screen.getByRole("button", { name: "Title" }));
+    await user.click(screen.getByRole("button", { name: "Título" }));
     await user.click(screen.getByRole("menuitemradio", { name: "Partner" }));
     // ...when the user ticks "Other" and leaves it empty.
-    await user.click(screen.getByRole("button", { name: "Practice areas" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Other" }));
+    await user.click(screen.getByRole("button", { name: "Áreas de atuação" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Outra" }));
     await user.keyboard("{Escape}");
 
     unmount(); // flush: the Title change must survive
@@ -120,9 +123,9 @@ describe("PersonalisationPage", () => {
 
   it("flushes a save that is still inside its debounce window on unmount", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<PersonalisationPage />);
+    const { unmount } = render(withIntl(<PersonalisationPage />));
 
-    await user.click(screen.getByRole("button", { name: "Title" }));
+    await user.click(screen.getByRole("button", { name: "Título" }));
     await user.click(screen.getByRole("menuitemradio", { name: "Partner" }));
     expect(updatePersonalisation).not.toHaveBeenCalled();
 

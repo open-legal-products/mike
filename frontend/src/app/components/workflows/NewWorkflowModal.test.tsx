@@ -11,6 +11,7 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Document, Workflow } from "../shared/types";
 import { NewWorkflowModal } from "./NewWorkflowModal";
+import { withIntl } from "@/test/withIntl";
 
 const { useUserProfile } = vi.hoisted(() => ({
     useUserProfile: vi.fn(),
@@ -83,33 +84,39 @@ describe("NewWorkflowModal editing", () => {
         useUserProfile.mockReturnValue({
             profile: { practiceAreas: ["Litigation"] },
         });
-        render(<NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />);
+        render(
+            withIntl(
+                <NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />,
+            ),
+        );
 
-        const typeField = screen.getByText("Type").parentElement;
+        const typeField = screen.getByText("Tipo").parentElement;
         const jurisdictionField =
-            screen.getByText("Jurisdiction").parentElement;
+            screen.getByText("Jurisdição").parentElement;
         expect(typeField?.parentElement).toBe(jurisdictionField?.parentElement);
         expect(typeField?.parentElement).toHaveClass("grid", "md:grid-cols-2");
-        expect(await screen.findByLabelText("Practice area")).toHaveTextContent(
+        expect(await screen.findByLabelText("Área de Prática")).toHaveTextContent(
             "Litigation",
         );
     });
 
     it("disables Save until details change", () => {
         render(
-            <NewWorkflowModal
-                open
-                editWorkflow={workflow}
-                onClose={vi.fn()}
-                onCreated={vi.fn()}
-                onUpdated={vi.fn()}
-            />,
+            withIntl(
+                <NewWorkflowModal
+                    open
+                    editWorkflow={workflow}
+                    onClose={vi.fn()}
+                    onCreated={vi.fn()}
+                    onUpdated={vi.fn()}
+                />,
+            ),
         );
 
-        const save = screen.getByRole("button", { name: "Save" });
+        const save = screen.getByRole("button", { name: "Salvar" });
         expect(save).toBeDisabled();
 
-        const title = screen.getByLabelText("Title");
+        const title = screen.getByLabelText("Título");
         fireEvent.change(title, { target: { value: "Contract Review" } });
         expect(save).toBeEnabled();
 
@@ -123,16 +130,18 @@ describe("NewWorkflowModal editing", () => {
         ]);
 
         render(
-            <NewWorkflowModal
-                open
-                editWorkflow={{ ...workflow, org_id: "org-1" }}
-                onClose={vi.fn()}
-                onCreated={vi.fn()}
-                onUpdated={vi.fn()}
-            />,
+            withIntl(
+                <NewWorkflowModal
+                    open
+                    editWorkflow={{ ...workflow, org_id: "org-1" }}
+                    onClose={vi.fn()}
+                    onCreated={vi.fn()}
+                    onUpdated={vi.fn()}
+                />,
+            ),
         );
 
-        const organisation = await screen.findByLabelText("Organisation");
+        const organisation = await screen.findByLabelText("Organização");
         expect(organisation).toBeDisabled();
         expect(organisation).toHaveTextContent("Elite Law LLP");
     });
@@ -141,34 +150,36 @@ describe("NewWorkflowModal editing", () => {
         const user = userEvent.setup({ delay: null });
         const onCreated = vi.fn();
         render(
-            <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            withIntl(
+                <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            ),
         );
 
-        await user.type(screen.getByLabelText("Title"), "New workflow");
-        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.type(screen.getByLabelText("Título"), "New workflow");
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
 
-        expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible();
-        expect(screen.getByText("Share Access")).toBeInTheDocument();
+        expect(screen.getByRole("dialog", { name: "Acesso" })).toBeVisible();
+        expect(screen.getByText("Compartilhar acesso")).toBeInTheDocument();
         expect(createWorkflow).not.toHaveBeenCalled();
         expect(onCreated).not.toHaveBeenCalled();
 
-        const skip = screen.getByRole("button", { name: "Skip" });
-        const next = screen.getByRole("button", { name: "Next" });
+        const skip = screen.getByRole("button", { name: "Pular" });
+        const next = screen.getByRole("button", { name: "Próximo" });
         expect(skip.parentElement).toBe(next.parentElement);
         expect(skip).toHaveClass("text-gray-500");
-        expect(screen.getByRole("button", { name: "Back" })).toHaveClass(
+        expect(screen.getByRole("button", { name: "Voltar" })).toHaveClass(
             "bg-blue-600/90",
         );
 
         await user.click(next);
         expect(
-            screen.getByRole("dialog", { name: "Add Assets" }),
+            screen.getByRole("dialog", { name: "Adicionar Arquivos" }),
         ).toBeVisible();
         expect(createWorkflow).not.toHaveBeenCalled();
         expect(onCreated).not.toHaveBeenCalled();
 
         await user.click(
-            screen.getByRole("button", { name: "Create workflow" }),
+            screen.getByRole("button", { name: "Criar fluxo" }),
         );
         await waitFor(() => expect(createWorkflow).toHaveBeenCalledTimes(1));
         expect(onCreated).toHaveBeenCalledWith({
@@ -182,21 +193,23 @@ describe("NewWorkflowModal editing", () => {
         const user = userEvent.setup({ delay: null });
         const onCreated = vi.fn();
         render(
-            <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            withIntl(
+                <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            ),
         );
 
-        await user.type(screen.getByLabelText("Title"), "New workflow");
-        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.type(screen.getByLabelText("Título"), "New workflow");
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
         expect(createWorkflow).not.toHaveBeenCalled();
 
-        await user.click(screen.getByRole("button", { name: "Skip" }));
+        await user.click(screen.getByRole("button", { name: "Pular" }));
         expect(
-            screen.getByRole("dialog", { name: "Add Assets" }),
+            screen.getByRole("dialog", { name: "Adicionar Arquivos" }),
         ).toBeVisible();
         expect(createWorkflow).not.toHaveBeenCalled();
 
         await user.click(
-            screen.getByRole("button", { name: "Create workflow" }),
+            screen.getByRole("button", { name: "Criar fluxo" }),
         );
         await waitFor(() => expect(createWorkflow).toHaveBeenCalledTimes(1));
         expect(shareWorkflow).not.toHaveBeenCalled();
@@ -211,17 +224,19 @@ describe("NewWorkflowModal editing", () => {
         const user = userEvent.setup({ delay: null });
         const onCreated = vi.fn();
         render(
-            <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            withIntl(
+                <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            ),
         );
 
-        await user.type(screen.getByLabelText("Title"), "New workflow");
-        await user.click(screen.getByRole("button", { name: "Next" }));
-        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.type(screen.getByLabelText("Título"), "New workflow");
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
         await user.click(screen.getByRole("button", { name: "Select asset" }));
         expect(createWorkflow).not.toHaveBeenCalled();
 
         await user.click(
-            screen.getByRole("button", { name: "Create workflow" }),
+            screen.getByRole("button", { name: "Criar fluxo" }),
         );
 
         await waitFor(() =>
@@ -241,22 +256,24 @@ describe("NewWorkflowModal editing", () => {
         const user = userEvent.setup({ delay: null });
         const onCreated = vi.fn();
         render(
-            <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            withIntl(
+                <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            ),
         );
 
         await user.click(screen.getByRole("button", { name: "Tabular" }));
-        await user.type(screen.getByLabelText("Title"), "Tabular workflow");
-        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.type(screen.getByLabelText("Título"), "Tabular workflow");
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
 
-        expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible();
+        expect(screen.getByRole("dialog", { name: "Acesso" })).toBeVisible();
         expect(
-            screen.getByRole("button", { name: "Create workflow" }),
+            screen.getByRole("button", { name: "Criar fluxo" }),
         ).toBeVisible();
         expect(screen.queryByText("Select asset")).not.toBeInTheDocument();
         expect(createWorkflow).not.toHaveBeenCalled();
 
         await user.click(
-            screen.getByRole("button", { name: "Create workflow" }),
+            screen.getByRole("button", { name: "Criar fluxo" }),
         );
         await waitFor(() => expect(createWorkflow).toHaveBeenCalledTimes(1));
         expect(copyDocumentsToWorkflowAssets).not.toHaveBeenCalled();
@@ -266,17 +283,19 @@ describe("NewWorkflowModal editing", () => {
     it("never creates a new workflow from a generic form submission", () => {
         const onCreated = vi.fn();
         render(
-            <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            withIntl(
+                <NewWorkflowModal open onClose={vi.fn()} onCreated={onCreated} />,
+            ),
         );
 
-        fireEvent.change(screen.getByLabelText("Title"), {
+        fireEvent.change(screen.getByLabelText("Título"), {
             target: { value: "New workflow" },
         });
         const form = document.getElementById("workflow-modal-form");
         expect(form).not.toBeNull();
 
         fireEvent.submit(form!);
-        expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible();
+        expect(screen.getByRole("dialog", { name: "Acesso" })).toBeVisible();
         fireEvent.submit(form!);
 
         expect(createWorkflow).not.toHaveBeenCalled();
@@ -288,11 +307,15 @@ describe("NewWorkflowModal editing", () => {
         vi.mocked(listOrgs).mockResolvedValue([
             { id: "org-1", name: "Elite Law LLP" } as never,
         ]);
-        render(<NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />);
+        render(
+            withIntl(
+                <NewWorkflowModal open onClose={vi.fn()} onCreated={vi.fn()} />,
+            ),
+        );
 
-        const jurisdiction = screen.getByLabelText("Jurisdiction");
+        const jurisdiction = screen.getByLabelText("Jurisdição");
         const organization = await screen.findByLabelText(
-            "Share across Organisation",
+            "Compartilhar com a Organização",
         );
         expect(
             jurisdiction.compareDocumentPosition(organization) &
@@ -303,26 +326,26 @@ describe("NewWorkflowModal editing", () => {
         await user.click(
             await screen.findByRole("menuitem", { name: "Elite Law LLP" }),
         );
-        await user.type(screen.getByLabelText("Title"), "Firm workflow");
-        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.type(screen.getByLabelText("Título"), "Firm workflow");
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
 
         expect(
-            screen.getByRole("dialog", { name: "Organisational Access" }),
+            screen.getByRole("dialog", { name: "Acesso Organizacional" }),
         ).toBeVisible();
         expect(
             screen.getByText(
-                "Add Elite Law LLP members as owners with rights to manage access, settings and delete the workflow.",
+                "Adicione membros de Elite Law LLP como donos, com direitos para gerenciar o acesso e as configurações e excluir o workflow.",
             ),
         ).not.toHaveClass("pl-3");
-        const denyToggle = screen.getByRole("button", { name: "Deny list" });
+        const denyToggle = screen.getByRole("button", { name: "Lista de bloqueio" });
         expect(denyToggle).toHaveAttribute("aria-expanded", "false");
         expect(
-            screen.queryByRole("searchbox", { name: "Deny list" }),
+            screen.queryByRole("searchbox", { name: "Lista de bloqueio" }),
         ).not.toBeInTheDocument();
         await user.click(denyToggle);
         expect(
             screen.getByText(
-                "Deny Elite Law LLP members from accessing this workflow.",
+                "Negue a membros de Elite Law LLP o acesso a este workflow.",
             ),
         ).not.toHaveClass("pl-3");
     });

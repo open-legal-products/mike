@@ -9,6 +9,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { CalendarDays, Download, Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { DayPicker, type Matcher } from "@daypicker/react";
 import dayPickerStyles from "@daypicker/react/style.module.css";
 import { getAuditHistory, type AuditEvent } from "@/app/lib/mikeApi";
@@ -39,17 +40,17 @@ import {
 import { LiquidDropdownContent } from "@/app/components/ui/liquid-dropdown";
 import { cn } from "@/app/lib/utils";
 
-const ACTION_LABELS: Record<string, string> = {
-  "chat.message": "Chat",
-  "document.uploaded": "Document upload",
-  "document.generated": "Generated document",
-  "document.edited": "Document edit",
-  "workflow.applied": "Workflow",
-  "tabular.created": "Tabular review",
-  "tabular.generated": "Tabular run",
-  "export.chats": "Chat export",
-  "export.account": "Account export",
-  "export.tabular": "Review export",
+const ACTION_LABEL_KEYS: Record<string, string> = {
+  "chat.message": "acaoConversa",
+  "document.uploaded": "acaoUploadDocumento",
+  "document.generated": "acaoDocumentoGerado",
+  "document.edited": "acaoEdicaoDocumento",
+  "workflow.applied": "acaoFluxoTrabalho",
+  "tabular.created": "acaoRevisaoTabular",
+  "tabular.generated": "acaoExecucaoTabular",
+  "export.chats": "acaoExportacaoConversas",
+  "export.account": "acaoExportacaoConta",
+  "export.tabular": "acaoExportacaoRevisao",
 };
 
 const STATUS_DOT_STYLES: Record<string, string> = {
@@ -67,32 +68,31 @@ const STATUS_TEXT_STYLES: Record<string, string> = {
 const GLASS_DOT =
   "h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-[0_1px_2px_rgba(15,23,42,0.08),inset_0_1px_1px_rgba(255,255,255,0.55)] backdrop-blur-xl";
 
-const SURFACE_LABELS: Record<string, string> = {
-  assistant: "Assistant",
-  project: "Project",
-  tabular: "Tabular",
-  workflows: "Workflows",
-  account: "Account",
+const SURFACE_LABEL_KEYS: Record<string, string> = {
+  assistant: "superficieAssistente",
+  project: "superficieProjeto",
+  tabular: "superficieTabular",
+  workflows: "superficieWorkflows",
+  account: "superficieConta",
 };
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
+const SORT_OPTIONS: { value: TableSortDirection; labelKey: string }[] = [
+  { value: "asc", labelKey: "ordemCrescente" },
+  { value: "desc", labelKey: "ordemDecrescente" },
 ];
 
-const STATUS_OPTIONS = [
-  { value: "completed", label: "Completed" },
-  { value: "cancelled", label: "Cancelled" },
-  { value: "failed", label: "Failed" },
+const STATUS_OPTION_KEYS = [
+  { value: "completed", labelKey: "statusConcluido" },
+  { value: "cancelled", labelKey: "statusCancelado" },
+  { value: "failed", labelKey: "statusFalhou" },
 ];
 
-const ACTION_OPTIONS = Object.entries(ACTION_LABELS).map(([value, label]) => ({
-  value,
-  label,
-}));
+const ACTION_OPTIONS = Object.entries(ACTION_LABEL_KEYS).map(
+  ([value, labelKey]) => ({ value, labelKey }),
+);
 
-const SURFACE_OPTIONS = Object.entries(SURFACE_LABELS).map(
-  ([value, label]) => ({ value, label }),
+const SURFACE_OPTIONS = Object.entries(SURFACE_LABEL_KEYS).map(
+  ([value, labelKey]) => ({ value, labelKey }),
 );
 
 type AuditSortKey = "created_at" | "user_email" | "title" | "model";
@@ -128,8 +128,8 @@ function defaultDateRange(): {
   return { from: localDateValue(start), to: localDateValue(end) };
 }
 
-function formatRangeDate(value: string): string {
-  if (!value) return "Open";
+function formatRangeDate(value: string, openLabel: string): string {
+  if (!value) return openLabel;
   return new Date(`${value}T00:00:00`).toLocaleDateString(undefined, {
     day: "numeric",
     month: "short",
@@ -151,6 +151,7 @@ function formatStatus(value: string): string {
 }
 
 export default function HistoryPage() {
+  const t = useTranslations("pages.historico");
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -245,7 +246,7 @@ export default function HistoryPage() {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert("Export failed.");
+      alert(t("erroExportar"));
     } finally {
       setExporting(false);
     }
@@ -271,6 +272,32 @@ export default function HistoryPage() {
 
   const initialLoading = loading && events.length === 0;
 
+  const sortOptions: TableFilterOption<TableSortDirection>[] =
+    SORT_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
+  const statusOptions: TableFilterOption<string>[] = STATUS_OPTION_KEYS.map(
+    ({ value, labelKey }) => ({ value, label: t(labelKey) }),
+  );
+  const actionOptions: TableFilterOption<string>[] = ACTION_OPTIONS.map(
+    ({ value, labelKey }) => ({ value, label: t(labelKey) }),
+  );
+  const surfaceOptions: TableFilterOption<string>[] = SURFACE_OPTIONS.map(
+    ({ value, labelKey }) => ({ value, label: t(labelKey) }),
+  );
+  const statusLabel = (value: string) => {
+    const labelKey = STATUS_OPTION_KEYS.find(
+      (option) => option.value === value,
+    )?.labelKey;
+    return labelKey ? t(labelKey) : formatStatus(value);
+  };
+  const actionLabel = (value: string) => {
+    const labelKey = ACTION_LABEL_KEYS[value];
+    return labelKey ? t(labelKey) : value;
+  };
+  const surfaceLabel = (value: string) => {
+    const labelKey = SURFACE_LABEL_KEYS[value];
+    return labelKey ? t(labelKey) : value;
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <PageHeader
@@ -279,7 +306,7 @@ export default function HistoryPage() {
             type: "search",
             value: search,
             onChange: setSearch,
-            placeholder: "Search history…",
+            placeholder: t("buscarHistorico"),
           },
           {
             icon: exporting ? (
@@ -287,15 +314,15 @@ export default function HistoryPage() {
             ) : (
               <Download className="h-4 w-4" />
             ),
-            label: "Export",
-            title: "Export history",
+            label: t("exportar"),
+            title: t("tituloExportar"),
             disabled: exporting,
             onClick: () => void handleExport(),
           },
         ]}
       >
         <h1 className="font-serif text-2xl font-medium text-gray-900">
-          History
+          {t("titulo")}
         </h1>
       </PageHeader>
 
@@ -305,18 +332,18 @@ export default function HistoryPage() {
         header={
           <TableHeaderRow>
             <TableStickyCell header widthClassName="w-52 shrink-0">
-              <span>Username</span>
+              <span>{t("colunaUsuario")}</span>
             </TableStickyCell>
             <TableHeaderCell className="ml-auto w-52">
-              <span className="mr-1">Email</span>
+              <span className="mr-1">{t("colunaEmail")}</span>
               {!initialLoading && (
                 <TableFilters
-                  label="Sort by email"
+                  label={t("ordenarPorEmail")}
                   value={sortValue("user_email")}
-                  allLabel="Default Order"
+                  allLabel={t("ordemPadrao")}
                   widthClassName="w-40"
                   align="right"
-                  options={SORT_OPTIONS}
+                  options={sortOptions}
                   onChange={(direction) =>
                     setSortDirection("user_email", direction)
                   }
@@ -324,13 +351,13 @@ export default function HistoryPage() {
               )}
             </TableHeaderCell>
             <TableHeaderCell className="w-40">
-              <span className="mr-1">Created</span>
+              <span className="mr-1">{t("colunaCriado")}</span>
               {!initialLoading && (
                 <TableFilters
-                  label="Sort by created date"
+                  label={t("ordenarPorData")}
                   value={sortValue("created_at")}
-                  allLabel="Default Order"
-                  options={SORT_OPTIONS}
+                  allLabel={t("ordemPadrao")}
+                  options={sortOptions}
                   onChange={(direction) =>
                     setSortDirection("created_at", direction)
                   }
@@ -338,61 +365,61 @@ export default function HistoryPage() {
               )}
             </TableHeaderCell>
             <TableHeaderCell className="w-72">
-              <span className="mr-1">Title</span>
+              <span className="mr-1">{t("colunaTitulo")}</span>
               {!initialLoading && (
                 <TableFilters
-                  label="Sort by title"
+                  label={t("ordenarPorTitulo")}
                   value={sortValue("title")}
-                  allLabel="Default Order"
-                  options={SORT_OPTIONS}
+                  allLabel={t("ordemPadrao")}
+                  options={sortOptions}
                   onChange={(direction) => setSortDirection("title", direction)}
                 />
               )}
             </TableHeaderCell>
             <TableHeaderCell className="w-28">
-              <span className="mr-1">Status</span>
+              <span className="mr-1">{t("colunaStatus")}</span>
               {!initialLoading && (
                 <TableFilters
-                  label="Filter by status"
+                  label={t("filtrarPorStatus")}
                   value={status}
-                  allLabel="All Statuses"
-                  options={STATUS_OPTIONS}
+                  allLabel={t("todosStatus")}
+                  options={statusOptions}
                   onChange={setStatus}
                 />
               )}
             </TableHeaderCell>
             <TableHeaderCell className="w-44">
-              <span className="mr-1">Type</span>
+              <span className="mr-1">{t("colunaTipo")}</span>
               {!initialLoading && (
                 <TableFilters
-                  label="Filter by type"
+                  label={t("filtrarPorTipo")}
                   value={action}
-                  allLabel="All Types"
-                  options={ACTION_OPTIONS}
+                  allLabel={t("todosTipos")}
+                  options={actionOptions}
                   onChange={setAction}
                 />
               )}
             </TableHeaderCell>
             <TableHeaderCell className="w-32">
-              <span className="mr-1">Application</span>
+              <span className="mr-1">{t("colunaAplicacao")}</span>
               {!initialLoading && (
                 <TableFilters
-                  label="Filter by application"
+                  label={t("filtrarPorAplicacao")}
                   value={surface}
-                  allLabel="All Applications"
-                  options={SURFACE_OPTIONS}
+                  allLabel={t("todosAplicativos")}
+                  options={surfaceOptions}
                   onChange={setSurface}
                 />
               )}
             </TableHeaderCell>
             <TableHeaderCell className="w-28">
-              <span className="mr-1">Model</span>
+              <span className="mr-1">{t("colunaModelo")}</span>
               {!initialLoading && (
                 <TableFilters
-                  label="Sort by model"
+                  label={t("ordenarPorModelo")}
                   value={sortValue("model")}
-                  allLabel="Default Order"
-                  options={SORT_OPTIONS}
+                  allLabel={t("ordemPadrao")}
+                  options={sortOptions}
                   onChange={(direction) => setSortDirection("model", direction)}
                 />
               )}
@@ -406,17 +433,17 @@ export default function HistoryPage() {
           <TableBody className="flex">
             <TableEmptyState>
               <p className="font-serif text-2xl font-medium text-gray-900">
-                History unavailable
+                {t("indisponivel")}
               </p>
               <p className="mt-1 text-xs text-gray-400">
-                Your activity could not be loaded.
+                {t("erroCarregar")}
               </p>
               <PillButton
                 tone="white"
                 className="mt-4"
                 onClick={() => void load(1, false)}
               >
-                Try again
+                {t("tentarNovamente")}
               </PillButton>
             </TableEmptyState>
           </TableBody>
@@ -428,10 +455,10 @@ export default function HistoryPage() {
                 className="mb-4 h-14 w-14"
               />
               <p className="font-serif text-2xl font-medium text-gray-900">
-                No history yet
+                {t("semHistorico")}
               </p>
               <p className="mt-1 text-xs text-gray-400">
-                Actions appear here as you use the app.
+                {t("descricaoSemHistorico")}
               </p>
             </TableEmptyState>
           </TableBody>
@@ -473,16 +500,14 @@ export default function HistoryPage() {
                         data-testid={`status-dot-${event.id}`}
                         className={`${GLASS_DOT} ${STATUS_DOT_STYLES[event.status] ?? "bg-gray-400/80"}`}
                       />
-                      {formatStatus(event.status)}
+                      {statusLabel(event.status)}
                     </span>
                   </TableCell>
                   <TableCell className="w-44 text-xs text-gray-700">
-                    {ACTION_LABELS[event.action] ?? event.action}
+                    {actionLabel(event.action)}
                   </TableCell>
                   <TableCell className="w-32 text-xs">
-                    {event.surface
-                      ? (SURFACE_LABELS[event.surface] ?? event.surface)
-                      : "—"}
+                    {event.surface ? surfaceLabel(event.surface) : "—"}
                   </TableCell>
                   <TableCell className="w-28 pr-4 text-xs">
                     {event.model ?? "—"}
@@ -501,7 +526,7 @@ export default function HistoryPage() {
                   tone="white"
                   onClick={() => void load(page + 1, true)}
                 >
-                  Load more ({events.length} of {total})
+                  {t("carregarMais", { exibidos: events.length, total })}
                 </PillButton>
               </div>
             )}
@@ -521,6 +546,7 @@ function DateRangeDropdown({
   to: string;
   onChange: (range: { from: string; to: string }) => void;
 }) {
+  const t = useTranslations("pages.historico");
   const [open, setOpen] = useState(false);
   const [draftRange, setDraftRange] = useState({ from, to });
   const hasChanges = draftRange.from !== from || draftRange.to !== to;
@@ -539,9 +565,10 @@ function DateRangeDropdown({
   return (
     <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild>
-        <TabPillButton active aria-label="Select date range">
+        <TabPillButton active aria-label={t("intervaloDatas")}>
           <CalendarDays className="h-3.5 w-3.5" />
-          {formatRangeDate(from)} – {formatRangeDate(to)}
+          {formatRangeDate(from, t("aberto"))} –{" "}
+          {formatRangeDate(to, t("aberto"))}
         </TabPillButton>
       </DropdownMenuTrigger>
       <LiquidDropdownContent
@@ -551,7 +578,7 @@ function DateRangeDropdown({
       >
         <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-[14rem_14rem]">
           <HistoryDatePicker
-            label="Start date"
+            label={t("dataInicial")}
             testId="start-date-picker"
             selected={dateFromLocalValue(draftRange.from)}
             disabled={{ after: dateFromLocalValue(draftRange.to) }}
@@ -563,7 +590,7 @@ function DateRangeDropdown({
             }
           />
           <HistoryDatePicker
-            label="End date"
+            label={t("dataFinal")}
             testId="end-date-picker"
             selected={dateFromLocalValue(draftRange.to)}
             disabled={[
@@ -584,7 +611,7 @@ function DateRangeDropdown({
             disabled={!hasChanges}
             onClick={handleConfirm}
           >
-            Confirm
+            {t("confirmar")}
           </PillButton>
         </div>
       </LiquidDropdownContent>

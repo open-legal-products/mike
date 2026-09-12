@@ -3,6 +3,7 @@
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { AlertCircle, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { GlassIconButton } from "@/app/components/ui/glass-icon-button";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { cn } from "@/app/lib/utils";
@@ -35,6 +36,7 @@ export function WarningPopup({
     primaryAction,
     className,
 }: WarningPopupProps) {
+    const t = useTranslations("popups.aviso");
     if (!open) return null;
 
     const warningIcon = icon ?? (
@@ -86,7 +88,7 @@ export function WarningPopup({
                 <GlassIconButton
                     onClick={onClose}
                     className="absolute right-1.5 top-1.5 h-5 w-5"
-                    aria-label="Dismiss warning"
+                    aria-label={t("descartar")}
                 >
                     <X className="h-3 w-3" />
                 </GlassIconButton>

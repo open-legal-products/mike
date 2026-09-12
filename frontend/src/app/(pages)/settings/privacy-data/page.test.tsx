@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { withIntl } from "@/test/withIntl";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     deleteAllMemories,
@@ -68,11 +69,11 @@ describe("privacy-data async exports", () => {
         globalThis.URL.createObjectURL = vi.fn(() => "blob:mock");
         globalThis.URL.revokeObjectURL = vi.fn();
 
-        render(<PrivacyDataPage />);
+        render(withIntl(<PrivacyDataPage />));
         // All three export buttons are labeled "Export"; render order is
         // chats, tabular reviews, account (see the page's Export data section).
         const exportButtons = screen.getAllByRole("button", {
-            name: "Export",
+            name: "Exportar",
         });
         await userEvent.click(exportButtons[2]);
 
@@ -90,9 +91,9 @@ describe("privacy-data async exports", () => {
         mockedStart.mockResolvedValue({ export_id: "job-9" });
         mockedStatus.mockResolvedValue({ status: "failed" });
 
-        render(<PrivacyDataPage />);
+        render(withIntl(<PrivacyDataPage />));
         const exportButtons = screen.getAllByRole("button", {
-            name: "Export",
+            name: "Exportar",
         });
         await userEvent.click(exportButtons[0]);
 
@@ -114,9 +115,9 @@ describe("privacy-data async exports", () => {
         globalThis.URL.createObjectURL = vi.fn(() => "blob:memory");
         globalThis.URL.revokeObjectURL = vi.fn();
 
-        render(<PrivacyDataPage />);
+        render(withIntl(<PrivacyDataPage />));
         await userEvent.click(
-            screen.getByRole("button", { name: "Export memory" }),
+            screen.getByRole("button", { name: "Exportar memória" }),
         );
 
         await waitFor(() =>
@@ -128,17 +129,17 @@ describe("privacy-data async exports", () => {
     it("confirms and deletes app and private-project memory", async () => {
         mockedDeleteMemories.mockResolvedValue();
 
-        render(<PrivacyDataPage />);
+        render(withIntl(<PrivacyDataPage />));
         await userEvent.click(
-            screen.getByRole("button", { name: "Delete all memory" }),
+            screen.getByRole("button", { name: "Excluir toda a memória" }),
         );
 
-        expect(screen.getByText("Delete all memory?")).toBeVisible();
+        expect(screen.getByText("Excluir toda a memória?")).toBeVisible();
         expect(
-            screen.getAllByText(/private projects you created/i),
+            screen.getAllByText(/projetos privados que você criou/i),
         ).toHaveLength(2);
         const confirmButtons = screen.getAllByRole("button", {
-            name: "Delete",
+            name: "Excluir",
         });
         await userEvent.click(confirmButtons.at(-1)!);
 

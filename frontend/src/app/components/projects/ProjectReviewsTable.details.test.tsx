@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { ProjectReviewsTable } from "./ProjectReviewsTable";
 import type { TabularReview } from "@/app/components/shared/types";
 
@@ -24,39 +25,51 @@ function renderTable(row: TabularReview, handlers: {
     onOwnerOnlyAction: (gate: unknown) => void;
 }) {
     return render(
-        <ProjectReviewsTable
-            docs={[]}
-            reviews={[row]}
-            selectedReviewIds={[]}
-            creatingReview={false}
-            onCreateReview={vi.fn()}
-            onDeleteSelectedReviews={vi.fn()}
-            onOpenReview={vi.fn()}
-            onOpenDetails={handlers.onOpenDetails}
-            onDeleteReview={vi.fn()}
-            onOwnerOnlyAction={handlers.onOwnerOnlyAction}
-            setSelectedReviewIds={vi.fn()}
-            onToggleAll={vi.fn()}
-            deletingReviewIds={new Set<string>()}
-            hasActiveSearch={false}
-            sort={{ key: "created", direction: "desc" }}
-            onSortChange={vi.fn()}
-            hasMore={false}
-            loadingMore={false}
-            error={null}
-            loadMoreError={null}
-            onLoadMore={vi.fn()}
-            onRetry={vi.fn()}
-        />,
+        withIntl(
+            <ProjectReviewsTable
+                docs={[]}
+                reviews={[row]}
+                selectedReviewIds={[]}
+                creatingReview={false}
+                onCreateReview={vi.fn()}
+                onDeleteSelectedReviews={vi.fn()}
+                onOpenReview={vi.fn()}
+                onOpenDetails={handlers.onOpenDetails}
+                onDeleteReview={vi.fn()}
+                onOwnerOnlyAction={handlers.onOwnerOnlyAction}
+                setSelectedReviewIds={vi.fn()}
+                onToggleAll={vi.fn()}
+                deletingReviewIds={new Set<string>()}
+                hasActiveSearch={false}
+                sort={{ key: "created", direction: "desc" }}
+                onSortChange={vi.fn()}
+                hasMore={false}
+                loadingMore={false}
+                error={null}
+                loadMoreError={null}
+                onLoadMore={vi.fn()}
+                onRetry={vi.fn()}
+            />,
+            // The popup namespace lands with this translation batch; the
+            // shared catalog still does not carry it.
+            {
+                popups: {
+                    permissao: {
+                        acaoEditarDetalhesRevisao:
+                            "editar os detalhes desta revisão tabular",
+                    },
+                },
+            },
+        ),
     );
 }
 
 async function clickEditDetails() {
     const menuButton = screen.getAllByRole("button", {
-        name: /row actions/i,
+        name: "Abrir ações da linha",
     })[0];
     fireEvent.click(menuButton);
-    const edit = await screen.findByText(/edit details/i);
+    const edit = await screen.findByText("Editar detalhes");
     fireEvent.click(edit);
 }
 
@@ -81,7 +94,7 @@ describe("ProjectReviewsTable details gate", () => {
 
         expect(onOpenDetails).not.toHaveBeenCalled();
         expect(onOwnerOnlyAction).toHaveBeenCalledWith({
-            action: "edit tabular review details",
+            action: "editar os detalhes desta revisão tabular",
             requiredRole: "editor",
         });
     });

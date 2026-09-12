@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { SiteLogo } from "@/app/components/site-logo";
 import { PillButton } from "@/app/components/ui/pill-button";
@@ -21,6 +22,7 @@ type MfaFactor = {
 };
 
 export default function VerifyMfaPage() {
+    const t = useTranslations("auth.verificarMfa");
     const router = useRouter();
     const searchParams = useSearchParams();
     const { user, authLoading, signOut } = useAuth();
@@ -37,7 +39,7 @@ export default function VerifyMfaPage() {
         ? [
               {
                   id: "preview-factor",
-                  friendly_name: "Authenticator app",
+                  friendly_name: t("appAutenticacao"),
                   factor_type: "totp",
               },
           ]
@@ -84,13 +86,11 @@ export default function VerifyMfaPage() {
                 setFactors(verified);
                 setSelectedFactorId(verified[0]?.id ?? "");
                 if (verified.length === 0) {
-                    setError(
-                        "No verified authenticator factor is available for this account.",
-                    );
+                    setError(t("erroSemFatorConta"));
                 }
             } catch {
                 if (cancelled) return;
-                setError("Unable to load authenticator verification.");
+                setError(t("erroCarregar"));
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -112,7 +112,7 @@ export default function VerifyMfaPage() {
             await challengeAndVerifyMfa(displayedFactorId, code.trim());
         } catch {
             setVerifying(false);
-            setError("The verification code is invalid or expired.");
+            setError(t("erroCodigoInvalido"));
             return;
         }
 
@@ -128,7 +128,7 @@ export default function VerifyMfaPage() {
             await signOut();
             router.replace("/login");
         } catch {
-            setError("Unable to sign out. Please try again.");
+            setError(t("erroSair"));
         }
     }
 
@@ -140,11 +140,10 @@ export default function VerifyMfaPage() {
             <div className={`w-full max-w-md ${authGlassCardClassName}`}>
                 <div className="mb-8 space-y-2">
                     <h1 className="font-serif text-2xl font-medium text-gray-950">
-                        Verify your identity
+                        {t("titulo")}
                     </h1>
                     <p className="text-sm text-gray-500">
-                        Enter the six-digit code from your authenticator app to
-                        continue.
+                        {t("descricao")}
                     </p>
                 </div>
 
@@ -152,12 +151,11 @@ export default function VerifyMfaPage() {
                     {displayedLoading ? (
                         <div className="flex h-13 items-center justify-center text-sm text-gray-500">
                             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Loading authenticator...
+                            {t("carregando")}
                         </div>
                     ) : displayedFactors.length === 0 ? (
                         <p className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-600">
-                            No verified authenticator factor is available for
-                            this session.
+                            {t("semFatorSessao")}
                         </p>
                     ) : (
                         <>
@@ -175,7 +173,7 @@ export default function VerifyMfaPage() {
                                             value={factor.id}
                                         >
                                             {factor.friendly_name ||
-                                                "Authenticator app"}
+                                                t("appAutenticacao")}
                                         </option>
                                     ))}
                                 </select>
@@ -200,7 +198,7 @@ export default function VerifyMfaPage() {
                             disabled={verifying}
                             className="px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:text-gray-950 disabled:cursor-not-allowed disabled:text-gray-400"
                         >
-                            Cancel
+                            {t("cancelar")}
                         </button>
                         <PillButton
                             tone="black"
@@ -210,7 +208,9 @@ export default function VerifyMfaPage() {
                             disabled={!canVerify}
                             loading={verifying}
                         >
-                            {verifying ? "Verifying..." : "Verify"}
+                            {verifying
+                                ? t("botaoVerificando")
+                                : t("botaoVerificar")}
                         </PillButton>
                     </div>
                 </div>

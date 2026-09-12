@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import ptBR from "../../../messages/pt-BR.json";
+import { withIntl } from "@/test/withIntl";
 import MikeLayout from "./layout";
 
 const navigation = vi.hoisted(() => ({
@@ -34,11 +36,22 @@ beforeEach(() => {
 });
 
 describe("mobile page header", () => {
+    const messages = {
+        ...ptBR,
+        shell: {
+            ...ptBR.shell,
+            header: { abrirMenu: ptBR.shared.appSidebar.abrirMenu },
+        },
+    };
+
     it("floats transparently over chat pages", () => {
         render(
-            <MikeLayout>
-                <div>Chat</div>
-            </MikeLayout>,
+            withIntl(
+                <MikeLayout>
+                    <div>Chat</div>
+                </MikeLayout>,
+                messages,
+            ),
         );
 
         const header = document.querySelector('[data-slot="mobile-header"]');
@@ -52,12 +65,15 @@ describe("mobile page header", () => {
 
     it("uses the header-button styling for the sidebar toggle", () => {
         render(
-            <MikeLayout>
-                <div>Page</div>
-            </MikeLayout>,
+            withIntl(
+                <MikeLayout>
+                    <div>Page</div>
+                </MikeLayout>,
+                messages,
+            ),
         );
 
-        const toggle = screen.getByRole("button", { name: "Open sidebar" });
+        const toggle = screen.getByRole("button", { name: "Abrir menu lateral" });
         expect(toggle).toHaveClass("h-7", "w-7", "rounded-full");
         expect(toggle.parentElement).toHaveClass(
             "liquid-glass-subtle",
@@ -68,9 +84,12 @@ describe("mobile page header", () => {
     it("keeps the mobile header in normal flow on non-chat pages", () => {
         navigation.pathname = "/projects";
         render(
-            <MikeLayout>
-                <div>Projects</div>
-            </MikeLayout>,
+            withIntl(
+                <MikeLayout>
+                    <div>Projects</div>
+                </MikeLayout>,
+                messages,
+            ),
         );
 
         const header = document.querySelector('[data-slot="mobile-header"]');

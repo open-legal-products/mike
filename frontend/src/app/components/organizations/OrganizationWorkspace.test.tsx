@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { withIntl } from "@/test/withIntl";
+
+// The popups.aviso namespace lands with this translation batch; the shared
+// catalog still does not carry it.
+const mensagensPopup = {
+    popups: {
+        aviso: { descartar: "Descartar aviso" },
+    },
+};
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { OrganizationWorkspace } from "./OrganizationWorkspace";
 
@@ -107,31 +116,31 @@ beforeEach(() => {
 describe("OrganizationWorkspace", () => {
   it("shows the breadcrumb, member identity columns, and every resource tab", async () => {
     const user = userEvent.setup();
-    render(<OrganizationWorkspace orgId="org-1" />);
+    render(withIntl(<OrganizationWorkspace orgId="org-1" />, mensagensPopup));
 
     expect(await screen.findByText("William Chen")).toBeInTheDocument();
     expect(screen.getByText("me@firm.example")).toBeInTheDocument();
     expect(screen.getAllByText("Elite Law LLP")).not.toHaveLength(0);
-    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(screen.getByText("Adicionado em")).toBeInTheDocument();
     expect(
-      screen.getByRole("checkbox", { name: "Select all people" }),
+      screen.getByRole("checkbox", { name: "Selecionar todas as pessoas" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Filter by role" }),
+      screen.getByRole("button", { name: "Filtrar por papel" }),
     ).toBeInTheDocument();
     const peopleRow = screen
-      .getByRole("checkbox", { name: "Select Jane Lee" })
+      .getByRole("checkbox", { name: "Selecionar Jane Lee" })
       .closest(".group");
     expect(peopleRow).toHaveClass("liquid-glass-hover");
     expect(peopleRow).not.toHaveClass("cursor-pointer");
 
-    await user.click(screen.getByRole("button", { name: "Projects" }));
-    expect(screen.getByRole("link", { name: "Open Apollo" })).toHaveClass(
+    await user.click(screen.getByRole("button", { name: "Projetos" }));
+    expect(screen.getByRole("link", { name: "Abrir Apollo" })).toHaveClass(
       "liquid-glass-hover",
     );
     await user.click(screen.getByRole("button", { name: "Workflows" }));
     expect(
-      screen.getByRole("link", { name: "Open Disclosure workflow" }),
+      screen.getByRole("link", { name: "Abrir Disclosure workflow" }),
     ).toHaveClass("liquid-glass-hover");
     expect(screen.queryByRole("button", { name: "Chats" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reviews" })).not.toBeInTheDocument();
@@ -140,15 +149,15 @@ describe("OrganizationWorkspace", () => {
   it("lets admins change a member's role from the colored role tab", async () => {
     const user = userEvent.setup();
     mocks.updateOrgMember.mockResolvedValue({});
-    render(<OrganizationWorkspace orgId="org-1" />);
+    render(withIntl(<OrganizationWorkspace orgId="org-1" />, mensagensPopup));
     await screen.findByText("Jane Lee");
 
     const roleTab = screen.getByRole("button", {
-      name: "Change role for Jane Lee",
+      name: "Alterar papel de Jane Lee",
     });
     expect(roleTab).toHaveClass("bg-violet-100", "text-violet-700");
     await user.click(roleTab);
-    await user.click(screen.getByRole("menuitem", { name: "Admin" }));
+    await user.click(screen.getByRole("menuitem", { name: "Administrador" }));
 
     await waitFor(() =>
       expect(mocks.updateOrgMember).toHaveBeenCalledWith(
@@ -158,7 +167,7 @@ describe("OrganizationWorkspace", () => {
       ),
     );
     expect(
-      screen.getByRole("button", { name: "Change role for Jane Lee" }),
+      screen.getByRole("button", { name: "Alterar papel de Jane Lee" }),
     ).toHaveClass("bg-blue-100", "text-blue-700");
   });
 
@@ -167,45 +176,45 @@ describe("OrganizationWorkspace", () => {
     mocks.updateOrgMember.mockRejectedValue(
       new MikeApiError({
         status: 409,
-        message: "An organization must keep at least one admin.",
+        message: "A organização precisa manter pelo menos um administrador.",
       }),
     );
-    render(<OrganizationWorkspace orgId="org-1" />);
+    render(withIntl(<OrganizationWorkspace orgId="org-1" />, mensagensPopup));
     await screen.findByText("William Chen");
 
     await user.click(
-      screen.getByRole("button", { name: "Change role for William Chen" }),
+      screen.getByRole("button", { name: "Alterar papel de William Chen" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Member" }));
+    await user.click(screen.getByRole("menuitem", { name: "Membro" }));
 
     expect(
-      await screen.findByText("An organization must keep at least one admin."),
+      await screen.findByText("A organização precisa manter pelo menos um administrador."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Organization action failed")).toBeInTheDocument();
+    expect(screen.getByText("Falha na ação da organização")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Dismiss warning" }),
+      screen.getByRole("button", { name: "Descartar aviso" }),
     ).toBeInTheDocument();
   });
 
   it("reveals a toolbar action and removes selected people", async () => {
     const user = userEvent.setup();
     mocks.removeOrgMember.mockResolvedValue(undefined);
-    render(<OrganizationWorkspace orgId="org-1" />);
+    render(withIntl(<OrganizationWorkspace orgId="org-1" />, mensagensPopup));
     await screen.findByText("Jane Lee");
 
     expect(
-      screen.queryByRole("button", { name: "Actions" }),
+      screen.queryByRole("button", { name: "Ações" }),
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole("checkbox", { name: "Select Jane Lee" }));
-    await user.click(screen.getByRole("button", { name: "Actions" }));
+    await user.click(screen.getByRole("checkbox", { name: "Selecionar Jane Lee" }));
+    await user.click(screen.getByRole("button", { name: "Ações" }));
     const removeAction = screen.getByRole("menuitem", {
-      name: "Remove all selected",
+      name: "Remover todos os selecionados",
     });
     expect(removeAction.querySelector("svg")).toHaveClass("text-red-600");
     await user.click(removeAction);
 
-    expect(screen.getByText("Remove selected people?")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(screen.getByText("Remover as pessoas selecionadas?")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remover" }));
     await waitFor(() =>
       expect(mocks.removeOrgMember).toHaveBeenCalledWith("org-1", "u2"),
     );
@@ -214,38 +223,38 @@ describe("OrganizationWorkspace", () => {
 
   it("warns an admin who includes themselves in bulk removal", async () => {
     const user = userEvent.setup();
-    render(<OrganizationWorkspace orgId="org-1" />);
+    render(withIntl(<OrganizationWorkspace orgId="org-1" />, mensagensPopup));
     await screen.findByText("William Chen");
 
     await user.click(
-      screen.getByRole("checkbox", { name: "Select William Chen" }),
+      screen.getByRole("checkbox", { name: "Selecionar William Chen" }),
     );
-    await user.click(screen.getByRole("button", { name: "Actions" }));
+    await user.click(screen.getByRole("button", { name: "Ações" }));
     await user.click(
-      screen.getByRole("menuitem", { name: "Remove all selected" }),
+      screen.getByRole("menuitem", { name: "Remover todos os selecionados" }),
     );
 
     expect(
-      await screen.findByText("An organization must keep at least one admin."),
+      await screen.findByText("A organização precisa manter pelo menos um administrador."),
     ).toBeInTheDocument();
     expect(mocks.removeOrgMember).not.toHaveBeenCalled();
   });
 
   it("offers add-member and settings actions only to admins", async () => {
     const user = userEvent.setup();
-    render(<OrganizationWorkspace orgId="org-1" />);
+    render(withIntl(<OrganizationWorkspace orgId="org-1" />, mensagensPopup));
     await screen.findByText("William Chen");
 
-    await user.click(screen.getByRole("button", { name: "Add member" }));
-    expect(screen.getByText("Email address")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Adicionar membro" }));
+    expect(screen.getByText("Endereço de e-mail")).toBeInTheDocument();
     expect(mocks.listOrgInvitations).toHaveBeenCalledWith("org-1");
 
     await user.keyboard("{Escape}");
     await user.click(
-      screen.getByRole("button", { name: "Organization settings" }),
+      screen.getByRole("button", { name: "Configurações da organização" }),
     );
-    await user.click(screen.getByText("Organization settings"));
-    expect(screen.getByLabelText("Organization name")).toHaveValue(
+    await user.click(screen.getByText("Configurações da organização"));
+    expect(screen.getByLabelText("Nome da organização")).toHaveValue(
       "Elite Law LLP",
     );
   });
@@ -253,17 +262,17 @@ describe("OrganizationWorkspace", () => {
   it("lets members browse resources but does not load administrative invitations", async () => {
     mocks.role = "member";
     const user = userEvent.setup();
-    render(<OrganizationWorkspace orgId="org-1" />);
+    render(withIntl(<OrganizationWorkspace orgId="org-1" />, mensagensPopup));
     await screen.findByText("William Chen");
 
     expect(mocks.listOrgInvitations).not.toHaveBeenCalled();
     expect(
       screen.getByRole("button", {
-        name: "Only organization admins can add members",
+        name: "Somente administradores da organização podem adicionar membros",
       }),
     ).toBeDisabled();
     expect(
-      screen.queryByRole("button", { name: "Organization settings" }),
+      screen.queryByRole("button", { name: "Configurações da organização" }),
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Workflows" }));

@@ -3,6 +3,7 @@
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { Trash2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
@@ -27,29 +28,40 @@ export function ConfirmPopup({
   open,
   title,
   message,
-  confirmLabel = "Confirm",
+  confirmLabel,
   confirmVariant = "default",
   confirmStatus = "idle",
-  cancelLabel = "Cancel",
+  cancelLabel,
   onConfirm,
   onCancel,
   confirmDisabled = false,
   className,
 }: ConfirmPopupProps) {
+  const t = useTranslations("popups.confirmar");
   if (!open) return null;
   const confirmBusy = confirmStatus === "loading";
   const resolvedConfirmDisabled = confirmDisabled || confirmStatus !== "idle";
+  const isDefaultConfirmLabel = confirmLabel === undefined;
   const normalizedConfirmLabel =
     typeof confirmLabel === "string" ? confirmLabel : "Confirm";
   const isDangerAction = confirmVariant === "danger";
   const resolvedConfirmLabel =
     confirmStatus === "loading" ? (
-      progressiveLabel(normalizedConfirmLabel)
+      isDefaultConfirmLabel ? (
+        t("confirmando")
+      ) : (
+        progressiveLabel(normalizedConfirmLabel)
+      )
     ) : confirmStatus === "complete" ? (
-      completedLabel(normalizedConfirmLabel)
+      isDefaultConfirmLabel ? (
+        t("confirmado")
+      ) : (
+        completedLabel(normalizedConfirmLabel)
+      )
     ) : (
-      confirmLabel
+      confirmLabel ?? t("confirmar")
     );
+  const resolvedCancelLabel = cancelLabel ?? t("cancelar");
 
   return createPortal(
     <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[230] flex justify-center px-4">
@@ -69,7 +81,7 @@ export function ConfirmPopup({
         )}
         <div className="mt-3 flex items-center justify-end gap-2">
           <PillButton tone="white" size="sm" onClick={onCancel}>
-            {cancelLabel}
+            {resolvedCancelLabel}
           </PillButton>
           <PillButton
             tone={isDangerAction ? "danger" : "black"}

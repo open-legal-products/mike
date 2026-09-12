@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { GoogleIconUI } from "@/shared/ui/GoogleIconUI";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { startGoogleOAuth } from "@/app/lib/authApi";
@@ -17,6 +18,7 @@ export function GoogleAuthButton({
     onLoadingChange,
 }: GoogleAuthButtonProps) {
     const [loading, setLoading] = useState(false);
+    const t = useTranslations("auth.google");
 
     const handleGoogleAuth = async () => {
         setLoading(true);
@@ -30,7 +32,7 @@ export function GoogleAuthButton({
             onError(
                 error instanceof Error
                     ? error.message
-                    : "Unable to continue with Google",
+                    : t("erroContinuar"),
             );
             setLoading(false);
             onLoadingChange?.(false);
@@ -48,7 +50,7 @@ export function GoogleAuthButton({
             onClick={() => void handleGoogleAuth()}
         >
             <GoogleIconUI className="h-4 w-4" />
-            {loading ? "Continuing…" : "Continue with Google"}
+            {loading ? t("botaoRedirecionando") : t("botaoContinuar")}
         </PillButton>
     );
 }

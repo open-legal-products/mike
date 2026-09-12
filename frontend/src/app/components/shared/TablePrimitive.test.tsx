@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import {
     SkeletonCheckbox,
     TableFilters,
@@ -246,17 +247,19 @@ describe("table tree indentation", () => {
 
     it("applies tree indentation to primary cells", () => {
         render(
-            <TablePrimaryCell
-                label="Nested workflow"
-                selected={false}
-                onSelectionChange={vi.fn()}
-                style={tableTreeCellStyle(1)}
-            />,
+            withIntl(
+                <TablePrimaryCell
+                    label="Nested workflow"
+                    selected={false}
+                    onSelectionChange={vi.fn()}
+                    style={tableTreeCellStyle(1)}
+                />,
+            ),
         );
 
         expect(
             screen.getByRole("checkbox", {
-                name: "Select Nested workflow",
+                name: "Selecionar Nested workflow",
             }).parentElement?.parentElement,
         ).toHaveStyle({ paddingLeft: "37px" });
     });

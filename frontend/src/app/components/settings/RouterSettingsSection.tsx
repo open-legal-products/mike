@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Check, ChevronDown, Loader2, X } from "lucide-react";
 import {
   LiquidDropdownButton,
@@ -36,17 +37,25 @@ function formatPerMillion(value?: string): string | null {
     : null;
 }
 
-function modelCostLabel(model: RouterCatalogModel): string | null {
+type RouterCostTranslator = (
+  key: string,
+  values?: Record<string, string | number>,
+) => string;
+
+function modelCostLabel(
+  model: RouterCatalogModel,
+  t: RouterCostTranslator,
+): string | null {
   if (!model.pricing) return null;
   const input = formatPerMillion(model.pricing.input);
   const output = formatPerMillion(model.pricing.output);
   const costs = [
-    input ? `${input}/M input` : null,
-    output ? `${output}/M output` : null,
+    input ? t("custoEntrada", { custo: input }) : null,
+    output ? t("custoSaida", { custo: output }) : null,
   ].filter(Boolean);
   if (costs.length === 0) return null;
-  if (model.pricing.tiered) costs.push("tiered pricing");
-  if (model.pricing.variesByProvider) costs.push("varies by provider");
+  if (model.pricing.tiered) costs.push(t("precoEscalonado"));
+  if (model.pricing.variesByProvider) costs.push(t("precoVaria"));
   return costs.join(" · ");
 }
 
@@ -60,21 +69,21 @@ const CATALOG_MODEL_ID_RE = /^[^\s/]+\/[^\s]+$/;
  */
 const ROUTER_MODEL_ID: Record<
   RouterSlug,
-  { pattern: RegExp; shape: string; example: string }
+  { pattern: RegExp; shapeKey: string; example: string }
 > = {
   openrouter: {
     pattern: CATALOG_MODEL_ID_RE,
-    shape: "vendor/model",
+    shapeKey: "formatoVendedorModelo",
     example: "anthropic/claude-sonnet-5",
   },
   vercel: {
     pattern: CATALOG_MODEL_ID_RE,
-    shape: "vendor/model",
+    shapeKey: "formatoVendedorModelo",
     example: "anthropic/claude-sonnet-5",
   },
   "opencode-go": {
     pattern: /^[^\s]+$/,
-    shape: "a model name with no spaces",
+    shapeKey: "formatoNomeModelo",
     example: "glm-5",
   },
 };
@@ -119,6 +128,7 @@ function catalogModelMatches(model: RouterCatalogModel, query: string) {
 }
 
 export function RouterSettingsSection() {
+  const t = useTranslations("configuracoes.roteadores");
   const {
     profile,
     updateOpenRouterModels,
@@ -136,10 +146,9 @@ export function RouterSettingsSection() {
 
   return (
     <section id="routers" className="scroll-mt-6 space-y-3">
-      <SettingsHeading>Routers</SettingsHeading>
+      <SettingsHeading>{t("titulo")}</SettingsHeading>
       <SettingsDescription>
-        Choose models from each router&apos;s catalog or enter a model ID. Saved
-        models appear in model selectors.
+        {t("descricao")}
       </SettingsDescription>
       <SettingsCard>
         {openRouterConfigured && (
@@ -187,6 +196,7 @@ function RouterModelsSetting({
   loadCatalog: () => Promise<RouterCatalogModel[]>;
   onSave: (models: string[]) => Promise<boolean>;
 }) {
+  const t = useTranslations("configuracoes.roteadores");
   const [catalog, setCatalog] = useState<RouterCatalogModel[]>([]);
   const [input, setInput] = useState("");
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -213,14 +223,14 @@ function RouterModelsSetting({
         if (!cancelled) {
           setCatalog([]);
           setError(
-            `${label}'s model list could not be loaded. You can still type a model ID.`,
+            t("erroCarregarCatalogo", { label }),
           );
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [label, loadCatalog]);
+  }, [label, loadCatalog, t]);
 
   useEffect(() => {
     if (!catalogOpen) return;
@@ -252,7 +262,7 @@ function RouterModelsSetting({
     setError(null);
     const ok = await onSave(next);
     setSaving(false);
-    if (!ok) setError(`${label} model preferences could not be saved.`);
+    if (!ok) setError(t("erroSalvarPreferencias", { label }));
   };
 
   // Enter with no explicit highlight adds exactly what the user typed — and
@@ -267,8 +277,11 @@ function RouterModelsSetting({
     if (!model) {
       setError(
         candidate.length > MAX_MODEL_ID_LENGTH
-          ? `Model IDs are at most ${MAX_MODEL_ID_LENGTH} characters.`
-          : `"${candidate}" is not a model ID — pick one from the list, or type it as ${ROUTER_MODEL_ID[provider].shape}.`,
+          ? t("erroIdLongo", { count: MAX_MODEL_ID_LENGTH })
+          : t("erroIdInvalido", {
+              candidate,
+              shape: t(ROUTER_MODEL_ID[provider].shapeKey),
+            }),
       );
       return;
     }
@@ -309,7 +322,7 @@ function RouterModelsSetting({
     <SettingsRow layout="stacked">
       <div className="flex items-center gap-2">
         <div>
-          <SettingsLabel>{label} models</SettingsLabel>
+          <SettingsLabel>{t("modelosDoRouter", { label })}</SettingsLabel>
         </div>
         {saving && (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
@@ -336,19 +349,19 @@ function RouterModelsSetting({
                             disagree with aria-activedescendant. */}
             {typedModelId && (
               <div className="px-3 py-2 text-xs text-gray-400">
-                Press Enter to add this model ID.
+                {t("pressioneEnter")}
               </div>
             )}
             <div
               id={catalogId}
               role="listbox"
               aria-multiselectable="true"
-              aria-label={`${label} model catalog`}
+              aria-label={t("catalogoModelos", { label })}
             >
               {visibleCatalog.map((model, index) => {
                 const selected = selection.includes(model.id);
                 const active = index === activeCatalogIndex;
-                const costLabel = modelCostLabel(model);
+                const costLabel = modelCostLabel(model, t);
                 return (
                   <LiquidDropdownButton
                     key={model.id}
@@ -385,7 +398,7 @@ function RouterModelsSetting({
             </div>
             {visibleCatalog.length === 0 && (
               <div className="px-3 py-2 text-xs text-gray-400">
-                No matching models.
+                {t("nenhumModelo")}
               </div>
             )}
           </LiquidDropdownSurface>
@@ -397,7 +410,7 @@ function RouterModelsSetting({
             ref={inputRef}
             type="text"
             role="combobox"
-            aria-label={`${label} models`}
+            aria-label={t("modelosDoRouter", { label })}
             aria-autocomplete="list"
             aria-controls={catalogId}
             aria-expanded={catalogOpen}
@@ -408,7 +421,9 @@ function RouterModelsSetting({
             }
             value={input}
             disabled={saving}
-            placeholder={`e.g. ${ROUTER_MODEL_ID[provider].example}`}
+            placeholder={t("placeholderExemplo", {
+              exemplo: ROUTER_MODEL_ID[provider].example,
+            })}
             className="h-full min-w-0 flex-1 bg-transparent text-sm text-gray-900 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed"
             onChange={(event) => {
               setInput(event.target.value);
@@ -454,7 +469,7 @@ function RouterModelsSetting({
           <button
             type="button"
             disabled={saving || catalog.length === 0}
-            aria-label={`Choose ${label} model`}
+            aria-label={t("escolherModelo", { label })}
             aria-controls={catalogId}
             aria-expanded={catalogOpen}
             aria-haspopup="listbox"
@@ -482,8 +497,8 @@ function RouterModelsSetting({
             <OptionPill
               key={model}
               disabled={saving}
-              aria-label={`Remove ${model}`}
-              title={`Remove ${model}`}
+              aria-label={t("removerModelo", { modelo: model })}
+              title={t("removerModelo", { modelo: model })}
               onClick={() =>
                 void save(selection.filter((item) => item !== model))
               }

@@ -8,6 +8,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { cn } from "@/app/lib/utils";
+import { useTranslations } from "next-intl";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
 
@@ -52,6 +53,7 @@ export function AddUserInput({
     className,
     requireExistingUser = true,
 }: AddUserInputProps) {
+    const t = useTranslations("modals.acesso");
     const [input, setInput] = useState("");
     const [checking, setChecking] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -64,7 +66,7 @@ export function AddUserInput({
         const email = trimmedEmail;
         if (!email || busy || checking) return;
         if (!EMAIL_RE.test(email)) {
-            setError("Enter a valid email.");
+            setError(t("erroEmailInvalido"));
             return;
         }
 
@@ -81,7 +83,7 @@ export function AddUserInput({
                 ? await lookupUserByEmail(email)
                 : { exists: false, email, display_name: null };
             if (requireExistingUser && !user.exists) {
-                setError(`${email} does not belong to a Mike user.`);
+                setError(t("erroNaoUsuario", { email }));
                 return;
             }
 
@@ -91,7 +93,7 @@ export function AddUserInput({
             setError(
                 userFacingApiError(
                     err,
-                    "Could not add this user. Try again.",
+                    t("erroPadraoAdicionar"),
                 ),
             );
         } finally {
@@ -156,7 +158,7 @@ export function AddUserInput({
                         {(busy || checking) && (
                             <Loader2 className="h-3 w-3 animate-spin" />
                         )}
-                        Add
+                        {t("adicionar")}
                     </button>
                 ) : showAddButton ? (
                     <PillButton
@@ -170,7 +172,7 @@ export function AddUserInput({
                         title={submitLabel}
                         className="shrink-0"
                     >
-                        Add
+                        {t("adicionar")}
                     </PillButton>
                 ) : null}
             </div>

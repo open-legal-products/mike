@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -207,6 +208,7 @@ function TRAssistantMessage({
     msg: TRMessage;
     onCitationClick: (colIdx: number, rowIdx: number) => void;
 }) {
+    const t = useTranslations("tabular.chat");
     const annotations = msg.annotations ?? [];
     const citationsList: TRCitationAnnotation[] = [];
 
@@ -283,7 +285,7 @@ function TRAssistantMessage({
         if (event.type === "thinking") {
             return (
                 <EventBlock key={key} showConnector={showConnector} isStreaming>
-                    <span>Thinking...</span>
+                    <span>{t("pensando")}</span>
                 </EventBlock>
             );
         }
@@ -441,6 +443,7 @@ function HistoryDropdown({
     onRename: (chatId: string, title: string) => void;
     onDelete: (chatId: string) => void;
 }) {
+    const t = useTranslations("tabular.chat");
     const [query, setQuery] = useState("");
     const [menu, setMenu] = useState<{
         chatId: string;
@@ -469,7 +472,7 @@ function HistoryDropdown({
                 <input
                     autoFocus
                     type="text"
-                    placeholder="Search chats…"
+                    placeholder={t("buscarConversas")}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     className="flex-1 text-xs bg-transparent outline-none placeholder:text-gray-400 text-gray-700"
@@ -483,12 +486,12 @@ function HistoryDropdown({
                     <p className="px-2 py-1.5 text-xs text-gray-400">
                         {chats.filter((c) => c.id !== currentChatId).length ===
                         0
-                            ? "No previous chats."
-                            : "No matches."}
+                            ? t("nenhumaConversa")
+                            : t("nenhumResultado")}
                     </p>
                 ) : (
                     filtered.map((chat) => {
-                        const label = chat.title ?? "Chat";
+                        const label = chat.title ?? t("conversa");
                         if (renamingChatId === chat.id) {
                             return (
                                 <input
@@ -536,7 +539,7 @@ function HistoryDropdown({
                                                   },
                                         );
                                     }}
-                                    title="Chat options"
+                                    title={t("opcoesConversa")}
                                     className={cn(
                                         `absolute right-1.5 flex h-5 w-5 items-center justify-center rounded-full text-gray-400 transition-colors hover:text-gray-700 ${LIQUID_GLASS_HOVER_CLASS}`,
                                         menu?.chatId === chat.id
@@ -569,7 +572,7 @@ function HistoryDropdown({
                                                 className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left"
                                             >
                                                 <Pencil className="h-3 w-3" />
-                                                Rename
+                                                {t("renomear")}
                                             </LiquidDropdownButton>
                                             <LiquidDropdownButton
                                                 onClick={() => {
@@ -579,7 +582,7 @@ function HistoryDropdown({
                                                 className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-red-600 hover:text-red-600 focus:text-red-600"
                                             >
                                                 <Trash2 className="h-3 w-3" />
-                                                Delete
+                                                {t("excluir")}
                                             </LiquidDropdownButton>
                                         </LiquidDropdownSurface>,
                                         document.body,
@@ -628,6 +631,8 @@ export function TRChatPanel({
     onChatIdChange,
     canSend = true,
 }: Props) {
+    const t = useTranslations("tabular.chat");
+    const tCompartilhado = useTranslations("shared.assistantChat");
     const [chats, setChats] = useState<TRChat[]>([]);
     const [currentChatId, setCurrentChatId] = useState<string | null>(
         initialChatId ?? null,
@@ -1684,7 +1689,7 @@ export function TRChatPanel({
                                     type: "content" as const,
                                     text: isAbort
                                         ? ""
-                                        : "An error occurred. Please try again.",
+                                        : t("erroTenteNovamente"),
                                 },
                             ],
                         };
@@ -1751,11 +1756,11 @@ export function TRChatPanel({
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
                         <button
                             onClick={() => setHistoryOpen((v) => !v)}
-                            title="Chat history"
+                            title={t("historicoConversas")}
                             className={`flex h-5 min-w-0 items-center gap-1 rounded-full px-1.5 text-gray-700 transition-colors ${LIQUID_GLASS_HOVER_CLASS}`}
                         >
                             <span className="min-w-0 truncate text-xs font-medium">
-                                {currentChatTitle ?? "New chat"}
+                                {currentChatTitle ?? tCompartilhado("novaConversa")}
                             </span>
                             <ChevronDown
                                 className={cn(
@@ -1783,7 +1788,7 @@ export function TRChatPanel({
                         <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
                             <button
                                 onClick={handleNewChat}
-                                title="New chat"
+                                title={tCompartilhado("novaConversa")}
                                 className={HEADER_PILL_BUTTON_CLASS}
                             >
                                 <Plus className="h-3.5 w-3.5" />
@@ -1794,7 +1799,7 @@ export function TRChatPanel({
                     <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
                         <button
                             onClick={onClose}
-                            title="Close"
+                            title={t("fechar")}
                             className={HEADER_PILL_BUTTON_CLASS}
                         >
                             <X className="h-3.5 w-3.5" />

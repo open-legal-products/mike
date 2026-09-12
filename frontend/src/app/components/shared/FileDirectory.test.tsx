@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import type { Document, Folder } from "./types";
 import { FileDirectory } from "./FileDirectory";
 
@@ -103,22 +104,24 @@ describe("FileDirectory", () => {
         } as Document;
 
         render(
-            <FileDirectory
-                documents={[document]}
-                folders={[folder]}
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs={false}
-            />,
+            withIntl(
+                <FileDirectory
+                    documents={[document]}
+                    folders={[folder]}
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs={false}
+                />,
+            ),
         );
 
         expect(screen.getByText("Closing documents")).toBeInTheDocument();
         expect(screen.queryByText("Agreement.pdf")).not.toBeInTheDocument();
-        const nameHeader = screen.getByText("Name");
+        const nameHeader = screen.getByText("Nome");
         expect(nameHeader.parentElement?.firstElementChild).toBe(nameHeader);
 
         const folderRow = screen.getByRole("button", {
-            name: "Expand Closing documents",
+            name: "Expandir Closing documents",
         });
         expect(folderRow.parentElement).toHaveStyle({ paddingLeft: "8px" });
         fireEvent.click(folderRow!);
@@ -147,21 +150,23 @@ describe("FileDirectory", () => {
         } as Document;
 
         render(
-            <FileDirectory
-                documents={[document]}
-                folders={[folder]}
-                selectedDocuments={[]}
-                onChange={onChange}
-                showTabs={false}
-                loadedFolderIds={new Set([folder.id])}
-            />,
+            withIntl(
+                <FileDirectory
+                    documents={[document]}
+                    folders={[folder]}
+                    selectedDocuments={[]}
+                    onChange={onChange}
+                    showTabs={false}
+                    loadedFolderIds={new Set([folder.id])}
+                />,
+            ),
         );
 
         const checkbox = screen.getByRole("checkbox", {
-            name: "Select all files in Closing documents",
+            name: "Selecionar todos os arquivos em Closing documents",
         });
         const expandButton = screen.getByRole("button", {
-            name: "Expand Closing documents",
+            name: "Expandir Closing documents",
         });
 
         expect(checkbox).toHaveAttribute("type", "checkbox");
@@ -177,7 +182,7 @@ describe("FileDirectory", () => {
         fireEvent.click(expandButton);
         expect(screen.getByText("Agreement.pdf")).toBeInTheDocument();
         const documentCheckbox = screen.getByRole("checkbox", {
-            name: "Select Agreement.pdf",
+            name: "Selecionar Agreement.pdf",
         });
         expect(documentCheckbox).toHaveAttribute("type", "checkbox");
         expect(documentCheckbox.closest("label")).toContainElement(
@@ -187,19 +192,21 @@ describe("FileDirectory", () => {
 
     it("renders project selection outside the project row button", () => {
         render(
-            <FileDirectory
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs
-                initialTab="projects"
-            />,
+            withIntl(
+                <FileDirectory
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs
+                    initialTab="projects"
+                />,
+            ),
         );
 
         const checkbox = screen.getByRole("checkbox", {
-            name: "Expand Acquisition and load all files before selecting it",
+            name: "Expanda Acquisition e carregue todos os arquivos antes de selecioná-lo",
         });
         const expandButton = screen.getByRole("button", {
-            name: "Expand Acquisition",
+            name: "Expandir Acquisition",
         });
 
         expect(checkbox).toBeDisabled();
@@ -209,12 +216,14 @@ describe("FileDirectory", () => {
 
     it("renders folders inside projects on the Projects tab", () => {
         render(
-            <FileDirectory
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs
-                initialTab="projects"
-            />,
+            withIntl(
+                <FileDirectory
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs
+                    initialTab="projects"
+                />,
+            ),
         );
 
         fireEvent.click(screen.getByText("Acquisition"));
@@ -229,22 +238,24 @@ describe("FileDirectory", () => {
 
     it("only renders the configured tabs", () => {
         render(
-            <FileDirectory
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs
-                tabs={["files", "projects"]}
-            />,
+            withIntl(
+                <FileDirectory
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs
+                    tabs={["files", "projects"]}
+                />,
+            ),
         );
 
         expect(
-            screen.getByRole("button", { name: "Files" }),
+            screen.getByRole("button", { name: "Arquivos" }),
         ).toBeInTheDocument();
         expect(
-            screen.getByRole("button", { name: "Projects" }),
+            screen.getByRole("button", { name: "Projetos" }),
         ).toBeInTheDocument();
         expect(
-            screen.queryByRole("button", { name: "Templates" }),
+            screen.queryByRole("button", { name: "Modelos" }),
         ).not.toBeInTheDocument();
     });
 
@@ -258,17 +269,19 @@ describe("FileDirectory", () => {
         } as Document;
 
         render(
-            <FileDirectory
-                documents={[document]}
-                selectedDocuments={[]}
-                onChange={onChange}
-                showTabs={false}
-                disabledDocumentIds={new Set([document.id])}
-            />,
+            withIntl(
+                <FileDirectory
+                    documents={[document]}
+                    selectedDocuments={[]}
+                    onChange={onChange}
+                    showTabs={false}
+                    disabledDocumentIds={new Set([document.id])}
+                />,
+            ),
         );
 
         const checkbox = screen.getByRole("checkbox", {
-            name: "Select Existing agreement.pdf",
+            name: "Selecionar Existing agreement.pdf",
         });
         expect(checkbox).toBeChecked();
         expect(checkbox).toBeDisabled();
@@ -278,12 +291,14 @@ describe("FileDirectory", () => {
 
     it("shows upload activity with a checkbox spinner and muted file icon", () => {
         render(
-            <FileDirectory
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs={false}
-                uploadingFilenames={["Uploading contract.docx"]}
-            />,
+            withIntl(
+                <FileDirectory
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs={false}
+                    uploadingFilenames={["Uploading contract.docx"]}
+                />,
+            ),
         );
 
         const row = screen.getByText("Uploading contract.docx").closest("div");
@@ -301,17 +316,19 @@ describe("FileDirectory", () => {
         } as Document;
 
         render(
-            <FileDirectory
-                documents={[document]}
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs={false}
-                rootDocumentsHasMore
-                onLoadMoreRootDocuments={onLoadMore}
-            />,
+            withIntl(
+                <FileDirectory
+                    documents={[document]}
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs={false}
+                    rootDocumentsHasMore
+                    onLoadMoreRootDocuments={onLoadMore}
+                />,
+            ),
         );
 
-        const viewport = screen.getByLabelText("File directory");
+        const viewport = screen.getByLabelText("Diretório de arquivos");
         Object.defineProperties(viewport, {
             scrollHeight: { configurable: true, value: 1000 },
             clientHeight: { configurable: true, value: 500 },
@@ -345,15 +362,17 @@ describe("FileDirectory", () => {
         ] as Document[];
 
         render(
-            <FileDirectory
-                documents={documents}
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs={false}
-                documentLimitByLevel={{ root: 1 }}
-                rootDocumentsHasMore
-                onLoadMoreRootDocuments={onLoadMore}
-            />,
+            withIntl(
+                <FileDirectory
+                    documents={documents}
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs={false}
+                    documentLimitByLevel={{ root: 1 }}
+                    rootDocumentsHasMore
+                    onLoadMoreRootDocuments={onLoadMore}
+                />,
+            ),
         );
 
         expect(screen.getByText("First agreement.pdf")).toBeInTheDocument();
@@ -361,7 +380,7 @@ describe("FileDirectory", () => {
             screen.queryByText("Second agreement.pdf"),
         ).not.toBeInTheDocument();
 
-        fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+        fireEvent.click(screen.getByRole("button", { name: "Carregar mais" }));
         expect(onLoadMore).toHaveBeenCalledTimes(1);
     });
 
@@ -372,12 +391,14 @@ describe("FileDirectory", () => {
         "renders folders on the %s tab",
         (initialTab, folderName, filename) => {
             render(
-                <FileDirectory
-                    selectedDocuments={[]}
-                    onChange={vi.fn()}
-                    showTabs
-                    initialTab={initialTab}
-                />,
+                withIntl(
+                    <FileDirectory
+                        selectedDocuments={[]}
+                        onChange={vi.fn()}
+                        showTabs
+                        initialTab={initialTab}
+                    />,
+                ),
             );
 
             expect(screen.getByText(folderName)).toBeInTheDocument();
@@ -390,12 +411,14 @@ describe("FileDirectory", () => {
 
     it("loads a library folder and its next document page on demand", () => {
         render(
-            <FileDirectory
-                selectedDocuments={[]}
-                onChange={vi.fn()}
-                showTabs
-                initialTab="files"
-            />,
+            withIntl(
+                <FileDirectory
+                    selectedDocuments={[]}
+                    onChange={vi.fn()}
+                    showTabs
+                    initialTab="files"
+                />,
+            ),
         );
 
         fireEvent.click(screen.getByText("Matter files"));
@@ -404,7 +427,7 @@ describe("FileDirectory", () => {
             "library-folder-1",
         );
 
-        fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+        fireEvent.click(screen.getByRole("button", { name: "Carregar mais" }));
         expect(loadMoreLibraryDocumentsMock).toHaveBeenCalledWith(
             "files",
             "library-folder-1",

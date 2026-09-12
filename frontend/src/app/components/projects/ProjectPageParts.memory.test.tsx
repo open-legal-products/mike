@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { ProjectPageHeader } from "./ProjectPageParts";
 
 vi.mock("@/app/components/shared/PageHeader", () => ({
@@ -52,25 +53,27 @@ vi.mock("@/app/components/shared/DocumentUploadMenu", () => ({
 function renderHeader(overrides: { roleKnown?: boolean } = {}) {
     const onOpenMemory = vi.fn();
     render(
-        <ProjectPageHeader
-            project={{ id: "project-1", name: "Matter" } as never}
-            search=""
-            activeSection="documents"
-            creatingChat={false}
-            creatingReview={false}
-            canManageProject
-            roleKnown
-            onBackToProjects={vi.fn()}
-            onProjectRoot={vi.fn()}
-            onOpenDetails={vi.fn()}
-            onOpenMemory={onOpenMemory}
-            onDeleteProject={vi.fn()}
-            onSearchChange={vi.fn()}
-            onOpenAccess={vi.fn()}
-            onNewChat={vi.fn()}
-            onNewReview={vi.fn()}
-            {...overrides}
-        />,
+        withIntl(
+            <ProjectPageHeader
+                project={{ id: "project-1", name: "Matter" } as never}
+                search=""
+                activeSection="documents"
+                creatingChat={false}
+                creatingReview={false}
+                canManageProject
+                roleKnown
+                onBackToProjects={vi.fn()}
+                onProjectRoot={vi.fn()}
+                onOpenDetails={vi.fn()}
+                onOpenMemory={onOpenMemory}
+                onDeleteProject={vi.fn()}
+                onSearchChange={vi.fn()}
+                onOpenAccess={vi.fn()}
+                onNewChat={vi.fn()}
+                onNewReview={vi.fn()}
+                {...overrides}
+            />,
+        ),
     );
     return { onOpenMemory };
 }
@@ -80,7 +83,7 @@ describe("ProjectPageHeader memory action", () => {
         const user = userEvent.setup();
         const { onOpenMemory } = renderHeader();
 
-        await user.click(screen.getByRole("button", { name: "Memory" }));
+        await user.click(screen.getByRole("button", { name: "Memória" }));
 
         expect(onOpenMemory).toHaveBeenCalledTimes(1);
     });
@@ -88,6 +91,8 @@ describe("ProjectPageHeader memory action", () => {
     it("waits for the caller's role before offering memory", () => {
         renderHeader({ roleKnown: false });
 
-        expect(screen.getByRole("button", { name: "Memory" })).toBeDisabled();
+        expect(
+            screen.getByRole("button", { name: "Memória" }),
+        ).toBeDisabled();
     });
 });

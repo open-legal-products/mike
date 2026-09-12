@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { ChevronDown, X } from "lucide-react";
 import { authInputClassName } from "@/app/components/auth/authStyles";
 import { Input } from "@/app/components/ui/input";
@@ -69,6 +70,7 @@ export function usePersonalisationFields(
   initial: PersonalisationInitialValues,
   onFieldChange?: (field: PersonalisationField) => void,
 ) {
+  const t = useTranslations("configuracoes.personalizacao");
   const commonAreas = initial.practiceAreas.filter((area) =>
     COMMON_PRACTICE_AREAS.includes(
       area as (typeof COMMON_PRACTICE_AREAS)[number],
@@ -150,9 +152,9 @@ export function usePersonalisationFields(
     details,
     invalidGroups,
     validationError: jurisdictionIncomplete
-      ? "Enter your jurisdiction of practice"
+      ? t("erroJurisdicao")
       : practiceAreasIncomplete
-        ? "Enter your other practice area"
+        ? t("erroOutraArea")
         : null,
     setJurisdictionChoice(value: string) {
       setJurisdictionChoiceState(value);
@@ -216,14 +218,15 @@ export function PersonalisationFields({
     content: ReactNode,
   ) => ReactNode;
 }) {
+  const t = useTranslations("configuracoes.personalizacao");
   const groups: Record<PersonalisationFieldGroup, ReactNode> = {
     professionalTitle: (
       <ProfileDropdown
         id="professional-title"
-        label="Title"
+        label={t("labelTitulo")}
         status={statusFor?.("professionalTitle")}
         value={form.professionalTitle}
-        placeholder="Select a title"
+        placeholder={t("placeholderTitulo")}
         options={PROFESSIONAL_TITLE_OPTIONS.map((title) => ({
           value: title,
           label: title,
@@ -236,10 +239,10 @@ export function PersonalisationFields({
     practiceSetting: (
       <ProfileDropdown
         id="practice-setting"
-        label="Professional setting"
+        label={t("labelAmbiente")}
         status={statusFor?.("practiceSetting")}
         value={form.practiceSetting}
-        placeholder="Select a professional setting"
+        placeholder={t("placeholderAmbiente")}
         options={PRACTICE_SETTING_OPTIONS}
         onChange={(value) =>
           form.setPracticeSetting(value ? (value as PracticeSetting) : null)
@@ -250,10 +253,10 @@ export function PersonalisationFields({
       <>
         <ProfileDropdown
           id="jurisdiction"
-          label="Jurisdiction of practice"
+          label={t("labelJurisdicao")}
           status={statusFor?.("jurisdiction")}
           value={form.jurisdictionChoice || null}
-          placeholder="Select a country"
+          placeholder={t("placeholderPais")}
           options={[
             ...COUNTRY_OPTIONS.map((country) => ({
               value: country,
@@ -261,7 +264,7 @@ export function PersonalisationFields({
             })),
             {
               value: OTHER_JURISDICTION_OPTION,
-              label: OTHER_JURISDICTION_OPTION,
+              label: t("outra"),
             },
           ]}
           onChange={form.setJurisdictionChoice}
@@ -270,7 +273,7 @@ export function PersonalisationFields({
         {form.jurisdictionChoice === OTHER_JURISDICTION_OPTION && (
           <div className="mt-4">
             <FieldLabelRow
-              label="Other jurisdiction"
+              label={t("labelOutraJurisdicao")}
               htmlFor="other-jurisdiction"
               status={statusFor?.("otherJurisdiction")}
             />
@@ -281,7 +284,7 @@ export function PersonalisationFields({
                 form.setOtherJurisdiction(event.target.value)
               }
               maxLength={100}
-              placeholder="Enter your jurisdiction"
+              placeholder={t("placeholderOutraJurisdicao")}
               className={`w-full ${authInputClassName}`}
             />
           </div>
@@ -291,7 +294,7 @@ export function PersonalisationFields({
     practiceAreas: (
       <div>
         <FieldLabelRow
-          label="Practice areas"
+          label={t("labelAreasPratica")}
           status={statusFor?.("practiceAreas")}
         />
         <DropdownMenu>
@@ -307,8 +310,10 @@ export function PersonalisationFields({
             >
               <span className="truncate">
                 {form.practiceAreas.length
-                  ? `${form.practiceAreas.length} selected`
-                  : "Select practice areas"}
+                  ? t("contagemSelecionadas", {
+                      count: form.practiceAreas.length,
+                    })
+                  : t("selecionarAreas")}
               </span>
               <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
             </button>
@@ -335,7 +340,7 @@ export function PersonalisationFields({
               }
               onSelect={(event) => event.preventDefault()}
             >
-              Other
+              {t("outra")}
             </LiquidDropdownCheckboxItem>
           </LiquidDropdownContent>
         </DropdownMenu>
@@ -346,7 +351,7 @@ export function PersonalisationFields({
               <OptionPill
                 key={area}
                 onClick={() => form.toggleArea(area)}
-                aria-label={`Remove ${area}`}
+                aria-label={t("removerArea", { area })}
               >
                 {area}
                 <X className="h-3 w-3" />
@@ -355,7 +360,7 @@ export function PersonalisationFields({
             {form.otherSelected && form.otherArea.trim() && (
               <OptionPill
                 onClick={() => form.setOtherSelected(false)}
-                aria-label={`Remove ${form.otherArea.trim()}`}
+                aria-label={t("removerArea", { area: form.otherArea.trim() })}
               >
                 {form.otherArea.trim()}
                 <X className="h-3 w-3" />
@@ -367,7 +372,7 @@ export function PersonalisationFields({
         {form.otherSelected && (
           <div className="mt-4">
             <FieldLabelRow
-              label="Other practice area"
+              label={t("labelOutraArea")}
               htmlFor="other-practice-area"
               status={statusFor?.("otherPracticeArea")}
             />
@@ -376,7 +381,7 @@ export function PersonalisationFields({
               value={form.otherArea}
               onChange={(event) => form.setOtherArea(event.target.value)}
               maxLength={100}
-              placeholder="Enter your practice area"
+              placeholder={t("placeholderOutraArea")}
               className={`w-full ${authInputClassName}`}
             />
           </div>
@@ -419,6 +424,7 @@ function ProfileDropdown({
   onChange: (value: string) => void;
   maxHeight?: boolean;
 }) {
+  const t = useTranslations("configuracoes.personalizacao");
   return (
     <div>
       <FieldLabelRow label={label} htmlFor={id} status={status} />
@@ -456,7 +462,7 @@ function ProfileDropdown({
             }
           >
             <LiquidDropdownRadioItem value={NOT_SET_OPTION}>
-              Not set
+              {t("naoDefinido")}
             </LiquidDropdownRadioItem>
             {options.map((option) => (
               <LiquidDropdownRadioItem key={option.value} value={option.value}>

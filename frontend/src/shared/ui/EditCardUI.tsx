@@ -33,6 +33,16 @@ export interface EditCardUIProps {
     actionsDisabled?: boolean;
     busyAction?: EditCardUIBusyAction;
     onView?: () => void;
+    labels?: {
+        aceitar: string;
+        aceitando: string;
+        aceito: string;
+        rejeitar: string;
+        rejeitando: string;
+        rejeitado: string;
+        ver: string;
+        tooltipResolvido: string;
+    };
     onApply?: () => void;
     onAccept?: () => void;
     onReject?: () => void;
@@ -58,6 +68,7 @@ export function EditCardUI({
     actionsDisabled = false,
     busyAction,
     onView,
+    labels,
     onApply,
     onAccept,
     onReject,
@@ -180,11 +191,11 @@ export function EditCardUI({
                             loading={busyAction === "accept"}
                         >
                             {busyAction === "accept" ? (
-                                "Accepting..."
+                                labels?.aceitando ?? "Accepting..."
                             ) : status === "accepted" ? (
-                                "Accepted"
+                                labels?.aceito ?? "Accepted"
                             ) : (
-                                "Accept"
+                                labels?.aceitar ?? "Accept"
                             )}
                         </PillButtonUI>
                     )}
@@ -196,11 +207,11 @@ export function EditCardUI({
                             loading={busyAction === "reject"}
                         >
                             {busyAction === "reject" ? (
-                                "Rejecting..."
+                                labels?.rejeitando ?? "Rejecting..."
                             ) : status === "rejected" ? (
-                                "Rejected"
+                                labels?.rejeitado ?? "Rejected"
                             ) : (
-                                "Reject"
+                                labels?.rejeitar ?? "Reject"
                             )}
                         </PillButtonUI>
                     )}
@@ -212,12 +223,12 @@ export function EditCardUI({
                             loading={busyAction === "view"}
                             title={
                                 resolved
-                                    ? "This change has been resolved and is no longer in the document."
+                                    ? labels?.tooltipResolvido ?? "This change has been resolved and is no longer in the document."
                                     : undefined
                             }
                             className="ml-auto"
                         >
-                            View
+                            {labels?.ver ?? "View"}
                         </PillButtonUI>
                     )}
                 </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { ApiKeyField } from "@/app/components/settings/ApiKeyField";
 import {
   SettingsDescription,
@@ -13,6 +14,7 @@ import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 
 export default function FeaturesPage() {
+  const t = useTranslations("configuracoes.recursos");
   const {
     profile,
     updateApiKey,
@@ -39,7 +41,7 @@ export default function FeaturesPage() {
     setSavingQuickActions(true);
     const ok = await updateQuickActionsVisible(visible);
     setSavingQuickActions(false);
-    if (!ok) setQuickActionsError("Could not update. Try again.");
+    if (!ok) setQuickActionsError(t("erroAtualizar"));
   };
 
   const handleCourtListenerChange = async (enabled: boolean) => {
@@ -51,20 +53,20 @@ export default function FeaturesPage() {
     setSaving(false);
     setOptimisticLegalResearchUs(null);
     if (!ok) {
-      setSaveError("Could not update. Try again.");
+      setSaveError(t("erroAtualizar"));
     }
   };
 
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Assistant</SettingsHeading>
+        <SettingsHeading>{t("tituloAssistente")}</SettingsHeading>
         <SettingsCard>
           <SettingsRow>
             <div className="min-w-0 space-y-1">
-              <SettingsLabel>Quick actions</SettingsLabel>
+              <SettingsLabel>{t("acoesRapidas")}</SettingsLabel>
               <SettingsDescription>
-                Show the quick actions row on the assistant start screen.
+                {t("descricaoAcoesRapidas")}
               </SettingsDescription>
               {quickActionsError && (
                 <p className="text-sm text-red-600" role="alert">
@@ -76,7 +78,7 @@ export default function FeaturesPage() {
               checked={quickActionsVisible}
               disabled={savingQuickActions}
               aria-busy={savingQuickActions}
-              aria-label="Quick actions"
+              aria-label={t("acoesRapidas")}
               onCheckedChange={(checked) => {
                 void setQuickActionsVisible(checked);
               }}
@@ -86,13 +88,13 @@ export default function FeaturesPage() {
       </section>
 
       <section className="space-y-3">
-        <SettingsHeading>Legal Research</SettingsHeading>
+        <SettingsHeading>{t("tituloPesquisaJuridica")}</SettingsHeading>
         <SettingsCard>
           <SettingsRow>
             <div className="min-w-0 space-y-1">
-              <SettingsLabel>Enable CourtListener</SettingsLabel>
+              <SettingsLabel>{t("ativarCourtlistener")}</SettingsLabel>
               <SettingsDescription>
-                CourtListener provides access to US case law.
+                {t("descricaoCourtlistener")}
               </SettingsDescription>
               {saveError && (
                 <p className="text-sm text-red-600" role="alert">
@@ -104,7 +106,7 @@ export default function FeaturesPage() {
               checked={courtListenerEnabled}
               disabled={saving}
               aria-busy={saving}
-              aria-label="Enable CourtListener"
+              aria-label={t("ativarCourtlistener")}
               onCheckedChange={(enabled) =>
                 void handleCourtListenerChange(enabled)
               }
@@ -112,7 +114,7 @@ export default function FeaturesPage() {
           </SettingsRow>
           {courtListenerEnabled && (
             <ApiKeyField
-              label="CourtListener API Key"
+              label={t("labelCourtlistener")}
               placeholder="Token..."
               hasSavedKey={!!profile?.apiKeys.courtlistener.configured}
               onSave={(value) =>

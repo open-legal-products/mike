@@ -13,6 +13,7 @@ import {
     useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 import { Loader2, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import {
     UploadBatchError,
@@ -154,17 +155,20 @@ export interface DocTableQuery {
     sort: DocumentSort | null;
 }
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-    { value: "asc", label: "Ascending" },
-    { value: "desc", label: "Descending" },
+const SORT_OPTIONS: {
+    value: TableSortDirection;
+    labelKey: string;
+}[] = [
+    { value: "asc", labelKey: "colunas.ascendente" },
+    { value: "desc", labelKey: "colunas.decrescente" },
 ];
 
-const SORT_KEY_LABELS: Record<DocumentSortKey, string> = {
-    name: "Name",
-    size: "Size",
-    version: "Version",
-    created: "Created",
-    updated: "Updated",
+const SORT_KEY_LABEL_KEYS: Record<DocumentSortKey, string> = {
+    name: "colunas.nome",
+    size: "colunas.tamanho",
+    version: "colunas.versao",
+    created: "colunas.criado",
+    updated: "colunas.atualizado",
 };
 
 interface DocTableOperations {
@@ -278,6 +282,7 @@ function documentVersionNumber(doc: Document): number | null {
 }
 
 function ProjectTableLoadingHeader() {
+    const t = useTranslations("documents");
     return (
         <TableHeaderRow className="pr-3">
             <TableStickyCell
@@ -285,22 +290,22 @@ function ProjectTableLoadingHeader() {
                 widthClassName={DOC_NAME_COL_W}
             >
                 <div className="mr-3 h-2.5 w-2.5 rounded bg-gray-100 animate-pulse" />
-                <span className="mr-1">Name</span>
+                <span className="mr-1">{t("colunas.nome")}</span>
             </TableStickyCell>
             <TableHeaderCell className="ml-auto flex w-20 items-center gap-1">
-                <span>Type</span>
+                <span>{t("colunas.tipo")}</span>
             </TableHeaderCell>
             <TableHeaderCell className="flex w-24 items-center gap-1">
-                <span>Size</span>
+                <span>{t("colunas.tamanho")}</span>
             </TableHeaderCell>
             <TableHeaderCell className="flex w-20 items-center gap-1">
-                <span>Version</span>
+                <span>{t("colunas.versao")}</span>
             </TableHeaderCell>
             <TableHeaderCell className="flex w-32 items-center gap-1">
-                <span>Created</span>
+                <span>{t("colunas.criado")}</span>
             </TableHeaderCell>
             <TableHeaderCell className="flex w-32 items-center gap-1">
-                <span>Updated</span>
+                <span>{t("colunas.atualizado")}</span>
             </TableHeaderCell>
             <TableHeaderCell className="w-8" />
         </TableHeaderRow>
@@ -344,10 +349,12 @@ function ProjectTableLoading() {
     );
 }
 
-function UploadingTrailingLabel() {
+function UploadActivityTrailingLabel({ status }: { status: UploadProgressStatus }) {
+    const t = useTranslations("documentosEstados");
+    const label = status === "processing" ? t("processando") : t("enviando");
     return (
-        <span role="status" aria-label="Uploading">
-            <span aria-hidden="true">Uploading</span>
+        <span role="status" aria-label={label}>
+            <span aria-hidden="true">{label}</span>
             <span aria-hidden="true" className="uploading-ellipsis">
                 <span className="uploading-ellipsis-one">.</span>
                 <span className="uploading-ellipsis-two">..</span>
@@ -396,6 +403,8 @@ export function DocTable({
     autoLoadOnScroll = false,
     defaultSort = null,
 }: DocTableProps) {
+    const t = useTranslations("documents");
+    const tEstados = useTranslations("documentosEstados");
     const [addDocsOpen, setAddDocsOpen] = useState(false);
     const { user } = useAuth();
     const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
@@ -446,7 +455,7 @@ export function DocTable({
         // Same capability the header Add button is gated on — this also
         // covers the empty-state click, which calls openAddDocuments
         // directly.
-        if (!requireCapability("content.edit", "add documents", "editor"))
+        if (!requireCapability("content.edit", tEstados("acaoAdicionarDocumentos"), "editor"))
             return;
         if (renderAddDocumentsModalRef.current) {
             setAddDocsOpen(true);
@@ -584,9 +593,8 @@ export function DocTable({
             // find is one we know nothing about, and the one thing we must
             // not do with an unknown is wave it through.
             setOwnerOnlyAction({
-                title: "Document unavailable",
-                message:
-                    "That document is not loaded, so its versions cannot be changed. Reload and try again.",
+                title: tEstados("tituloDocumentoIndisponivel"),
+                message: tEstados("mensagemDocumentoIndisponivel"),
             });
             return false;
         }
@@ -604,8 +612,8 @@ export function DocTable({
             // account exists, so naming that tier sent people to somebody who
             // could not help. And no "ask …" line, for the same reason.
             setOwnerOnlyAction({
-                title: "Uploader only",
-                message: `Only the person who uploaded this document can ${action}.`,
+                title: tEstados("tituloSomenteRemetente"),
+                message: tEstados("mensagemSomenteRemetente", { acao: action }),
             });
             return false;
         }
@@ -618,20 +626,20 @@ export function DocTable({
 
     async function submitNewVersion(doc: Document, file: File, filename: string) {
         // Same tier as the server's POST /versions guard (content.edit).
-        if (!requireCapability("content.edit", "upload a new version", "editor"))
+        if (!requireCapability("content.edit", tEstados("acaoEnviarNovaVersao"), "editor"))
             return;
         try {
             await uploadDocumentVersion(doc.id, file, filename);
             await refreshDocumentVersionState(doc.id);
         } catch (e) {
             console.error("uploadDocumentVersion failed", e);
-            setDocumentUploadWarning("Version upload failed. Please try again.");
+            setDocumentUploadWarning(tEstados("erroEnvioVersao"));
         }
     }
 
     async function replaceVersionFile(docId: string, versionId: string, file: File, filename: string) {
         if (
-            !requireDocOwnerForVersions(docId, "replace this version's file")
+            !requireDocOwnerForVersions(docId, tEstados("acaoSubstituirArquivoVersao"))
         )
             return;
         await replaceDocumentVersionFile(docId, versionId, file, filename);
@@ -640,7 +648,7 @@ export function DocTable({
         if (replaced) {
             setViewingDocVersion({
                 id: replaced.id,
-                label: replaced.filename?.trim() || "Version",
+                label: replaced.filename?.trim() || t("colunas.versao"),
             });
         }
     }
@@ -667,14 +675,14 @@ export function DocTable({
      */
     async function handleRenameVersion(docId: string, versionId: string, filename: string | null) {
         // Server PATCH /versions/:id guard is content.edit.
-        if (!requireCapability("content.edit", "rename versions", "editor"))
+        if (!requireCapability("content.edit", tEstados("acaoRenomearVersoes"), "editor"))
             return;
         const previousFilename = versionsByDocId
             .get(docId)
             ?.versions.find((version) => version.id === versionId)
             ?.filename?.trim();
         if (previousFilename && (filename == null || hasFilenameExtensionChange(previousFilename, filename))) {
-            setDocumentRenameWarning(extensionChangeWarning(previousFilename));
+            setDocumentRenameWarning(extensionChangeWarning(tEstados, previousFilename));
             return;
         }
 
@@ -696,7 +704,7 @@ export function DocTable({
     }
 
     async function handleDeleteVersion(docId: string, versionId: string) {
-        if (!requireDocOwnerForVersions(docId, "delete document versions"))
+        if (!requireDocOwnerForVersions(docId, tEstados("acaoExcluirVersoesDocumento")))
             return;
         try {
             await deleteDocumentVersion(docId, versionId);
@@ -710,13 +718,13 @@ export function DocTable({
                 nextVersion
                     ? {
                           id: nextVersion.id,
-                          label: nextVersion.filename?.trim() || "Version",
+                          label: nextVersion.filename?.trim() || t("colunas.versao"),
                       }
                     : null,
             );
         } catch (e) {
             console.error("deleteDocumentVersion failed", e);
-            setDocumentRenameWarning("Could not delete this version.");
+            setDocumentRenameWarning(tEstados("erroExcluirVersao"));
         }
     }
 
@@ -755,6 +763,7 @@ export function DocTable({
                 clientId: string;
                 entry: DocumentUploadEntry;
                 status: UploadProgressStatus;
+                resourceId?: string | null;
             }>;
         }>>(`document-upload:${scopeKey}`, []);
     const [folderUploadConflict, setFolderUploadConflict] = useState<{
@@ -1022,7 +1031,7 @@ export function DocTable({
             setCreatingFolderIn(undefined);
             return;
         }
-        if (!requireCapability("docs.organize", "create folders", "editor")) {
+        if (!requireCapability("docs.organize", tEstados("acaoCriarPastas"), "editor")) {
             setCreatingFolderIn(undefined);
             return;
         }
@@ -1063,7 +1072,7 @@ export function DocTable({
         if (!name) return;
         // Folder operations are member-level: organizing the shelf is part
         // of collaborating on what sits on it, not an administrative act.
-        if (!requireCapability("docs.organize", "rename folders", "editor"))
+        if (!requireCapability("docs.organize", tEstados("acaoRenomearPastas"), "editor"))
             return;
         const updatedAt = new Date().toISOString();
         setFolders((prev) =>
@@ -1108,7 +1117,7 @@ export function DocTable({
         if (
             !requireCapability(
                 "docs.organize",
-                "delete folders and their documents",
+                tEstados("acaoExcluirPastasDocumentos"),
                 "editor",
             )
         )
@@ -1191,7 +1200,7 @@ export function DocTable({
                 ),
             );
             setPendingDeleteFolderStatus("idle");
-            setCollectionActionWarning("Folder could not be deleted. Please try again.");
+            setCollectionActionWarning(tEstados("erroExcluirPasta"));
         }
     }
 
@@ -1280,7 +1289,7 @@ export function DocTable({
 
     async function handleRemoveDocFromFolder(docId: string) {
         if (
-            !requireCapability("docs.organize", "move documents", "editor")
+            !requireCapability("docs.organize", tEstados("acaoMoverDocumentos"), "editor")
         )
             return;
         setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, folder_id: null } : d)));
@@ -1299,13 +1308,13 @@ export function DocTable({
             return;
         }
         if (
-            !requireCapability("docs.organize", "rename documents", "editor")
+            !requireCapability("docs.organize", tEstados("acaoRenomearDocumentos"), "editor")
         ) {
             setRenamingDocumentId(null);
             return;
         }
         if (hasFilenameExtensionChange(previous.filename, trimmed)) {
-            setDocumentRenameWarning(extensionChangeWarning(previous.filename));
+            setDocumentRenameWarning(extensionChangeWarning(tEstados, previous.filename));
             return;
         }
 
@@ -1339,7 +1348,7 @@ export function DocTable({
         // permission (it required `doc`, `user.id` AND `doc.user_id` to be
         // present before it would refuse anything).
         if (!canDeleteDocument(doc)) {
-            refuseDocumentDelete("delete it");
+            refuseDocumentDelete(tEstados("acaoExcluirItem"));
             return;
         }
         setDeletingDocIds((prev) => new Set([...prev, docId]));
@@ -1363,7 +1372,7 @@ export function DocTable({
 
     function requestRemoveDoc(doc: Document) {
         if (doc && user?.id && doc.user_id && doc.user_id !== user.id) {
-            setOwnerOnlyAction("delete this document");
+            setOwnerOnlyAction(tEstados("acaoExcluirEsteDocumento"));
             return;
         }
         const versionCount = versionsByDocId.get(doc.id)?.versions.length ?? currentVersionNumber(doc) ?? 1;
@@ -1376,7 +1385,7 @@ export function DocTable({
                 setCollectionActionWarning(
                     userFacingApiError(
                         error,
-                        "This file could not be deleted. Please try again.",
+                        tEstados("erroExcluirArquivo"),
                     ),
                 );
             });
@@ -1466,8 +1475,8 @@ export function DocTable({
     /** The refusal for a delete: the uploader rule, and nobody to ask. */
     function refuseDocumentDelete(action: string) {
         setOwnerOnlyAction({
-            title: "Uploader only",
-            message: `Only the person who uploaded this document can ${action}.`,
+            title: tEstados("tituloSomenteRemetente"),
+            message: tEstados("mensagemSomenteRemetente", { acao: action }),
         });
     }
 
@@ -1503,7 +1512,7 @@ export function DocTable({
         // (capability-gated) Add button, so they need the same
         // content.edit check: viewers get the role popup instead of a
         // doomed upload that the backend would 403 anyway.
-        if (!requireCapability("content.edit", "add documents", "editor"))
+        if (!requireCapability("content.edit", tEstados("acaoAdicionarDocumentos"), "editor"))
             return;
         const { supported, unsupported } = partitionSupportedDocumentFiles(
             entries.map((entry) => entry.file),
@@ -1518,7 +1527,9 @@ export function DocTable({
             supportedEntries.length > MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD
         ) {
             setCollectionActionWarning(
-                `You can upload up to ${MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD} supported documents at a time. Nothing was uploaded.`,
+                tEstados("erroLimiteUpload", {
+                    count: MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD,
+                }),
             );
             return;
         }
@@ -1681,6 +1692,10 @@ export function DocTable({
                                                       ? {
                                                             ...file,
                                                             status: progress.status,
+                                                            resourceId:
+                                                                progress.resourceId ??
+                                                                file.resourceId ??
+                                                                null,
                                                         }
                                                       : file,
                                               ),
@@ -1689,10 +1704,42 @@ export function DocTable({
                                 ),
                             );
                             if (
+                                progress.status === "processing" &&
+                                progress.resourceId
+                            ) {
+                                const placeholder: Document = {
+                                    id: progress.resourceId,
+                                    project_id: null,
+                                    filename: progress.filename,
+                                    file_type: null,
+                                    storage_path: null,
+                                    pdf_storage_path: null,
+                                    size_bytes: null,
+                                    page_count: null,
+                                    structure_tree: null,
+                                    status: "processing",
+                                    created_at: null,
+                                };
+                                setDocuments((prev) =>
+                                    prev.some((d) => d.id === placeholder.id)
+                                        ? prev
+                                        : [...prev, placeholder],
+                                );
+                            }
+                            if (
                                 progress.status === "completed" &&
                                 progress.result
                             ) {
-                                handleDocsSelected([progress.result]);
+                                const result = progress.result;
+                                setDocuments((prev) =>
+                                    prev.some((d) => d.id === result.id)
+                                        ? prev.map((d) =>
+                                              d.id === result.id
+                                                  ? { ...d, ...result }
+                                                  : d,
+                                          )
+                                        : [...prev, result],
+                                );
                             }
                         },
                     },
@@ -1730,7 +1777,7 @@ export function DocTable({
                     ? failedUploadMessage(err.outcomes)
                     : userFacingApiError(
                           err,
-                          "This folder could not be uploaded. Please try again.",
+                          tEstados("erroEnvioPasta"),
                       ),
             );
         } finally {
@@ -1760,9 +1807,7 @@ export function DocTable({
             await handleCollectionUploadEntries(entries, baseFolderId);
         } catch (error) {
             console.error("Folder drop traversal failed", error);
-            setCollectionActionWarning(
-                "This folder could not be read. Please try selecting it with Upload folder.",
-            );
+            setCollectionActionWarning(tEstados("erroLerPasta"));
         }
     }
 
@@ -1819,7 +1864,7 @@ export function DocTable({
         if (files.length === 0) return;
         // Same tier as the server's POST /versions guard (content.edit) —
         // without it an org viewer's drop fails into console.error only.
-        if (!requireCapability("content.edit", "upload a new version", "editor"))
+        if (!requireCapability("content.edit", tEstados("acaoEnviarNovaVersao"), "editor"))
             return;
         const { supported, unsupported } = partitionSupportedDocumentFiles(files);
         setDocumentUploadWarning(formatUnsupportedDocumentWarning(unsupported));
@@ -1833,7 +1878,7 @@ export function DocTable({
             await refreshDocumentVersionState(doc.id);
         } catch (err) {
             console.error("Document version drop upload failed", err);
-            setDocumentUploadWarning("Version upload failed. Please try again.");
+            setDocumentUploadWarning(tEstados("erroEnvioVersao"));
         } finally {
             setUploadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -1868,7 +1913,7 @@ export function DocTable({
             setCollectionActionWarning(
                 userFacingApiError(
                     err,
-                    "Could not save this document as a new version.",
+                    tEstados("erroSalvarNovaVersao"),
                 ),
             );
         } finally {
@@ -1940,7 +1985,7 @@ export function DocTable({
             });
             if (movingIds.length === 0) return;
             if (
-                !requireCapability("docs.organize", "move documents", "editor")
+                !requireCapability("docs.organize", tEstados("acaoMoverDocumentos"), "editor")
             )
                 return;
             const updatedAt = new Date().toISOString();
@@ -1978,12 +2023,12 @@ export function DocTable({
             if (failedCount > 0) {
                 await operations.refreshCollection();
                 setCollectionActionWarning(
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be moved. Please try again.`,
+                    tEstados("erroMoverDocumentos", { count: failedCount }),
                 );
             }
         } else if (subFolderId && subFolderId !== targetFolderId) {
             if (
-                !requireCapability("docs.organize", "move folders", "editor")
+                !requireCapability("docs.organize", tEstados("acaoMoverPastas"), "editor")
             )
                 return;
             if (targetFolderId !== null && wouldCreateCycle(subFolderId, targetFolderId)) return;
@@ -2033,7 +2078,7 @@ export function DocTable({
                         <input
                             type="checkbox"
                             disabled
-                            aria-label="Select files in new folder"
+                            aria-label={tEstados("selecionarArquivosNovaPasta")}
                             className={`${TABLE_CHECKBOX_CLASS} cursor-default opacity-40`}
                         />
                         <span className="mr-2 flex h-4 w-4 shrink-0 items-center justify-center">
@@ -2043,7 +2088,7 @@ export function DocTable({
                         <input
                             autoFocus
                             className="flex-1 min-w-0 text-xs text-gray-800 bg-transparent outline-none border-b border-gray-300"
-                            placeholder="Folder name"
+                            placeholder={tEstados("nomePastaPlaceholder")}
                             value={newFolderName}
                             onChange={(e) => setNewFolderName(e.target.value)}
                             onKeyDown={(e) => {
@@ -2116,11 +2161,11 @@ export function DocTable({
                 </div>
                 <div className="ml-auto w-20 shrink-0 text-xs text-gray-300 lowercase truncate">
                     {entryKind === "folder"
-                        ? "folder"
+                        ? tEstados("tipoPasta")
                         : fileType ??
                           (filename.includes(".")
                               ? filename.split(".").pop()
-                              : "file")}
+                              : tEstados("tipoArquivo"))}
                 </div>
                 <div className="w-24 shrink-0 text-xs text-gray-300">{statusLabel}</div>
                 <div className="w-20 shrink-0 text-xs text-gray-300">—</div>
@@ -2142,6 +2187,7 @@ export function DocTable({
             upload.files
                 .filter(
                     (file) =>
+                        !file.resourceId &&
                         documentUploadFolderSegments(file.entry).length === 0 &&
                         file.status !== "completed" &&
                         file.status !== "error",
@@ -2153,7 +2199,9 @@ export function DocTable({
                         fileType: null,
                         depth,
                         statusLabel: "",
-                        nameTrailingLabel: <UploadingTrailingLabel />,
+                        nameTrailingLabel: (
+                            <UploadActivityTrailingLabel status={file.status} />
+                        ),
                     }),
                 ),
         );
@@ -2530,7 +2578,7 @@ export function DocTable({
                             filename: doc.filename,
                             fileType: doc.file_type,
                             depth,
-                            statusLabel: "Deleting...",
+                            statusLabel: tEstados("excluindo"),
                         });
                     }
                     return (
@@ -2603,7 +2651,7 @@ export function DocTable({
                                                                 )
                                                             }
                                                             onClick={(e) => e.stopPropagation()}
-                                                            aria-label={`Select ${doc.filename}`}
+                                                            aria-label={tEstados("selecionarArquivo", { nome: doc.filename })}
                                                             className={TABLE_CHECKBOX_CLASS}
                                                         />
                                                     )}
@@ -2697,7 +2745,7 @@ export function DocTable({
                                                             setRenameDocumentValue(docName);
                                                             setRenamingDocumentId(doc.id);
                                                         }}
-                                                        renameLabel="Rename document"
+                                                        renameLabel={t("acoes.renomearDocumento")}
                                                         onDownload={() => downloadDoc(doc.id)}
                                                         onShowAllVersions={
                                                             hasVersions && !isVersionsOpen
@@ -2740,7 +2788,7 @@ export function DocTable({
                                         handleRenameVersion(doc.id, versionId, filename)
                                     }
                                     onExtensionChangeBlocked={(filename) =>
-                                        setDocumentRenameWarning(extensionChangeWarning(filename))
+                                        setDocumentRenameWarning(extensionChangeWarning(tEstados, filename))
                                     }
                                 />
                             )}
@@ -2935,15 +2983,21 @@ export function DocTable({
                                                 event.stopPropagation()
                                             }
                                             className={TABLE_CHECKBOX_CLASS}
-                                            aria-label={`Select files in ${folder.name}`}
-                                            title={`Select files in ${folder.name}`}
+                                            aria-label={tEstados(
+                                                "selecionarArquivosPasta",
+                                                { nome: folder.name },
+                                            )}
+                                            title={tEstados(
+                                                "selecionarArquivosPasta",
+                                                { nome: folder.name },
+                                            )}
                                         />
                                         <button
                                             type="button"
                                             aria-label={
                                                 isExpanded
-                                                    ? `Collapse ${folder.name}`
-                                                    : `Expand ${folder.name}`
+                                                    ? tEstados("recolherPasta", { nome: folder.name })
+                                                    : tEstados("expandirPasta", { nome: folder.name })
                                             }
                                             onClick={(event) => {
                                                 event.stopPropagation();
@@ -2996,7 +3050,7 @@ export function DocTable({
                                 <div className="w-8 shrink-0 flex justify-end" onClick={(e) => e.stopPropagation()}>
                                     <RowActions
                                         onView={() => openFolderView(folder.id)}
-                                        viewLabel="Open"
+                                        viewLabel={t("acoes.abrir")}
                                         onRename={() => {
                                             setRenameFolderValue(folder.name);
                                             setRenamingFolderId(folder.id);
@@ -3101,15 +3155,20 @@ export function DocTable({
             setCollectionActionWarning(
                 userFacingApiError(
                     error,
-                    "The selected files and folders could not be downloaded.",
+                    tEstados("erroBaixarSelecionados"),
                 ),
             );
         }
-    }, [downloadDoc, selectedFolderRootIds, selectedStandaloneDocIds]);
+    }, [
+        downloadDoc,
+        selectedFolderRootIds,
+        selectedStandaloneDocIds,
+        tEstados,
+    ]);
 
     const handleRemoveSelectedFromFolder = useCallback(async () => {
         if (
-            !requireCapability("docs.organize", "move documents", "editor")
+            !requireCapability("docs.organize", tEstados("acaoMoverDocumentos"), "editor")
         )
             return;
         const ids = selectedStandaloneDocIds.filter(
@@ -3119,7 +3178,14 @@ export function DocTable({
         setSelectedFolderIds(new Set());
         setDocuments((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, folder_id: null } : d)));
         await Promise.all(ids.map((id) => operations.moveDocument(id, null).catch(() => {})));
-    }, [docs, operations, requireCapability, selectedStandaloneDocIds, setDocuments]);
+    }, [
+        docs,
+        operations,
+        requireCapability,
+        selectedStandaloneDocIds,
+        setDocuments,
+        tEstados,
+    ]);
 
     const deleteDocumentIds = useCallback(async (ids: string[]) => {
         const owned = ids.filter((id) => {
@@ -3192,7 +3258,7 @@ export function DocTable({
             setCollectionActionWarning((current) =>
                 [
                     current,
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted. Please try again.`,
+                    tEstados("erroExcluirDocumentos", { count: failedCount }),
                 ]
                     .filter(Boolean)
                     .join(" "),
@@ -3200,7 +3266,7 @@ export function DocTable({
         }
         if (blocked > 0) {
             setOwnerOnlyAction(
-                `delete ${blocked} of the selected documents — only the document creator can delete a document`,
+                tEstados("acaoExcluirSelecionadosBloqueado", { count: blocked }),
             );
         }
         if (deletedIds.length > 0 && operations.bulkDeleteDocuments) {
@@ -3214,6 +3280,7 @@ export function DocTable({
         selectedDocIds,
         setDocuments,
         setOwnerOnlyAction,
+        tEstados,
     ]);
 
     const handleDeleteSelectedItems = useCallback(async () => {
@@ -3281,7 +3348,9 @@ export function DocTable({
             );
             setSelectedFolderIds(new Set(failedFolderRootIds));
             setCollectionActionWarning(
-                `${failedFolderRootIds.length} ${failedFolderRootIds.length === 1 ? "folder" : "folders"} could not be deleted. Please try again.`,
+                tEstados("erroExcluirPastas", {
+                    count: failedFolderRootIds.length,
+                }),
             );
         }
 
@@ -3335,6 +3404,7 @@ export function DocTable({
         selectedStandaloneDocIds,
         setDocuments,
         setFolders,
+        tEstados,
         updateViewedFolder,
     ]);
 
@@ -3473,24 +3543,34 @@ export function DocTable({
     const createdSortDirection = effectiveSort?.key === "created" ? effectiveSort.direction : null;
     const updatedSortDirection = effectiveSort?.key === "updated" ? effectiveSort.direction : null;
     const resetSortLabel = defaultSort
-        ? `Default (${SORT_KEY_LABELS[defaultSort.key]})`
-        : "Default Order";
+        ? t("colunas.ordenacaoPadrao", {
+              ordem: t(SORT_KEY_LABEL_KEYS[defaultSort.key]),
+          })
+        : t("colunas.ordemPadrao");
+    const sortOptions = useMemo(
+        () =>
+            SORT_OPTIONS.map(({ value, labelKey }) => ({
+                value,
+                label: t(labelKey),
+            })),
+        [t],
+    );
     const nameFilterButton = enableHeaderFilters ? (
         <TableFilters
-            label="Sort by name"
+            label={t("colunas.ordenarPorNome")}
             value={nameSortDirection}
             allLabel={resetSortLabel}
             widthClassName="w-40"
             align="right"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("name", direction)}
         />
     ) : null;
     const typeFilterButton = enableHeaderFilters ? (
         <TableFilters
-            label="Filter by file type"
+            label={t("colunas.filtrarPorTipo")}
             value={typeFilter}
-            allLabel="All Types"
+            allLabel={t("colunas.todosTipos")}
             widthClassName="w-40"
             options={typeOptions}
             onChange={handleTypeFilterChange}
@@ -3498,41 +3578,41 @@ export function DocTable({
     ) : null;
     const sizeFilterButton = enableHeaderFilters ? (
         <TableFilters
-            label="Sort by size"
+            label={t("colunas.ordenarPorTamanho")}
             value={sizeSortDirection}
             allLabel={resetSortLabel}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("size", direction)}
         />
     ) : null;
     const versionFilterButton = enableHeaderFilters ? (
         <TableFilters
-            label="Sort by version"
+            label={t("colunas.ordenarPorVersao")}
             value={versionSortDirection}
             allLabel={resetSortLabel}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("version", direction)}
         />
     ) : null;
     const createdFilterButton = enableHeaderFilters ? (
         <TableFilters
-            label="Sort by created date"
+            label={t("colunas.ordenarPorDataCriacao")}
             value={createdSortDirection}
             allLabel={resetSortLabel}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("created", direction)}
         />
     ) : null;
     const updatedFilterButton = enableHeaderFilters ? (
         <TableFilters
-            label="Sort by updated date"
+            label={t("colunas.ordenarPorDataAtualizacao")}
             value={updatedSortDirection}
             allLabel={resetSortLabel}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("updated", direction)}
         />
     ) : null;
@@ -3670,7 +3750,7 @@ export function DocTable({
             setCollectionActionWarning(
                 userFacingApiError(
                     error,
-                    "All matching files could not be selected. Please try again.",
+                    tEstados("erroSelecionarTodos"),
                 ),
             );
         } finally {
@@ -3685,6 +3765,7 @@ export function DocTable({
         selectAllFolderIds,
         selectionCameFromSelectAll,
         sort,
+        tEstados,
         typeFilter,
         viewedFolderTreeIds,
     ]);
@@ -3722,15 +3803,16 @@ export function DocTable({
     const pendingVersionDropMessage = pendingVersionDrop ? (
         <div className="space-y-2">
             <p>
-                You are about to save{" "}
-                <span className="font-medium text-gray-950">{pendingVersionDrop.sourceDoc.filename}</span> as a new
-                version of <span className="font-medium text-gray-950">{pendingVersionDrop.targetDoc.filename}</span>.
+                {tEstados("confirmarSalvarVersaoPrefixo")}{" "}
+                <span className="font-medium text-gray-950">{pendingVersionDrop.sourceDoc.filename}</span>{" "}
+                {tEstados("confirmarSalvarVersaoMeio")}{" "}
+                <span className="font-medium text-gray-950">{pendingVersionDrop.targetDoc.filename}</span>.
             </p>
             <p>
-                <span className="font-medium text-gray-950">{pendingVersionDrop.sourceDoc.filename}</span> will no
-                longer exist as a separate document
+                <span className="font-medium text-gray-950">{pendingVersionDrop.sourceDoc.filename}</span>{" "}
+                {tEstados("confirmarSalvarVersaoDetalhe")}
                 {(currentVersionNumber(pendingVersionDrop.sourceDoc) ?? 1) > 1
-                    ? " and its older versions will be deleted"
+                    ? ` ${tEstados("confirmarSalvarVersaoVersoesAntigas")}`
                     : ""}
                 .
             </p>
@@ -3742,43 +3824,53 @@ export function DocTable({
     const pendingDeleteDocMessage = pendingDeleteDoc ? (
         <div className="space-y-2">
             <p>
-                <span className="font-medium text-gray-950">{pendingDeleteDoc.filename}</span> has{" "}
-                {pendingDeleteDocVersionCount} {pendingDeleteDocVersionCount === 1 ? "version" : "versions"}. Deleting
-                this document will delete all of its versions.
+                <span className="font-medium text-gray-950">{pendingDeleteDoc.filename}</span>{" "}
+                {tEstados("confirmarExcluirDocumentoTem", {
+                    count: pendingDeleteDocVersionCount,
+                })}
             </p>
         </div>
     ) : undefined;
     const pendingDeleteFolderMessage = pendingDeleteFolder ? (
         <div className="space-y-2">
             <p>
-                This will permanently delete{" "}
+                {tEstados("excluiraPermanentemente")}{" "}
                 <span className="font-medium text-gray-950">
-                    {pendingDeleteFolder.folderIds.length}{" "}
-                    {pendingDeleteFolder.folderIds.length === 1 ? "folder" : "folders"}
+                    {tEstados("contagemPastas", {
+                        count: pendingDeleteFolder.folderIds.length,
+                    })}
                 </span>
-                , including <span className="font-medium text-gray-950">{pendingDeleteFolder.folder.name}</span>
-                {pendingDeleteFolder.folderIds.length > 1 ? " and its nested subfolders" : ""}.
+                {tEstados("incluindo")}{" "}
+                <span className="font-medium text-gray-950">{pendingDeleteFolder.folder.name}</span>
+                {pendingDeleteFolder.folderIds.length > 1
+                    ? ` ${tEstados("eSubpastasAninhadas")}`
+                    : ""}
+                .
             </p>
             {pendingDeleteFolder.documentCount > 0 && (
                 <p>
-                    {pendingDeleteFolder.documentCount}{" "}
-                    {pendingDeleteFolder.documentCount === 1 ? "document" : "documents"} in the deleted{" "}
-                    {pendingDeleteFolder.folderIds.length === 1 ? "folder" : "folders"} will also be permanently
-                    deleted.
+                    {tEstados("contagemDocumentos", {
+                        count: pendingDeleteFolder.documentCount,
+                    })}{" "}
+                    {tEstados("confirmarExcluirPastaDocumentos", {
+                        count: pendingDeleteFolder.folderIds.length,
+                    })}
                 </p>
             )}
         </div>
     ) : undefined;
     const selectedDeleteSummary = [
         selectedFolderIds.size > 0
-            ? `${selectedFolderIds.size} ${selectedFolderIds.size === 1 ? "folder" : "folders"}`
+            ? tEstados("contagemPastas", { count: selectedFolderIds.size })
             : null,
         selectedStandaloneDocIds.length > 0
-            ? `${selectedStandaloneDocIds.length} ${selectedStandaloneDocIds.length === 1 ? "file" : "files"}`
+            ? tEstados("contagemArquivos", {
+                  count: selectedStandaloneDocIds.length,
+              })
             : null,
     ]
         .filter(Boolean)
-        .join(" and ");
+        .join(tEstados("e"));
 
     return (
         <div
@@ -3821,7 +3913,7 @@ export function DocTable({
             />
             <UploadOverlay
                 open={isDraggingCollectionFiles}
-                label="Drop files or folders here to upload"
+                label={tEstados("solteArquivosUpload")}
                 warning={documentUploadWarning}
                 onWarningClose={() => setDocumentUploadWarning(null)}
             />
@@ -3837,24 +3929,27 @@ export function DocTable({
             />
             <ConfirmPopup
                 open={!!folderUploadConflict}
-                title="Folder already exists"
+                title={tEstados("tituloPastaExistente")}
                 message={
                     folderUploadConflict
-                        ? `A folder named “${folderUploadConflict.folderName}” already exists. This folder will be uploaded as “${folderUploadConflict.suggestedName}”.`
+                        ? tEstados("mensagemPastaExistente", {
+                              nome: folderUploadConflict.folderName,
+                              sugerido: folderUploadConflict.suggestedName,
+                          })
                         : undefined
                 }
-                confirmLabel="Continue"
-                cancelLabel="Cancel"
+                confirmLabel={tEstados("continuar")}
+                cancelLabel={tEstados("cancelar")}
                 onCancel={() => finishFolderUploadConflict("cancel")}
                 onConfirm={() => finishFolderUploadConflict("rename")}
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && !!selectionActions}
-                title="Delete selected items?"
+                title={tEstados("tituloExcluirSelecionados")}
                 message={
                     <div className="space-y-2">
                         <p>
-                            This will permanently delete{" "}
+                            {tEstados("excluiraPermanentemente")}{" "}
                             <span className="font-medium text-gray-950">
                                 {selectedDeleteSummary}
                             </span>
@@ -3862,28 +3957,28 @@ export function DocTable({
                         </p>
                         {selectedFolderIds.size > 0 && (
                             <p>
-                                All nested folders and files contained in the
-                                selected folders will also be deleted.
+                                {tEstados(
+                                    "confirmarExcluirSelecionadosPastas",
+                                )}
                             </p>
                         )}
                         <p>
-                            Files owned by others will be skipped. This action
-                            cannot be undone.
+                            {tEstados("confirmarExcluirSelecionadosOutros")}
                         </p>
                     </div>
                 }
-                confirmLabel="Delete"
+                confirmLabel={t("excluir")}
                 confirmVariant="danger"
-                cancelLabel="Cancel"
+                cancelLabel={tEstados("cancelar")}
                 onCancel={() => setConfirmDeleteAllOpen(false)}
                 onConfirm={() => void handleDeleteSelectedItems()}
             />
             <ConfirmPopup
                 open={!!pendingVersionDrop}
-                title="Save as new version?"
+                title={tEstados("tituloSalvarNovaVersao")}
                 message={pendingVersionDropMessage}
-                confirmLabel="Confirm"
-                cancelLabel="Cancel"
+                confirmLabel={tEstados("confirmar")}
+                cancelLabel={tEstados("cancelar")}
                 onCancel={() => setPendingVersionDrop(null)}
                 onConfirm={() => {
                     const pending = pendingVersionDrop;
@@ -3894,9 +3989,9 @@ export function DocTable({
             />
             <ConfirmPopup
                 open={!!pendingDeleteDoc}
-                title="Delete document?"
+                title={tEstados("tituloExcluirDocumento")}
                 message={pendingDeleteDocMessage}
-                confirmLabel="Delete"
+                confirmLabel={t("excluir")}
                 confirmVariant="danger"
                 confirmStatus={
                     pendingDeleteStatus === "deleting"
@@ -3905,7 +4000,7 @@ export function DocTable({
                           ? "complete"
                           : "idle"
                 }
-                cancelLabel="Cancel"
+                cancelLabel={tEstados("cancelar")}
                 onCancel={() => {
                     if (pendingDeleteStatus === "deleting") return;
                     setPendingDeleteDoc(null);
@@ -3915,9 +4010,9 @@ export function DocTable({
             />
             <ConfirmPopup
                 open={!!pendingDeleteFolder}
-                title="Delete folder?"
+                title={tEstados("tituloExcluirPasta")}
                 message={pendingDeleteFolderMessage}
-                confirmLabel="Delete"
+                confirmLabel={t("excluir")}
                 confirmVariant="danger"
                 confirmStatus={
                     pendingDeleteFolderStatus === "deleting"
@@ -3926,7 +4021,7 @@ export function DocTable({
                           ? "complete"
                           : "idle"
                 }
-                cancelLabel="Cancel"
+                cancelLabel={tEstados("cancelar")}
                 onCancel={() => {
                     if (pendingDeleteFolderStatus === "deleting") return;
                     setPendingDeleteFolder(null);
@@ -3969,29 +4064,29 @@ export function DocTable({
                                     }}
                                     onChange={() => void handleToggleAllDocuments()}
                                     className={TABLE_CHECKBOX_CLASS}
-                                    aria-label="Select all files and folders"
+                                    aria-label={tEstados("selecionarTodosArquivosPastas")}
                                 />
-                                <span className="mr-1">Name</span>
+                                <span className="mr-1">{t("colunas.nome")}</span>
                                 {nameFilterButton}
                             </TableStickyCell>
                             <TableHeaderCell className="ml-auto flex w-20 items-center gap-1">
-                                <span>Type</span>
+                                <span>{t("colunas.tipo")}</span>
                                 {typeFilterButton}
                             </TableHeaderCell>
                             <TableHeaderCell className="flex w-24 items-center gap-1">
-                                <span>Size</span>
+                                <span>{t("colunas.tamanho")}</span>
                                 {sizeFilterButton}
                             </TableHeaderCell>
                             <TableHeaderCell className="flex w-20 items-center gap-1">
-                                <span>Version</span>
+                                <span>{t("colunas.versao")}</span>
                                 {versionFilterButton}
                             </TableHeaderCell>
                             <TableHeaderCell className="flex w-32 items-center gap-1">
-                                <span>Created</span>
+                                <span>{t("colunas.criado")}</span>
                                 {createdFilterButton}
                             </TableHeaderCell>
                             <TableHeaderCell className="flex w-32 items-center gap-1">
-                                <span>Updated</span>
+                                <span>{t("colunas.atualizado")}</span>
                                 {updatedFilterButton}
                             </TableHeaderCell>
                             <TableHeaderCell className="w-8" />
@@ -4036,7 +4131,7 @@ export function DocTable({
                             {viewedFolderIsEmpty ? (
                                 <div className="flex flex-1 items-center justify-center py-24 text-center">
                                     <p className="text-sm text-gray-400">
-                                        Empty folder
+                                        {tEstados("pastaVazia")}
                                     </p>
                                 </div>
                             ) : docs.length === 0 &&
@@ -4045,7 +4140,7 @@ export function DocTable({
                             !hasVisibleCollectionUpload ? (
                                 serverQueryActive ? (
                                     <div className="flex-1 flex flex-col items-center justify-center py-24 text-center">
-                                        <p className="text-sm text-gray-400">No matches found</p>
+                                        <p className="text-sm text-gray-400">{tEstados("nenhumResultado")}</p>
                                     </div>
                                 ) : (
                                     <div
@@ -4056,7 +4151,7 @@ export function DocTable({
                                             <EmptyState
                                                 icon={<LibrarySkeuoIcon />}
                                                 title={emptyStateTitle}
-                                                description="Upload documents or drop files and folders here"
+                                                description={tEstados("estadoVazioDescricao")}
                                                 action={
                                                     <PillButton
                                                         tone="black"
@@ -4066,7 +4161,7 @@ export function DocTable({
                                                             openAddDocuments();
                                                         }}
                                                     >
-                                                        Upload
+                                                        {t("acoes.enviar")}
                                                     </PillButton>
                                                 }
                                             />
@@ -4136,7 +4231,7 @@ export function DocTable({
                                                         filename: doc.filename,
                                                         fileType: doc.file_type,
                                                         depth: 0,
-                                                        statusLabel: "Deleting...",
+                                                        statusLabel: tEstados("excluindo"),
                                                     });
                                                 }
                                                 return (
@@ -4200,7 +4295,7 @@ export function DocTable({
                                                                                 )
                                                                             }
                                                                             onClick={(e) => e.stopPropagation()}
-                                                                            aria-label={`Select ${docName}`}
+                                                                            aria-label={tEstados("selecionarArquivo", { nome: docName })}
                                                                             className={TABLE_CHECKBOX_CLASS}
                                                                         />
                                                                     )}
@@ -4300,7 +4395,7 @@ export function DocTable({
                                                                             setRenameDocumentValue(docName);
                                                                             setRenamingDocumentId(doc.id);
                                                                         }}
-                                                                        renameLabel="Rename document"
+                                                                        renameLabel={t("acoes.renomearDocumento")}
                                                                         onDownload={() => downloadDoc(doc.id)}
                                                                         onShowAllVersions={
                                                                             hasVersions && !isVersionsOpen
@@ -4340,7 +4435,7 @@ export function DocTable({
                                                                 }
                                                                 onExtensionChangeBlocked={(filename) =>
                                                                     setDocumentRenameWarning(
-                                                                        extensionChangeWarning(filename),
+                                                                        extensionChangeWarning(tEstados, filename),
                                                                     )
                                                                 }
                                                             />
@@ -4429,7 +4524,7 @@ export function DocTable({
                                                               setRenamingDocumentId(menuDoc.id);
                                                           }
                                                 }
-                                                renameLabel="Rename document"
+                                                renameLabel={t("acoes.renomearDocumento")}
                                                 onDownload={() =>
                                                     menuAppliesToSelection
                                                         ? handleDownloadSelectedDocs()
@@ -4465,7 +4560,9 @@ export function DocTable({
                                                 }
                                                 deleteLabel={
                                                     menuAppliesToSelection
-                                                        ? `Delete ${selectedItemCount} items`
+                                                        ? tEstados("excluirNItens", {
+                                                              count: selectedItemCount,
+                                                          })
                                                         : undefined
                                                 }
                                                 deleteDisabled={
@@ -4493,7 +4590,7 @@ export function DocTable({
                                                               )
                                                         : undefined
                                                 }
-                                                viewLabel="Open"
+                                                viewLabel={t("acoes.abrir")}
                                                 onDownload={
                                                     menuFolderAppliesToSelection
                                                         ? handleDownloadSelectedDocs
@@ -4513,8 +4610,8 @@ export function DocTable({
                                                 }}
                                                 newSubfolderLabel={
                                                     contextMenu.showFolderActions
-                                                        ? "New subfolder inside"
-                                                        : "New subfolder"
+                                                        ? t("acoes.novaSubpastaDentro")
+                                                        : t("acoes.novaSubpasta")
                                                 }
                                                 onRename={
                                                     !menuFolderAppliesToSelection &&
@@ -4528,7 +4625,7 @@ export function DocTable({
                                                           }
                                                         : undefined
                                                 }
-                                                renameLabel="Rename folder"
+                                                renameLabel={t("acoes.renomearPasta")}
                                                 onDelete={
                                                     menuFolderAppliesToSelection
                                                         ? requestDeleteSelectedItems
@@ -4538,8 +4635,10 @@ export function DocTable({
                                                 }
                                                 deleteLabel={
                                                     menuFolderAppliesToSelection
-                                                        ? `Delete ${selectedItemCount} items`
-                                                        : "Delete folder"
+                                                        ? tEstados("excluirNItens", {
+                                                              count: selectedItemCount,
+                                                          })
+                                                        : t("acoes.excluirPasta")
                                                 }
                                             />
                                         ),
@@ -4600,9 +4699,11 @@ function hasFilenameExtensionChange(previous: string, next: string) {
     );
 }
 
-function extensionChangeWarning(filename: string) {
+type TranslateFn = (key: string, values?: Record<string, string | number>) => string;
+
+function extensionChangeWarning(t: TranslateFn, filename: string) {
     const extension = filenameExtension(filename);
     return extension
-        ? `File extensions cannot be changed here. Keep ${extension} at the end of the name.`
-        : "File extensions cannot be changed here.";
+        ? t("avisoExtensaoComArg", { extensao: extension })
+        : t("avisoExtensao");
 }

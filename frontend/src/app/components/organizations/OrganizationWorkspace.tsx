@@ -10,6 +10,7 @@ import {
 } from "react";
 import { Check, ChevronDown, Loader2, Pencil, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
@@ -61,7 +62,7 @@ import {
   type OrgMember,
   type OrgResources,
 } from "@/app/lib/mikeApi";
-import { ORG_ROLE_LABELS, type OrgRole } from "@/app/lib/permissions";
+import { type OrgRole } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import {
   InviteOrganizationMemberModal,
@@ -70,27 +71,38 @@ import {
 
 type OrganizationTab = "people" | "projects" | "workflows";
 
-const TABS: { id: OrganizationTab; label: string }[] = [
-  { id: "people", label: "People" },
-  { id: "projects", label: "Projects" },
-  { id: "workflows", label: "Workflows" },
+const TABS: { id: OrganizationTab; labelKey: string }[] = [
+  { id: "people", labelKey: "abaPessoas" },
+  { id: "projects", labelKey: "abaProjetos" },
+  { id: "workflows", labelKey: "abaWorkflows" },
 ];
 
 const EMPTY_RESOURCES: OrgResources = { projects: [], workflows: [] };
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
+const SORT_OPTIONS = [
+  { value: "asc" as TableSortDirection, labelKey: "crescente" },
+  { value: "desc" as TableSortDirection, labelKey: "decrescente" },
 ];
 
-const ROLE_FILTER_OPTIONS: TableFilterOption<OrgRole>[] = [
-  { value: "admin", label: ORG_ROLE_LABELS.admin, className: "text-blue-700" },
-  {
-    value: "member",
-    label: ORG_ROLE_LABELS.member,
-    className: "text-violet-700",
-  },
+const ROLE_FILTER_OPTIONS = [
+  { value: "admin" as OrgRole, labelKey: "papelAdmin", className: "text-blue-700" },
+  { value: "member" as OrgRole, labelKey: "papelMembro", className: "text-violet-700" },
 ];
+
+const PAPEL_KEYS: Record<OrgRole, string> = {
+  admin: "papelAdmin",
+  member: "papelMembro",
+};
+
+function withLabels<T extends { labelKey: string }>(
+  options: T[],
+  t: (key: string) => string,
+): (Omit<T, "labelKey"> & { label: string })[] {
+  return options.map(({ labelKey, ...rest }) => ({
+    ...rest,
+    label: t(labelKey),
+  }));
+}
 
 function formatDate(value?: string | null) {
   if (!value) return "—";
@@ -109,6 +121,8 @@ function resourceName(value: string | null | undefined, fallback: string) {
 
 export function OrganizationWorkspace({ orgId }: { orgId: string }) {
   const router = useRouter();
+  const t = useTranslations("organizations.workspace");
+  const tg = useTranslations("organizations.geral");
   const { user } = useAuth();
   const [org, setOrg] = useState<Org | null>(null);
   const [members, setMembers] = useState<OrgMember[]>([]);
@@ -145,7 +159,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
     } catch (error) {
       console.error("Failed to load organization", error);
       setLoadError(
-        userFacingApiError(error, "Could not load this organization."),
+        userFacingApiError(error, t("erroCarregamento")),
       );
     } finally {
       setLoading(false);
@@ -175,7 +189,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
         ),
       );
     } catch (error) {
-      setActionError(userFacingApiError(error, "Could not change that role."));
+      setActionError(userFacingApiError(error, t("erroMudarPapel")));
     } finally {
       setBusyMemberId(null);
     }
@@ -201,7 +215,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       setRemoveMember(null);
     } catch (error) {
       setActionError(
-        userFacingApiError(error, "Could not remove that member."),
+        userFacingApiError(error, t("erroRemoverMembro")),
       );
       setRemoveMember(null);
     } finally {
@@ -215,7 +229,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       selectedMemberIds.includes(member.id),
     );
     if (selectedMembers.some((member) => member.user_id === user?.id)) {
-      setActionError("An organization must keep at least one admin.");
+      setActionError(t("erroManterAdmin"));
       return;
     }
     setRemoveSelectedOpen(true);
@@ -247,7 +261,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       setActionError(
         userFacingApiError(
           firstFailure.reason,
-          "Could not remove all selected members.",
+          t("erroRemoverSelecionados"),
         ),
       );
     }
@@ -260,7 +274,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <TabPillButton>
-            Actions
+            {t("acoes")}
             <ChevronDown className="h-3.5 w-3.5" />
           </TabPillButton>
         </DropdownMenuTrigger>
@@ -270,7 +284,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
             className="text-red-600 focus:text-red-700"
           >
             <Trash2 className="h-3.5 w-3.5 text-red-600" />
-            Remove all selected
+            {t("removerSelecionados")}
           </LiquidDropdownItem>
         </LiquidDropdownContent>
       </DropdownMenu>
@@ -282,9 +296,9 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
         loading={loading}
         breadcrumbs={[
           {
-            label: "Organizations",
+            label: tg("organizacoes"),
             onClick: () => router.push("/organizations"),
-            title: "Back to Organizations",
+            title: t("voltarOrganizacoes"),
           },
           org
             ? { label: org.name, cursor: "text" }
@@ -295,8 +309,8 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
             {
               type: "new",
               title: isAdmin
-                ? "Add member"
-                : "Only organization admins can add members",
+                ? tg("adicionarMembro")
+                : t("somenteAdminsAdicionam"),
               disabled: !isAdmin,
               onClick: () => setInviteOpen(true),
             },
@@ -305,10 +319,10 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
                   type: "custom",
                   render: (
                     <HeaderActionsMenu
-                      title="Organization settings"
+                      title={t("configuracoesOrganizacao")}
                       items={[
                         {
-                          label: "Organization settings",
+                          label: t("configuracoesOrganizacao"),
                           icon: Pencil,
                           onSelect: () => setSettingsOpen(true),
                         },
@@ -322,7 +336,10 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       />
 
       <TableToolbar
-        items={TABS}
+        items={TABS.map(({ labelKey, ...rest }) => ({
+          ...rest,
+          label: t(labelKey),
+        }))}
         active={activeTab}
         onChange={(tab) => {
           setActiveTab(tab);
@@ -353,7 +370,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
           kind="projects"
           rows={resources.projects.map((project) => ({
             id: project.id,
-            name: resourceName(project.name, "Untitled project"),
+            name: resourceName(project.name, t("projetoSemNome")),
             context: project.practice || "—",
             createdAt: project.created_at,
             href: `/projects/${project.id}`,
@@ -368,9 +385,11 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
           kind="workflows"
           rows={resources.workflows.map((workflow) => ({
             id: workflow.id,
-            name: resourceName(workflow.title, "Untitled workflow"),
+            name: resourceName(workflow.title, t("workflowSemNome")),
             context:
-              workflow.type === "tabular" ? "Tabular review" : "Assistant",
+              workflow.type === "tabular"
+                ? t("contextoTabular")
+                : t("contextoAssistente"),
             createdAt: workflow.created_at,
             href: `/workflows/${workflow.id}`,
           }))}
@@ -407,15 +426,22 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
         open={removeMember !== null}
         title={
           removeMember?.user_id === user?.id
-            ? "Leave organization?"
-            : "Remove member?"
+            ? t("sairOrganizacaoTitulo")
+            : t("removerMembroTitulo")
         }
         message={
           removeMember?.user_id === user?.id
-            ? "You will lose access to this organization's shared resources."
-            : `${removeMember?.display_name || removeMember?.email || "This member"} will lose organization access.`
+            ? t("sairOrganizacaoMensagem")
+            : t("removerMembroMensagem", {
+                nome:
+                  removeMember?.display_name ||
+                  removeMember?.email ||
+                  t("membroFallback"),
+              })
         }
-        confirmLabel={removeMember?.user_id === user?.id ? "Leave" : "Remove"}
+        confirmLabel={
+          removeMember?.user_id === user?.id ? t("sair") : t("remover")
+        }
         confirmVariant="danger"
         confirmStatus={busyMemberId ? "loading" : "idle"}
         onCancel={() => setRemoveMember(null)}
@@ -423,9 +449,11 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       />
       <ConfirmPopup
         open={removeSelectedOpen}
-        title="Remove selected people?"
-        message={`${selectedMemberIds.length} selected ${selectedMemberIds.length === 1 ? "member" : "members"} will lose access to this organization.`}
-        confirmLabel="Remove"
+        title={t("removerSelecionadosTitulo")}
+        message={t("removerSelecionadosMensagem", {
+          count: selectedMemberIds.length,
+        })}
+        confirmLabel={t("remover")}
         confirmVariant="danger"
         confirmStatus={removingSelected ? "loading" : "idle"}
         onCancel={() => setRemoveSelectedOpen(false)}
@@ -433,7 +461,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
       />
       <WarningPopup
         open={actionError !== null}
-        title="Organization action failed"
+        title={t("erroAcaoTitulo")}
         message={actionError}
         onClose={() => setActionError(null)}
       />
@@ -466,11 +494,15 @@ function PeopleTable({
   onRoleChange: (member: OrgMember, role: OrgRole) => Promise<void>;
   onRemove: (member: OrgMember) => void;
 }) {
+  const t = useTranslations("organizations.workspace");
+  const tg = useTranslations("organizations.geral");
   const [roleFilter, setRoleFilter] = useState<OrgRole | null>(null);
   const [sort, setSort] = useState<{
     key: "name" | "email" | "added";
     direction: TableSortDirection;
   } | null>(null);
+  const sortOptions = withLabels(SORT_OPTIONS, tg);
+  const roleOptions = withLabels(ROLE_FILTER_OPTIONS, tg);
   const visibleMembers = useMemo(() => {
     const filtered = roleFilter
       ? members.filter((member) => member.role === roleFilter)
@@ -544,16 +576,16 @@ function PeopleTable({
                 }}
                 onChange={toggleAllVisible}
                 className={TABLE_CHECKBOX_CLASS}
-                aria-label="Select all people"
+                aria-label={t("selecionarTodasPessoas")}
               />
             )}
-            <span className="mr-1">Username</span>
+            <span className="mr-1">{t("colunaUsuario")}</span>
             {!loading ? (
               <TableFilters
-                label="Sort by username"
+                label={t("ordenarPorUsuario")}
                 value={sort?.key === "name" ? sort.direction : null}
-                allLabel="Default order"
-                options={SORT_OPTIONS}
+                allLabel={tg("ordemPadrao")}
+                options={sortOptions}
                 align="right"
                 widthClassName="w-40"
                 onChange={(direction) => setSortFor("name", direction)}
@@ -561,26 +593,26 @@ function PeopleTable({
             ) : null}
           </TableStickyCell>
           <TableHeaderCell className="ml-auto w-64">
-            <span className="mr-1">Email</span>
+            <span className="mr-1">{t("colunaEmail")}</span>
             {!loading ? (
               <TableFilters
-                label="Sort by email"
+                label={t("ordenarPorEmail")}
                 value={sort?.key === "email" ? sort.direction : null}
-                allLabel="Default order"
-                options={SORT_OPTIONS}
+                allLabel={tg("ordemPadrao")}
+                options={sortOptions}
                 widthClassName="w-40"
                 onChange={(direction) => setSortFor("email", direction)}
               />
             ) : null}
           </TableHeaderCell>
           <TableHeaderCell className="w-32">
-            <span className="mr-1">Role</span>
+            <span className="mr-1">{t("colunaPapel")}</span>
             {!loading ? (
               <TableFilters
-                label="Filter by role"
+                label={t("filtrarPorPapel")}
                 value={roleFilter}
-                allLabel="All roles"
-                options={ROLE_FILTER_OPTIONS}
+                allLabel={t("todosOsPapeis")}
+                options={roleOptions}
                 widthClassName="w-36"
                 onChange={(role) => {
                   setRoleFilter(role);
@@ -590,13 +622,13 @@ function PeopleTable({
             ) : null}
           </TableHeaderCell>
           <TableHeaderCell className="w-36">
-            <span className="mr-1">Added</span>
+            <span className="mr-1">{t("colunaAdicionado")}</span>
             {!loading ? (
               <TableFilters
-                label="Sort by date added"
+                label={t("ordenarPorAdicao")}
                 value={sort?.key === "added" ? sort.direction : null}
-                allLabel="Default order"
-                options={SORT_OPTIONS}
+                allLabel={tg("ordemPadrao")}
+                options={sortOptions}
                 widthClassName="w-40"
                 onChange={(direction) => setSortFor("added", direction)}
               />
@@ -614,13 +646,13 @@ function PeopleTable({
         <TableEmptyState>
           <EmptyState
             icon={<OrganizationSkeuoIcon />}
-            title="People"
-            description="This organization has no members."
+            title={t("abaPessoas")}
+            description={t("semMembros")}
           />
         </TableEmptyState>
       ) : visibleMembers.length === 0 ? (
         <TableEmptyState>
-          <p className="text-sm text-gray-400">No people match this filter.</p>
+          <p className="text-sm text-gray-400">{t("nenhumaPessoaFiltro")}</p>
         </TableEmptyState>
       ) : (
         <TableBody>
@@ -638,14 +670,14 @@ function PeopleTable({
                 <TablePrimaryCell
                   selected={isSelected}
                   onSelectionChange={() => toggleMember(member.id)}
-                  checkboxTitle={`Select ${label}`}
+                  checkboxTitle={t("selecionar", { nome: label })}
                 >
                   <span className="min-w-0 flex-1 truncate text-xs text-gray-800">
                     {label}
                   </span>
                   {member.user_id === currentUserId ? (
                     <span className="ml-1 text-[10px] text-gray-400">
-                      (You)
+                      {t("voce")}
                     </span>
                   ) : null}
                 </TablePrimaryCell>
@@ -667,13 +699,13 @@ function PeopleTable({
                 <TableCell className="flex w-10 justify-end overflow-visible">
                   {canRemove ? (
                     <HeaderActionsMenu
-                      title={`Actions for ${label}`}
+                      title={t("acoesDe", { nome: label })}
                       items={[
                         {
                           label:
                             member.user_id === currentUserId
-                              ? "Leave organization"
-                              : "Remove member",
+                              ? t("sairOrganizacao")
+                              : t("removerMembro"),
                           icon: Trash2,
                           variant: "danger",
                           onSelect: () => onRemove(member),
@@ -704,6 +736,8 @@ function OrganizationRoleTab({
   disabled: boolean;
   onChange: (role: OrgRole) => void;
 }) {
+  const t = useTranslations("organizations.workspace");
+  const tg = useTranslations("organizations.geral");
   const tone =
     role === "admin"
       ? "bg-blue-100 text-blue-700"
@@ -711,7 +745,7 @@ function OrganizationRoleTab({
   const className = `inline-flex h-6 min-w-20 items-center justify-center gap-1 rounded-full px-2 text-[11px] font-medium ${tone}`;
 
   if (!editable) {
-    return <span className={className}>{ORG_ROLE_LABELS[role]}</span>;
+    return <span className={className}>{tg(PAPEL_KEYS[role])}</span>;
   }
 
   return (
@@ -719,11 +753,11 @@ function OrganizationRoleTab({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Change role for ${label}`}
+          aria-label={t("mudarPapel", { nome: label })}
           disabled={disabled}
           className={`${className} transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-wait disabled:opacity-50`}
         >
-          <span className="flex-1 text-center">{ORG_ROLE_LABELS[role]}</span>
+          <span className="flex-1 text-center">{tg(PAPEL_KEYS[role])}</span>
           {disabled ? (
             <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
           ) : (
@@ -732,7 +766,7 @@ function OrganizationRoleTab({
         </button>
       </DropdownMenuTrigger>
       <LiquidDropdownContent align="start" className="z-[120] w-36">
-        {ROLE_FILTER_OPTIONS.map((option) => (
+        {withLabels(ROLE_FILTER_OPTIONS, tg).map((option) => (
           <LiquidDropdownItem
             key={option.value}
             selected={role === option.value}
@@ -773,23 +807,34 @@ function ResourceTable({
   onRetry: () => Promise<void>;
 }) {
   const router = useRouter();
+  const t = useTranslations("organizations.workspace");
+  const tg = useTranslations("organizations.geral");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [contextFilter, setContextFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<{
     key: "name" | "created";
     direction: TableSortDirection;
   } | null>(null);
+  const sortOptions = withLabels(SORT_OPTIONS, tg);
   const copy = {
     projects: {
-      title: "Projects",
-      context: "Practice",
-      empty: "No projects belong to this organization.",
+      tipo: t("tipoProjetos"),
+      title: t("abaProjetos"),
+      context: t("contextoPratica"),
+      empty: t("semProjetos"),
+      allContexts: t("todasPraticas"),
+      noFilterMatch: t("nenhumProjetoFiltro"),
+      selectAll: t("selecionarTodosTipo", { tipo: t("tipoProjetos") }),
       icon: <ClosedProjectSvgIcon />,
     },
     workflows: {
-      title: "Workflows",
-      context: "Type",
-      empty: "No workflows belong to this organization.",
+      tipo: t("tipoWorkflows"),
+      title: t("abaWorkflows"),
+      context: t("contextoTipo"),
+      empty: t("semWorkflows"),
+      allContexts: t("todosOsTipos"),
+      noFilterMatch: t("nenhumWorkflowFiltro"),
+      selectAll: t("selecionarTodosTipo", { tipo: t("tipoWorkflows") }),
       icon: <WorkflowSkeuoIcon />,
     },
   }[kind];
@@ -862,16 +907,16 @@ function ResourceTable({
                 }}
                 onChange={toggleAllVisible}
                 className={TABLE_CHECKBOX_CLASS}
-                aria-label={`Select all ${kind}`}
+                aria-label={copy.selectAll}
               />
             )}
-            <span className="mr-1">Name</span>
+            <span className="mr-1">{tg("colunaNome")}</span>
             {!loading ? (
               <TableFilters
-                label={`Sort ${kind} by name`}
+                label={t("ordenarNomePorTipo", { tipo: copy.tipo })}
                 value={sort?.key === "name" ? sort.direction : null}
-                allLabel="Default order"
-                options={SORT_OPTIONS}
+                allLabel={tg("ordemPadrao")}
+                options={sortOptions}
                 align="right"
                 widthClassName="w-40"
                 onChange={(direction) => setSortFor("name", direction)}
@@ -882,9 +927,12 @@ function ResourceTable({
             <span className="mr-1">{copy.context}</span>
             {!loading ? (
               <TableFilters
-                label={`Filter ${kind} by ${copy.context.toLowerCase()}`}
+                label={t("filtrarPorContexto", {
+                  tipo: copy.tipo,
+                  contexto: copy.context.toLowerCase(),
+                })}
                 value={contextFilter}
-                allLabel={`All ${copy.context.toLowerCase()}s`}
+                allLabel={copy.allContexts}
                 options={contextOptions}
                 widthClassName="w-44"
                 onChange={(context) => {
@@ -895,13 +943,13 @@ function ResourceTable({
             ) : null}
           </TableHeaderCell>
           <TableHeaderCell className="w-36">
-            <span className="mr-1">Created</span>
+            <span className="mr-1">{tg("colunaCriacao")}</span>
             {!loading ? (
               <TableFilters
-                label={`Sort ${kind} by creation date`}
+                label={t("ordenarCriacaoPorTipo", { tipo: copy.tipo })}
                 value={sort?.key === "created" ? sort.direction : null}
-                allLabel="Default order"
-                options={SORT_OPTIONS}
+                allLabel={tg("ordemPadrao")}
+                options={sortOptions}
                 widthClassName="w-40"
                 onChange={(direction) => setSortFor("created", direction)}
               />
@@ -924,7 +972,7 @@ function ResourceTable({
         </TableEmptyState>
       ) : visibleRows.length === 0 ? (
         <TableEmptyState>
-          <p className="text-sm text-gray-400">No {kind} match this filter.</p>
+          <p className="text-sm text-gray-400">{copy.noFilterMatch}</p>
         </TableEmptyState>
       ) : (
         <TableBody>
@@ -934,7 +982,7 @@ function ResourceTable({
               selected={selectedIds.includes(row.id)}
               role="link"
               tabIndex={0}
-              aria-label={`Open ${row.name}`}
+              aria-label={t("abrir", { nome: row.name })}
               onClick={() => router.push(row.href)}
               onKeyDown={(event) => {
                 if (event.target !== event.currentTarget) return;
@@ -948,7 +996,7 @@ function ResourceTable({
               <TablePrimaryCell
                 selected={selectedIds.includes(row.id)}
                 onSelectionChange={() => toggleRow(row.id)}
-                checkboxTitle={`Select ${row.name}`}
+                checkboxTitle={t("selecionar", { nome: row.name })}
               >
                 <span className="min-w-0 flex-1 truncate text-xs text-gray-800">
                   {row.name}
@@ -996,11 +1044,13 @@ function ErrorState({
   error: string;
   onRetry: () => Promise<void>;
 }) {
+  const t = useTranslations("organizations.workspace");
+  const tg = useTranslations("organizations.geral");
   return (
     <TableEmptyState>
       <EmptyState
         icon={<OrganizationSkeuoIcon />}
-        title="Organization"
+        title={t("tituloOrganizacao")}
         description={error}
         tone="error"
         action={
@@ -1010,7 +1060,7 @@ function ErrorState({
             className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
           >
             <Loader2 className="h-3.5 w-3.5" />
-            Try again
+            {tg("tentarNovamente")}
           </button>
         }
       />

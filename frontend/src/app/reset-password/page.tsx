@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { Input } from "@/app/components/ui/input";
 import { PillButton } from "@/app/components/ui/pill-button";
@@ -11,14 +12,12 @@ import {
     authGlassCardClassName,
     authInputClassName,
 } from "@/app/components/auth/authStyles";
-import {
-    MIN_PASSWORD_LENGTH,
-    minimumPasswordMessage,
-} from "@/app/components/auth/passwordPolicy";
+import { MIN_PASSWORD_LENGTH } from "@/app/components/auth/passwordPolicy";
 import { getAuthSession, updateAuthPassword } from "@/app/lib/authApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
 
 function ResetPasswordContent() {
+    const t = useTranslations("auth.redefinirSenha");
     const searchParams = useSearchParams();
     const [ready, setReady] = useState(false);
     const [password, setPassword] = useState("");
@@ -34,7 +33,7 @@ function ResetPasswordContent() {
     const isUnavailablePreview = preview === "reset-unavailable";
     const displayedReady = isUnavailablePreview || ready;
     const displayedError = isUnavailablePreview
-        ? "This password-reset link is invalid or has expired."
+        ? t("erroLinkInvalido")
         : error;
     const resetUnavailable =
         displayedReady && !!displayedError && !password && !confirmPassword;
@@ -48,15 +47,13 @@ function ResetPasswordContent() {
             .then((session) => {
                 if (cancelled) return;
                 if (!session) {
-                    setError(
-                        "This password-reset link is invalid or has expired.",
-                    );
+                    setError(t("erroLinkInvalido"));
                 }
                 setReady(true);
             })
             .catch(() => {
                 if (cancelled) return;
-                setError("This password-reset link is invalid or has expired.");
+                setError(t("erroLinkInvalido"));
                 setReady(true);
             });
         return () => {
@@ -68,11 +65,11 @@ function ResetPasswordContent() {
         event.preventDefault();
         setError(null);
         if (password.length < MIN_PASSWORD_LENGTH) {
-            setError(`${minimumPasswordMessage}.`);
+            setError(t("erroSenhaMinima", { count: MIN_PASSWORD_LENGTH }));
             return;
         }
         if (password !== confirmPassword) {
-            setError("Passwords do not match.");
+            setError(t("erroSenhaNaoCoincidem"));
             return;
         }
 
@@ -81,7 +78,7 @@ function ResetPasswordContent() {
             await updateAuthPassword(password, true);
             setSuccess(true);
         } catch {
-            setError("Unable to update your password. Please try again.");
+            setError(t("erroPadrao"));
         } finally {
             setLoading(false);
         }
@@ -104,20 +101,19 @@ function ResetPasswordContent() {
                         <div>
                             <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
                             <h1 className="mt-4 font-serif text-2xl font-medium text-gray-950">
-                                Verifying your reset link...
+                                {t("verificando")}
                             </h1>
                             <p className="mt-2 text-sm text-gray-500">
-                                This should only take a moment.
+                                {t("verificandoDescricao")}
                             </p>
                         </div>
                     ) : success ? (
                         <div>
                             <h1 className="text-2xl font-medium font-serif text-gray-950">
-                                Password updated
+                                {t("tituloSucesso")}
                             </h1>
                             <p className="mt-3 text-sm leading-relaxed text-gray-600">
-                                Your password has been changed. Log in again
-                                with your new password.
+                                {t("descricaoSucesso")}
                             </p>
                             <PillButton
                                 asChild
@@ -125,13 +121,13 @@ function ResetPasswordContent() {
                                 size="normal"
                                 className="mt-6"
                             >
-                                <Link href="/login">Log in</Link>
+                                <Link href="/login">{t("entrar")}</Link>
                             </PillButton>
                         </div>
                     ) : resetUnavailable ? (
                         <div>
                             <h1 className="text-2xl font-medium font-serif text-gray-950">
-                                Reset link unavailable
+                                {t("tituloIndisponivel")}
                             </h1>
                             <p className="mt-3 text-sm leading-relaxed text-gray-600">
                                 {displayedError}
@@ -143,17 +139,17 @@ function ResetPasswordContent() {
                                 className="mt-6"
                             >
                                 <Link href="/forgot-password">
-                                    Request another link
+                                    {t("pedirNovoLink")}
                                 </Link>
                             </PillButton>
                         </div>
                     ) : (
                         <>
                             <h1 className="text-2xl font-medium font-serif text-gray-950">
-                                Choose a new password
+                                {t("titulo")}
                             </h1>
                             <p className="mt-2 text-sm text-gray-500">
-                                Use at least {MIN_PASSWORD_LENGTH} characters.
+                                {t("descricao", { count: MIN_PASSWORD_LENGTH })}
                             </p>
                             <form
                                 onSubmit={handleSubmit}
@@ -161,7 +157,7 @@ function ResetPasswordContent() {
                             >
                                 <div>
                                     <FieldLabel htmlFor="password">
-                                        New password
+                                        {t("labelNovaSenha")}
                                     </FieldLabel>
                                     <Input
                                         id="password"
@@ -177,7 +173,7 @@ function ResetPasswordContent() {
                                 </div>
                                 <div>
                                     <FieldLabel htmlFor="confirmPassword">
-                                        Confirm new password
+                                        {t("labelConfirmarNovaSenha")}
                                     </FieldLabel>
                                     <Input
                                         id="confirmPassword"
@@ -208,8 +204,8 @@ function ResetPasswordContent() {
                                     className="w-full"
                                 >
                                     {loading
-                                        ? "Updating password..."
-                                        : "Update password"}
+                                        ? t("botaoAtualizando")
+                                        : t("botaoAtualizar")}
                                 </PillButton>
                             </form>
                         </>

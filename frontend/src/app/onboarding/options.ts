@@ -235,9 +235,9 @@ export const PRACTICE_AREA_OPTIONS = [
 ] as const;
 
 export const PRACTICE_SETTING_OPTIONS = [
-    { value: "private_practice", label: "Private practice" },
-    { value: "in_house", label: "In-house" },
-    { value: "not_practising", label: "Not a practising attorney" },
+    { value: "private_practice", label: "Advocacia privada" },
+    { value: "in_house", label: "Jurídico interno (in-house)" },
+    { value: "not_practising", label: "Não exerce a advocacia atualmente" },
 ] as const satisfies readonly { value: PracticeSetting; label: string }[];
 
 export type { PracticeSetting } from "@/app/lib/mikeApi";

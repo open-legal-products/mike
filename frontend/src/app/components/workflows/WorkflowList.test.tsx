@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { WorkflowList } from "./WorkflowList";
 
 const {
@@ -96,9 +97,9 @@ describe("WorkflowList pack toolbar", () => {
 
   it("replaces workflow tabs with Back on the left inside a pack", async () => {
     const user = userEvent.setup();
-    render(<WorkflowList initialTab="addons" packKey="legal-starter" />);
+    render(withIntl(<WorkflowList initialTab="addons" packKey="legal-starter" />));
 
-    const back = screen.getByText("Back").closest("button");
+    const back = screen.getByText("Voltar").closest("button");
     expect(back).not.toBeNull();
     if (!back) throw new Error("Pack toolbar Back button was not rendered");
     const toolbar = back.closest(".h-10");
@@ -107,16 +108,16 @@ describe("WorkflowList pack toolbar", () => {
     expect(back.parentElement).toHaveClass("flex-1");
     expect(back.parentElement).not.toHaveClass("ml-auto");
     expect(
-      within(toolbar as HTMLElement).queryByText("All"),
+      within(toolbar as HTMLElement).queryByText("Todos"),
     ).not.toBeInTheDocument();
     expect(
-      within(toolbar as HTMLElement).queryByText("Assistant"),
+      within(toolbar as HTMLElement).queryByText("Assistente"),
     ).not.toBeInTheDocument();
     expect(
       within(toolbar as HTMLElement).queryByText("Tabular"),
     ).not.toBeInTheDocument();
     expect(
-      within(toolbar as HTMLElement).queryByText("Add-ons"),
+      within(toolbar as HTMLElement).queryByText("Complementos"),
     ).not.toBeInTheDocument();
 
     await user.click(back);
@@ -148,16 +149,16 @@ describe("WorkflowList pack toolbar", () => {
       },
     ]);
 
-    render(<WorkflowList initialTab="addons" />);
+    render(withIntl(<WorkflowList initialTab="addons" />));
 
-    const rowImport = await screen.findByRole("button", { name: "Import" });
+    const rowImport = await screen.findByRole("button", { name: "Importar" });
     expect(rowImport).not.toHaveClass("bg-gray-950/88");
     expect(rowImport.querySelector("svg")).toBeNull();
 
     const checkboxes = screen.getAllByRole("checkbox");
     await user.click(checkboxes.at(-1)!);
 
-    const importButtons = screen.getAllByRole("button", { name: "Import" });
+    const importButtons = screen.getAllByRole("button", { name: "Importar" });
     expect(importButtons).toHaveLength(2);
     expect(
       importButtons.filter((button) =>
@@ -202,10 +203,10 @@ describe("WorkflowList pack toolbar", () => {
       is_system: false,
     });
 
-    render(<WorkflowList initialTab="addons" />);
-    await user.click(await screen.findByRole("button", { name: "Import" }));
+    render(withIntl(<WorkflowList initialTab="addons" />));
+    await user.click(await screen.findByRole("button", { name: "Importar" }));
 
-    const imported = await screen.findByRole("button", { name: "Imported" });
+    const imported = await screen.findByRole("button", { name: "Importado" });
     expect(imported).toHaveClass("text-green-600");
     expect(imported.querySelector("svg")).not.toBeNull();
     expect(imported).toBeDisabled();
@@ -261,9 +262,9 @@ describe("WorkflowList pack toolbar", () => {
       },
     ];
 
-    render(<WorkflowList />);
+    render(withIntl(<WorkflowList />));
 
-    expect(screen.getByText("Access")).toBeInTheDocument();
+    expect(screen.getByText("Acesso")).toBeInTheDocument();
     expect(screen.getByText("Private")).toBeInTheDocument();
     expect(screen.getByText("2 users")).toBeInTheDocument();
     expect(screen.getByText("Elite Law LLP")).toBeInTheDocument();
@@ -273,12 +274,12 @@ describe("WorkflowList pack toolbar", () => {
   it("filters Private and Shared from the Access column header", async () => {
     const user = userEvent.setup();
     activeTab.current = "all";
-    render(<WorkflowList />);
+    render(withIntl(<WorkflowList />));
 
     await user.click(
-      screen.getByRole("button", { name: "Filter by access" }),
+      screen.getByRole("button", { name: "Filtrar por acesso" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Shared" }));
+    await user.click(screen.getByRole("menuitem", { name: "Compartilhado" }));
 
     const calls = usePaginatedWorkflowsSpy.mock.calls;
     expect(calls.at(-1)?.[0]).toEqual(
@@ -286,9 +287,9 @@ describe("WorkflowList pack toolbar", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Filter by access" }),
+      screen.getByRole("button", { name: "Filtrar por acesso" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Private" }));
+    await user.click(screen.getByRole("menuitem", { name: "Privado" }));
     expect(usePaginatedWorkflowsSpy.mock.calls.at(-1)?.[0]).toEqual(
       expect.objectContaining({ scope: "private" }),
     );

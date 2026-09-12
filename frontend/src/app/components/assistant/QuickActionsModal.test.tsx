@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { QuickActionsModal } from "./QuickActionsModal";
 import type { QuickAction } from "../shared/types";
 
@@ -32,13 +33,13 @@ describe("QuickActionsModal", () => {
     it("only enables Save after an editable field changes", async () => {
         const onSave = vi.fn().mockResolvedValue(undefined);
         render(
-            <QuickActionsModal
+            withIntl(<QuickActionsModal
                 open
                 actions={[action]}
                 onSave={onSave}
                 onCreate={vi.fn()}
                 onClose={vi.fn()}
-            />,
+            />),
         );
 
         expect(
@@ -54,10 +55,10 @@ describe("QuickActionsModal", () => {
         expect(
             document.querySelector('[data-slot="quick-action-form"]'),
         ).not.toHaveClass("overflow-y-auto");
-        const save = screen.getByRole("button", { name: "Save" });
+        const save = screen.getByRole("button", { name: "Salvar" });
         expect(save).toBeDisabled();
 
-        fireEvent.change(screen.getByLabelText("Name"), {
+        fireEvent.change(screen.getByLabelText("Nome"), {
             target: { value: "Proofread contract" },
         });
         expect(save).toBeEnabled();

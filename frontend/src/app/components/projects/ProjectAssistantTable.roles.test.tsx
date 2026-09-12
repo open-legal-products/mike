@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { withIntl } from "@/test/withIntl";
 import type { Chat } from "@/app/components/shared/types";
 import { ProjectAssistantTable } from "./ProjectAssistantTable";
 
@@ -28,32 +29,41 @@ function chat(overrides: Partial<Chat> = {}): Chat {
 function renderTable(row: Chat) {
     const chats = [row];
     return render(
-        <ProjectAssistantTable
-            chats={chats}
-            filteredChats={chats}
-            selectedChatIds={[]}
-            allChatsSelected={false}
-            someChatsSelected={false}
-            renamingChatId={null}
-            renameChatValue=""
-            currentUserId="u1"
-            onCreateChat={vi.fn()}
-            onOpenChat={vi.fn()}
-            onDeleteChat={vi.fn()}
-            onDeleteSelectedChats={vi.fn()}
-            onOwnerOnlyAction={onOwnerOnlyAction}
-            submitChatRename={vi.fn()}
-            setSelectedChatIds={vi.fn()}
-            setRenamingChatId={setRenamingChatId}
-            setRenameChatValue={setRenameChatValue}
-        />,
+        withIntl(
+            <ProjectAssistantTable
+                chats={chats}
+                filteredChats={chats}
+                selectedChatIds={[]}
+                allChatsSelected={false}
+                someChatsSelected={false}
+                renamingChatId={null}
+                renameChatValue=""
+                currentUserId="u1"
+                onCreateChat={vi.fn()}
+                onOpenChat={vi.fn()}
+                onDeleteChat={vi.fn()}
+                onDeleteSelectedChats={vi.fn()}
+                onOwnerOnlyAction={onOwnerOnlyAction}
+                submitChatRename={vi.fn()}
+                setSelectedChatIds={vi.fn()}
+                setRenamingChatId={setRenamingChatId}
+                setRenameChatValue={setRenameChatValue}
+            />,
+            // The popup namespace lands with this translation batch; the
+            // shared catalog still does not carry it.
+            {
+                popups: {
+                    permissao: { acaoRenomear: "renomear esta conversa" },
+                },
+            },
+        ),
     );
 }
 
 /** Open the row's action menu and click Rename. */
 function clickRename() {
     fireEvent.click(screen.getByText("···"));
-    fireEvent.click(screen.getByText("Rename"));
+    fireEvent.click(screen.getByText("Renomear"));
 }
 
 beforeEach(() => {
@@ -87,7 +97,7 @@ describe("ProjectAssistantTable rename gating", () => {
         // "editor", not "owner": the popup tells the viewer which tier they
         // would have to be, and renaming does not need an admin.
         expect(onOwnerOnlyAction).toHaveBeenCalledWith({
-            action: "rename this chat",
+            action: "renomear esta conversa",
             requiredRole: "editor",
         });
     });

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { MoreHorizontal, Pencil, Trash2, Check, X, Users } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
     DropdownMenu,
     DropdownMenuTrigger,
@@ -33,7 +34,10 @@ interface Props {
 }
 
 export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props) {
+    const t = useTranslations("shell.itemConversa");
+    const tPermissao = useTranslations("popups.permissao");
     const { renameChat, deleteChat } = useChatHistoryContext();
+    const displayTitle = chat.title ?? t("conversaSemTitulo");
     const [isRenaming, setIsRenaming] = useState(false);
     const [shareOpen, setShareOpen] = useState(false);
     const [editTitle, setEditTitle] = useState(chat.title ?? "");
@@ -73,7 +77,7 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
             setRenameError(
                 userFacingApiError(
                     error,
-                    "The chat could not be renamed. Please try again.",
+                    t("erroRenomear"),
                 ),
             );
         }
@@ -139,19 +143,19 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                                 ? "pr-3 text-gray-900"
                                 : "pr-0 text-gray-700 group-hover:pr-3",
                         )}
-                        title={projectName ? `${projectName}: ${chat.title ?? "Untitled chat"}` : (chat.title ?? "Untitled chat")}
+                        title={projectName ? `${projectName}: ${displayTitle}` : displayTitle}
                     >
                         {projectName && (
                             <span className="text-gray-400 font-normal">{projectName}: </span>
                         )}
-                        {chat.title ?? "Untitled chat"}
+                        {displayTitle}
                     </button>
 
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <button
                                 type="button"
-                                aria-label={`Actions for ${chat.title ?? "Untitled chat"}`}
+                                aria-label={t("acoesConversa", { titulo: displayTitle })}
                                 className={`flex h-6 w-0 shrink-0 items-center justify-center overflow-hidden rounded-md bg-transparent text-gray-500 opacity-0 transition-opacity hover:text-gray-900 ${
                                     isActive
                                         ? "w-6 opacity-100"
@@ -166,7 +170,9 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                                 onSelect={() => {
                                     if (!canShare) {
                                         setGate({
-                                            action: "share this chat",
+                                            action: tPermissao(
+                                                "acaoCompartilhar",
+                                            ),
                                             requiredRole: "owner",
                                         });
                                         return;
@@ -175,13 +181,15 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                                 }}
                             >
                                 <Users className="mr-2 h-4 w-4" />
-                                Share
+                                {t("compartilhar")}
                             </LiquidDropdownItem>
                             <LiquidDropdownItem
                                 onSelect={() => {
                                     if (!canRename) {
                                         setGate({
-                                            action: "rename this chat",
+                                            action: tPermissao(
+                                                "acaoRenomear",
+                                            ),
                                             requiredRole: "editor",
                                         });
                                         return;
@@ -191,13 +199,13 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                                 }}
                             >
                                 <Pencil className="mr-2 h-4 w-4" />
-                                Rename
+                                {t("renomear")}
                             </LiquidDropdownItem>
                             <LiquidDropdownItem
                                 onSelect={() => {
                                     if (!canDelete) {
                                         setGate({
-                                            action: "delete this chat",
+                                            action: tPermissao("acaoExcluir"),
                                             requiredRole: "owner",
                                         });
                                         return;
@@ -206,7 +214,7 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                                         setDeleteError(
                                             userFacingApiError(
                                                 error,
-                                                "The chat could not be deleted. Please try again.",
+                                                t("erroExcluir"),
                                             ),
                                         );
                                     });
@@ -214,7 +222,7 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                                 className="text-red-600 focus:text-red-600"
                             >
                                 <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
+                                {t("excluir")}
                             </LiquidDropdownItem>
                         </LiquidDropdownContent>
                     </DropdownMenu>
@@ -228,13 +236,13 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
             />
             <WarningPopup
                 open={!!deleteError}
-                title="Chat not deleted"
+                title={t("tituloFalhaExcluir")}
                 message={deleteError}
                 onClose={() => setDeleteError(null)}
             />
             <WarningPopup
                 open={!!renameError}
-                title="Chat not renamed"
+                title={t("tituloFalhaRenomear")}
                 message={renameError}
                 onClose={() => setRenameError(null)}
             />

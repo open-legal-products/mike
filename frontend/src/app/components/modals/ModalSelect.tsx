@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 import { cn } from "@/app/lib/utils";
 import {
@@ -50,13 +51,15 @@ export function ModalSelect({
     value,
     options,
     onChange,
-    placeholder = "Select...",
+    placeholder,
     disabled = false,
     open,
     onOpenChange,
     className,
     menuClassName,
 }: ModalSelectProps) {
+    const t = useTranslations("modals.acesso");
+    const resolvedPlaceholder = placeholder ?? t("selecionar");
     const [internalOpen, setInternalOpen] = useState(false);
     const isOpen = open ?? internalOpen;
     const normalizedOptions = options.map(normalizeOption);
@@ -105,7 +108,7 @@ export function ModalSelect({
                             )}
                         >
                             {selected?.label ??
-                                (hasValue ? value : placeholder)}
+                                (hasValue ? value : resolvedPlaceholder)}
                         </span>
                     </span>
                     <ChevronDown

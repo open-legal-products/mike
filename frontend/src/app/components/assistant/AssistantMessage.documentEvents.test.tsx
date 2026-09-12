@@ -1,5 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import {
+    fireEvent,
+    render,
+    screen,
+    within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { AssistantMessage } from "./AssistantMessage";
 import type { AssistantEvent } from "../shared/types";
 
@@ -60,10 +66,12 @@ describe("AssistantMessage document events", () => {
         ];
 
         const { container } = render(
-            <AssistantMessage
-                events={events}
-                onOpenDocument={onOpenDocument}
-            />,
+            withIntl(
+                <AssistantMessage
+                    events={events}
+                    onOpenDocument={onOpenDocument}
+                />,
+            ),
         );
 
         expect(
@@ -178,15 +186,20 @@ describe("AssistantMessage document events", () => {
         ];
 
         render(
-            <AssistantMessage
-                events={events}
-                onOpenDocument={onOpenDocument}
-                onEditViewClick={onEditViewClick}
-            />,
+            withIntl(
+                <AssistantMessage
+                    events={events}
+                    onOpenDocument={onOpenDocument}
+                    onEditViewClick={onEditViewClick}
+                />,
+            ),
         );
 
-        const viewButtons = screen.getAllByRole("button", { name: "View" });
-        fireEvent.click(viewButtons[0]);
+        // O 1º "Ver" no DOM é a ação em lote da seção (abre o documento);
+        // os demais pertencem aos cards individuais.
+        fireEvent.click(
+            screen.getAllByRole("button", { name: "Ver" })[0],
+        );
         expect(onOpenDocument).toHaveBeenCalledWith({
             documentId: "document-1",
             filename: "agreement.docx",
@@ -195,7 +208,13 @@ describe("AssistantMessage document events", () => {
         });
         expect(onEditViewClick).not.toHaveBeenCalled();
 
-        fireEvent.click(viewButtons[1]);
+        const cardGroups = screen.getAllByRole("group", {
+            name: "Edit actions",
+        });
+        const cardViewButtons = cardGroups.map((group) =>
+            within(group).getByRole("button", { name: "Ver" }),
+        );
+        fireEvent.click(cardViewButtons[0]);
         expect(onEditViewClick).toHaveBeenCalledWith(
             expect.objectContaining({ edit_id: "edit-1" }),
             "agreement.docx",

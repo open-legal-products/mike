@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import {
     getProjectFilterOptions,
@@ -81,27 +82,29 @@ function formatDate(iso: string) {
  */
 function getProjectCreatorLabel(
     project: Project,
-    currentUserId?: string | null,
+    currentUserId: string | null | undefined,
+    t: (key: string) => string,
 ) {
-    if (project.is_owner ?? project.user_id === currentUserId) return "Me";
+    if (project.is_owner ?? project.user_id === currentUserId)
+        return t("criadorEu");
     return (
         project.owner_display_name?.trim() ||
         project.owner_email?.trim() ||
-        "Shared"
+        t("criadorCompartilhado")
     );
 }
 
 type ProjectFilter = "all" | "shared" | "private";
 type ProjectSortKey = "name" | "cm" | "files" | "chats" | "reviews" | "created";
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-    { value: "asc", label: "Ascending" },
-    { value: "desc", label: "Descending" },
+const SORT_OPTIONS: { value: TableSortDirection; labelKey: string }[] = [
+    { value: "asc", labelKey: "ordenarAscendente" },
+    { value: "desc", labelKey: "ordenarDescendente" },
 ];
-const PROJECT_FILTERS: { id: ProjectFilter; label: string }[] = [
-    { id: "all", label: "All" },
-    { id: "shared", label: "Shared" },
-    { id: "private", label: "Private" },
+const PROJECT_FILTERS: { id: ProjectFilter; labelKey: string }[] = [
+    { id: "all", labelKey: "tabTodos" },
+    { id: "shared", labelKey: "tabCompartilhados" },
+    { id: "private", labelKey: "tabPrivados" },
 ];
 const PROJECT_FILTER_IDS = PROJECT_FILTERS.map((filter) => filter.id);
 const PROJECT_FILTER_SCOPES: Record<ProjectFilter, ProjectScope> = {
@@ -109,12 +112,17 @@ const PROJECT_FILTER_SCOPES: Record<ProjectFilter, ProjectScope> = {
     shared: "collaborative",
     private: "private",
 };
-const ACCESS_FILTER_OPTIONS: TableFilterOption<"private" | "shared">[] = [
-    { value: "private", label: "Private" },
-    { value: "shared", label: "Shared" },
+const ACCESS_FILTER_OPTIONS: {
+    value: "private" | "shared";
+    labelKey: string;
+}[] = [
+    { value: "private", labelKey: "tabPrivados" },
+    { value: "shared", labelKey: "tabCompartilhados" },
 ];
 
 export function ProjectsOverview() {
+    const t = useTranslations("projects.visaoGeral");
+    const tPermissao = useTranslations("popups.permissao");
     const router = useRouter();
     const searchParams = useSearchParams();
     const [modalOpen, setModalOpen] = useState(false);
@@ -177,7 +185,7 @@ export function ProjectsOverview() {
         ownerUserIdFilter: ownerFilter,
         sort,
     });
-    const loadError = loadErrorObj ? "Could not load projects." : null;
+    const loadError = loadErrorObj ? t("erroCarregar") : null;
     const effectiveLoading = loading && !previewEmptyStates;
     const visibleProjects = useMemo(
         () => (previewEmptyStates ? [] : projects),
@@ -273,24 +281,34 @@ export function ProjectsOverview() {
         sort?.key === "reviews" ? sort.direction : null;
     const createdSortDirection =
         sort?.key === "created" ? sort.direction : null;
+    const sortOptions: TableFilterOption<TableSortDirection>[] =
+        SORT_OPTIONS.map(({ value, labelKey }) => ({
+            value,
+            label: t(labelKey),
+        }));
+    const accessFilterOptions: TableFilterOption<"private" | "shared">[] =
+        ACCESS_FILTER_OPTIONS.map(({ value, labelKey }) => ({
+            value,
+            label: t(labelKey),
+        }));
     const nameFilterButton = (
         <TableFilters
-            label="Sort by project name"
+            label={t("ordenarPorNome")}
             value={nameSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
             align="right"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("name", direction)}
         />
     );
     const accessFilterButton = (
         <TableFilters
-            label="Filter by access"
+            label={t("filtrarPorAcesso")}
             value={activeFilter === "all" ? null : activeFilter}
-            allLabel="All Access"
+            allLabel={t("todoAcesso")}
             widthClassName="w-40"
-            options={ACCESS_FILTER_OPTIONS}
+            options={accessFilterOptions}
             onChange={(value) => {
                 setActiveFilter(value ?? "all");
                 clearSelection();
@@ -299,19 +317,19 @@ export function ProjectsOverview() {
     );
     const cmFilterButton = (
         <TableFilters
-            label="Sort by CM"
+            label={t("ordenarPorReferencia")}
             value={cmSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("cm", direction)}
         />
     );
     const practiceFilterButton = (
         <TableFilters
-            label="Filter by practice"
+            label={t("filtrarPorArea")}
             value={practiceFilter}
-            allLabel="All Practices"
+            allLabel={t("todasAsAreas")}
             options={practices.map((practice) => ({
                 value: practice,
                 label: practice,
@@ -321,9 +339,9 @@ export function ProjectsOverview() {
     );
     const ownerFilterButton = (
         <TableFilters
-            label="Filter by creator"
+            label={t("filtrarPorCriador")}
             value={ownerFilter}
-            allLabel="All Creators"
+            allLabel={t("todosOsCriadores")}
             widthClassName="w-44"
             options={ownerOptions}
             onChange={handleOwnerFilterChange}
@@ -331,41 +349,41 @@ export function ProjectsOverview() {
     );
     const filesFilterButton = (
         <TableFilters
-            label="Sort by files"
+            label={t("ordenarPorArquivos")}
             value={filesSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("files", direction)}
         />
     );
     const chatsFilterButton = (
         <TableFilters
-            label="Sort by chats"
+            label={t("ordenarPorConversas")}
             value={chatsSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("chats", direction)}
         />
     );
     const reviewsFilterButton = (
         <TableFilters
-            label="Sort by tabular reviews"
+            label={t("ordenarPorRevisoes")}
             value={reviewsSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("reviews", direction)}
         />
     );
     const createdFilterButton = (
         <TableFilters
-            label="Sort by created date"
+            label={t("ordenarPorData")}
             value={createdSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("created", direction)}
         />
     );
@@ -381,7 +399,7 @@ export function ProjectsOverview() {
         // mistaken for an outsider just because they did not create it.
         if (!can(roleFrom(detailsProject), "access.manage")) {
             setOwnerOnlyAction({
-                action: "edit project details",
+                action: t("ownerEditarDetalhes"),
                 contacts: detailsProject.admin_contacts,
             });
             return;
@@ -434,10 +452,7 @@ export function ProjectsOverview() {
             // only produce an unhandled rejection and a row that reappears
             // with no explanation.
             setActionError(
-                userFacingApiError(
-                    error,
-                    "This project could not be deleted. Please try again.",
-                ),
+                userFacingApiError(error, t("erroExcluirProjeto")),
             );
         }
     }
@@ -495,7 +510,9 @@ export function ProjectsOverview() {
                     .map((project) => project?.admin_contacts),
             );
             setOwnerOnlyAction({
-                action: `delete ${blocked} of the selected projects — only a project owner can delete a project`,
+                action: tPermissao("acaoExcluirProjetosSelecionados", {
+                    count: blocked,
+                }),
                 contacts: blockedContacts,
             });
         }
@@ -505,7 +522,7 @@ export function ProjectsOverview() {
         selectedIds.length > 0 ? (
             <div ref={actionsRef} className="relative">
                 <TabPillButton onClick={() => setActionsOpen((v) => !v)}>
-                    Actions
+                    {t("acoes")}
                     <ChevronDown className="h-3.5 w-3.5" />
                 </TabPillButton>
                 {actionsOpen && (
@@ -516,7 +533,7 @@ export function ProjectsOverview() {
                             onClick={requestDeleteSelected}
                             className="w-full px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 transition-colors"
                         >
-                            Delete
+                            {t("excluir")}
                         </button>
                     </div>
                 )}
@@ -533,22 +550,25 @@ export function ProjectsOverview() {
                         type: "search",
                         value: search,
                         onChange: setSearch,
-                        placeholder: "Search projects…",
+                        placeholder: t("buscar"),
                     },
                     {
                         type: "new",
                         onClick: () => setModalOpen(true),
-                        title: "New project",
+                        title: t("novoProjeto"),
                     },
                 ]}
             >
                 <h1 className="text-2xl font-medium font-serif text-gray-900">
-                    Projects
+                    {t("titulo")}
                 </h1>
             </PageHeader>
 
             <TableToolbar
-                items={PROJECT_FILTERS}
+                items={PROJECT_FILTERS.map(({ id, labelKey }) => ({
+                    id,
+                    label: t(labelKey),
+                }))}
                 active={activeFilter}
                 onChange={(nextFilter) => {
                     setActiveFilter(nextFilter);
@@ -580,55 +600,55 @@ export function ProjectsOverview() {
                                     }}
                                     onChange={toggleAll}
                                     className={TABLE_CHECKBOX_CLASS}
-                                    aria-label="Select all projects"
+                                    aria-label={t("selecionarTodosProjetos")}
                                 />
                             )}
-                            <span className="mr-1">Name</span>
+                            <span className="mr-1">{t("colunaNome")}</span>
                             {!loading && nameFilterButton}
                         </TableStickyCell>
                         <TableHeaderCell className="ml-auto w-32">
-                            <span className="mr-1">Access</span>
+                            <span className="mr-1">{t("colunaAcesso")}</span>
                             {!loading && accessFilterButton}
                         </TableHeaderCell>
                         <TableHeaderCell className="w-32">
                             <div className="flex items-center gap-1">
-                                <span>CM</span>
+                                <span>{t("colunaReferencia")}</span>
                                 {!loading && cmFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-36">
                             <div className="flex items-center gap-1">
-                                <span>Practice</span>
+                                <span>{t("colunaArea")}</span>
                                 {!loading && practiceFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-32">
                             <div className="flex items-center gap-1">
-                                <span>Created by</span>
+                                <span>{t("colunaCriadoPor")}</span>
                                 {!loading && ownerFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-24">
                             <div className="flex items-center gap-1">
-                                <span>Files</span>
+                                <span>{t("colunaArquivos")}</span>
                                 {!loading && filesFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-24">
                             <div className="flex items-center gap-1">
-                                <span>Chats</span>
+                                <span>{t("colunaConversas")}</span>
                                 {!loading && chatsFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-36">
                             <div className="flex items-center gap-1">
-                                <span>Tabular Reviews</span>
+                                <span>{t("colunaRevisoes")}</span>
                                 {!loading && reviewsFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-32">
                             <div className="flex items-center gap-1">
-                                <span>Created</span>
+                                <span>{t("colunaCriado")}</span>
                                 {!loading && createdFilterButton}
                             </div>
                         </TableHeaderCell>
@@ -680,7 +700,7 @@ export function ProjectsOverview() {
                     <TableEmptyState>
                         <EmptyState
                             icon={<OpenProjectSvgIcon />}
-                            title="Projects"
+                            title={t("estadoVazioTitulo")}
                             description={loadError}
                             tone="error"
                             action={
@@ -689,7 +709,7 @@ export function ProjectsOverview() {
                                     size="sm"
                                     onClick={retry}
                                 >
-                                    Try again
+                                    {t("tentarNovamente")}
                                 </PillButton>
                             }
                         />
@@ -698,20 +718,20 @@ export function ProjectsOverview() {
                     <TableEmptyState>
                         {activeFilter === "shared" ? (
                             <p className="text-sm text-gray-400">
-                                No shared projects
+                                {t("nenhumCompartilhado")}
                             </p>
                         ) : (
                             <EmptyState
                                 icon={<OpenProjectSvgIcon />}
-                                title="Projects"
-                                description="Upload documents into projects and to commence chats and tabular reviews with them."
+                                title={t("estadoVazioTitulo")}
+                                description={t("estadoVazioDescricao")}
                                 action={
                                     <PillButton
                                         tone="black"
                                         size="sm"
                                         onClick={() => setModalOpen(true)}
                                     >
-                                        Create
+                                        {t("criar")}
                                     </PillButton>
                                 }
                             />
@@ -749,7 +769,7 @@ export function ProjectsOverview() {
                                                               `/projects/${project.id}`,
                                                           )
                                             }
-                                            viewLabel="Open"
+                                            viewLabel={t("abrir")}
                                             onEditDetails={
                                                 appliesToSelection || !canManage
                                                     ? undefined
@@ -771,7 +791,10 @@ export function ProjectsOverview() {
                                             }
                                             deleteLabel={
                                                 appliesToSelection
-                                                    ? `Delete ${actionIds.length} projects`
+                                                    ? t("excluirNProjetos", {
+                                                          count: actionIds
+                                                              .length,
+                                                      })
                                                     : undefined
                                             }
                                         />
@@ -825,7 +848,9 @@ export function ProjectsOverview() {
                                         onSelectionChange={() =>
                                             toggleOne(project.id)
                                         }
-                                        checkboxTitle={`Select ${project.name}`}
+                                        checkboxTitle={t("selecionarProjeto", {
+                                            name: project.name,
+                                        })}
                                     >
                                         <ClosedProjectSvgIcon className="mr-2 h-4 w-4 shrink-0" />
                                         <span className="min-w-0 flex-1 truncate text-xs text-gray-800">
@@ -869,6 +894,7 @@ export function ProjectsOverview() {
                                         {getProjectCreatorLabel(
                                             project,
                                             user?.id,
+                                            t,
                                         )}
                                     </TableCell>
                                     <TableCell className="w-24">
@@ -894,7 +920,7 @@ export function ProjectsOverview() {
                                                     `/projects/${project.id}`,
                                                 )
                                             }
-                                            viewLabel="Open"
+                                            viewLabel={t("abrir")}
                                             onEditDetails={
                                                 canManage
                                                     ? () => {
@@ -962,9 +988,11 @@ export function ProjectsOverview() {
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}
-                title="Delete all selected projects?"
-                message={`This will permanently delete every selected project you administer, including selected projects not currently shown. Every file within those projects will also be deleted. Projects you cannot delete will be skipped. ${selectedIds.length} projects are selected.`}
-                confirmLabel="Delete"
+                title={t("tituloExcluirSelecionados")}
+                message={t("mensagemExcluirSelecionados", {
+                    count: selectedIds.length,
+                })}
+                confirmLabel={t("excluir")}
                 confirmVariant="danger"
                 onCancel={() => setConfirmDeleteAllOpen(false)}
                 onConfirm={() => void handleDeleteSelected()}

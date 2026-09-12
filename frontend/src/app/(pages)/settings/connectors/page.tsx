@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   ChevronDown,
   Eye,
@@ -115,6 +116,7 @@ function isGoogleMcpConnector(connector: McpConnectorSummary) {
 }
 
 export default function ConnectorsPage() {
+  const t = useTranslations("configuracoes.conectores");
   const [connectors, setConnectors] = useState<McpConnectorSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -155,11 +157,11 @@ export default function ConnectorsPage() {
     try {
       setConnectors(await listMcpConnectors());
     } catch (err) {
-      setError(userFacingApiError(err, "Failed to load connectors."));
+      setError(userFacingApiError(err, t("erroCarregar")));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void loadConnectors();
@@ -224,7 +226,7 @@ export default function ConnectorsPage() {
       replaceConnector(await getMcpConnector(connectorId));
     } catch (err) {
       setDetailError(
-        userFacingApiError(err, "Failed to load connector details."),
+        userFacingApiError(err, t("erroCarregarDetalhes")),
       );
     } finally {
       setLoadingConnectorId((current) =>
@@ -250,7 +252,7 @@ export default function ConnectorsPage() {
         setPendingMfaAction(action);
         return;
       }
-      const message = userFacingApiError(err, "Action failed.");
+      const message = userFacingApiError(err, t("erroAcao"));
       if (action.type === "create") setAddError(message);
       else if (action.type === "save") setDetailError(message);
       else setError(message);
@@ -361,9 +363,7 @@ export default function ConnectorsPage() {
         } catch (err) {
           if (err instanceof MikeApiError && err.code === "oauth_required") {
             replaceConnector(connector);
-            setAddAuthMessage(
-              "Complete authorization in the popup to finish connecting this MCP server.",
-            );
+            setAddAuthMessage(t("msgAutorizacaoPendente"));
             setAddStep("auth");
             const authorized = await connectConnectorOAuth(connector.id);
             if (authorized) {
@@ -377,9 +377,7 @@ export default function ConnectorsPage() {
         }
         replaceConnector(refreshed);
         if (isGoogleMcpConnector(refreshed) && !refreshed.oauthConnected) {
-          setAddAuthMessage(
-            "Authorize Google in the popup to finish connecting this MCP server.",
-          );
+          setAddAuthMessage(t("msgAutorizacaoGoogle"));
           setAddStep("auth");
           const authorized = await connectConnectorOAuth(refreshed.id);
           if (authorized) {
@@ -394,7 +392,7 @@ export default function ConnectorsPage() {
       } catch (err) {
         setAddStep("form");
         setAddAuthMessage(null);
-        setAddError(userFacingApiError(err, "Failed to add connector."));
+        setAddError(userFacingApiError(err, t("erroAdicionar")));
       } finally {
         setBusyKey(null);
       }
@@ -565,7 +563,7 @@ export default function ConnectorsPage() {
     <div>
       <div className="mb-4">
         <div className="flex items-center justify-between gap-3">
-          <SettingsHeading>Connectors</SettingsHeading>
+          <SettingsHeading>{t("titulo")}</SettingsHeading>
           <div className="flex shrink-0 items-center rounded-full border border-white/70 bg-app-surface p-0.5 shadow-[0_8px_24px_rgba(15,23,42,0.06)] backdrop-blur-2xl">
             <button
               type="button"
@@ -573,7 +571,7 @@ export default function ConnectorsPage() {
               className={`flex h-6 items-center justify-center gap-1 rounded-full px-2.5 text-xs font-medium text-gray-500 transition-colors hover:text-gray-900 ${LIQUID_GLASS_HOVER_CLASS} ${LIQUID_GLASS_PRESSED_CLASS}`}
             >
               <Plus className="h-3.5 w-3.5" />
-              Add
+              {t("adicionar")}
             </button>
           </div>
         </div>
@@ -590,7 +588,7 @@ export default function ConnectorsPage() {
           (connectors.length === 0 ? (
             <SettingsCard>
               <div className="p-4">
-                <SettingsDescription>No connectors yet.</SettingsDescription>
+                <SettingsDescription>{t("nenhumConector")}</SettingsDescription>
               </div>
             </SettingsCard>
           ) : (
@@ -677,6 +675,7 @@ function ConnectorRow({
   onOpen: () => void;
   onConnectorEnabled: (connectorId: string, enabled: boolean) => Promise<void>;
 }) {
+  const t = useTranslations("configuracoes.conectores");
   const toolCount = connector.toolCount ?? connector.tools.length;
 
   return (
@@ -699,7 +698,7 @@ function ConnectorRow({
               <SettingsLabel>{connector.name}</SettingsLabel>
               <span className="h-1 w-1 rounded-full bg-gray-300" />
               <span className="shrink-0 text-xs font-medium text-gray-500">
-                {toolCount} {toolCount === 1 ? "tool" : "tools"}
+                {t("contagemFerramentas", { count: toolCount })}
               </span>
             </div>
           </div>
@@ -715,7 +714,7 @@ function ConnectorRow({
                 void onConnectorEnabled(connector.id, enabled)
               }
             >
-              {connector.enabled ? "Enabled" : "Disabled"}
+              {connector.enabled ? t("ativado") : t("desativado")}
             </ToggleSwitch>
           </div>
           <div className="min-w-0 truncate">
@@ -729,7 +728,7 @@ function ConnectorRow({
             }}
             className="shrink-0 justify-self-end text-xs font-medium text-gray-500 transition-colors hover:text-gray-950"
           >
-            Details
+            {t("detalhes")}
           </button>
         </div>
       </div>
@@ -788,11 +787,15 @@ function McpConnectorDetailsModal({
       draft.customHeaders.trim().length > 0);
   const isSaving = !!connector && busyKey === `save:${connector.id}`;
 
+  const t = useTranslations("configuracoes.conectores");
+  const tComum = useTranslations("common");
+  const tModelos = useTranslations("pages.modelos");
+
   return (
     <Modal
       open={!!connector}
       onClose={onClose}
-      breadcrumbs={["Connectors", connector?.name ?? "MCP connector"]}
+      breadcrumbs={[t("titulo"), connector?.name ?? t("trilhaConector")]}
       headerAction={
         connector ? (
           <ToggleSwitch
@@ -803,7 +806,7 @@ function McpConnectorDetailsModal({
               void onConnectorEnabled(connector.id, enabled)
             }
           >
-            {connector.enabled ? "Enabled" : "Disabled"}
+            {connector.enabled ? t("ativado") : t("desativado")}
           </ToggleSwitch>
         ) : null
       }
@@ -811,7 +814,7 @@ function McpConnectorDetailsModal({
       secondaryAction={
         connector
           ? {
-              label: "Delete connector",
+              label: t("excluirConector"),
               variant: "danger",
               onClick: () => void onDelete(connector.id),
               disabled: busyKey === `delete:${connector.id}`,
@@ -819,7 +822,7 @@ function McpConnectorDetailsModal({
           : undefined
       }
       primaryAction={{
-        label: isSaving ? "Saving..." : "Save",
+        label: isSaving ? tModelos("salvando") : tComum("save"),
         icon: isSaving ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : undefined,
@@ -831,7 +834,7 @@ function McpConnectorDetailsModal({
           !draft.name.trim() ||
           !draft.serverUrl.trim(),
       }}
-      cancelAction={{ label: "Close", onClick: onClose }}
+      cancelAction={{ label: t("fechar"), onClick: onClose }}
       footerStatus={
         error ? <span className="text-sm text-red-600">{error}</span> : null
       }
@@ -843,12 +846,17 @@ function McpConnectorDetailsModal({
             showToken={showToken}
             showAdvanced={showAdvanced}
             tokenPlaceholder={
-              connector.hasAuthConfig ? "Saved token encrypted" : "Bearer token"
+              connector.hasAuthConfig
+                ? t("tokenSalvoCriptografado")
+                : t("labelToken")
             }
             tokenAction={
               connector.hasAuthConfig || clearTokenStatus === "cleared"
                 ? {
-                    label: clearTokenStatus === "cleared" ? "Cleared" : "Clear",
+                    label:
+                      clearTokenStatus === "cleared"
+                        ? t("limpo")
+                        : t("limpar"),
                     loading: clearTokenStatus === "clearing",
                     cleared: clearTokenStatus === "cleared",
                     onClick: () => void onClearBearerToken(connector.id),
@@ -871,11 +879,11 @@ function McpConnectorDetailsModal({
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-medium text-gray-500">
                 {toolsLoading ? connector.toolCount : connector.tools.length}{" "}
-                {(toolsLoading
-                  ? connector.toolCount
-                  : connector.tools.length) === 1
-                  ? "Tool"
-                  : "Tools"}
+                {t("contagemFerramentasTitulo", {
+                  count: toolsLoading
+                    ? connector.toolCount
+                    : connector.tools.length,
+                })}
               </h3>
               <div className="flex items-center">
                 <button
@@ -889,7 +897,7 @@ function McpConnectorDetailsModal({
                   ) : (
                     <RefreshCw className="h-3.5 w-3.5" />
                   )}
-                  Refresh
+                  {t("atualizar")}
                 </button>
               </div>
             </div>
@@ -939,23 +947,24 @@ function ConnectorForm({
   onShowTokenChange: (show: boolean) => void;
   onShowAdvancedChange: (show: boolean) => void;
 }) {
+  const t = useTranslations("configuracoes.conectores");
   return (
     <div className="grid gap-3 pt-1">
       <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
-        <FieldLabel htmlFor="connector-config-label">Label</FieldLabel>
+        <FieldLabel htmlFor="connector-config-label">{t("labelNome")}</FieldLabel>
         <SettingsTextInput
           id="connector-config-label"
           value={draft.name}
           onChange={(event) =>
             onDraftChange({ ...draft, name: event.target.value })
           }
-          placeholder="Connector label"
+          placeholder={t("placeholderNome")}
           className="h-8"
           disabled={disabled}
         />
       </div>
       <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
-        <FieldLabel htmlFor="connector-config-url">URL endpoint</FieldLabel>
+        <FieldLabel htmlFor="connector-config-url">{t("labelUrl")}</FieldLabel>
         <SettingsTextInput
           id="connector-config-url"
           value={draft.serverUrl}
@@ -971,7 +980,9 @@ function ConnectorForm({
         />
       </div>
       <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-start">
-        <FieldLabel htmlFor="connector-config-token">Bearer token</FieldLabel>
+        <FieldLabel htmlFor="connector-config-token">
+          {t("labelToken")}
+        </FieldLabel>
         <div className="min-w-0">
           <div className="relative">
             <SettingsTextInput
@@ -1003,7 +1014,9 @@ function ConnectorForm({
                   tokenAction ? "right-[3.75rem]" : "right-1.5"
                 } flex items-center ${settingsGlassIconButtonClassName}`}
                 onClick={() => onShowTokenChange(!showToken)}
-                aria-label={showToken ? "Hide token" : "Show token"}
+                aria-label={
+                  showToken ? t("ocultarToken") : t("mostrarToken")
+                }
                 disabled={disabled}
               >
                 {showToken ? (
@@ -1037,7 +1050,7 @@ function ConnectorForm({
           </div>
           {showTokenNote && (
             <p className="mt-1 text-right text-xs text-gray-500">
-              Tokens are stored encrypted.
+              {t("notaTokens")}
             </p>
           )}
         </div>
@@ -1049,7 +1062,7 @@ function ConnectorForm({
           className="inline-flex items-center gap-1 justify-self-start text-xs font-medium text-gray-500 transition-colors hover:text-gray-900"
           disabled={disabled}
         >
-          Advanced
+          {t("avancado")}
           <ChevronDown
             className={`h-3.5 w-3.5 transition-transform ${
               showAdvanced ? "" : "-rotate-90"
@@ -1059,7 +1072,7 @@ function ConnectorForm({
         {showAdvanced && (
           <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-start">
             <FieldLabel htmlFor="connector-config-headers">
-              Custom headers
+              {t("labelHeaders")}
             </FieldLabel>
             <div className="min-w-0">
               <textarea
@@ -1078,7 +1091,7 @@ function ConnectorForm({
                 disabled={disabled}
               />
               <p className="mt-1 text-right text-xs text-gray-500">
-                Secrets are stored encrypted.
+                {t("notaSecrets")}
               </p>
             </div>
           </div>
@@ -1132,6 +1145,7 @@ function ScrollableToolList({
   ) => Promise<void>;
   fill?: boolean;
 }) {
+  const t = useTranslations("configuracoes.conectores");
   const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
 
   if (connector.tools.length === 0) {
@@ -1141,7 +1155,7 @@ function ScrollableToolList({
           fill ? "min-h-0 flex-1" : ""
         }`}
       >
-        No tools discovered yet.
+        {t("nenhumaFerramenta")}
       </div>
     );
   }
@@ -1167,9 +1181,11 @@ function ScrollableToolList({
                   type="button"
                   onClick={() => setExpandedToolId(isExpanded ? null : tool.id)}
                   className="inline-flex h-5 w-5 items-center justify-center text-gray-400 transition-colors hover:text-gray-800"
-                  aria-label={`${
-                    isExpanded ? "Collapse" : "Expand"
-                  } ${toolLabel}`}
+                  aria-label={
+                    isExpanded
+                      ? t("recolherFerramenta", { ferramenta: toolLabel })
+                      : t("expandirFerramenta", { ferramenta: toolLabel })
+                  }
                 >
                   <ChevronDown
                     className={`h-3.5 w-3.5 transition-transform ${
@@ -1185,7 +1201,7 @@ function ScrollableToolList({
                     checked={tool.enabled}
                     disabled={disabled || busyKey === `tool:${tool.id}`}
                     aria-busy={busyKey === `tool:${tool.id}`}
-                    aria-label={`${toolLabel} enabled`}
+                    aria-label={t("ferramentaRotulo", { ferramenta: toolLabel })}
                     onCheckedChange={(enabled) =>
                       void onToolEnabled(connector.id, tool.id, enabled)
                     }
@@ -1196,7 +1212,7 @@ function ScrollableToolList({
                       tool.enabled ? "text-green-600" : "text-gray-500"
                     }`}
                   >
-                    {tool.enabled ? "Enabled" : "Disabled"}
+                    {tool.enabled ? t("ativado") : t("desativado")}
                   </span>
                 )}
               </div>
@@ -1204,7 +1220,7 @@ function ScrollableToolList({
                 <div className="ml-7 mt-2 min-w-0">
                   {tool.requiresConfirmation && (
                     <p className="text-xs font-medium text-amber-700">
-                      Confirmation required
+                      {t("confirmacaoNecessaria")}
                     </p>
                   )}
                   {tool.description && (

@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import SignupPage from "./page";
 
 const { signup, startGoogleOAuth, refreshSession, replace, push } = vi.hoisted(() => ({
@@ -48,23 +49,23 @@ describe("SignupPage", () => {
             requiresEmailConfirmation: true,
         });
         const user = userEvent.setup();
-        render(<SignupPage />);
+        render(withIntl(<SignupPage />));
 
-        expect(screen.getByLabelText("Password")).toHaveAttribute(
+        expect(screen.getByLabelText("Senha")).toHaveAttribute(
             "placeholder",
-            "Min. 10 Characters",
+            "Mín. 10 caracteres",
         );
 
         await user.type(
-            screen.getByRole("textbox", { name: "Email" }),
+            screen.getByRole("textbox", { name: "E-mail" }),
             "alex@example.com",
         );
-        await user.type(screen.getByLabelText("Password"), "secret1234");
+        await user.type(screen.getByLabelText("Senha"), "secret1234");
         await user.type(
-            screen.getByLabelText("Confirm Password"),
+            screen.getByLabelText("Confirmar Senha"),
             "secret1234",
         );
-        await user.click(screen.getByRole("button", { name: "Sign up" }));
+        await user.click(screen.getByRole("button", { name: "Cadastrar" }));
 
         expect(signup).toHaveBeenCalledWith(
             "alex@example.com",
@@ -75,11 +76,11 @@ describe("SignupPage", () => {
     });
 
     it("places Google after the primary signup action without offering SSO", () => {
-        render(<SignupPage />);
+        render(withIntl(<SignupPage />));
 
-        const signup = screen.getByRole("button", { name: "Sign up" });
+        const signup = screen.getByRole("button", { name: "Cadastrar" });
         const google = screen.getByRole("button", {
-            name: "Continue with Google",
+            name: "Continuar com Google",
         });
         expect(
             signup.compareDocumentPosition(google) &

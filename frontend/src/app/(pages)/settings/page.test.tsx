@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { withIntl } from "@/test/withIntl";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsPage from "./page";
 
@@ -96,7 +97,7 @@ describe("SettingsPage Google email changes", () => {
                     };
                 }),
         );
-        render(<SettingsPage />);
+        render(withIntl(<SettingsPage />));
 
         const name = screen.getByPlaceholderText("Enter your name");
         const organisation = screen.getByPlaceholderText(
@@ -118,7 +119,7 @@ describe("SettingsPage Google email changes", () => {
 
     it("directs Google-created accounts without a password to Security", async () => {
         const user = userEvent.setup();
-        render(<SettingsPage />);
+        render(withIntl(<SettingsPage />));
 
         const email = screen.getByPlaceholderText("Enter your email");
         expect(email).toBeDisabled();
@@ -141,7 +142,7 @@ describe("SettingsPage Google email changes", () => {
     it("allows the email change after a password has been added", async () => {
         state.passwordSet = true;
         const user = userEvent.setup();
-        render(<SettingsPage />);
+        render(withIntl(<SettingsPage />));
 
         const email = screen.getByPlaceholderText("Enter your email");
         await user.clear(email);
@@ -162,7 +163,7 @@ describe("SettingsPage Google email changes", () => {
 
     it("auto-saves name and organisation when their fields lose focus", async () => {
         const user = userEvent.setup();
-        render(<SettingsPage />);
+        render(withIntl(<SettingsPage />));
 
         const name = screen.getByPlaceholderText("Enter your name");
         await user.clear(name);
@@ -185,7 +186,7 @@ describe("SettingsPage Google email changes", () => {
 
     it("allows an existing display name to be cleared", async () => {
         const user = userEvent.setup();
-        render(<SettingsPage />);
+        render(withIntl(<SettingsPage />));
 
         const name = screen.getByPlaceholderText("Enter your name");
         await user.clear(name);

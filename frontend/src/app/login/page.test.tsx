@@ -1,7 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import LoginPage from "./page";
+
+function renderLogin() {
+    return render(withIntl(<LoginPage />));
+}
 
 const { login, startGoogleOAuth, refreshSession, replace, push } = vi.hoisted(
     () => ({
@@ -47,31 +52,31 @@ describe("LoginPage", () => {
     it("allows an existing account to submit a password shorter than the new minimum", async () => {
         login.mockResolvedValue({ user: { id: "user-1" } });
         const user = userEvent.setup();
-        render(<LoginPage />);
+        renderLogin();
 
-        expect(screen.getByLabelText("Password")).not.toHaveAttribute(
+        expect(screen.getByLabelText("Senha")).not.toHaveAttribute(
             "placeholder",
         );
 
         await user.type(
-            screen.getByRole("textbox", { name: "Email" }),
+            screen.getByRole("textbox", { name: "E-mail" }),
             "existing@example.com",
         );
-        await user.type(screen.getByLabelText("Password"), "oldpass");
-        await user.click(screen.getByRole("button", { name: "Log in" }));
+        await user.type(screen.getByLabelText("Senha"), "oldpass");
+        await user.click(screen.getByRole("button", { name: "Entrar" }));
 
         expect(login).toHaveBeenCalledWith("existing@example.com", "oldpass");
         expect(push).toHaveBeenCalledWith("/onboarding/profile");
     });
 
     it("places Google and SSO after the primary login action", () => {
-        render(<LoginPage />);
+        renderLogin();
 
-        const login = screen.getByRole("button", { name: "Log in" });
+        const login = screen.getByRole("button", { name: "Entrar" });
         const google = screen.getByRole("button", {
-            name: "Continue with Google",
+            name: "Continuar com Google",
         });
-        const sso = screen.getByRole("button", { name: "Continue with SSO" });
+        const sso = screen.getByRole("button", { name: "Continuar com SSO" });
         expect(
             login.compareDocumentPosition(google) &
                 Node.DOCUMENT_POSITION_FOLLOWING,

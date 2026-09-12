@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { TableLoadMoreRow } from "./TableLoadMoreRow";
 
 let intersectionCallback:
@@ -35,15 +36,17 @@ describe("TableLoadMoreRow", () => {
     it("loads automatically when an enabled row reaches the viewport", () => {
         const onLoadMore = vi.fn();
         render(
-            <TableLoadMoreRow
-                autoLoadOnVisible
-                loading={false}
-                hasMore
-                itemCount={10}
-                loadingMore={false}
-                hasError={false}
-                onLoadMore={onLoadMore}
-            />,
+            withIntl(
+                <TableLoadMoreRow
+                    autoLoadOnVisible
+                    loading={false}
+                    hasMore
+                    itemCount={10}
+                    loadingMore={false}
+                    hasError={false}
+                    onLoadMore={onLoadMore}
+                />,
+            ),
         );
 
         expect(observe).toHaveBeenCalledTimes(1);
@@ -58,17 +61,19 @@ describe("TableLoadMoreRow", () => {
     it("retains the manual load-more fallback", () => {
         const onLoadMore = vi.fn();
         render(
-            <TableLoadMoreRow
-                loading={false}
-                hasMore
-                itemCount={10}
-                loadingMore={false}
-                hasError={false}
-                onLoadMore={onLoadMore}
-            />,
+            withIntl(
+                <TableLoadMoreRow
+                    loading={false}
+                    hasMore
+                    itemCount={10}
+                    loadingMore={false}
+                    hasError={false}
+                    onLoadMore={onLoadMore}
+                />,
+            ),
         );
 
-        fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+        fireEvent.click(screen.getByRole("button", { name: "Carregar mais" }));
         expect(onLoadMore).toHaveBeenCalledTimes(1);
         expect(observe).not.toHaveBeenCalled();
     });

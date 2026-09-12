@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { AlertCircle, Upload, Loader2, X } from "lucide-react";
 import {
     UploadBatchError,
@@ -69,6 +70,8 @@ export function AddDocumentsModal({
     disabledDocumentIds,
     uploadStateId,
 }: Props) {
+    const t = useTranslations("modals.adicionarDocumentos");
+    const tBanco = useTranslations("modals.addDocuments");
     const uploadSurfaceId =
         uploadStateId ??
         [
@@ -322,10 +325,7 @@ export function AddDocumentsModal({
             setUploadWarning(
                 err instanceof UploadBatchError
                     ? failedUploadMessage(err.outcomes)
-                    : userFacingApiError(
-                          err,
-                          "Documents could not be uploaded. Please try again.",
-                      ),
+                    : userFacingApiError(err, t("erroUpload")),
             );
         } finally {
             setUploading(false);
@@ -383,7 +383,9 @@ export function AddDocumentsModal({
             keepMounted={keepMounted}
             breadcrumbs={breadcrumb}
             secondaryAction={{
-                label: uploading ? "Uploading…" : "Upload",
+                label: uploading
+                    ? tBanco("enviando")
+                    : tBanco("enviarArquivo"),
                 icon: uploading ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
@@ -393,7 +395,7 @@ export function AddDocumentsModal({
                 disabled: uploading,
             }}
             primaryAction={{
-                label: uploading ? "Saving…" : "Confirm",
+                label: uploading ? tBanco("salvando") : tBanco("confirmar"),
                 onClick: handleConfirm,
                 disabled: selectedDocuments.length === 0 || uploading,
             }}
@@ -415,7 +417,7 @@ export function AddDocumentsModal({
                         type="button"
                         onClick={() => setUploadWarning(null)}
                         className="shrink-0 rounded p-0.5 text-black hover:bg-gray-100"
-                        aria-label="Dismiss warning"
+                        aria-label={t("dispensarAviso")}
                     >
                         <X className="h-3.5 w-3.5" />
                     </button>

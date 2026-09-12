@@ -8,6 +8,7 @@ import {
     type KeyboardEvent,
 } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
     challengeAndVerifyMfa,
     getMfaAssurance,
@@ -43,9 +44,13 @@ export function MfaVerificationPopup({
     open,
     onCancel,
     onVerified,
-    title = "Two-factor verification required",
-    message = "Enter a code from your authenticator app to continue.",
+    title,
+    message,
 }: MfaVerificationPopupProps) {
+    const t = useTranslations("popups.mfa");
+    const tMfa = useTranslations("auth.verificarMfa");
+    const resolvedTitle = title ?? t("titulo");
+    const resolvedMessage = message ?? t("mensagem");
     const [factors, setFactors] = useState<MfaFactor[]>([]);
     const [selectedFactorId, setSelectedFactorId] = useState("");
     const [code, setCode] = useState("");
@@ -85,7 +90,7 @@ export function MfaVerificationPopup({
                             ? listError.message
                             : String(listError),
                 });
-                setError("Authenticator verification could not be loaded.");
+                setError(tMfa("erroCarregar"));
                 setFactors([]);
                 setSelectedFactorId("");
             }
@@ -114,7 +119,7 @@ export function MfaVerificationPopup({
                         ? verifyError.message
                         : String(verifyError),
             });
-            setError("The verification code is invalid or expired.");
+            setError(tMfa("erroCodigoInvalido"));
             return;
         }
 
@@ -130,11 +135,11 @@ export function MfaVerificationPopup({
         <Modal
             open={open}
             onClose={onCancel}
-            breadcrumbs={[title]}
+            breadcrumbs={[resolvedTitle]}
             size="sm"
             className="h-auto min-h-[310px] max-h-[min(92vh,400px)]"
             cancelAction={{
-                label: "Cancel",
+                label: tMfa("cancelar"),
                 onClick: onCancel,
                 disabled: verifying,
             }}
@@ -142,26 +147,25 @@ export function MfaVerificationPopup({
                 label: verifying ? (
                     <span className="inline-flex items-center gap-1.5">
                         <Loader2 className="h-3 w-3 animate-spin" />
-                        Verifying...
+                        {tMfa("botaoVerificando")}
                     </span>
                 ) : (
-                    "Verify"
+                    tMfa("botaoVerificar")
                 ),
                 onClick: () => void verify(),
                 disabled: !canVerify,
             }}
         >
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pb-2 pt-0">
-                <p className="text-sm text-gray-500 pb-6">{message}</p>
+                <p className="text-sm text-gray-500 pb-6">{resolvedMessage}</p>
                 {loading ? (
                     <div className="flex h-13 items-center justify-center text-sm text-gray-500">
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Loading authenticator...
+                        {tMfa("carregando")}
                     </div>
                 ) : factors.length === 0 ? (
                     <p className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-600">
-                        No verified authenticator factor is available for this
-                        session.
+                        {tMfa("semFatorSessao")}
                     </p>
                 ) : (
                     <div className="space-y-4">
@@ -176,7 +180,7 @@ export function MfaVerificationPopup({
                                 {factors.map((factor) => (
                                     <option key={factor.id} value={factor.id}>
                                         {factor.friendly_name ||
-                                            "Authenticator app"}
+                                            tMfa("appAutenticacao")}
                                     </option>
                                 ))}
                             </select>
@@ -212,6 +216,7 @@ export function VerificationCodeInput({
     onSubmit?: () => void;
     canSubmit?: boolean;
 }) {
+    const t = useTranslations("popups.mfa");
     const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
     const digits = Array.from({ length: 6 }, (_, index) => value[index] ?? "");
 
@@ -273,7 +278,7 @@ export function VerificationCodeInput({
         <div
             className="flex justify-center gap-2"
             role="group"
-            aria-label="Six digit verification code"
+            aria-label={t("ariaCodigo")}
         >
             {digits.map((digit, index) => (
                 <input
@@ -290,7 +295,7 @@ export function VerificationCodeInput({
                     onPaste={handlePaste}
                     onKeyDown={(event) => handleKeyDown(event, index)}
                     className="h-13 w-12 rounded-lg border border-gray-300 bg-gray-50 text-center text-2xl font-medium font-serif text-gray-950 shadow-none outline-none transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-300/45 disabled:cursor-not-allowed disabled:opacity-45"
-                    aria-label={`Verification code digit ${index + 1}`}
+                    aria-label={t("ariaDigito", { numero: index + 1 })}
                     maxLength={1}
                 />
             ))}

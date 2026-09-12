@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { MarkdownEditor } from "./markdown-editor";
 
 const mocks = vi.hoisted(() => {
@@ -65,12 +66,12 @@ describe("MarkdownEditor", () => {
   it("selects a grid size and inserts at the saved editor selection", async () => {
     const user = userEvent.setup();
     const { container } = render(
-      <MarkdownEditor
+      withIntl(<MarkdownEditor
         value="Prompt"
         onChange={vi.fn()}
         ariaLabel="Memory document"
         className="workflow-prompt-editor"
-      />,
+      />),
     );
 
     expect(container.firstElementChild).toHaveClass(
@@ -83,12 +84,12 @@ describe("MarkdownEditor", () => {
     expect(container.firstElementChild).not.toHaveClass("table-surface");
 
     expect(
-      screen.getByRole("toolbar", { name: "Markdown formatting" }),
+      screen.getByRole("toolbar", { name: "Formatação Markdown" }),
     ).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Insert table" }));
+    await user.click(screen.getByRole("button", { name: "Inserir tabela" }));
     const gridCell = screen.getByRole("menuitem", {
-      name: "Insert 3 by 4 table",
+      name: "Inserir tabela de 3 por 4",
     });
     await user.hover(gridCell);
     expect(screen.getByText("3 x 4")).toBeVisible();
@@ -108,20 +109,20 @@ describe("MarkdownEditor", () => {
 
   it("dims a suspended editor instead of calling it read-only", () => {
     const { container } = render(
-      <MarkdownEditor value="Prompt" ariaLabel="Memory document" suspended />,
+      withIntl(<MarkdownEditor value="Prompt" ariaLabel="Memory document" suspended />),
     );
 
     // A pending confirmation says nothing about the reader's rights, so the
     // toolbar stays put and the "Read-only" bar never appears.
     expect(
-      screen.getByRole("toolbar", { name: "Markdown formatting" }),
+      screen.getByRole("toolbar", { name: "Formatação Markdown" }),
     ).toBeVisible();
-    expect(screen.queryByText("Read-only")).toBeNull();
+    expect(screen.queryByText("Somente leitura")).toBeNull();
 
-    expect(screen.getByRole("button", { name: "Heading 1" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Insert table" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Título 1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Inserir tabela" })).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Show raw Markdown" }),
+      screen.getByRole("button", { name: "Mostrar Markdown bruto" }),
     ).toBeDisabled();
     expect(mocks.editor.setEditable).toHaveBeenLastCalledWith(false, false);
     expect(
@@ -131,23 +132,23 @@ describe("MarkdownEditor", () => {
 
   it("withholds the table control when tables are not allowed", () => {
     render(
-      <MarkdownEditor
+      withIntl(<MarkdownEditor
         value="Prompt"
         ariaLabel="Memory document"
         allowTables={false}
-      />,
+      />),
     );
 
     expect(
-      screen.getByRole("toolbar", { name: "Markdown formatting" }),
+      screen.getByRole("toolbar", { name: "Formatação Markdown" }),
     ).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Insert table" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Heading 1" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Inserir tabela" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Título 1" })).toBeVisible();
   });
 
   it("names the rich and raw editors and gives raw mode a focus indicator", async () => {
     const user = userEvent.setup();
-    render(<MarkdownEditor value="Prompt" ariaLabel="Memory document" />);
+    render(withIntl(<MarkdownEditor value="Prompt" ariaLabel="Memory document" />));
 
     expect(mocks.useEditor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -161,28 +162,28 @@ describe("MarkdownEditor", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: "Show raw Markdown" }),
+      screen.getByRole("button", { name: "Mostrar Markdown bruto" }),
     );
     expect(
       screen.getByRole("textbox", {
-        name: "Memory document (raw Markdown)",
+        name: "Memory document (Markdown bruto)",
       }),
     ).toHaveClass("focus-visible:ring-2");
   });
 
   it("activates toolbar controls from the keyboard", async () => {
     const user = userEvent.setup();
-    render(<MarkdownEditor value="Prompt" ariaLabel="Memory document" />);
+    render(withIntl(<MarkdownEditor value="Prompt" ariaLabel="Memory document" />));
 
     const rawToggle = screen.getByRole("button", {
-      name: "Show raw Markdown",
+      name: "Mostrar Markdown bruto",
     });
     rawToggle.focus();
     await user.keyboard("{Enter}");
 
     expect(
       screen.getByRole("textbox", {
-        name: "Memory document (raw Markdown)",
+        name: "Memory document (Markdown bruto)",
       }),
     ).toBeVisible();
   });
@@ -190,18 +191,18 @@ describe("MarkdownEditor", () => {
   it("syncs external values in raw mode and updates editability", async () => {
     const user = userEvent.setup();
     const { rerender } = render(
-      <MarkdownEditor value="Prompt" ariaLabel="Memory document" />,
+      withIntl(<MarkdownEditor value="Prompt" ariaLabel="Memory document" />),
     );
     await user.click(
-      screen.getByRole("button", { name: "Show raw Markdown" }),
+      screen.getByRole("button", { name: "Mostrar Markdown bruto" }),
     );
 
     rerender(
-      <MarkdownEditor
+      withIntl(<MarkdownEditor
         value="Latest value"
         ariaLabel="Memory document"
         readOnly
-      />,
+      />),
     );
 
     expect(mocks.editor.commands.setContent).toHaveBeenCalledWith(
@@ -212,7 +213,7 @@ describe("MarkdownEditor", () => {
     await waitFor(() =>
       expect(
         screen.getByRole("textbox", {
-          name: "Memory document (raw Markdown)",
+          name: "Memory document (Markdown bruto)",
         }),
       ).toHaveValue("Latest value"),
     );
@@ -222,19 +223,19 @@ describe("MarkdownEditor", () => {
     mocks.editor.storage.markdown.getMarkdown = () => "plain text";
 
     render(
-      <MarkdownEditor
+      withIntl(<MarkdownEditor
         value={"![diagram](diagram.png)\n\nplain text"}
         ariaLabel="Memory document"
-      />,
+      />),
     );
 
     expect(
       await screen.findByRole("textbox", {
-        name: "Memory document (raw Markdown)",
+        name: "Memory document (Markdown bruto)",
       }),
     ).toHaveValue("![diagram](diagram.png)\n\nplain text");
     expect(
-      screen.getByText("Raw view preserves this Markdown"),
+      screen.getByText("A visualização bruta preserva este Markdown"),
     ).toBeVisible();
   });
 
@@ -242,15 +243,15 @@ describe("MarkdownEditor", () => {
     mocks.editor.storage.markdown.getMarkdown = () => "first line\nsecond line";
 
     render(
-      <MarkdownEditor
+      withIntl(<MarkdownEditor
         value={"first line  \nsecond line"}
         ariaLabel="Memory document"
-      />,
+      />),
     );
 
     expect(
       await screen.findByRole("textbox", {
-        name: "Memory document (raw Markdown)",
+        name: "Memory document (Markdown bruto)",
       }),
     ).toHaveValue("first line  \nsecond line");
   });

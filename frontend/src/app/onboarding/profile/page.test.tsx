@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import OnboardingProfilePage from "./page";
 
 const { push, replace, reloadProfile, updateUserProfile } = vi.hoisted(() => ({
@@ -49,15 +50,15 @@ describe("OnboardingProfilePage", () => {
 
     it("allows an empty name and saves profile details before continuing", async () => {
         const user = userEvent.setup();
-        render(<OnboardingProfilePage />);
+        render(withIntl(<OnboardingProfilePage />));
 
-        const name = screen.getByRole("textbox", { name: "Name" });
+        const name = screen.getByRole("textbox", { name: "Nome" });
         await user.clear(name);
         await user.type(
-            screen.getByRole("textbox", { name: /Organisation/ }),
+            screen.getByRole("textbox", { name: "Organização" }),
             "Example LLP",
         );
-        await user.click(screen.getByRole("button", { name: "Continue" }));
+        await user.click(screen.getByRole("button", { name: "Continuar" }));
 
         await waitFor(() =>
             expect(updateUserProfile).toHaveBeenCalledWith({

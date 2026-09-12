@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
@@ -16,7 +17,7 @@ import {
 import {
   MemoryConflictNotice,
   MemorySaveStatus,
-  memoryActivityLabel,
+  useMemoryActivityLabel,
 } from "@/app/components/memory/MemoryEditorState";
 import { MemoryUpdateFailedPopup } from "@/app/components/memory/MemoryUpdateFailedPopup";
 import { useMemoryFileController } from "@/app/components/memory/useMemoryFileController";
@@ -30,6 +31,7 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 type ConfirmAction = "disable";
 
 export function UserMemoryPage() {
+  const t = useTranslations("memoria");
   const [settingsMutation, setSettingsMutation] = useState<
     "enable" | "disable" | null
   >(null);
@@ -67,10 +69,11 @@ export function UserMemoryPage() {
     flushOnUnmount: settingsMutation === null,
     loadMemory,
     saveMemory,
-    conflictLoadError:
-      "Memory changed while you were editing. Reload the page before saving again.",
-    saveError: "Memory could not be saved. Your draft has been kept.",
+    conflictLoadError: t("erroConflitoRecarregar"),
+    saveError: t("erroSalvarRascunhoMantido"),
   });
+
+  const memoryActivity = useMemoryActivityLabel(memory);
 
   const interactionLocked =
     autosave.inFlight || settingsMutation !== null || confirmAction !== null;
@@ -84,10 +87,7 @@ export function UserMemoryPage() {
       syncCurrent(await setUserMemoryEnabled(true));
     } catch (cause) {
       setError(
-        userFacingApiError(
-          cause,
-          "App-wide memory could not be turned on. Please try again.",
-        ),
+        userFacingApiError(cause, t("erroAtivar")),
       );
     } finally {
       setSettingsMutation(null);
@@ -104,10 +104,7 @@ export function UserMemoryPage() {
       setConfirmAction(null);
     } catch (cause) {
       setError(
-        userFacingApiError(
-          cause,
-          "App-wide memory could not be turned off. Please try again.",
-        ),
+        userFacingApiError(cause, t("erroDesativar")),
       );
       setConfirmAction(null);
     } finally {
@@ -122,14 +119,14 @@ export function UserMemoryPage() {
         aria-labelledby="app-memory-settings-heading"
       >
         <SettingsHeading id="app-memory-settings-heading">
-          Memory
+          {t("titulo")}
         </SettingsHeading>
 
         <SettingsCard>
           {loading ? (
             <div
               className="flex items-center justify-between gap-3 px-4 py-5"
-              aria-label="Loading memory settings"
+              aria-label={t("carregandoConfiguracoes")}
             >
               <div className="space-y-2">
                 <div className="h-4 w-36 animate-pulse rounded bg-gray-200" />
@@ -140,22 +137,23 @@ export function UserMemoryPage() {
           ) : loadError || !memory ? (
             <SettingsRow>
               <div className="space-y-1">
-                <SettingsLabel>Memory settings are unavailable</SettingsLabel>
+                <SettingsLabel>
+                  {t("configuracoesIndisponiveis")}
+                </SettingsLabel>
                 <p className="text-sm text-red-600" role="alert">
-                  Could not load memory settings. Please try again.
+                  {t("erroCarregarConfiguracoes")}
                 </p>
               </div>
               <PillButton tone="white" size="sm" onClick={() => void load()}>
-                Retry
+                {t("tentarNovamente")}
               </PillButton>
             </SettingsRow>
           ) : (
             <SettingsRow>
               <div className="space-y-1">
-                <SettingsLabel>App-wide memory</SettingsLabel>
+                <SettingsLabel>{t("memoriaAplicativo")}</SettingsLabel>
                 <SettingsDescription>
-                  Let Mike curate useful details after saved conversations and
-                  use them in future answers.
+                  {t("descricaoMemoriaAplicativo")}
                 </SettingsDescription>
               </div>
               <div className="flex items-center gap-3">
@@ -163,7 +161,7 @@ export function UserMemoryPage() {
                   checked={memory.enabled}
                   disabled={interactionLocked}
                   aria-busy={settingsMutation === "enable"}
-                  aria-label="App-wide memory"
+                  aria-label={t("memoriaAplicativo")}
                   onCheckedChange={(enabled) => {
                     if (enabled) void enableMemory();
                     else {
@@ -195,7 +193,7 @@ export function UserMemoryPage() {
         >
           <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
             <SettingsHeading id="app-memory-file-heading">
-              Memory file
+              {t("tituloArquivoMemoria")}
             </SettingsHeading>
             <div className="flex flex-wrap items-center gap-3">
               <MemorySaveStatus
@@ -207,9 +205,9 @@ export function UserMemoryPage() {
                   autosave.retry();
                 }}
               />
-              {memoryActivityLabel(memory) ? (
+              {memoryActivity ? (
                 <p className="text-xs text-gray-400" role="status">
-                  {memoryActivityLabel(memory)}
+                  {memoryActivity}
                 </p>
               ) : null}
             </div>
@@ -228,7 +226,7 @@ export function UserMemoryPage() {
               onChange={(value) => {
                 changeDraft(value);
               }}
-              ariaLabel="App-wide memory"
+              ariaLabel={t("memoriaAplicativo")}
               className="min-h-[24rem]"
               suspended={editorLocked}
               allowTables={false}
@@ -239,9 +237,11 @@ export function UserMemoryPage() {
 
       <ConfirmPopup
         open={confirmAction !== null}
-        title="Turn off and delete app-wide memory?"
-        message={`This will delete the existing app-wide memory.md file${dirty ? " and your unsaved draft" : ""}, cancel pending memory updates, and stop future memory updates until you turn app-wide memory on again.`}
-        confirmLabel="Disable"
+        title={t("tituloConfirmarDesativar")}
+        message={t("corpoConfirmarDesativar", {
+          rascunho: dirty ? "true" : "false",
+        })}
+        confirmLabel={t("desativar")}
         confirmVariant="danger"
         confirmStatus={settingsMutation ? "loading" : "idle"}
         onConfirm={() => void confirmSettingsMutation()}
@@ -261,6 +261,7 @@ export function UserMemoryPage() {
  * another owner's choice on an existing project.
  */
 function ProjectMemoryDefaultRow() {
+  const t = useTranslations("memoria");
   const { profile, updateProjectMemoryDefault } = useUserProfile();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -272,12 +273,7 @@ function ProjectMemoryDefaultRow() {
     try {
       await updateProjectMemoryDefault(enabled);
     } catch (cause) {
-      setError(
-        userFacingApiError(
-          cause,
-          "That preference could not be saved. Please try again.",
-        ),
-      );
+      setError(userFacingApiError(cause, t("erroSalvarPreferencia")));
     } finally {
       setSaving(false);
     }
@@ -286,10 +282,9 @@ function ProjectMemoryDefaultRow() {
   return (
     <SettingsRow>
       <div className="space-y-1">
-        <SettingsLabel>Project memory for new projects</SettingsLabel>
+        <SettingsLabel>{t("memoriaProjetosNovos")}</SettingsLabel>
         <SettingsDescription>
-          Choose whether memory is enabled by default for projects you create.
-          Project owners can still change it for each project.
+          {t("descricaoMemoriaProjetos")}
         </SettingsDescription>
         {error ? (
           <p className="text-xs text-red-600" role="alert">
@@ -301,7 +296,7 @@ function ProjectMemoryDefaultRow() {
         checked={profile?.projectMemoryDefault !== false}
         disabled={!profile || saving}
         aria-busy={saving}
-        aria-label="Project memory for new projects"
+        aria-label={t("memoriaProjetosNovos")}
         onCheckedChange={(enabled) => void handleToggle(enabled)}
       />
     </SettingsRow>
@@ -309,8 +304,9 @@ function ProjectMemoryDefaultRow() {
 }
 
 function MemoryEditorSkeleton() {
+  const t = useTranslations("memoria");
   return (
-    <div className="space-y-3" aria-label="Loading memory editor">
+    <div className="space-y-3" aria-label={t("carregandoEditor")}>
       <div className="space-y-2">
         <div className="h-7 w-36 animate-pulse rounded bg-gray-200" />
         <div className="h-3 w-full max-w-xl animate-pulse rounded bg-gray-100" />

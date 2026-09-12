@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import ptBR from "../../../../messages/pt-BR.json";
+import { withIntl } from "@/test/withIntl";
 import { SidebarChatItem } from "./SidebarChatItem";
 import type { Chat } from "@/app/components/shared/types";
 
@@ -11,6 +13,20 @@ import type { Chat } from "@/app/components/shared/types";
 
 const renameChat = vi.fn();
 const deleteChat = vi.fn();
+
+const messages = {
+    ...ptBR,
+    shell: {
+        ...ptBR.shell,
+        itemConversa: {
+            ...ptBR.shell.itemConversa,
+            compartilhar: ptBR.workflows.compartilharModal.compartilhar,
+            renomear: ptBR.assistant.renomear,
+            excluir: ptBR.assistant.excluir,
+            conversaSemTitulo: ptBR.assistant.conversaSemTitulo,
+        },
+    },
+};
 
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({ renameChat, deleteChat }),
@@ -33,7 +49,7 @@ function chat(overrides: Partial<Chat>): Chat {
 function openMenu() {
     // Radix opens on pointerdown, not click.
     const trigger = screen.getByRole("button", {
-        name: "Actions for Quarterly filing",
+        name: "Ações para Quarterly filing",
     });
     fireEvent.pointerDown(
         trigger,
@@ -50,77 +66,92 @@ beforeEach(() => {
 describe("SidebarChatItem role gates", () => {
     it("opens chat access from an owner's Share action", async () => {
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: true })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Share"));
+        fireEvent.click(await screen.findByText("Compartilhar"));
 
         expect(await screen.findByText("Chat access modal")).toBeInTheDocument();
     });
 
     it("gates Share for a non-owner", async () => {
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: false, access_role: "editor" })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: false, access_role: "editor" })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Share"));
+        fireEvent.click(await screen.findByText("Compartilhar"));
 
         expect(screen.queryByText("Chat access modal")).not.toBeInTheDocument();
-        expect(await screen.findByText(/only an owner/i)).toBeInTheDocument();
+        expect(await screen.findByText(/Somente o proprietário pode/)).toBeInTheDocument();
     });
 
     it("lets a shared member rename but not delete", async () => {
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: false, access_role: "editor" })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: false, access_role: "editor" })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Delete"));
+        fireEvent.click(await screen.findByText("Excluir"));
 
         expect(deleteChat).not.toHaveBeenCalled();
         expect(
-            await screen.findByText(/only an owner/i),
+            await screen.findByText(/Somente o proprietário pode/),
         ).toBeInTheDocument();
     });
 
     it("lets the creator delete — is_owner alone derives admin", async () => {
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: true })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Delete"));
+        fireEvent.click(await screen.findByText("Excluir"));
 
         expect(deleteChat).toHaveBeenCalledWith("chat-1");
     });
 
     it("refuses a viewer's rename with the member tier", async () => {
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: false, access_role: "viewer" })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: false, access_role: "viewer" })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Rename"));
+        fireEvent.click(await screen.findByText("Renomear"));
 
         expect(
-            await screen.findByText(/only an editor/i),
+            await screen.findByText(/Somente um editor pode/),
         ).toBeInTheDocument();
     });
 
@@ -131,14 +162,17 @@ describe("SidebarChatItem role gates", () => {
         // and the admin was refused a delete the server accepts — the
         // headline widening, unreachable from the sidebar.
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: false, access_role: "owner" })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: false, access_role: "owner" })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Delete"));
+        fireEvent.click(await screen.findByText("Excluir"));
 
         expect(deleteChat).toHaveBeenCalledWith("chat-1");
     });
@@ -148,18 +182,21 @@ describe("SidebarChatItem role gates", () => {
         // offering member-tier affordances on it is how the sidebar ended up
         // offering renames the server refuses. Nothing may be offered.
         render(
-            <SidebarChatItem
-                chat={chat({})}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({})}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Rename"));
+        fireEvent.click(await screen.findByText("Renomear"));
 
         expect(renameChat).not.toHaveBeenCalled();
         expect(
-            await screen.findByText(/only an editor/i),
+            await screen.findByText(/Somente um editor pode/),
         ).toBeInTheDocument();
     });
 
@@ -169,37 +206,43 @@ describe("SidebarChatItem role gates", () => {
         // the rename twin of the surfaced delete failure below.
         renameChat.mockRejectedValue(new Error("boom"));
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: true })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Rename"));
+        fireEvent.click(await screen.findByText("Renomear"));
         const input = screen.getByRole("textbox");
         fireEvent.change(input, { target: { value: "New title" } });
         fireEvent.keyDown(input, { key: "Enter" });
 
         expect(
-            await screen.findByText(/could not be renamed/i),
+            await screen.findByText(/não foi possível renomear/i),
         ).toBeInTheDocument();
     });
 
     it("surfaces a failed delete instead of swallowing it", async () => {
         deleteChat.mockRejectedValue(new Error("boom"));
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: true })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            withIntl(
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />,
+                messages,
+            ),
         );
         openMenu();
-        fireEvent.click(await screen.findByText("Delete"));
+        fireEvent.click(await screen.findByText("Excluir"));
 
         expect(
-            await screen.findByText(/could not be deleted/i),
+            await screen.findByText(/não foi possível excluir/i),
         ).toBeInTheDocument();
     });
 });

@@ -2,6 +2,7 @@
 
 import { Globe } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { PillButton } from "@/app/components/ui/pill-button";
 
 interface SsoAuthButtonProps {
@@ -9,6 +10,7 @@ interface SsoAuthButtonProps {
 }
 
 export function SsoAuthButton({ disabled = false }: SsoAuthButtonProps) {
+    const t = useTranslations("auth.sso");
     const router = useRouter();
 
     return (
@@ -21,7 +23,7 @@ export function SsoAuthButton({ disabled = false }: SsoAuthButtonProps) {
             onClick={() => router.push("/login/sso")}
         >
             <Globe aria-hidden="true" className="h-4 w-4" />
-            Continue with SSO
+            {t("botaoContinuarSso")}
         </PillButton>
     );
 }

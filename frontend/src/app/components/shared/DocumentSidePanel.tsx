@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 import {
     AlertCircle,
     Check,
@@ -100,6 +101,7 @@ export function DocumentSidePanel({
     onOwnerOnlyAction,
     onDelete,
 }: DocumentSidePanelProps) {
+    const t = useTranslations("painelDocumento");
     const [mounted, setMounted] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
@@ -274,7 +276,7 @@ export function DocumentSidePanel({
         if (!selectedVersionId) return;
         const trimmed = nameDraft.trim();
         if (!trimmed) {
-            setNameError("Name is required.");
+            setNameError(t("erroNomeObrigatorio"));
             return;
         }
         if (hasExtensionChange(selectedFilename, trimmed)) {
@@ -294,7 +296,7 @@ export function DocumentSidePanel({
             setEditingName(false);
         } catch (err) {
             console.error("rename version failed", err);
-            setNameError("Could not save name.");
+            setNameError(t("erroSalvarNome"));
         } finally {
             setSavingName(false);
         }
@@ -310,7 +312,7 @@ export function DocumentSidePanel({
             await onUploadNewVersion(doc, file, file.name);
         } catch (err) {
             console.error("upload new version failed", err);
-            setUploadError("Could not upload the new version.");
+            setUploadError(t("erroEnviarVersao"));
         } finally {
             setUploading(false);
         }
@@ -318,7 +320,7 @@ export function DocumentSidePanel({
 
     async function handleDeleteVersion(versionIdToDelete: string) {
         if (!canDelete) {
-            onOwnerOnlyAction?.("delete this document version");
+            onOwnerOnlyAction?.(t("acaoExcluirVersao"));
             return;
         }
         setDeletingVersionId(versionIdToDelete);
@@ -365,7 +367,7 @@ export function DocumentSidePanel({
             setReplaceFile(null);
         } catch (err) {
             console.error("replace version failed", err);
-            setUploadError("Could not replace this version.");
+            setUploadError(t("erroSubstituirVersao"));
         } finally {
             setReplacingVersionId(null);
         }
@@ -393,7 +395,7 @@ export function DocumentSidePanel({
 
     function requestDeleteDocument() {
         if (!canDelete) {
-            onOwnerOnlyAction?.("delete this document");
+            onOwnerOnlyAction?.(t("acaoExcluirDocumento"));
             return;
         }
         if (versions.length > 1) {
@@ -478,7 +480,7 @@ export function DocumentSidePanel({
             <div
                 onMouseDown={handlePanelResizeMouseDown}
                 className="absolute inset-y-0 left-0 z-20 hidden w-1 cursor-col-resize bg-transparent transition-colors hover:bg-blue-400/60 md:block"
-                title="Resize document view"
+                title={t("redimensionarVisualizacao")}
             />
             <div className="mx-3 flex min-h-11 shrink-0 items-center justify-between gap-3 py-2 md:h-11 md:py-0">
                 <div className="flex min-w-0 items-center gap-2">
@@ -502,7 +504,7 @@ export function DocumentSidePanel({
                                     : "text-gray-500 hover:text-gray-800",
                             )}
                         >
-                            Document
+                            {t("abaDocumento")}
                         </button>
                         <button
                             type="button"
@@ -514,10 +516,10 @@ export function DocumentSidePanel({
                                     : "text-gray-500 hover:text-gray-800",
                             )}
                         >
-                            Details
+                            {t("abaDetalhes")}
                         </button>
                     </div>
-                    <GlassIconButton onClick={onClose} aria-label="Close">
+                    <GlassIconButton onClick={onClose} aria-label={t("fechar")}>
                         <X className="h-3.5 w-3.5" />
                     </GlassIconButton>
                 </div>
@@ -571,7 +573,7 @@ export function DocumentSidePanel({
                         "relative z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors md:block",
                         "bg-transparent hover:bg-blue-400/60",
                     )}
-                    title="Resize document panel"
+                    title={t("redimensionarPainel")}
                 />
 
                 <aside
@@ -582,7 +584,7 @@ export function DocumentSidePanel({
                 >
                     <div className="mb-4 shrink-0">
                         <div className="mb-3 text-xs font-medium text-gray-900">
-                            Name
+                            {t("nome")}
                         </div>
                         {editingName ? (
                             <div className="space-y-1.5">
@@ -611,7 +613,7 @@ export function DocumentSidePanel({
                                         onClick={() => void handleSaveName()}
                                         disabled={savingName}
                                         className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-white/65 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-40"
-                                        title="Save name"
+                                        title={t("salvarNome")}
                                     >
                                         {savingName ? (
                                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -640,7 +642,7 @@ export function DocumentSidePanel({
                                             setNameError(null);
                                         }}
                                         className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-white/65 hover:text-gray-900"
-                                        title="Edit name"
+                                        title={t("editarNome")}
                                     >
                                         <Pencil className="h-3.5 w-3.5" />
                                     </button>
@@ -650,16 +652,16 @@ export function DocumentSidePanel({
                     </div>
 
                     <div className="mb-3 shrink-0 text-xs font-medium text-gray-900">
-                        Document Data
+                        {t("dadosDocumento")}
                     </div>
                     <div className="shrink-0 rounded-xl py-2">
                         <div className="space-y-1.5">
                             <DataRow
-                                label="Type"
+                                label={t("rotuloTipo")}
                                 value={selectedFileType ?? "—"}
                             />
                             <DataRow
-                                label="Size"
+                                label={t("rotuloTamanho")}
                                 value={
                                     selectedSizeBytes != null
                                         ? formatBytes(selectedSizeBytes)
@@ -667,16 +669,19 @@ export function DocumentSidePanel({
                                 }
                             />
                             <DataRow
-                                label="Version"
+                                label={t("rotuloVersao")}
                                 value={
                                     selectedVersionNumber != null
                                         ? String(selectedVersionNumber)
                                         : "—"
                                 }
                             />
-                            <DataRow label="Uploaded by" value={ownerLabel} />
                             <DataRow
-                                label="Uploaded"
+                                label={t("rotuloEnviadoPor")}
+                                value={ownerLabel}
+                            />
+                            <DataRow
+                                label={t("rotuloEnviadoEm")}
                                 value={
                                     selectedUploadedAt
                                         ? formatDateTime(selectedUploadedAt)
@@ -684,7 +689,7 @@ export function DocumentSidePanel({
                                 }
                             />
                             <DataRow
-                                label="Pages"
+                                label={t("rotuloPaginas")}
                                 value={
                                     selectedPageCount != null
                                         ? String(selectedPageCount)
@@ -697,7 +702,7 @@ export function DocumentSidePanel({
                     {!readOnly && (
                         <>
                             <div className="mb-2 mt-4 shrink-0 text-xs font-medium text-gray-900">
-                                Versions
+                                {t("versoes")}
                             </div>
                     <div className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2 py-2">
                             {versionsLoading && versions.length === 0 ? (
@@ -714,16 +719,16 @@ export function DocumentSidePanel({
                                 </div>
                             ) : orderedVersions.length === 0 ? (
                                 <div className="py-2 text-xs text-gray-400">
-                                    No version history.
+                                    {t("semHistoricoVersoes")}
                                 </div>
                             ) : (
                                     <div className="space-y-1.5">
                                         {uploading && <VersionUploadSkeleton />}
                                         {orderedVersions.map((version) => {
                                             const title =
-                                                versionTitleFor(version);
+                                                versionTitleFor(version, t);
                                             const filename =
-                                                versionFilenameFor(version);
+                                                versionFilenameFor(version, t);
                                             const selected =
                                                 selectedVersionId ===
                                                 version.id;
@@ -817,7 +822,7 @@ export function DocumentSidePanel({
                                                     >
                                                         {deleted ? (
                                                             <span className="text-[11px] font-medium text-gray-800">
-                                                                Deleted
+                                                                {t("excluida")}
                                                             </span>
                                                         ) : (
                                                             <>
@@ -838,8 +843,15 @@ export function DocumentSidePanel({
                                                                             null
                                                                     }
                                                                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
-                                                                    aria-label={`Replace ${title}`}
-                                                                    title="Replace version file"
+                                                                    aria-label={t(
+                                                                        "substituirVersao",
+                                                                        {
+                                                                            titulo: title,
+                                                                        },
+                                                                    )}
+                                                                    title={t(
+                                                                        "substituirArquivoVersao",
+                                                                    )}
                                                                 >
                                                                     {versionReplacing ? (
                                                                         <Loader2 className="h-3 w-3 animate-spin" />
@@ -860,8 +872,15 @@ export function DocumentSidePanel({
                                                                         );
                                                                     }}
                                                                     className="inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
-                                                                    aria-label={`Download ${title}`}
-                                                                    title="Download version"
+                                                                    aria-label={t(
+                                                                        "baixarVersao",
+                                                                        {
+                                                                            titulo: title,
+                                                                        },
+                                                                    )}
+                                                                    title={t(
+                                                                        "baixarArquivoVersao",
+                                                                    )}
                                                                 >
                                                                     <Download className="h-3 w-3" />
                                                                 </button>
@@ -887,11 +906,20 @@ export function DocumentSidePanel({
                                                                         !canDelete &&
                                                                             "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-red-500",
                                                                     )}
-                                                                    aria-label={`Delete ${title}`}
+                                                                    aria-label={t(
+                                                                        "excluirVersao",
+                                                                        {
+                                                                            titulo: title,
+                                                                        },
+                                                                    )}
                                                                     title={
                                                                         canDelete
-                                                                            ? "Delete version"
-                                                                            : "Only the person who uploaded this document can delete its versions"
+                                                                            ? t(
+                                                                                  "excluirVersaoTitulo",
+                                                                              )
+                                                                            : t(
+                                                                                  "excluirVersaoSomenteProprietario",
+                                                                              )
                                                                     }
                                                                 >
                                                                     {versionDeleting ? (
@@ -934,7 +962,7 @@ export function DocumentSidePanel({
                                 className="ml-auto"
                             >
                                 <Download className="h-3.5 w-3.5 shrink-0" />
-                                Download
+                                {t("baixar")}
                             </PillButton>
                         ) : (
                             <>
@@ -964,12 +992,12 @@ export function DocumentSidePanel({
                             )}
                             title={
                                 canDelete
-                                    ? "Delete document"
-                                    : "Only the person who uploaded this document can delete it"
+                                    ? t("excluirDocumentoTitulo")
+                                    : t("excluirDocumentoSomenteProprietario")
                             }
                         >
                             <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                            Delete
+                            {t("excluir")}
                         </PillButton>
                                 <PillButton
                                     tone="blue"
@@ -981,7 +1009,7 @@ export function DocumentSidePanel({
                                     loading={uploading}
                                 >
                                     <Upload className="h-3.5 w-3.5 shrink-0" />
-                                    Upload new version
+                                    {t("enviarNovaVersao")}
                                 </PillButton>
                             </>
                         )}
@@ -993,17 +1021,23 @@ export function DocumentSidePanel({
                 onClose={() => setExtensionWarningOpen(false)}
                 message={
                     selectedExtension
-                        ? `File extensions cannot be changed here. Keep ${selectedExtension} at the end of the name.`
-                        : "File extensions cannot be changed here."
+                        ? t("avisoExtensaoComAtual", {
+                              extensao: selectedExtension,
+                          })
+                        : t("avisoExtensao")
                 }
             />
             <ConfirmPopup
                 open={replaceConfirmOpen}
-                title="Replace version?"
-                message={`This will wipe ${versionTitleFor(replaceTargetVersion)} and replace it with ${replaceFile?.name ?? "the selected file"}. Save as a new version instead if you want to keep both copies.`}
-                confirmLabel="Replace"
+                title={t("confirmarSubstituicaoTitulo")}
+                message={t("confirmarSubstituicaoMensagem", {
+                    titulo: versionTitleFor(replaceTargetVersion, t),
+                    arquivo:
+                        replaceFile?.name ?? t("arquivoSelecionado"),
+                })}
+                confirmLabel={t("substituir")}
                 confirmStatus={replacingVersionId != null ? "loading" : "idle"}
-                cancelLabel="Cancel"
+                cancelLabel={t("cancelar")}
                 onCancel={() => {
                     if (replacingVersionId != null) return;
                     setReplaceConfirmOpen(false);
@@ -1014,9 +1048,12 @@ export function DocumentSidePanel({
             />
             <ConfirmPopup
                 open={confirmDeleteDocumentOpen}
-                title="Delete document?"
-                message={`${selectedFilename} has ${versions.length} versions. Deleting this document will delete all of its versions.`}
-                confirmLabel="Delete"
+                title={t("excluirDocumentoPergunta")}
+                message={t("excluirDocumentoMensagem", {
+                    filename: selectedFilename,
+                    count: versions.length,
+                })}
+                confirmLabel={t("excluir")}
                 confirmVariant="danger"
                 confirmStatus={
                     deleteDocumentStatus === "deleting"
@@ -1025,7 +1062,7 @@ export function DocumentSidePanel({
                           ? "complete"
                           : "idle"
                 }
-                cancelLabel="Cancel"
+                cancelLabel={t("cancelar")}
                 onCancel={() => {
                     if (deleteDocumentStatus === "deleting") return;
                     setConfirmDeleteDocumentOpen(false);
@@ -1087,20 +1124,25 @@ function clampPanelWidth(width: number, dataColumnWidth: number) {
     return Math.min(maxWidth, Math.max(minWidth, width));
 }
 
-function versionTitleFor(version: DocumentVersion | null) {
-    if (!version) return "this version";
+type TranslateFn = (
+    key: string,
+    values?: Record<string, string | number>,
+) => string;
+
+function versionTitleFor(version: DocumentVersion | null, t: TranslateFn) {
+    if (!version) return t("estaVersao");
     if (
         typeof version.version_number === "number" &&
         version.version_number >= 1
     ) {
-        return `Version ${version.version_number}`;
+        return t("versaoN", { n: version.version_number });
     }
-    return "Version";
+    return t("versao");
 }
 
-function versionFilenameFor(version: DocumentVersion) {
+function versionFilenameFor(version: DocumentVersion, t: TranslateFn) {
     if (version.filename?.trim()) return version.filename.trim();
-    return version.source === "upload" ? "Original" : "—";
+    return version.source === "upload" ? t("original") : "—";
 }
 
 function fileTypeForVersion(version: DocumentVersion, fallback: string | null) {

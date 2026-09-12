@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Check, X } from "lucide-react";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { TabPillButton } from "@/app/components/ui/tab-pill-button";
@@ -60,6 +61,9 @@ export function AskInputPopup({
     const [activeInputId, setActiveInputId] = useState(
         () => event.items[0]?.id ?? "",
     );
+    const t = useTranslations("assistant.entradaPergunta");
+    const tAssistente = useTranslations("assistant");
+    const tChatInput = useTranslations("assistant.chatInput");
 
     const docsForItem = useCallback(
         (inputId: string) => {
@@ -314,18 +318,21 @@ export function AskInputPopup({
         const lines = response.responses.map((item, index) => {
             if (item.kind === "multi_choice") {
                 if (item.skipped)
-                    return `${index + 1}. Skipped: ${item.question}`;
+                    return `${index + 1}. ${t("ignorada", { question: item.question })}`;
                 return `${index + 1}. ${item.question}\n${item.answers?.join(", ") ?? ""}`;
             }
             if (item.kind !== "documents") {
                 if (item.skipped)
-                    return `${index + 1}. Skipped: ${item.question}`;
+                    return `${index + 1}. ${t("ignorada", { question: item.question })}`;
                 return `${index + 1}. ${item.question}\n${item.answer ?? ""}`;
             }
-            if (item.skipped) return `${index + 1}. Skipped document request.`;
-            return `${index + 1}. Documents attached: ${item.filenames.join(", ")}`;
+            if (item.skipped)
+                return `${index + 1}. ${t("ignoradaSolicitacao")}`;
+            return `${index + 1}. ${t("documentosAnexados", {
+                filenames: item.filenames.join(", "),
+            })}`;
         });
-        return `Responses to Mike's questions:\n${lines.join("\n\n")}`;
+        return `${t("respostas")}\n${lines.join("\n\n")}`;
     };
 
     const submit = () => {
@@ -369,7 +376,7 @@ export function AskInputPopup({
                     <div className="flex min-w-0 items-center">
                         <div className="text-sm text-gray-500">
                             {submitted ? (
-                                "Inputs sent"
+                                t("entradasEnviadas")
                             ) : (
                                 <div className="flex flex-wrap gap-x-1.5 gap-y-1">
                                     {event.items.map((item) => {
@@ -378,8 +385,8 @@ export function AskInputPopup({
                                         const isResolved = itemResolved(item);
                                         const label =
                                             item.kind === "documents"
-                                                ? "Documents"
-                                                : "Question";
+                                                ? t("documentos")
+                                                : t("pergunta");
                                         return (
                                             <TabPillButton
                                                 key={item.id}
@@ -407,7 +414,7 @@ export function AskInputPopup({
                         <TabPillButton
                             type="button"
                             onClick={dismiss}
-                            aria-label="Dismiss"
+                            aria-label={t("dispensar")}
                             className="h-6 w-6 shrink-0 px-0"
                         >
                             <X className="h-3 w-3" />
@@ -591,8 +598,8 @@ export function AskInputPopup({
                                         className="px-1 font-sans text-[10px] text-gray-500 transition-colors hover:text-gray-800"
                                     >
                                         {skipped.has(activeItem.id)
-                                            ? "Unskip"
-                                            : "Skip"}
+                                            ? t("desfazerPulo")
+                                            : t("pular")}
                                     </button>
                                     <PillButton
                                         tone="black"
@@ -610,11 +617,11 @@ export function AskInputPopup({
                                     >
                                         {confirmed.has(activeItem.id) ? (
                                             <>
-                                                Confirmed
+                                                {t("confirmado")}
                                                 <Check className="h-3 w-3" />
                                             </>
                                         ) : (
-                                            "Confirm"
+                                            t("confirmar")
                                         )}
                                     </PillButton>
                                 </div>
@@ -644,7 +651,10 @@ export function AskInputPopup({
                         selected.filter((doc) => !existing.has(doc.id)),
                     );
                 }}
-                breadcrumb={["Assistant", "Add Documents"]}
+                breadcrumb={[
+                    tAssistente("title"),
+                    tChatInput("adicionarDocumentos"),
+                ]}
                 uploadStateId="assistant-ask-input"
                 initialSelectedDocuments={
                     docSelectorTarget
@@ -667,6 +677,7 @@ function OpenTextInput({
     disabled?: boolean;
     onChange: (value: string) => void;
 }) {
+    const t = useTranslations("assistant.entradaPergunta");
     return (
         <div className="mt-2">
             <textarea
@@ -680,7 +691,7 @@ function OpenTextInput({
                 onChange={(event) =>
                     onChange(event.target.value.slice(0, OPEN_TEXT_MAX_LENGTH))
                 }
-                placeholder="Type your answer..."
+                placeholder={t("placeholderResposta")}
                 className="min-h-28 w-full resize-y rounded-lg bg-gray-100/70 px-3 py-2 text-sm leading-5 text-gray-700 outline-none transition-colors placeholder:text-gray-400 focus:bg-gray-200/70 disabled:cursor-default disabled:opacity-60"
             />
             <p
@@ -713,6 +724,7 @@ function OptionInput({
     onOtherOpen: () => void;
     onOtherValue: (value: string) => void;
 }) {
+    const t = useTranslations("assistant.entradaPergunta");
     return (
         <div className="mt-2 grid gap-1.5">
             {item.options.map((option, idx) => {
@@ -779,13 +791,13 @@ function OptionInput({
                                         e.target.style.height = "auto";
                                         e.target.style.height = `${e.target.scrollHeight}px`;
                                     }}
-                                    placeholder="Type your answer..."
+                                    placeholder={t("placeholderResposta")}
                                     className="flex-1 resize-none overflow-hidden bg-transparent text-sm leading-5 text-gray-600 outline-none placeholder:text-gray-400"
                                 />
                             </span>
                         ) : (
                             <span className="min-w-0 flex-1 text-sm text-gray-700">
-                                {item.other_label || "Other"}
+                                {item.other_label || t("outra")}
                             </span>
                         )}
                         {otherOpen && (
@@ -799,9 +811,10 @@ function OptionInput({
 }
 
 function DocumentPrompt() {
+    const t = useTranslations("assistant.entradaPergunta");
     return (
         <p className="mt-0.5 text-sm text-gray-800">
-            Add the following documents if available:
+            {t("solicitarDocumentos")}
         </p>
     );
 }
@@ -819,8 +832,9 @@ function DocumentInput({
     onOpenSelector: (typeIndex: number) => void;
     onRemoveDoc: (typeIndex: number, docId: string) => void;
 }) {
+    const t = useTranslations("assistant.entradaPergunta");
     const documentTypes = item.document_types ?? [];
-    const rows = documentTypes.length > 0 ? documentTypes : ["Documents"];
+    const rows = documentTypes.length > 0 ? documentTypes : [t("documentos")];
     return (
         <div className="mt-2 grid gap-1.5">
             {rows.map((documentType, idx) => {
@@ -898,8 +912,10 @@ function DocumentInput({
                             </span>
                             <span className="mt-0.5 shrink-0 whitespace-nowrap font-sans text-[10px] text-gray-500">
                                 {docs.length > 0
-                                    ? `${docs.length} file${docs.length === 1 ? "" : "s"} added`
-                                    : "+ Add"}
+                                    ? t("arquivosAdicionados", {
+                                          n: docs.length,
+                                      })
+                                    : t("adicionar")}
                             </span>
                         </span>
                     </div>

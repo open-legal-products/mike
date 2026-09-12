@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChevronDown, Download, Loader2 } from "lucide-react";
@@ -19,13 +20,7 @@ import {
 } from "@/shared/ui/DocumentEventBlocksUI";
 import { RESPONSE_GLASS_SURFACE, withoutMarkdownNode } from "./messageStyles";
 
-const THINKING_PHRASES = [
-    "Thinking...",
-    "Pondering...",
-    "Analyzing...",
-    "Reviewing...",
-    "Reasoning...",
-];
+const THINKING_PHRASE_COUNT = 5;
 const REASONING_COLLAPSED_MAX_LINES = 6;
 const REASONING_COLLAPSED_MAX_HEIGHT_REM = 9;
 
@@ -91,11 +86,20 @@ export function ReasoningBlock({
     const [hasMeasured, setHasMeasured] = useState(false);
     const [thinkingIndex, setThinkingIndex] = useState(0);
     const contentRef = useRef<HTMLDivElement | null>(null);
+    const t = useTranslations("assistant.eventos");
+    const tMensagem = useTranslations("assistant.mensagem");
+    const thinkingPhrases = [
+        tMensagem("pensando"),
+        t("refletindo"),
+        t("analisando"),
+        t("revisando"),
+        t("raciocinando"),
+    ];
 
     useEffect(() => {
         if (!isStreaming) return;
         const interval = setInterval(() => {
-            setThinkingIndex((i) => (i + 1) % THINKING_PHRASES.length);
+            setThinkingIndex((i) => (i + 1) % THINKING_PHRASE_COUNT);
         }, 2000);
         return () => clearInterval(interval);
     }, [isStreaming]);
@@ -129,8 +133,8 @@ export function ReasoningBlock({
                 }}
                 label={
                     isStreaming
-                        ? THINKING_PHRASES[thinkingIndex]
-                        : "Thought process"
+                        ? thinkingPhrases[thinkingIndex]
+                        : t("processoRaciocinio")
                 }
             />
             {showContent && (
@@ -170,7 +174,9 @@ export function ReasoningBlock({
                                     type="button"
                                     onClick={() => setIsExpanded(true)}
                                     className="absolute left-1/2 bottom-2 z-10 -translate-x-1/2 text-gray-400 transition-colors hover:text-gray-600"
-                                    aria-label="Expand thought process"
+                                    aria-label={t(
+                                        "expandirProcessoRaciocinio",
+                                    )}
                                 >
                                     <ChevronDown className="h-3.5 w-3.5" />
                                 </button>
@@ -182,7 +188,7 @@ export function ReasoningBlock({
                             type="button"
                             onClick={() => setIsExpanded(false)}
                             className="mx-auto mt-2 flex text-gray-400 transition-colors hover:text-gray-600"
-                            aria-label="Minimise thought process"
+                            aria-label={t("minimizarProcessoRaciocinio")}
                         >
                             <ChevronDown className="h-3.5 w-3.5 rotate-180" />
                         </button>
@@ -259,6 +265,7 @@ export function DocCreatedBlock({
     isStreaming?: boolean;
     onClick?: () => void;
 }) {
+    const t = useTranslations("assistant.eventos");
     return (
         <EventBlock
             showConnector={showConnector}
@@ -267,7 +274,7 @@ export function DocCreatedBlock({
         >
             <div className="flex min-w-0 items-center gap-1.5">
                 <EventLabel className="shrink-0">
-                    {isStreaming ? "Creating" : "Created"}
+                    {isStreaming ? t("criando") : t("criado")}
                 </EventLabel>
                 {isStreaming || !onClick ? (
                     <span className="flex min-w-0 items-center gap-1.5">
@@ -326,10 +333,11 @@ export function DocReplicatedBlock({
         version_id: string;
     }) => void;
 }) {
-    const label = isStreaming ? "Replicating" : "Replicated";
+    const t = useTranslations("assistant.eventos");
+    const label = isStreaming ? t("replicando") : t("replicado");
     const suffix =
         !isStreaming && count > 1
-            ? ` ${count} times`
+            ? ` ${t("replicacoes", { count })}`
             : isStreaming
               ? "..."
               : "";
@@ -520,15 +528,17 @@ export function WorkflowAppliedBlock({
     showConnector?: boolean;
     onClick?: () => void;
 }) {
+    const t = useTranslations("assistant.eventos");
+    const tChatInput = useTranslations("assistant.chatInput");
     return (
         <EventBlock showConnector={showConnector} dotColor="green">
             <div className="flex min-w-0 items-center gap-1.5">
-                <EventLabel className="shrink-0">Read</EventLabel>
+                <EventLabel className="shrink-0">{t("lido")}</EventLabel>
                 {onClick ? (
                     <button
                         type="button"
                         onClick={onClick}
-                        aria-label={`Open workflow ${title}`}
+                        aria-label={tChatInput("abrirWorkflow", { title })}
                         className="flex min-w-0 cursor-pointer items-center gap-1.5 text-left transition-colors hover:text-gray-700"
                     >
                         <WorkflowSkeuoIcon className="h-3.5 w-3.5 shrink-0" />
@@ -555,6 +565,7 @@ export function AskInputsBlock({
     showConnector?: boolean;
 }) {
     const [isOpen, setIsOpen] = useState(!response);
+    const t = useTranslations("assistant.eventos");
     const responseById = new Map(
         response?.responses.map((item) => [item.id, item]) ?? [],
     );
@@ -566,7 +577,7 @@ export function AskInputsBlock({
             <EventDisclosureButton
                 open={isOpen}
                 onToggle={() => setIsOpen((open) => !open)}
-                label={response ? "Asked for input" : "Asking for input"}
+                label={response ? t("solicitouEntrada") : t("solicitandoEntrada")}
             />
             {isOpen && (
                 <div className="mt-2 space-y-2 text-gray-800">
@@ -574,7 +585,7 @@ export function AskInputsBlock({
                         const itemResponse = responseById.get(item.id);
                         const responseText = (() => {
                             if (!itemResponse) return null;
-                            if (itemResponse.skipped) return "Skipped";
+                            if (itemResponse.skipped) return t("ignorado");
                             if (itemResponse.kind === "multi_choice") {
                                 return itemResponse.answers?.join(", ") ?? "";
                             }
@@ -584,20 +595,20 @@ export function AskInputsBlock({
                             const filenames = itemResponse.filenames;
                             return filenames.length
                                 ? filenames.join(", ")
-                                : "No documents attached";
+                                : t("semDocumentosAnexados");
                         })();
                         return (
                             <div key={item.id}>
                                 <p className="text-xs text-gray-500">
                                     {index + 1}.{" "}
                                     {item.kind === "documents"
-                                        ? "Documents"
-                                        : "Question"}
+                                        ? t("documentos")
+                                        : t("pergunta")}
                                 </p>
                                 <p className="mt-0.5">
                                     {item.kind === "documents"
                                         ? item.document_types.join(", ") ||
-                                          "Documents requested"
+                                          t("documentosSolicitados")
                                         : item.question}
                                 </p>
                                 {responseText !== null && (
@@ -641,6 +652,8 @@ export function CourtListenerBlock({
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const hasItems = !!items && items.length > 0;
+    const t = useTranslations("assistant.eventos");
+    const tMensagem = useTranslations("assistant.mensagem");
     return (
         <EventBlock
             showConnector={showConnector}
@@ -668,17 +681,17 @@ export function CourtListenerBlock({
                         const label = [item.caseName, item.citation]
                             .filter(Boolean)
                             .join(", ");
-                        const primary = label || item.url || "Unknown case";
+                        const primary =
+                            label || item.url || t("casoDesconhecido");
                         const searchText = item.query
-                            ? `Searched for "${item.query}" in ${primary}${
-                                  typeof item.totalMatches === "number"
-                                      ? ` (${item.totalMatches} ${
-                                            item.totalMatches === 1
-                                                ? "match"
-                                                : "matches"
-                                        })`
-                                      : ""
-                              }`
+                            ? `${t("buscouPor", {
+                                    query: item.query,
+                                    primary,
+                                })}${
+                                    typeof item.totalMatches === "number"
+                                        ? ` (${tMensagem("correspondencias", { count: item.totalMatches })})`
+                                        : ""
+                                }`
                             : null;
                         return (
                             <li key={idx}>
@@ -724,7 +737,12 @@ export function DocEditBlock({
     hasError?: boolean;
     onClick?: () => void;
 }) {
-    const label = isStreaming ? "Editing" : hasError ? "Edit failed" : "Edited";
+    const t = useTranslations("assistant.eventos");
+    const label = isStreaming
+        ? t("editando")
+        : hasError
+          ? t("erroEdicao")
+          : t("editado");
 
     return (
         <DocEditBlockUI

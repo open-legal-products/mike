@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { useTranslations } from "next-intl";
 import {
   ModelToggleUI,
   nearestReasoningLevelForModel,
@@ -112,6 +113,14 @@ export function modelDisplayName(modelId: string): string {
  */
 export const ROUTER_SLUGS = ["openrouter", "vercel", "opencode-go"] as const;
 export type RouterSlug = (typeof ROUTER_SLUGS)[number];
+
+const GROUP_LABEL_KEYS: Record<string, string> = {
+  "Other providers": "outrosProvedores",
+};
+
+const SOURCE_LABEL_KEYS: Record<string, string> = {
+  Direct: "direto",
+};
 
 const ROUTER_VENDOR_GROUPS: Record<string, string> = {
   anthropic: "Anthropic",
@@ -243,6 +252,7 @@ export function ModelToggle({
   reasoningLevel,
   onReasoningChange,
 }: Props) {
+  const t = useTranslations("assistant.seletorModelo");
   const ollamaModels = useOllamaModels();
   const models = [
     ...MODELS,
@@ -254,7 +264,16 @@ export function ModelToggle({
       label: modelDisplayName(model.id),
       source: "Local",
     })),
-  ];
+  ].map((model) => ({
+    ...model,
+    group: GROUP_LABEL_KEYS[model.group]
+      ? t(GROUP_LABEL_KEYS[model.group])
+      : model.group,
+    source:
+      model.source && SOURCE_LABEL_KEYS[model.source]
+        ? t(SOURCE_LABEL_KEYS[model.source])
+        : model.source,
+  }));
   const availableModels = models.filter((model) => {
     if (model.group === "Local") return true;
     if (apiKeysLoading) return false; // nothing offered until known
@@ -277,9 +296,12 @@ export function ModelToggle({
     }
   }, [normalizedReasoningLevel, onReasoningChange, reasoningLevel]);
   const selectedLabel = apiKeysLoading
-    ? (models.find((model) => model.id === value)?.label ?? "Select model")
+    ? (models.find((model) => model.id === value)?.label ??
+      t("selecionarModelo"))
     : (selected?.label ??
-      (availableModels.length > 0 ? "Select model" : "No Models"));
+      (availableModels.length > 0
+        ? t("selecionarModelo")
+        : t("semModelos")));
   const emptyReason = noModelsReason(apiKeys, {
     openrouter: openRouterModels,
     vercel: vercelModels,
@@ -295,7 +317,7 @@ export function ModelToggle({
       loading={apiKeysLoading}
       compact={compact}
       modalInput={modalInput}
-      emptyLabel="No Models"
+      emptyLabel={t("semModelos")}
       onEmptyClick={
         onNoModelsClick ? () => onNoModelsClick(emptyReason) : undefined
       }

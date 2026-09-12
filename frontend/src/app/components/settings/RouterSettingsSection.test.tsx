@@ -42,6 +42,7 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
     }),
 }));
 
+import { withIntl } from "@/test/withIntl";
 import {
     RouterSettingsSection,
     normalizeTypedModelId,
@@ -80,9 +81,9 @@ describe("RouterSettingsSection", () => {
     });
 
     it("shows matching catalog entries above a full-width typeahead", async () => {
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         const input = screen.getByPlaceholderText(
-            "e.g. anthropic/claude-sonnet-5",
+            "ex.: anthropic/claude-sonnet-5",
         );
 
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
@@ -90,7 +91,7 @@ describe("RouterSettingsSection", () => {
 
         await screen.findByText("GPT 5.4");
         expect(
-            screen.getByText("$1.25/M input · $10/M output"),
+            screen.getByText("$1.25/M de entrada · $10/M de saída"),
         ).toBeInTheDocument();
         expect(screen.queryByText("Claude Sonnet 4.5")).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
@@ -100,11 +101,11 @@ describe("RouterSettingsSection", () => {
     });
 
     it("opens and closes the catalog from the chevron", async () => {
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
 
         const chevron = screen.getByRole("button", {
-            name: "Choose OpenRouter model",
+            name: "Escolher modelo de OpenRouter",
         });
         fireEvent.click(chevron);
         expect(
@@ -119,9 +120,9 @@ describe("RouterSettingsSection", () => {
 
     it("supports keyboard navigation and selection from the model field", async () => {
         updateOpenRouterModels.mockResolvedValue(true);
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         const input = screen.getByRole("combobox", {
-            name: "OpenRouter models",
+            name: "Modelos de OpenRouter",
         });
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
 
@@ -146,9 +147,9 @@ describe("RouterSettingsSection", () => {
         // "qwen/qwen-2.5-72b-instruct". Enter must add what was typed, not
         // the highlighted lookalike.
         updateOpenRouterModels.mockResolvedValue(true);
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         const input = screen.getByRole("combobox", {
-            name: "OpenRouter models",
+            name: "Modelos de OpenRouter",
         });
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
 
@@ -158,7 +159,7 @@ describe("RouterSettingsSection", () => {
         // … and the add-verbatim hint shows although catalog rows match.
         expect(screen.getByText("Qwen 2.5 72B Instruct")).toBeInTheDocument();
         expect(
-            screen.getByText("Press Enter to add this model ID."),
+            screen.getByText("Pressione Enter para adicionar este ID de modelo."),
         ).toBeInTheDocument();
 
         fireEvent.keyDown(input, { key: "Enter" });
@@ -171,9 +172,9 @@ describe("RouterSettingsSection", () => {
     });
 
     it("explains why Enter did nothing while the text is not id-shaped", async () => {
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         const input = screen.getByRole("combobox", {
-            name: "OpenRouter models",
+            name: "Modelos de OpenRouter",
         });
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
 
@@ -185,14 +186,14 @@ describe("RouterSettingsSection", () => {
         expect(input).toHaveValue("qwen");
         // …but silence would read as a broken key. Say what is wrong.
         expect(
-            screen.getByText(/is not a model ID/),
+            screen.getByText(/não é um ID de modelo/),
         ).toBeInTheDocument();
     });
 
     it("rejects an over-long typed id client-side with a length message", async () => {
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         const input = screen.getByRole("combobox", {
-            name: "OpenRouter models",
+            name: "Modelos de OpenRouter",
         });
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
 
@@ -203,7 +204,7 @@ describe("RouterSettingsSection", () => {
 
         expect(updateOpenRouterModels).not.toHaveBeenCalled();
         expect(
-            screen.getByText("Model IDs are at most 200 characters."),
+            screen.getByText("IDs de modelo têm no máximo 200 caracteres."),
         ).toBeInTheDocument();
     });
 
@@ -211,18 +212,18 @@ describe("RouterSettingsSection", () => {
         // ARIA: a listbox may only contain option/group children. A stray div
         // inside it makes the option count and index reported to assistive
         // tech disagree with what aria-activedescendant points at.
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         const input = screen.getByRole("combobox", {
-            name: "OpenRouter models",
+            name: "Modelos de OpenRouter",
         });
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
 
         fireEvent.change(input, { target: { value: "qwen/qwen-2" } });
 
         const listbox = screen.getByRole("listbox", {
-            name: "OpenRouter model catalog",
+            name: "Catálogo de modelos de OpenRouter",
         });
-        const hint = screen.getByText("Press Enter to add this model ID.");
+        const hint = screen.getByText("Pressione Enter para adicionar este ID de modelo.");
         expect(listbox.contains(hint)).toBe(false);
         for (const child of Array.from(listbox.children)) {
             expect(child.getAttribute("role")).toBe("option");
@@ -234,9 +235,9 @@ describe("RouterSettingsSection", () => {
         // router prefix before validating leaves "auto", which is not
         // vendor/model shaped, so the add used to fail with an error.
         updateOpenRouterModels.mockResolvedValue(true);
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
         const input = screen.getByRole("combobox", {
-            name: "OpenRouter models",
+            name: "Modelos de OpenRouter",
         });
         await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
 
@@ -252,10 +253,10 @@ describe("RouterSettingsSection", () => {
     });
 
     it("renders saved models with the option pill primitive", () => {
-        render(<RouterSettingsSection />);
+        render(withIntl(<RouterSettingsSection />));
 
         const pill = screen.getByRole("button", {
-            name: "Remove anthropic/claude-sonnet-4.5",
+            name: "Remover anthropic/claude-sonnet-4.5",
         });
         expect(pill).toHaveAttribute("data-slot", "option-pill");
         expect(pill).toHaveClass("rounded-full", "text-xs");
@@ -320,8 +321,8 @@ describe("RouterSettingsSection with OpenCode Go configured", () => {
 
     it("saves a typed bare model name, which the other routers reject", async () => {
         updateOpenCodeGoModels.mockResolvedValue(true);
-        render(<RouterSettingsSection />);
-        const input = screen.getByPlaceholderText("e.g. glm-5");
+        render(withIntl(<RouterSettingsSection />));
+        const input = screen.getByPlaceholderText("ex.: glm-5");
 
         await waitFor(() => expect(getOpenCodeGoModels).toHaveBeenCalled());
         fireEvent.change(input, { target: { value: "opencode-go/kimi-k3" } });

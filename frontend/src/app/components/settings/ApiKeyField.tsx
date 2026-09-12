@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Eye, EyeOff } from "lucide-react";
 import {
   MfaVerificationPopup,
@@ -27,6 +28,8 @@ export function ApiKeyField({
   onSave: (value: string) => Promise<boolean>;
   onRemove: () => Promise<boolean>;
 }) {
+  const t = useTranslations("configuracoes.chaveApi");
+  const tModelos = useTranslations("pages.modelos");
   const [value, setValue] = useState("");
   const [reveal, setReveal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -54,13 +57,13 @@ export function ApiKeyField({
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       } else {
-        alert(`Failed to save ${label}.`);
+        alert(t("erroSalvar", { label }));
       }
     } catch (error) {
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("save");
       } else {
-        alert(`Failed to save ${label}.`);
+        alert(t("erroSalvar", { label }));
       }
     } finally {
       setIsSaving(false);
@@ -75,12 +78,12 @@ export function ApiKeyField({
         return;
       }
       const ok = await onRemove();
-      if (!ok) alert(`Failed to remove ${label}.`);
+      if (!ok) alert(t("erroRemover", { label }));
     } catch (error) {
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("remove");
       } else {
-        alert(`Failed to remove ${label}.`);
+        alert(t("erroRemover", { label }));
       }
     } finally {
       setIsSaving(false);
@@ -113,7 +116,9 @@ export function ApiKeyField({
               type={reveal ? "text" : "password"}
               value={value}
               onChange={(event) => setValue(event.target.value)}
-              placeholder={hasSavedKey ? "Saved key hidden" : placeholder}
+              placeholder={
+                hasSavedKey ? tModelos("placeholderOculta") : placeholder
+              }
               className="pr-10"
               autoComplete="off"
               spellCheck={false}
@@ -123,7 +128,9 @@ export function ApiKeyField({
                 type="button"
                 onClick={() => setReveal((current) => !current)}
                 className={`absolute inset-y-1 right-1.5 flex items-center ${settingsGlassIconButtonClassName}`}
-                aria-label={reveal ? "Hide key" : "Show key"}
+                aria-label={
+                  reveal ? tModelos("ocultarChave") : tModelos("mostrarChave")
+                }
               >
                 {reveal ? (
                   <EyeOff className="h-4 w-4" />
@@ -140,7 +147,11 @@ export function ApiKeyField({
               disabled={isSaving || !dirty || saved}
               className="text-xs font-medium text-gray-700 transition-colors hover:text-gray-950 disabled:cursor-not-allowed disabled:text-gray-400"
             >
-              {isSaving ? "Saving..." : saved ? "Saved" : "Save"}
+              {isSaving
+                ? tModelos("salvando")
+                : saved
+                  ? tModelos("salvo")
+                  : tModelos("salvar")}
             </button>
             {hasSavedKey && (
               <button
@@ -149,7 +160,7 @@ export function ApiKeyField({
                 disabled={isSaving}
                 className="text-xs font-medium text-red-600 transition-colors hover:text-red-700 disabled:cursor-not-allowed disabled:text-red-300"
               >
-                Remove
+                {tModelos("remover")}
               </button>
             )}
           </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEditor, EditorContent, useEditorState } from "@tiptap/react";
+import { useTranslations } from "next-intl";
 import StarterKit from "@tiptap/starter-kit";
 import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "tiptap-markdown";
@@ -127,10 +128,12 @@ export function MarkdownEditor({
   onChange,
   readOnly = false,
   suspended = false,
-  ariaLabel = "Markdown editor",
+  ariaLabel,
   className,
   allowTables = true,
 }: MarkdownEditorProps) {
+  const t = useTranslations("ui.editorMarkdown");
+  const editorLabel = ariaLabel ?? t("editor");
   const lastEmittedRef = useRef(value);
   const rawTextareaRef = useRef<HTMLTextAreaElement>(null);
   const tableInsertionSelectionRef = useRef<{
@@ -178,7 +181,7 @@ export function MarkdownEditor({
     editorProps: {
       attributes: {
         class: "tiptap markdown-editor-content",
-        "aria-label": ariaLabel,
+        "aria-label": editorLabel,
       },
     },
   });
@@ -426,7 +429,7 @@ export function MarkdownEditor({
         <div
           className="flex shrink-0 items-center gap-0.5 overflow-x-auto bg-app-surface px-2 py-1.5 backdrop-blur-xl"
           role="toolbar"
-          aria-label="Markdown formatting"
+          aria-label={t("formatacao")}
         >
           <AppToolbarButton
             disabled={suspended}
@@ -436,7 +439,7 @@ export function MarkdownEditor({
                 : editor.chain().focus().toggleHeading({ level: 1 }).run()
             }
             active={!rawMode && activeFormatting.heading1}
-            title="Heading 1"
+            title={t("titulo1")}
           >
             <Heading1 className="h-4 w-4" />
           </AppToolbarButton>
@@ -448,7 +451,7 @@ export function MarkdownEditor({
                 : editor.chain().focus().toggleHeading({ level: 2 }).run()
             }
             active={!rawMode && activeFormatting.heading2}
-            title="Heading 2"
+            title={t("titulo2")}
           >
             <Heading2 className="h-4 w-4" />
           </AppToolbarButton>
@@ -460,7 +463,7 @@ export function MarkdownEditor({
                 : editor.chain().focus().toggleHeading({ level: 3 }).run()
             }
             active={!rawMode && activeFormatting.heading3}
-            title="Heading 3"
+            title={t("titulo3")}
           >
             <Heading3 className="h-4 w-4" />
           </AppToolbarButton>
@@ -473,7 +476,7 @@ export function MarkdownEditor({
                 : editor.chain().focus().toggleBold().run()
             }
             active={!rawMode && activeFormatting.bold}
-            title="Bold"
+            title={t("negrito")}
           >
             <Bold className="h-4 w-4" />
           </AppToolbarButton>
@@ -485,7 +488,7 @@ export function MarkdownEditor({
                 : editor.chain().focus().toggleItalic().run()
             }
             active={!rawMode && activeFormatting.italic}
-            title="Italic"
+            title={t("italico")}
           >
             <Italic className="h-4 w-4" />
           </AppToolbarButton>
@@ -498,7 +501,7 @@ export function MarkdownEditor({
                 : editor.chain().focus().toggleBulletList().run()
             }
             active={!rawMode && activeFormatting.bulletList}
-            title="Bullet list"
+            title={t("listaMarcadores")}
           >
             <List className="h-4 w-4" />
           </AppToolbarButton>
@@ -510,7 +513,7 @@ export function MarkdownEditor({
                 : editor.chain().focus().toggleOrderedList().run()
             }
             active={!rawMode && activeFormatting.orderedList}
-            title="Numbered list"
+            title={t("listaNumerada")}
           >
             <ListOrdered className="h-4 w-4" />
           </AppToolbarButton>
@@ -530,8 +533,8 @@ export function MarkdownEditor({
                     variant="ghost"
                     size="icon-sm"
                     disabled={suspended}
-                    title="Insert table"
-                    aria-label="Insert table"
+                    title={t("inserirTabela")}
+                    aria-label={t("inserirTabela")}
                     aria-pressed={tablePickerOpen}
                     className={`h-7 w-7 text-gray-600 hover:bg-white hover:text-gray-900 ${
                       tablePickerOpen
@@ -545,7 +548,7 @@ export function MarkdownEditor({
                 </DropdownMenuTrigger>
                 <LiquidDropdownContent
                   align="start"
-                  aria-label="Insert table"
+                  aria-label={t("inserirTabela")}
                   className="z-[250] w-max p-2"
                   onCloseAutoFocus={(event) => event.preventDefault()}
                 >
@@ -574,7 +577,10 @@ export function MarkdownEditor({
                               return (
                                 <LiquidDropdownItem
                                   key={`${rows}-${cols}`}
-                                  aria-label={`Insert ${rows} by ${cols} table`}
+                                  aria-label={t("inserirTabelaTamanho", {
+                                    rows,
+                                    cols,
+                                  })}
                                   selected={selected}
                                   onPointerMove={() =>
                                     setTablePickerSize({
@@ -603,7 +609,7 @@ export function MarkdownEditor({
                     <div className="text-center text-[11px] font-medium text-gray-500">
                       {tablePickerSize
                         ? `${tablePickerSize.rows} x ${tablePickerSize.cols}`
-                        : "Select table size"}
+                        : t("selecionarTamanho")}
                     </div>
                   </div>
                 </LiquidDropdownContent>
@@ -613,14 +619,14 @@ export function MarkdownEditor({
           <div className="ml-auto" />
           {rawMode && rawModeRequired ? (
             <span className="whitespace-nowrap px-1 text-[11px] text-gray-500">
-              Raw view preserves this Markdown
+              {t("visaoBrutaPreserva")}
             </span>
           ) : null}
           <AppToolbarButton
             disabled={suspended}
             onClick={handleRawToggle}
             active={rawMode}
-            title={rawMode ? "Show rich editor" : "Show raw Markdown"}
+            title={rawMode ? t("mostrarEditorRico") : t("mostrarMarkdownBruto")}
           >
             <Code2 className="h-4 w-4" />
           </AppToolbarButton>
@@ -628,13 +634,15 @@ export function MarkdownEditor({
       )}
       {readOnly && (
         <div className="flex h-9 shrink-0 items-center justify-between bg-app-surface px-5 backdrop-blur-xl">
-          <span className="text-xs font-medium text-gray-500">Read-only</span>
+          <span className="text-xs font-medium text-gray-500">
+            {t("somenteLeitura")}
+          </span>
           {editor && (
             <AppToolbarButton
               disabled={suspended}
               onClick={handleRawToggle}
               active={rawMode}
-              title={rawMode ? "Show rich editor" : "Show raw Markdown"}
+              title={rawMode ? t("mostrarEditorRico") : t("mostrarMarkdownBruto")}
             >
               <Code2 className="h-4 w-4" />
             </AppToolbarButton>
@@ -654,7 +662,7 @@ export function MarkdownEditor({
             readOnly={readOnly || suspended}
             spellCheck={false}
             className="h-full min-h-full w-full resize-none bg-transparent px-5 py-4 font-mono text-xs leading-6 text-gray-800 outline-none placeholder:text-gray-400 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600/40 read-only:cursor-default"
-            aria-label={`${ariaLabel} (raw Markdown)`}
+            aria-label={t("editorBruto", { label: editorLabel })}
           />
         ) : (
           <EditorContent editor={editor} />

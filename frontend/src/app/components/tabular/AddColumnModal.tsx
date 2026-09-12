@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { ChevronDown, Plus, X } from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
 import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
@@ -43,6 +44,7 @@ interface Props {
 }
 
 export function AddColumnModal({ open, existingCount, onClose, onAdd, editingColumn, onSave, onDelete }: Props) {
+    const t = useTranslations("tabular.novaColuna");
     const isEditing = !!editingColumn;
     const formId = "add-column-modal-form";
     const [columns, setColumns] = useState<ColumnDraft[]>([{ ...EMPTY_DRAFT }]);
@@ -217,22 +219,22 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
             open={open}
             onClose={handleClose}
             breadcrumbs={[
-                "Tabular Review",
-                isEditing ? "Edit column" : "New column",
+                t("revisaoTabular"),
+                isEditing ? t("editarColuna") : t("novaColuna"),
             ]}
             primaryAction={{
-                label: isEditing ? "Save changes" : "Add columns",
+                label: isEditing ? t("salvarAlteracoes") : t("adicionarColunas"),
                 type: "submit",
                 form: formId,
                 disabled: columns.some(
                     (col) => !col.name.trim() || !col.prompt.trim(),
                 ),
             }}
-            cancelAction={{ label: "Cancel", onClick: handleClose }}
+            cancelAction={{ label: t("cancelar"), onClick: handleClose }}
             secondaryAction={
                 isEditing && onDelete
                     ? {
-                          label: "Delete",
+                          label: t("excluir"),
                           variant: "danger",
                           onClick: onDelete,
                       }
@@ -275,7 +277,9 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                         className={`h-4 w-4 shrink-0 text-gray-600 transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
                                                     />
                                                     <h3 className="font-serif text-2xl text-gray-950">
-                                                        Column {index + 1}
+                                                        {t("colunaNumero", {
+                                                            index: index + 1,
+                                                        })}
                                                     </h3>
                                                 </button>
                                                 {columns.length > 1 && (
@@ -285,7 +289,9 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                             removeColumn(index)
                                                         }
                                                         className="rounded-lg p-1.5 text-gray-300 transition-colors hover:bg-gray-100 hover:text-gray-500"
-                                                        aria-label="Remove column"
+                                                        aria-label={t(
+                                                            "removerColuna",
+                                                        )}
                                                     >
                                                         <X className="h-4 w-4" />
                                                     </button>
@@ -294,7 +300,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                             {!isCollapsed && (
                                                 <>
                                             <FieldLabel htmlFor={nameInputId}>
-                                                Column title
+                                                {t("tituloColuna")}
                                             </FieldLabel>
                                 {/* Name row */}
                                 <div className="flex items-start gap-2">
@@ -330,7 +336,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                         : {}),
                                                 });
                                             }}
-                                            placeholder="Column name"
+                                            placeholder={t("placeholderNome")}
                                             className="flex-1"
                                             autoFocus={index === 0}
                                         />
@@ -343,7 +349,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                         : index,
                                                 )
                                             }
-                                            title="Column presets"
+                                            title={t("modelosColuna")}
                                             className="mt-1.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
                                         >
                                             <ChevronDown
@@ -360,7 +366,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                     }}
                                                     className="theme-dropdown-item w-full border-b border-gray-100 px-3 py-2 text-left text-sm text-gray-400 transition-colors"
                                                 >
-                                                    No Preset
+                                                    {t("semModelo")}
                                                 </button>
                                                 {PROMPT_PRESETS.map(
                                                     (preset) => (
@@ -399,7 +405,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                 {/* Format */}
                                 <div className="mt-4">
                                     <FieldLabel htmlFor={formatInputId}>
-                                        Format
+                                        {t("formato")}
                                     </FieldLabel>
                                     <ModalSelect
                                         id={formatInputId}
@@ -424,7 +430,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                 {column.format === "tag" && (
                                     <div className="mt-3">
                                         <FieldLabel htmlFor={tagInputId}>
-                                            Tags
+                                            {t("etiquetas")}
                                         </FieldLabel>
                                         <div
                                             className={`mt-1 flex flex-wrap gap-1.5 rounded-xl px-2 py-1.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`}
@@ -470,12 +476,14 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                                     handleTagKeyDown(e, index)
                                                 }
                                                 onBlur={() => commitTag(index)}
-                                                placeholder="Add tag…"
+                                                placeholder={t(
+                                                    "adicionarEtiqueta",
+                                                )}
                                                 className="min-w-[80px] flex-1 bg-transparent font-sans text-sm text-gray-700 shadow-none placeholder:text-gray-400"
                                             />
                                         </div>
                                         <p className="mt-1 text-xs text-gray-400">
-                                            Press Enter or comma to add a tag.
+                                            {t("instrucaoEtiqueta")}
                                         </p>
                                     </div>
                                 )}
@@ -483,7 +491,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                 {/* Prompt */}
                                 <div className="mt-4 flex items-center justify-between">
                                     <FieldLabel htmlFor={promptInputId}>
-                                        Prompt
+                                        {t("prompt")}
                                     </FieldLabel>
                                     <button
                                         type="button"
@@ -501,7 +509,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                         ) : (
                                             <Plus className="h-4 w-4" />
                                         )}
-                                        Auto-Generate Prompt
+                                        {t("gerarPrompt")}
                                     </button>
                                 </div>
                                 <ModalTextarea
@@ -513,7 +521,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                             prompt: e.target.value,
                                         })
                                     }
-                                    placeholder="Write the analysis prompt — describe what Mike should extract from each document for this column…"
+                                    placeholder={t("placeholderPrompt")}
                                     className="mt-2 min-h-36"
                                 />
                                                 </>
@@ -531,7 +539,7 @@ export function AddColumnModal({ open, existingCount, onClose, onAdd, editingCol
                                 className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-gray-900"
                             >
                                 <Plus className="h-4 w-4" />
-                                Add another column
+                                {t("adicionarOutraColuna")}
                             </button>
                         )}
                 </div>

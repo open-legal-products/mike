@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import OnboardingPracticePage from "./page";
 
 const { push, replace, completeOnboarding } = vi.hoisted(() => ({
@@ -47,7 +48,7 @@ describe("OnboardingPracticePage", () => {
 
   it("saves a country and multiple practice areas", async () => {
     const user = userEvent.setup();
-    const { container } = render(<OnboardingPracticePage />);
+    const { container } = render(withIntl(<OnboardingPracticePage />));
 
     expect(
       container.querySelector('[data-slot="settings-row"]'),
@@ -55,26 +56,26 @@ describe("OnboardingPracticePage", () => {
 
     await user.click(
       screen.getByRole("button", {
-        name: "Jurisdiction of practice",
+        name: "Jurisdição de atuação",
       }),
     );
-    await user.click(screen.getByRole("menuitemradio", { name: "Other" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Outra" }));
     await user.type(
-      screen.getByRole("textbox", { name: "Other jurisdiction" }),
+      screen.getByRole("textbox", { name: "Outra jurisdição" }),
       "England and Wales",
     );
-    await user.click(screen.getByRole("button", { name: "Title" }));
+    await user.click(screen.getByRole("button", { name: "Título" }));
     await user.click(
       screen.getByRole("menuitemradio", { name: "Senior Associate" }),
     );
     await user.click(
-      screen.getByRole("button", { name: "Professional setting" }),
+      screen.getByRole("button", { name: "Ambiente profissional" }),
     );
     await user.click(
-      screen.getByRole("menuitemradio", { name: "Private practice" }),
+      screen.getByRole("menuitemradio", { name: "Advocacia privada" }),
     );
     await user.click(
-      screen.getByRole("button", { name: "Select practice areas" }),
+      screen.getByRole("button", { name: "Selecione áreas de atuação" }),
     );
     await user.click(
       screen.getByRole("menuitemcheckbox", { name: "Litigation" }),
@@ -85,7 +86,7 @@ describe("OnboardingPracticePage", () => {
       }),
     );
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Finish" }));
+    await user.click(screen.getByRole("button", { name: "Concluir" }));
 
     await waitFor(() =>
       expect(completeOnboarding).toHaveBeenCalledWith({
@@ -100,40 +101,40 @@ describe("OnboardingPracticePage", () => {
 
   it("requires free text when Other is selected", async () => {
     const user = userEvent.setup();
-    render(<OnboardingPracticePage />);
+    render(withIntl(<OnboardingPracticePage />));
 
     await user.click(
       screen.getByRole("button", {
-        name: "Jurisdiction of practice",
+        name: "Jurisdição de atuação",
       }),
     );
     await user.click(screen.getByRole("menuitemradio", { name: "Australia" }));
     await user.click(
-      screen.getByRole("button", { name: "Professional setting" }),
+      screen.getByRole("button", { name: "Ambiente profissional" }),
     );
     await user.click(
       screen.getByRole("menuitemradio", {
-        name: "Not a practising attorney",
+        name: "Não exerce a advocacia atualmente",
       }),
     );
     await user.click(
-      screen.getByRole("button", { name: "Select practice areas" }),
+      screen.getByRole("button", { name: "Selecione áreas de atuação" }),
     );
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Other" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Outra" }));
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Finish" }));
+    await user.click(screen.getByRole("button", { name: "Concluir" }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter your other practice area",
+      "Digite sua outra área de atuação",
     );
     expect(completeOnboarding).not.toHaveBeenCalled();
   });
 
   it("allows personalisation to be skipped", async () => {
     const user = userEvent.setup();
-    render(<OnboardingPracticePage />);
+    render(withIntl(<OnboardingPracticePage />));
 
-    await user.click(screen.getByRole("button", { name: "Skip" }));
+    await user.click(screen.getByRole("button", { name: "Pular" }));
 
     await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith({}));
     expect(replace).toHaveBeenCalledWith("/assistant");

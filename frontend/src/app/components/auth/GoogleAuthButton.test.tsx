@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { GoogleAuthButton } from "./GoogleAuthButton";
 
 const { startGoogleOAuth } = vi.hoisted(() => ({
@@ -20,16 +21,16 @@ describe("GoogleAuthButton", () => {
         startGoogleOAuth.mockResolvedValue({ url: "https://accounts.example.test" });
         const onError = vi.fn();
         const user = userEvent.setup();
-        render(<GoogleAuthButton onError={onError} />);
+        render(withIntl(<GoogleAuthButton onError={onError} />));
 
         await user.click(
-            screen.getByRole("button", { name: "Continue with Google" }),
+            screen.getByRole("button", { name: "Continuar com Google" }),
         );
 
         expect(startGoogleOAuth).toHaveBeenCalledWith("/onboarding/profile");
         expect(onError).toHaveBeenCalledWith("");
         expect(
-            screen.getByRole("button", { name: "Continuing…" }),
+            screen.getByRole("button", { name: "Redirecionando..." }),
         ).toBeDisabled();
     });
 
@@ -39,17 +40,17 @@ describe("GoogleAuthButton", () => {
         );
         const onError = vi.fn();
         const user = userEvent.setup();
-        render(<GoogleAuthButton onError={onError} />);
+        render(withIntl(<GoogleAuthButton onError={onError} />));
 
         await user.click(
-            screen.getByRole("button", { name: "Continue with Google" }),
+            screen.getByRole("button", { name: "Continuar com Google" }),
         );
 
         expect(onError).toHaveBeenLastCalledWith(
             "Google provider is unavailable",
         );
         expect(
-            screen.getByRole("button", { name: "Continue with Google" }),
+            screen.getByRole("button", { name: "Continuar com Google" }),
         ).toBeEnabled();
     });
 });

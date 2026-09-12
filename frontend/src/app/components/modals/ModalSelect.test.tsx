@@ -1,19 +1,22 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { ModalSelect } from "./ModalSelect";
 
 describe("ModalSelect", () => {
     it("portals its open menu above modal content and footers", () => {
         const { container } = render(
-            <div data-testid="modal-content" className="overflow-y-auto">
-                <ModalSelect
-                    id="language"
-                    value="English"
-                    options={["English", "French"]}
-                    onChange={vi.fn()}
-                    open
-                />
-            </div>,
+            withIntl(
+                <div data-testid="modal-content" className="overflow-y-auto">
+                    <ModalSelect
+                        id="language"
+                        value="English"
+                        options={["English", "French"]}
+                        onChange={vi.fn()}
+                        open
+                    />
+                </div>,
+            ),
         );
 
         const menu = screen.getByRole("menu");
@@ -27,13 +30,15 @@ describe("ModalSelect", () => {
 
     it("finds an option from keyboard input", async () => {
         render(
-            <ModalSelect
-                id="country"
-                value="Australia"
-                options={["Australia", "Singapore", "United Kingdom"]}
-                onChange={vi.fn()}
-                open
-            />,
+            withIntl(
+                <ModalSelect
+                    id="country"
+                    value="Australia"
+                    options={["Australia", "Singapore", "United Kingdom"]}
+                    onChange={vi.fn()}
+                    open
+                />,
+            ),
         );
 
         const menu = screen.getByRole("menu");

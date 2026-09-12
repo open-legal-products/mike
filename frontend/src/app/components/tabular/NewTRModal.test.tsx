@@ -7,6 +7,7 @@ import {
 import { UPLOAD_LIMIT_MESSAGES } from "@/shared/api/uploadSessionClient";
 import type { Document } from "../shared/types";
 import { NewTRModal } from "./NewTRModal";
+import { withIntl } from "@/test/withIntl";
 
 vi.mock("@/app/lib/mikeApi", async () => {
     // The upload error copy is real shared code; only the network calls are
@@ -79,17 +80,17 @@ describe("NewTRModal", () => {
 
     it("shows folder grouping on the first screen and excludes Templates", () => {
         const onAdd = vi.fn();
-        render(<NewTRModal open onClose={vi.fn()} onAdd={onAdd} />);
+        render(withIntl(<NewTRModal open onClose={vi.fn()} onAdd={onAdd} />));
 
-        expect(screen.getByText("Document grouping")).toBeInTheDocument();
+        expect(screen.getByText("Agrupamento de documentos")).toBeInTheDocument();
         expect(screen.queryByLabelText("Organization")).not.toBeInTheDocument();
         expect(
             screen.getByText(
-                "Treat documents in the same folder as one review row",
+                "Tratar documentos na mesma pasta como uma linha da revisão",
             ),
         ).toBeInTheDocument();
 
-        const reviewNameInput = screen.getByLabelText("Review name");
+        const reviewNameInput = screen.getByLabelText("Nome da revisão");
         const modelSelect = screen.getByRole("button", {
             name: "Choose model",
         });
@@ -108,21 +109,21 @@ describe("NewTRModal", () => {
             target: { value: "Closing review" },
         });
         const groupingSwitch = screen.getByRole("switch", {
-            name: "Treat documents in the same folder as one review row",
+            name: "Tratar documentos na mesma pasta como uma linha da revisão",
         });
         expect(groupingSwitch).toHaveAttribute("aria-checked", "false");
         fireEvent.click(groupingSwitch);
         expect(groupingSwitch).toHaveAttribute("aria-checked", "true");
-        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
 
         expect(screen.queryByText("Document directory")).not.toBeInTheDocument();
-        expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible();
-        expect(screen.getByText("Share Access")).toBeInTheDocument();
-        const skip = screen.getByRole("button", { name: "Skip" });
-        const accessNext = screen.getByRole("button", { name: "Next" });
+        expect(screen.getByRole("dialog", { name: "Acesso" })).toBeVisible();
+        expect(screen.getByText("Compartilhar acesso")).toBeInTheDocument();
+        const skip = screen.getByRole("button", { name: "Pular" });
+        const accessNext = screen.getByRole("button", { name: "Próximo" });
         expect(skip.parentElement).toBe(accessNext.parentElement);
         expect(skip).toHaveClass("text-gray-500");
-        expect(screen.getByRole("button", { name: "Back" })).toHaveClass(
+        expect(screen.getByRole("button", { name: "Voltar" })).toHaveClass(
             "bg-blue-600/90",
         );
         fireEvent.click(skip);
@@ -132,7 +133,7 @@ describe("NewTRModal", () => {
         );
         expect(screen.queryByText("Document grouping")).not.toBeInTheDocument();
 
-        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+        fireEvent.click(screen.getByRole("button", { name: "Criar" }));
         expect(onAdd).toHaveBeenCalledWith(
             "Closing review",
             undefined,
@@ -153,22 +154,22 @@ describe("NewTRModal", () => {
                 }),
         );
         const onClose = vi.fn();
-        render(<NewTRModal open onClose={onClose} onAdd={onAdd} />);
+        render(withIntl(<NewTRModal open onClose={onClose} onAdd={onAdd} />));
 
-        fireEvent.change(screen.getByLabelText("Review name"), {
+        fireEvent.change(screen.getByLabelText("Nome da revisão"), {
             target: { value: "Single review" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Next" }));
-        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
+        fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
 
         expect(onAdd).not.toHaveBeenCalled();
-        const create = screen.getByRole("button", { name: "Create" });
+        const create = screen.getByRole("button", { name: "Criar" });
         fireEvent.click(create);
         fireEvent.click(create);
 
         expect(onAdd).toHaveBeenCalledTimes(1);
         expect(
-            screen.getByRole("button", { name: "Creating..." }),
+            screen.getByRole("button", { name: "Criando..." }),
         ).toBeDisabled();
 
         finishAdd?.();
@@ -193,22 +194,24 @@ describe("NewTRModal", () => {
         ]);
 
         render(
-            <NewTRModal
-                open
-                onClose={vi.fn()}
-                onAdd={vi.fn()}
-                projectId="project-1"
-                projectDocs={[]}
-                projectFolders={[]}
-                projectName="Acquisition"
-            />,
+            withIntl(
+                <NewTRModal
+                    open
+                    onClose={vi.fn()}
+                    onAdd={vi.fn()}
+                    projectId="project-1"
+                    projectDocs={[]}
+                    projectFolders={[]}
+                    projectName="Acquisition"
+                />,
+            ),
         );
 
-        fireEvent.change(screen.getByLabelText("Review name"), {
+        fireEvent.change(screen.getByLabelText("Nome da revisão"), {
             target: { value: "Project review" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Next" }));
-        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
+        fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
 
         const file = new File(["agreement"], "New agreement.pdf", {
             type: "application/pdf",
@@ -227,21 +230,23 @@ describe("NewTRModal", () => {
 
     async function attachFileOnDocumentsStep(filename: string) {
         render(
-            <NewTRModal
-                open
-                onClose={vi.fn()}
-                onAdd={vi.fn()}
-                projectId="project-1"
-                projectDocs={[]}
-                projectFolders={[]}
-                projectName="Acquisition"
-            />,
+            withIntl(
+                <NewTRModal
+                    open
+                    onClose={vi.fn()}
+                    onAdd={vi.fn()}
+                    projectId="project-1"
+                    projectDocs={[]}
+                    projectFolders={[]}
+                    projectName="Acquisition"
+                />,
+            ),
         );
-        fireEvent.change(screen.getByLabelText("Review name"), {
+        fireEvent.change(screen.getByLabelText("Nome da revisão"), {
             target: { value: "Project review" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Next" }));
-        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
+        fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
         const input =
             document.querySelector<HTMLInputElement>('input[type="file"]');
         fireEvent.change(input!, {
@@ -303,7 +308,7 @@ describe("NewTRModal", () => {
 
         await waitFor(() =>
             expect(screen.getByRole("alert")).toHaveTextContent(
-                "The selected files could not be uploaded. Please try again.",
+                "Não foi possível enviar os arquivos selecionados. Tente novamente.",
             ),
         );
         expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
