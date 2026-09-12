@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { TRTable } from "./TRTable";
 import type { Document, TabularReviewRow } from "../shared/types";
 
@@ -29,25 +30,27 @@ function renderTable(
     onDocumentOpen = vi.fn(),
 ) {
     const renderResult = render(
-        <TRTable
-            loading={false}
-            documentGrouping={documentGrouping}
-            columns={[]}
-            rows={tableRows}
-            documents={documents}
-            cells={[]}
-            savingColumn={false}
-            savingColumnsConfig={false}
-            selectedRowIds={[]}
-            onSelectionChange={vi.fn()}
-            onDocumentOpen={onDocumentOpen}
-            onExpand={vi.fn()}
-            onCitationClick={vi.fn()}
-            onUpdateColumn={vi.fn()}
-            onDeleteColumn={vi.fn()}
-            onAddColumn={vi.fn()}
-            onAddDocuments={vi.fn()}
-        />,
+        withIntl(
+            <TRTable
+                loading={false}
+                documentGrouping={documentGrouping}
+                columns={[]}
+                rows={tableRows}
+                documents={documents}
+                cells={[]}
+                savingColumn={false}
+                savingColumnsConfig={false}
+                selectedRowIds={[]}
+                onSelectionChange={vi.fn()}
+                onDocumentOpen={onDocumentOpen}
+                onExpand={vi.fn()}
+                onCitationClick={vi.fn()}
+                onUpdateColumn={vi.fn()}
+                onDeleteColumn={vi.fn()}
+                onAddColumn={vi.fn()}
+                onAddDocuments={vi.fn()}
+            />,
+        ),
     );
     return { ...renderResult, onDocumentOpen };
 }
@@ -57,8 +60,10 @@ describe("TRTable", () => {
     // this asserts on rendered content rather than ARIA table semantics.
     it("renders one table row for a grouped folder", () => {
         const { container } = renderTable();
-        expect(screen.getByText("Folder / Document")).toBeInTheDocument();
-        expect(screen.getByText("Folder / Document").parentElement).toHaveClass(
+        expect(screen.getByText("Pasta / Documento")).toBeInTheDocument();
+        expect(
+            screen.getByText("Pasta / Documento").parentElement,
+        ).toHaveClass(
             "text-gray-700",
         );
         expect(screen.getByText("Contracts")).toBeInTheDocument();
@@ -66,7 +71,7 @@ describe("TRTable", () => {
             "tabular-review-table-surface",
         );
         expect(
-            screen.getByText("Folder / Document").parentElement,
+            screen.getByText("Pasta / Documento").parentElement,
         ).toHaveClass("table-sticky-cell");
         expect(
             screen.getByText("Contracts").closest(".table-sticky-cell"),
@@ -77,9 +82,9 @@ describe("TRTable", () => {
 
     it("uses Document as the header for document grouping", () => {
         renderTable("document");
-        expect(screen.getByText("Document")).toBeInTheDocument();
+        expect(screen.getByText("Documento")).toBeInTheDocument();
         expect(
-            screen.queryByText("Folder / Document"),
+            screen.queryByText("Pasta / Documento"),
         ).not.toBeInTheDocument();
     });
 

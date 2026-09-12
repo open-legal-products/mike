@@ -2,6 +2,7 @@
 
 import { useCallback, useState, useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { PanelLeft } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { ChatHistoryProvider } from "@/app/contexts/ChatHistoryContext";
@@ -18,6 +19,7 @@ export default function MikeLayout({
     children: React.ReactNode;
 }) {
     const { isAuthenticated, authLoading } = useAuth();
+    const t = useTranslations("shell.header");
     const router = useRouter();
     const pathname = usePathname();
     const isChatPage = /^\/assistant\/chat\/[^/]+\/?$/.test(pathname);
@@ -124,8 +126,8 @@ export default function MikeLayout({
                                         <HeaderButtonUI
                                             iconOnly
                                             onClick={handleSidebarToggle}
-                                            title="Open sidebar"
-                                            aria-label="Open sidebar"
+                                            title={t("abrirMenu")}
+                                            aria-label={t("abrirMenu")}
                                         >
                                             <PanelLeft className="h-4 w-4" />
                                         </HeaderButtonUI>

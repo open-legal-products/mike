@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { SsoAuthButton } from "./SsoAuthButton";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
@@ -15,10 +16,10 @@ describe("SsoAuthButton", () => {
     });
 
     it("renders immediately and opens the dedicated SSO login screen", async () => {
-        render(<SsoAuthButton />);
+        render(withIntl(<SsoAuthButton />));
 
         const button = screen.getByRole("button", {
-            name: "Continue with SSO",
+            name: "Continuar com SSO",
         });
         expect(button).toHaveAttribute("type", "button");
         await userEvent.click(button);
@@ -26,9 +27,9 @@ describe("SsoAuthButton", () => {
     });
 
     it("respects the parent loading state", () => {
-        render(<SsoAuthButton disabled />);
+        render(withIntl(<SsoAuthButton disabled />));
         expect(
-            screen.getByRole("button", { name: "Continue with SSO" }),
+            screen.getByRole("button", { name: "Continuar com SSO" }),
         ).toBeDisabled();
     });
 });

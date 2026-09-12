@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { signup } from "@/app/lib/authApi";
 import { Input } from "@/app/components/ui/input";
 import { PillButton } from "@/app/components/ui/pill-button";
@@ -14,23 +15,19 @@ import {
     authInputClassName,
 } from "@/app/components/auth/authStyles";
 import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
-
-const SIGNUP_ERROR_MESSAGES = {
-    user_already_exists: "An account with this email already exists.",
-    email_exists: "An account with this email already exists.",
-    over_email_send_rate_limit:
-        "Too many signup emails were requested. Please wait and try again.",
-    weak_password: "Choose a stronger password and try again.",
-} as const;
-import {
-    MIN_PASSWORD_LENGTH,
-    minimumPasswordMessage,
-} from "@/app/components/auth/passwordPolicy";
+import { MIN_PASSWORD_LENGTH } from "@/app/components/auth/passwordPolicy";
 import { AuthDivider } from "@/app/components/auth/AuthDivider";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
 import { FieldLabel } from "@/app/components/ui/form-field";
 
 function SignupContent() {
+    const t = useTranslations("auth.signup");
+    const signupErrorMessages: Record<string, string> = {
+        user_already_exists: t("erroEmailExistente"),
+        email_exists: t("erroEmailExistente"),
+        over_email_send_rate_limit: t("erroMuitosEmails"),
+        weak_password: t("erroSenhaFraca"),
+    };
     const router = useRouter();
     const searchParams = useSearchParams();
     const { isAuthenticated, authLoading, refreshSession } = useAuth();
@@ -64,14 +61,14 @@ function SignupContent() {
 
         // Validate passwords match
         if (password !== confirmPassword) {
-            setError("Passwords do not match");
+            setError(t("erroSenhaNaoCoincidem"));
             setLoading(false);
             return;
         }
 
         // Validate password length
         if (password.length < MIN_PASSWORD_LENGTH) {
-            setError(minimumPasswordMessage);
+            setError(t("erroSenhaMinima", { count: MIN_PASSWORD_LENGTH }));
             setLoading(false);
             return;
         }
@@ -97,8 +94,8 @@ function SignupContent() {
             setError(
                 knownErrorCodeMessage(
                     error,
-                    SIGNUP_ERROR_MESSAGES,
-                    "Unable to create your account right now. Please try again.",
+                    signupErrorMessages,
+                    t("erroPadrao"),
                 ),
             );
         } finally {
@@ -116,10 +113,10 @@ function SignupContent() {
                 <div className="w-full max-w-md">
                     <div className={authGlassCardClassName}>
                         <h1 className="font-serif text-2xl font-medium text-gray-950">
-                            Account created!
+                            {t("contaCriada")}
                         </h1>
                         <p className="mt-3 text-sm leading-relaxed text-gray-600">
-                            Redirecting you to finish setting up your account...
+                            {t("redirecionandoConfiguracao")}
                         </p>
                         <PillButton
                             asChild
@@ -127,7 +124,9 @@ function SignupContent() {
                             size="normal"
                             className="mt-6"
                         >
-                            <Link href="/onboarding/profile">Continue</Link>
+                            <Link href="/onboarding/profile">
+                                {t("continuar")}
+                            </Link>
                         </PillButton>
                     </div>
                 </div>
@@ -144,13 +143,13 @@ function SignupContent() {
             <div className="w-full max-w-md">
                 <div className={cn(authGlassCardClassName, "mb-4")}>
                     <h2 className="mb-6 text-left text-2xl font-medium font-serif text-gray-950">
-                        Sign Up
+                        {t("titulo")}
                     </h2>
 
                     <form onSubmit={handleSignup} className="space-y-4">
                         <div>
                             <FieldLabel htmlFor="email">
-                                Email
+                                {t("labelEmail")}
                             </FieldLabel>
                             <Input
                                 id="email"
@@ -164,14 +163,16 @@ function SignupContent() {
 
                         <div>
                             <FieldLabel htmlFor="password">
-                                Password
+                                {t("labelSenha")}
                             </FieldLabel>
                             <Input
                                 id="password"
                                 type="password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                placeholder={`Min. ${MIN_PASSWORD_LENGTH} Characters`}
+                                placeholder={t("placeholderSenhaMinima", {
+                                    count: MIN_PASSWORD_LENGTH,
+                                })}
                                 required
                                 className={`w-full ${authInputClassName}`}
                             />
@@ -179,7 +180,7 @@ function SignupContent() {
 
                         <div>
                             <FieldLabel htmlFor="confirmPassword">
-                                Confirm Password
+                                {t("labelConfirmarSenha")}
                             </FieldLabel>
                             <Input
                                 id="confirmPassword"
@@ -201,23 +202,23 @@ function SignupContent() {
 
                         <div className="space-y-3 pt-2">
                             <div className="text-center text-xs text-gray-500">
-                                By signing up, you agree to our{" "}
+                                {t("termos")}{" "}
                                 <Link
                                     href="https://mikeoss.com/terms"
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-blue-600 hover:underline"
                                 >
-                                    Terms of Use
+                                    {t("termosDeUso")}
                                 </Link>{" "}
-                                and{" "}
+                                {t("e")}{" "}
                                 <Link
                                     href="https://mikeoss.com/privacy"
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-blue-600 hover:underline"
                                 >
-                                    Privacy Policy
+                                    {t("politicaPrivacidade")}
                                 </Link>
                             </div>
                             <PillButton
@@ -227,7 +228,9 @@ function SignupContent() {
                                 disabled={loading}
                                 className="w-full"
                             >
-                                {loading ? "Creating account..." : "Sign up"}
+                                {loading
+                                    ? t("botaoCriando")
+                                    : t("botaoCadastrar")}
                             </PillButton>
                             <AuthDivider />
                             <GoogleAuthButton
@@ -239,12 +242,12 @@ function SignupContent() {
                     </form>
                 </div>
                 <div className="text-center text-sm text-gray-500">
-                    Have an account?{" "}
+                    {t("temConta")}{" "}
                     <Link
                         href="/login"
                         className="font-medium transition-colors hover:text-gray-950"
                     >
-                        Log in
+                        {t("entrar")}
                     </Link>
                 </div>
             </div>

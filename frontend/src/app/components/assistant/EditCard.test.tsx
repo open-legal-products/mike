@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { EditCard } from "./EditCard";
 
 const { resolveDocumentEdit } = vi.hoisted(() => ({
@@ -27,11 +28,13 @@ describe("EditCard", () => {
     it("runs the shared View action without making the change text clickable", () => {
         const onViewClick = vi.fn();
         render(
-            <EditCard
-                changeNumber={3}
-                annotation={annotation}
-                onViewClick={onViewClick}
-            />,
+            withIntl(
+                <EditCard
+                    changeNumber={3}
+                    annotation={annotation}
+                    onViewClick={onViewClick}
+                />,
+            ),
         );
 
         expect(screen.getByLabelText("Tracked change 3")).toHaveTextContent(
@@ -48,13 +51,13 @@ describe("EditCard", () => {
             "role",
             "button",
         );
-        fireEvent.click(screen.getByRole("button", { name: "View" }));
+        fireEvent.click(screen.getByRole("button", { name: "Ver" }));
         expect(onViewClick).toHaveBeenCalledWith(annotation);
     });
 
     it.each([
-        ["accept", "Accept", "Accepting...", "Accepted"],
-        ["reject", "Reject", "Rejecting...", "Rejected"],
+        ["accept", "Aceitar", "Aceitando...", "Aceito"],
+        ["reject", "Rejeitar", "Rejeitando...", "Rejeitado"],
     ] as const)(
         "shows the %s action while the request is pending",
         async (verb, idleLabel, busyLabel, resolvedLabel) => {
@@ -65,7 +68,7 @@ describe("EditCard", () => {
                 }),
             );
 
-            render(<EditCard annotation={annotation} />);
+            render(withIntl(<EditCard annotation={annotation} />));
             fireEvent.click(
                 screen.getByRole("button", { name: idleLabel }),
             );
@@ -75,7 +78,7 @@ describe("EditCard", () => {
             ).toBeDisabled();
             expect(
                 screen.getByRole("button", {
-                    name: verb === "accept" ? "Reject" : "Accept",
+                    name: verb === "accept" ? "Rejeitar" : "Aceitar",
                 }),
             ).toBeDisabled();
 

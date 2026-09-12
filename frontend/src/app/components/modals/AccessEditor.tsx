@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { Check, ChevronDown, Info, Loader2 } from "lucide-react";
 import type { UserLookupResult } from "@/app/lib/mikeApi";
 import type { AccessAssignmentRole } from "@/app/lib/mikeApi";
@@ -27,6 +28,8 @@ import {
 } from "@/shared/ui/LiquidGlassUI";
 
 export type AccessScope = "direct" | "project";
+
+export type AccessResourceKind = "project" | "workflow" | "tabular_review";
 
 export interface AccessRow {
     key?: string;
@@ -93,6 +96,7 @@ function AccessRolePill({
     onChange: (role: AccessAssignmentRole) => void;
     options: AccessAssignmentRole[];
 }) {
+    const t = useTranslations("modals.acesso");
     const tone = accessRoleTone(role);
     const className = `inline-flex h-6 items-center justify-self-start justify-center gap-1 rounded-full px-2 text-left text-[11px] font-medium ${tone}`;
 
@@ -103,7 +107,7 @@ function AccessRolePill({
             <DropdownMenuTrigger asChild>
                 <button
                     type="button"
-                    aria-label={`Role for ${label}`}
+                    aria-label={t("papelDe", { label })}
                     disabled={disabled}
                     className={`${className} transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-wait disabled:opacity-50`}
                 >
@@ -146,12 +150,13 @@ function RemoveActionDropdown({
     disabled?: boolean;
     onRemove: () => void;
 }) {
+    const t = useTranslations("modals.acesso");
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
                 <button
                     type="button"
-                    aria-label={`Actions for ${label}`}
+                    aria-label={t("acoesDe", { label })}
                     disabled={disabled}
                     className="flex h-6 w-6 items-center justify-center rounded-full text-xs text-gray-500 hover:bg-gray-200/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:opacity-50"
                 >
@@ -166,7 +171,7 @@ function RemoveActionDropdown({
                     onSelect={onRemove}
                     className="text-red-500 hover:!bg-red-500/10 focus:!bg-red-500/10 data-[highlighted]:!bg-red-500/10"
                 >
-                    Remove
+                    {t("remover")}
                 </LiquidDropdownItem>
             </LiquidDropdownContent>
         </DropdownMenu>
@@ -225,6 +230,7 @@ function OrganizationMemberPicker({
     disabled: boolean;
     onSelect: (member: AccessRow) => void;
 }) {
+    const t = useTranslations("modals.acesso");
     const [query, setQuery] = useState("");
     const [focused, setFocused] = useState(false);
     const normalizedQuery = query.trim().toLowerCase();
@@ -254,7 +260,7 @@ function OrganizationMemberPicker({
                         </label>
                     }
                     tooltipId={`${id}-description`}
-                    infoLabel={`About ${label}`}
+                    infoLabel={t("sobre", { label })}
                 >
                     {description}
                 </InfoLabelTooltip>
@@ -280,7 +286,7 @@ function OrganizationMemberPicker({
             {showResults ? (
                 <div
                     role="listbox"
-                    aria-label={`${label} matches`}
+                    aria-label={t("correspondenciasDe", { label })}
                     className={`absolute left-0 right-0 top-full z-[260] mt-1 max-h-48 overflow-y-auto rounded-xl p-1 ${LIQUID_GLASS_FLOAT_CLASS}`}
                 >
                     {matches.length > 0 ? (
@@ -320,7 +326,7 @@ function OrganizationMemberPicker({
                         })
                     ) : (
                         <p className="px-3 py-2 text-xs text-gray-400">
-                            No matching organization members.
+                            {t("nenhumMembroCorrespondente")}
                         </p>
                     )}
                 </div>
@@ -346,12 +352,13 @@ function OrganizationAssignmentList({
         assignment: OrganizationAccessAssignment,
     ) => Promise<unknown> | unknown;
 }) {
+    const t = useTranslations("modals.acesso");
     return (
         <div className="h-28 overflow-y-auto rounded-xl bg-white/20 p-1">
             {loading ? (
                 <div className="flex h-full items-center justify-center gap-2 text-xs text-gray-400">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading organization members…
+                    {t("carregandoMembros")}
                 </div>
             ) : assignments.length === 0 ? (
                 <div className="flex h-full items-center justify-center text-xs text-gray-400">
@@ -405,7 +412,8 @@ export function OrganizationAccessEditor({
     members,
     assignments,
     organizationName,
-    ownerLabel = "Project owners",
+    ownerLabel,
+    resourceKind,
     loading = false,
     disabled = false,
     error,
@@ -416,6 +424,7 @@ export function OrganizationAccessEditor({
     assignments: OrganizationAccessAssignment[];
     organizationName?: string | null;
     ownerLabel?: string;
+    resourceKind?: AccessResourceKind;
     loading?: boolean;
     disabled?: boolean;
     error?: string | null;
@@ -427,6 +436,7 @@ export function OrganizationAccessEditor({
         assignment: OrganizationAccessAssignment,
     ) => Promise<unknown> | unknown;
 }) {
+    const t = useTranslations("modals.acesso");
     const [denyExpanded, setDenyExpanded] = useState(false);
     const assignedKeys = new Set(
         assignments.map(
@@ -457,12 +467,26 @@ export function OrganizationAccessEditor({
     const deniedAssignments = assignments.filter(
         (assignment) => assignment.role === "deny",
     );
-    const resourceNoun = ownerLabel.toLowerCase().startsWith("workflow")
-        ? "workflow"
-        : "project";
-    const organizationMembersLabel = organizationName || "organisation";
-    const ownerDescription = `Add ${organizationMembersLabel} members as owners with rights to manage access, settings and delete the ${resourceNoun}.`;
-    const denyDescription = `Deny ${organizationMembersLabel} members from accessing this ${resourceNoun}.`;
+    const resolvedOwnerLabel = ownerLabel ?? t("donosProjeto");
+    const resourceNoun: AccessResourceKind =
+        resourceKind ??
+        (resolvedOwnerLabel.toLowerCase().startsWith("workflow")
+            ? "workflow"
+            : "project");
+    const organizationMembersLabel = organizationName || t("organizacao");
+    const recurso = {
+        project: t("recursoProjeto"),
+        workflow: t("recursoWorkflow"),
+        tabular_review: t("recursoRevisao"),
+    }[resourceNoun];
+    const ownerDescription = t("donoDescricao", {
+        membros: organizationMembersLabel,
+        recurso,
+    });
+    const denyDescription = t("negarDescricao", {
+        membros: organizationMembersLabel,
+        recurso,
+    });
 
     return (
         <div
@@ -472,17 +496,17 @@ export function OrganizationAccessEditor({
             <section className="space-y-2">
                 <OrganizationMemberPicker
                     id="organization-owner-picker"
-                    label={ownerLabel}
-                    placeholder="Search members…"
+                    label={resolvedOwnerLabel}
+                    placeholder={t("buscarMembros")}
                     description={ownerDescription}
                     members={availableOwnerMembers}
                     disabled={disabled || loading}
                     onSelect={(member) => onAssign(member, "owner")}
                 />
                 <OrganizationAssignmentList
-                    label={`${ownerLabel} list`}
+                    label={t("listaDe", { label: resolvedOwnerLabel })}
                     assignments={ownerAssignments}
-                    emptyMessage="No additional Owners added."
+                    emptyMessage={t("nenhumDonoAdicional")}
                     loading={loading}
                     disabled={disabled}
                     onRemove={onRemove}
@@ -507,7 +531,7 @@ export function OrganizationAccessEditor({
                             }
                             className="flex items-center gap-1.5 rounded-lg text-left text-sm font-medium text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
                         >
-                            <span>Deny list</span>
+                            <span>{t("listaNegada")}</span>
                             <ChevronDown
                                 aria-hidden="true"
                                 className={`h-3.5 w-3.5 text-gray-400 transition-transform ${denyExpanded ? "rotate-180" : ""}`}
@@ -515,7 +539,7 @@ export function OrganizationAccessEditor({
                         </button>
                     }
                     tooltipId="organization-deny-description"
-                    infoLabel="About the Deny list"
+                    infoLabel={t("sobreListaNegada")}
                 >
                     {denyDescription}
                 </InfoLabelTooltip>
@@ -526,17 +550,17 @@ export function OrganizationAccessEditor({
                     >
                         <OrganizationMemberPicker
                             id="organization-deny-picker"
-                            label="Deny list"
+                            label={t("listaNegada")}
                             showLabel={false}
-                            placeholder="Search members…"
+                            placeholder={t("buscarMembros")}
                             members={availableDenyMembers}
                             disabled={disabled || loading}
                             onSelect={(member) => onAssign(member, "deny")}
                         />
                         <OrganizationAssignmentList
-                            label="Deny list entries"
+                            label={t("listaNegada")}
                             assignments={deniedAssignments}
-                            emptyMessage="No members denied."
+                            emptyMessage={t("nenhumMembroBloqueado")}
                             loading={loading}
                             disabled={disabled}
                             onRemove={onRemove}
@@ -585,6 +609,7 @@ export function AccessEditor({
     error?: string | null;
 }) {
     const roleOptions = PROJECT_ROLES;
+    const t = useTranslations("modals.acesso");
     const normalizedCurrentEmail = currentUserEmail?.trim().toLowerCase();
 
     return (
@@ -594,15 +619,15 @@ export function AccessEditor({
                     <InfoLabelTooltip
                         label={
                             <h2 className="text-sm font-medium text-gray-700">
-                                Share Access
+                                {t("compartilharAcesso")}
                             </h2>
                         }
                         tooltipId="access-role-rights"
-                        infoLabel="About access roles"
+                        infoLabel={t("sobrePapeisAcesso")}
                     >
                         <div>
                             <p className="mb-2 text-xs font-medium text-gray-700">
-                                Roles and rights
+                                {t("papeisEDireitos")}
                             </p>
                             <dl className="space-y-2">
                                 {PROJECT_ROLES.map((role) => (
@@ -627,16 +652,18 @@ export function AccessEditor({
                         onAdd={onAdd}
                         validateEmail={validateEmail}
                         busy={busy}
-                        placeholder="Add by email..."
+                        placeholder={t("adicionarPorEmail")}
                         autoFocus
-                        submitLabel="Add"
+                        submitLabel={t("adicionar")}
                         submitVariant="attached"
                         inputEndControl={
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                     <button
                                         type="button"
-                                        aria-label={`Role for the new recipient: ${accessRoleLabel(newRole)}`}
+                                        aria-label={t("papelNovoDestinatario", {
+                                            papel: accessRoleLabel(newRole),
+                                        })}
                                         disabled={busy}
                                         className={`${INPUT_GROUP_ROLE_TRIGGER_CLASS} bg-transparent ${accessRoleTextTone(newRole)}`}
                                     >
@@ -679,18 +706,17 @@ export function AccessEditor({
             <section className="flex min-h-0 flex-1 flex-col">
                 <div className="mb-1 grid grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)_5rem_1.5rem] gap-3 px-2 text-xs font-medium text-gray-500">
                     <div className="flex items-center gap-2">
-                        <span>Name</span>
+                        <span>{t("nome")}</span>
                         {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                     </div>
-                    <span className="justify-self-start text-left">Email</span>
-                    <span className="justify-self-start text-left">Role</span>
+                    <span className="justify-self-start text-left">{t("email")}</span>
+                    <span className="justify-self-start text-left">{t("papel")}</span>
                     <span aria-hidden="true" />
                 </div>
 
                 {scope === "project" ? (
                     <p className="mb-2 text-xs text-gray-500">
-                        Access is inherited from the project and must be changed
-                        from the project&apos;s Access panel.
+                        {t("acessoHerdado")}
                     </p>
                 ) : null}
 
@@ -710,7 +736,7 @@ export function AccessEditor({
                     </div>
                 ) : rows.length === 0 ? (
                     <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-gray-400">
-                        No one has access yet.
+                        {t("ninguemComAcesso")}
                     </div>
                 ) : (
                     <div
@@ -725,7 +751,7 @@ export function AccessEditor({
                                 !!normalizedCurrentEmail &&
                                 email.toLowerCase() === normalizedCurrentEmail;
                             const name = isYou
-                                ? "You"
+                                ? t("voce")
                                 : entry.display_name?.trim() || "—";
                             const isPending = pendingEmail === email;
                             return (

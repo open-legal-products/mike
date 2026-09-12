@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { Suspense, type ReactNode } from "react";
 import type { Chat } from "@/app/components/shared/types";
 import { MikeApiError } from "@/app/lib/mikeApi";
+import { withIntl } from "@/test/withIntl";
 import ProjectAssistantPage from "./page";
 
 // What this file pins: WHO the client offers chat deletion to, and what the
@@ -99,9 +100,13 @@ async function renderPage(rows: Chat[]) {
     let view!: ReturnType<typeof render>;
     await act(async () => {
         view = render(
-            <Suspense fallback={null}>
-                <ProjectAssistantPage params={Promise.resolve({ id: "p1" })} />
-            </Suspense>,
+            withIntl(
+                <Suspense fallback={null}>
+                    <ProjectAssistantPage
+                        params={Promise.resolve({ id: "p1" })}
+                    />
+                </Suspense>,
+            ),
         );
     });
     await screen.findByText("select all");
@@ -138,7 +143,7 @@ describe("project assistant chat deletion gating", () => {
         fireEvent.click(screen.getByText("delete c1"));
 
         await waitFor(() =>
-            expect(setOwnerOnlyAction).toHaveBeenCalledWith("delete this chat"),
+            expect(setOwnerOnlyAction).toHaveBeenCalledWith("excluir esta conversa"),
         );
         expect(deleteChat).not.toHaveBeenCalled();
     });

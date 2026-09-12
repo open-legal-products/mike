@@ -12,6 +12,7 @@ import {
     useState,
 } from "react";
 import { useRouter, useSelectedLayoutSegments } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ChevronLeft } from "lucide-react";
 import {
     createTabularReview,
@@ -213,6 +214,7 @@ export function ProjectWorkspaceProvider({
     const activeSection = activeSectionFromSegments(segments);
     const showShell = shouldShowWorkspaceShell(segments);
     const router = useRouter();
+    const t = useTranslations("projects.pagina");
     const { user } = useAuth();
     const { profile } = useUserProfile();
     const { saveChat } = useChatHistoryContext();
@@ -382,7 +384,7 @@ export function ProjectWorkspaceProvider({
         // this gate an org viewer's click fails with a silent 404.
         if (!canDo("content.edit")) {
             denyUnlessLoading({
-                action: "start a chat in this project",
+                action: t("ownerIniciarConversa"),
                 requiredRole: "editor",
             });
             return;
@@ -429,6 +431,7 @@ export function ProjectWorkspaceProvider({
         projectId,
         router,
         saveChat,
+        t,
         user?.id,
     ]);
 
@@ -438,13 +441,13 @@ export function ProjectWorkspaceProvider({
         // an unexplained failed submit.
         if (!canDo("content.edit")) {
             denyUnlessLoading({
-                action: "create a tabular review",
+                action: t("ownerCriarRevisao"),
                 requiredRole: "editor",
             });
             return;
         }
         setNewTRModalOpen(true);
-    }, [canDo, denyUnlessLoading]);
+    }, [canDo, denyUnlessLoading, t]);
 
     async function handleCreateReview(
         title: string,
@@ -486,7 +489,7 @@ export function ProjectWorkspaceProvider({
     }) {
         if (!canDo("access.manage")) {
             denyUnlessLoading({
-                action: "edit project details",
+                action: t("ownerEditarDetalhes"),
                 requiredRole: "owner",
             });
             return;
@@ -514,7 +517,7 @@ export function ProjectWorkspaceProvider({
 
     function requestProjectDelete() {
         if (!canDo("container.delete")) {
-            denyUnlessLoading("delete this project");
+            denyUnlessLoading(t("ownerExcluirProjeto"));
             return;
         }
         setDeleteProjectStatus("idle");
@@ -667,9 +670,9 @@ export function ProjectWorkspaceProvider({
 
                 <ConfirmPopup
                     open={deleteProjectConfirmOpen}
-                    title="Delete project?"
-                    message="This will permanently delete the project and its related documents, chats, and tabular reviews."
-                    confirmLabel="Delete"
+                    title={t("tituloExcluirProjeto")}
+                    message={t("mensagemExcluirProjeto")}
+                    confirmLabel={t("excluir")}
                     confirmVariant="danger"
                     confirmStatus={
                         deleteProjectStatus === "deleting"
@@ -678,7 +681,7 @@ export function ProjectWorkspaceProvider({
                               ? "complete"
                               : "idle"
                     }
-                    cancelLabel="Cancel"
+                    cancelLabel={t("cancelar")}
                     onCancel={() => {
                         if (deleteProjectStatus === "deleting") return;
                         setDeleteProjectConfirmOpen(false);
@@ -695,17 +698,18 @@ export function ProjectWorkspaceProvider({
                         fetchAccess={getProjectPeople}
                         currentUserEmail={user?.email ?? null}
                         breadcrumb={[
-                            "Projects",
+                            t("projetos"),
                             project.name +
                                 (project.cm_number
                                     ? ` (${project.cm_number})`
                                     : ""),
-                            "Access",
+                            t("acesso"),
                         ]}
                         access={{
                             grants: grants ?? [],
                             orgId: project.org_id ?? null,
-                            ownerLabel: "Project owners",
+                            ownerLabel: t("donosProjeto"),
+                            resourceKind: "project",
                             canManage: canDo("access.manage"),
                             onGrant: async (email, role) => {
                                 await grantProjectAccess(
@@ -736,6 +740,7 @@ export function ProjectSectionToolbar({
 }) {
     const { activeSection, projectId } = useProjectWorkspace();
     const router = useRouter();
+    const t = useTranslations("projects.pagina");
 
     return (
         <TableToolbar
@@ -743,9 +748,9 @@ export function ProjectSectionToolbar({
                 backAction
                     ? []
                     : [
-                          { id: "documents", label: "Documents" },
-                          { id: "assistant", label: "Chats" },
-                          { id: "reviews", label: "Tabular Reviews" },
+                          { id: "documents", label: t("tabDocumentos") },
+                          { id: "assistant", label: t("colunaConversas") },
+                          { id: "reviews", label: t("tabRevisoes") },
                       ]
             }
             active={activeSection}
@@ -762,7 +767,7 @@ export function ProjectSectionToolbar({
                 backAction ? (
                     <TabPillButton onClick={backAction}>
                         <ChevronLeft className="h-3.5 w-3.5" />
-                        Back
+                        {t("voltar")}
                     </TabPillButton>
                 ) : undefined
             }

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import {
     AskInputsBlock,
     CourtListenerBlock,
@@ -29,7 +30,7 @@ describe("DocDownloadBlock", () => {
 describe("AskInputsBlock", () => {
     it("collapses completed input details and toggles them from the label", () => {
         render(
-            <AskInputsBlock
+            withIntl(<AskInputsBlock
                 event={{
                     type: "ask_inputs",
                     event_id: "ask-1",
@@ -54,11 +55,11 @@ describe("AskInputsBlock", () => {
                         },
                     ],
                 }}
-            />,
+            />),
         );
 
         const toggle = screen.getByRole("button", {
-            name: "Asked for input",
+            name: "Solicitou entradas",
         });
         expect(toggle).toHaveAttribute("aria-expanded", "false");
         expect(
@@ -82,7 +83,7 @@ describe("AskInputsBlock", () => {
 describe("event line consistency", () => {
     it("uses one chevron direction and always reports expansion", () => {
         const { container, unmount } = render(
-            <AskInputsBlock
+            withIntl(<AskInputsBlock
                 event={{
                     type: "ask_inputs",
                     event_id: "ask-1",
@@ -94,11 +95,11 @@ describe("event line consistency", () => {
                         },
                     ],
                 }}
-            />,
+            />),
         );
 
         // Unanswered blocks open by default: chevron down, nothing rotated.
-        const toggle = screen.getByRole("button", { name: "Asking for input" });
+        const toggle = screen.getByRole("button", { name: "Solicitando entradas" });
         expect(toggle).toHaveAttribute("aria-expanded", "true");
         expect(container.querySelector("svg.-rotate-90")).toBeNull();
 
@@ -109,7 +110,7 @@ describe("event line consistency", () => {
         unmount();
 
         const research = render(
-            <CourtListenerBlock
+            withIntl(<CourtListenerBlock
                 label="Searched case law"
                 items={[
                     {
@@ -118,7 +119,7 @@ describe("event line consistency", () => {
                         url: "https://x.test",
                     },
                 ]}
-            />,
+            />),
         );
         const search = screen.getByRole("button", {
             name: /Searched case law/,

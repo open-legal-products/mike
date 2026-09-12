@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Loader2, Upload } from "lucide-react";
 import type { Document, Folder, Project, Workflow } from "../shared/types";
 import {
@@ -71,6 +72,7 @@ export function NewTRModal({
     projectCmNumber,
 }: Props) {
     const isProjectMode = projectId !== undefined;
+    const t = useTranslations("tabular.novoModal");
     const [step, setStep] = useState<"details" | "access" | "documents">(
         "details",
     );
@@ -234,7 +236,7 @@ export function NewTRModal({
             handleClose();
         } catch (error) {
             setUploadError(
-                userFacingApiError(error, "Could not create the review."),
+                userFacingApiError(error, t("erroCriarRevisao")),
             );
         } finally {
             creatingRef.current = false;
@@ -311,7 +313,7 @@ export function NewTRModal({
                     ? failedUploadMessage(err.outcomes)
                     : userFacingApiError(
                           err,
-                          "The selected files could not be uploaded. Please try again.",
+                          t("erroEnvioArquivos"),
                       ),
             );
         } finally {
@@ -324,8 +326,8 @@ export function NewTRModal({
         {
             value: "",
             label: loadingWorkflows
-                ? "Loading templates..."
-                : "No template - start from scratch",
+                ? t("carregandoTemplates")
+                : t("semTemplate"),
         },
         ...workflows.map((workflow) => ({
             value: workflow.id,
@@ -339,7 +341,7 @@ export function NewTRModal({
                   project.name +
                   (project.cm_number ? ` (#${project.cm_number})` : ""),
           }))
-        : [{ value: "", label: "No projects found" }];
+        : [{ value: "", label: t("nenhumProjeto") }];
 
     // What to show in the directory depends on mode and toggle state
     const directoryDocuments = isProjectMode
@@ -361,11 +363,11 @@ export function NewTRModal({
     const breadcrumbs =
         isProjectMode && projectName
             ? [
-                  "Projects",
+                  t("projetos"),
                   `${projectName}${projectCmNumber ? ` (#${projectCmNumber})` : ""}`,
-                  "New Tabular Review",
+                  t("novaRevisaoTabular"),
               ]
-            : ["Tabular Reviews", "New Tabular Review"];
+            : [t("revisoesTabulares"), t("novaRevisaoTabular")];
 
     return (
         <Modal
@@ -374,15 +376,15 @@ export function NewTRModal({
             breadcrumbs={[
                 ...breadcrumbs,
                 step === "details"
-                    ? "Details"
+                    ? t("detalhes")
                     : step === "access"
-                      ? "Access"
-                      : "Add Documents",
+                      ? t("acesso")
+                      : t("adicionarDocumentos"),
             ]}
             secondaryAction={
                 step === "documents"
                     ? {
-                          label: uploading ? "Uploading..." : "Upload",
+                          label: uploading ? t("enviando") : t("enviar"),
                           icon: uploading ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                           ) : (
@@ -393,7 +395,7 @@ export function NewTRModal({
                       }
                     : step === "access"
                       ? {
-                            label: "Back",
+                            label: t("voltar"),
                             type: "button",
                             onClick: () => setStep("details"),
                             disabled: uploading,
@@ -403,13 +405,13 @@ export function NewTRModal({
             cancelAction={
                 step === "documents"
                     ? {
-                          label: "Back",
+                          label: t("voltar"),
                           onClick: () => setStep("access"),
                           disabled: uploading,
                       }
                     : step === "access"
                       ? {
-                            label: "Skip",
+                            label: t("pular"),
                             type: "button",
                             onClick: () => {
                                 setDirectGrants([]);
@@ -422,7 +424,7 @@ export function NewTRModal({
             primaryAction={
                 step === "details"
                     ? {
-                          label: "Next",
+                          label: t("proximo"),
                           type: "button",
                           onClick: () => setStep("access"),
                           disabled:
@@ -432,7 +434,7 @@ export function NewTRModal({
                       }
                     : step === "access"
                       ? {
-                            label: "Next",
+                            label: t("proximo"),
                             type: "button",
                             onClick: (event) => {
                                 // The same footer node becomes the submit button
@@ -444,7 +446,7 @@ export function NewTRModal({
                             disabled: uploading,
                         }
                       : {
-                          label: creating ? "Creating..." : "Create",
+                          label: creating ? t("criando") : t("criar"),
                           type: "submit",
                           form: formId,
                           name: "modalAction",
@@ -474,14 +476,14 @@ export function NewTRModal({
                     <div className="space-y-6">
                         <div>
                             <FieldLabel htmlFor="new-tr-title">
-                                Review name
+                                {t("nomeRevisao")}
                             </FieldLabel>
                             <FormTextInput
                                 id="new-tr-title"
                                 type="text"
                                 value={title}
                                 onChange={(e) => setTitle(e.target.value)}
-                                placeholder="Review name"
+                                placeholder={t("nomeRevisao")}
                                 variant="minimal"
                                 className="placeholder:text-gray-400"
                                 autoFocus
@@ -489,7 +491,7 @@ export function NewTRModal({
                         </div>
 
                         <div>
-                            <FieldLabel as="p">Model</FieldLabel>
+                            <FieldLabel as="p">{t("modelo")}</FieldLabel>
                             <ModelToggle
                                 value={selectedModel}
                                 onChange={setSelectedModel}
@@ -505,7 +507,9 @@ export function NewTRModal({
 
                         {/* Workflow template */}
                         <div>
-                            <FieldLabel as="p">Workflow template</FieldLabel>
+                            <FieldLabel as="p">
+                                {t("modeloWorkflow")}
+                            </FieldLabel>
                             <ModalSelect
                                 id="new-tr-workflow-template"
                                 value={selectedWorkflowId ?? ""}
@@ -520,7 +524,7 @@ export function NewTRModal({
                         {/* Create under a project toggle */}
                         {!isProjectMode && (
                             <div className="space-y-3">
-                                <FieldLabel as="p">Project</FieldLabel>
+                                <FieldLabel as="p">{t("projeto")}</FieldLabel>
                                 <ToggleSwitch
                                     checked={underProject}
                                     onCheckedChange={(next) => {
@@ -533,7 +537,7 @@ export function NewTRModal({
                                         }
                                     }}
                                 >
-                                    Create under a project
+                                    {t("criarNoProjeto")}
                                 </ToggleSwitch>
 
                                 {underProject && (
@@ -546,7 +550,7 @@ export function NewTRModal({
                                                 void handleSelectProject(value);
                                             }
                                         }}
-                                        placeholder="Select project..."
+                                        placeholder={t("selecionarProjeto")}
                                         disabled={projects.length === 0}
                                     />
                                 )}
@@ -554,13 +558,14 @@ export function NewTRModal({
                         )}
 
                         <div>
-                            <FieldLabel as="p">Document grouping</FieldLabel>
+                            <FieldLabel as="p">
+                                {t("agrupamentoDocumentos")}
+                            </FieldLabel>
                             <ToggleSwitch
                                 checked={groupBySubfolder}
                                 onCheckedChange={setGroupBySubfolder}
                             >
-                                Treat documents in the same folder as one review
-                                row
+                                {t("agruparPorPasta")}
                             </ToggleSwitch>
                         </div>
                     </div>
@@ -572,7 +577,8 @@ export function NewTRModal({
                         directGrants={directGrants}
                         onDirectGrantsChange={setDirectGrants}
                         inheritedFromProject={isProjectMode || underProject}
-                        ownerLabel="Review owners"
+                        ownerLabel={t("proprietariosRevisao")}
+                        resourceKind="tabular_review"
                     />
                 ) : (
                     <div className="flex min-h-0 flex-1 flex-col">

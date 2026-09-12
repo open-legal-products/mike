@@ -8,6 +8,7 @@ import {
     type ComponentPropsWithoutRef,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 import {
     Download,
     Eye,
@@ -87,15 +88,23 @@ export const RowActionMenuItems = forwardRef<
     onEditDetails,
     onRename,
     onUpdateCmNumber,
-    viewLabel = "View",
-    editDetailsLabel = "Edit details",
-    newSubfolderLabel = "New subfolder",
-    renameLabel = "Rename",
-    uploadNewVersionLabel = "Upload new version",
-    deleteLabel = "Delete",
+    viewLabel,
+    editDetailsLabel,
+    newSubfolderLabel,
+    renameLabel,
+    uploadNewVersionLabel,
+    deleteLabel,
     onClose,
     surfaceProps,
 }, ref) {
+    const t = useTranslations("acoesLinha");
+    const viewLabelText = viewLabel ?? t("visualizar");
+    const editDetailsLabelText = editDetailsLabel ?? t("editarDetalhes");
+    const newSubfolderLabelText = newSubfolderLabel ?? t("novaSubpasta");
+    const renameLabelText = renameLabel ?? t("renomear");
+    const uploadNewVersionLabelText =
+        uploadNewVersionLabel ?? t("enviarNovaVersao");
+    const deleteLabelText = deleteLabel ?? t("excluir");
     const { className: surfaceClassName, ...restSurfaceProps } =
         surfaceProps ?? {};
 
@@ -111,7 +120,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_LEFT_ITEM_CLASS}
                 >
                     <X className="h-3.5 w-3.5 shrink-0" />
-                    Deselect rows
+                    {t("desmarcarLinhas")}
                 </LiquidDropdownButton>
             )}
             {onView && (
@@ -120,7 +129,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_ITEM_CLASS}
                 >
                     <Eye className="h-3.5 w-3.5" />
-                    {viewLabel}
+                    {viewLabelText}
                 </LiquidDropdownButton>
             )}
             {onNewSubfolder && (
@@ -129,7 +138,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_LEFT_ITEM_CLASS}
                 >
                     <SubfolderSvgIcon className="h-3.5 w-3.5 shrink-0" />
-                    {newSubfolderLabel}
+                    {newSubfolderLabelText}
                 </LiquidDropdownButton>
             )}
             {onRename && (
@@ -138,7 +147,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_ITEM_CLASS}
                 >
                     <Pencil className="h-3.5 w-3.5" />
-                    {renameLabel}
+                    {renameLabelText}
                 </LiquidDropdownButton>
             )}
             {onEditDetails && (
@@ -147,7 +156,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_ITEM_CLASS}
                 >
                     <Pencil className="h-3.5 w-3.5" />
-                    {editDetailsLabel}
+                    {editDetailsLabelText}
                 </LiquidDropdownButton>
             )}
             {onUpdateCmNumber && (
@@ -156,7 +165,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_ITEM_CLASS}
                 >
                     <Hash className="h-3.5 w-3.5" />
-                    Edit CM No.
+                    {t("editarCm")}
                 </LiquidDropdownButton>
             )}
             {onDownload && (
@@ -165,7 +174,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_ITEM_CLASS}
                 >
                     <Download className="h-3.5 w-3.5" />
-                    Download
+                    {t("baixar")}
                 </LiquidDropdownButton>
             )}
             {onShowAllVersions && (
@@ -174,7 +183,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_LEFT_ITEM_CLASS}
                 >
                     <History className="h-3.5 w-3.5 shrink-0" />
-                    Show all versions
+                    {t("mostrarTodasVersoes")}
                 </LiquidDropdownButton>
             )}
             {onUploadNewVersion && (
@@ -183,7 +192,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_LEFT_ITEM_CLASS}
                 >
                     <Upload className="h-3.5 w-3.5 shrink-0" />
-                    {uploadNewVersionLabel}
+                    {uploadNewVersionLabelText}
                 </LiquidDropdownButton>
             )}
             {onRemoveFromFolder && (
@@ -192,7 +201,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_LEFT_ITEM_CLASS}
                 >
                     <FolderMinus className="h-3.5 w-3.5 shrink-0" />
-                    Remove from subfolder
+                    {t("removerSubpasta")}
                 </LiquidDropdownButton>
             )}
             {onUnhide && (
@@ -201,7 +210,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_ITEM_CLASS}
                 >
                     <Eye className="h-3.5 w-3.5" />
-                    Activate
+                    {t("ativar")}
                 </LiquidDropdownButton>
             )}
             {onHide && (
@@ -210,7 +219,7 @@ export const RowActionMenuItems = forwardRef<
                     className={ROW_ACTION_ITEM_CLASS}
                 >
                     <EyeOff className="h-3.5 w-3.5" />
-                    Deactivate
+                    {t("desativar")}
                 </LiquidDropdownButton>
             )}
             {onDelete && (
@@ -234,7 +243,7 @@ export const RowActionMenuItems = forwardRef<
                     }`}
                 >
                     <Trash2 className="h-3.5 w-3.5" />
-                    {deleteLabel}
+                    {deleteLabelText}
                 </button>
             )}
         </LiquidDropdownSurface>
@@ -242,6 +251,7 @@ export const RowActionMenuItems = forwardRef<
 });
 
 export function RowActions(props: Props) {
+    const t = useTranslations("acoesLinha");
     const [open, setOpen] = useState(false);
     const [coords, setCoords] = useState({ top: 0, right: 0 });
     const btnRef = useRef<HTMLButtonElement>(null);
@@ -289,7 +299,7 @@ export function RowActions(props: Props) {
             <button
                 ref={btnRef}
                 type="button"
-                aria-label="Open row actions"
+                aria-label={t("abrirAcoes")}
                 onClick={handleToggle}
                 className={`flex items-center justify-center w-6 h-6 rounded text-gray-700 hover:text-gray-900 transition-colors leading-none ${LIQUID_GLASS_HOVER_CLASS}`}
             >

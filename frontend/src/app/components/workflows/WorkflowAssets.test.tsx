@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Document } from "../shared/types";
+import { withIntl } from "@/test/withIntl";
 import { WorkflowAssets, type WorkflowAssetsHandle } from "./WorkflowAssets";
 
 const { copyDocumentsToWorkflowAssets, listWorkflowAssets } = vi.hoisted(() => ({
@@ -56,7 +57,9 @@ describe("WorkflowAssets", () => {
     it("opens an asset in the document side panel when its row is clicked", async () => {
         const user = userEvent.setup();
         render(
-            <WorkflowAssets workflowId="workflow-1" readOnly={false} />,
+            withIntl(
+                <WorkflowAssets workflowId="workflow-1" readOnly={false} />,
+            ),
         );
 
         await waitFor(() =>
@@ -72,11 +75,13 @@ describe("WorkflowAssets", () => {
     it("copies selected saved documents into the workflow assets", async () => {
         const ref = createRef<WorkflowAssetsHandle>();
         render(
-            <WorkflowAssets
-                ref={ref}
-                workflowId="workflow-1"
-                readOnly={false}
-            />,
+            withIntl(
+                <WorkflowAssets
+                    ref={ref}
+                    workflowId="workflow-1"
+                    readOnly={false}
+                />,
+            ),
         );
         await screen.findByText("Precedent.docx");
 

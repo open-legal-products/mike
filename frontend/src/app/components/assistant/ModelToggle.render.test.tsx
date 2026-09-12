@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { ModelToggle, underlyingProviderGroup } from "./ModelToggle";
 import type { ApiKeyState } from "@/app/lib/mikeApi";
 
@@ -34,13 +35,15 @@ describe("ModelToggle responsive trigger", () => {
         const user = userEvent.setup();
         const onReasoningChange = vi.fn();
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeys={keys({ gemini: true })}
-                reasoningLevel="high"
-                onReasoningChange={onReasoningChange}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ gemini: true })}
+                    reasoningLevel="high"
+                    onReasoningChange={onReasoningChange}
+                />,
+            ),
         );
 
         await user.click(screen.getByRole("button", { name: "Choose model" }));
@@ -63,13 +66,15 @@ describe("ModelToggle responsive trigger", () => {
     it("offers Max for GPT-5.6 without offering Minimal", async () => {
         const onReasoningChange = vi.fn();
         render(
-            <ModelToggle
-                value="gpt-5.6-terra"
-                onChange={vi.fn()}
-                apiKeys={keys({ openai: true })}
-                reasoningLevel="low"
-                onReasoningChange={onReasoningChange}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gpt-5.6-terra"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ openai: true })}
+                    reasoningLevel="low"
+                    onReasoningChange={onReasoningChange}
+                />,
+            ),
         );
 
         await userEvent.click(
@@ -89,13 +94,15 @@ describe("ModelToggle responsive trigger", () => {
     it("uses the provider-supported GPT-5.5 levels", async () => {
         const onReasoningChange = vi.fn();
         render(
-            <ModelToggle
-                value="gpt-5.5"
-                onChange={vi.fn()}
-                apiKeys={keys({ openai: true })}
-                reasoningLevel="low"
-                onReasoningChange={onReasoningChange}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gpt-5.5"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ openai: true })}
+                    reasoningLevel="low"
+                    onReasoningChange={onReasoningChange}
+                />,
+            ),
         );
 
         await userEvent.click(
@@ -113,13 +120,15 @@ describe("ModelToggle responsive trigger", () => {
         const user = userEvent.setup();
         const onReasoningChange = vi.fn();
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeys={keys({ gemini: true })}
-                reasoningLevel="high"
-                onReasoningChange={onReasoningChange}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ gemini: true })}
+                    reasoningLevel="high"
+                    onReasoningChange={onReasoningChange}
+                />,
+            ),
         );
 
         await user.click(screen.getByRole("button", { name: "Choose model" }));
@@ -136,11 +145,13 @@ describe("ModelToggle responsive trigger", () => {
 
     it("uses the Settings2 icon in a compact chat input", () => {
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                compact
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    compact
+                />,
+            ),
         );
 
         const trigger = screen.getByRole("button", { name: "Choose model" });
@@ -152,11 +163,13 @@ describe("ModelToggle responsive trigger", () => {
 
     it("allows a wider model label in the regular trigger", () => {
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeys={keys({ gemini: true })}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ gemini: true })}
+                />,
+            ),
         );
 
         expect(screen.getByText("Gemini 3 Flash")).toHaveClass("max-w-[200px]");
@@ -165,11 +178,13 @@ describe("ModelToggle responsive trigger", () => {
     it("does not add an inset shadow to the selected model row", async () => {
         const user = userEvent.setup();
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeys={keys({ gemini: true })}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ gemini: true })}
+                />,
+            ),
         );
 
         await user.click(screen.getByRole("button", { name: "Choose model" }));
@@ -189,11 +204,13 @@ describe("ModelToggle responsive trigger", () => {
 describe("ModelToggle availability states", () => {
     it("renders a neutral disabled trigger while keys are loading", () => {
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeysLoading
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeysLoading
+                />,
+            ),
         );
 
         const trigger = screen.getByRole("button", { name: "Choose model" });
@@ -205,7 +222,9 @@ describe("ModelToggle availability states", () => {
 
     it("fails open when key state is unknown after a failed load", () => {
         render(
-            <ModelToggle value="gemini-3-flash-preview" onChange={vi.fn()} />,
+            withIntl(
+                <ModelToggle value="gemini-3-flash-preview" onChange={vi.fn()} />,
+            ),
         );
 
         const trigger = screen.getByRole("button", { name: "Choose model" });
@@ -218,19 +237,21 @@ describe("ModelToggle availability states", () => {
         const user = userEvent.setup();
         const onNoModelsClick = vi.fn();
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeys={keys({})}
-                onNoModelsClick={onNoModelsClick}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeys={keys({})}
+                    onNoModelsClick={onNoModelsClick}
+                />,
+            ),
         );
 
         const trigger = screen.getByRole("button", {
             name: "No models available",
         });
         expect(trigger).toBeEnabled();
-        expect(trigger).toHaveTextContent("No Models");
+        expect(trigger).toHaveTextContent("Nenhum modelo");
         expect(trigger.querySelector("svg")).not.toBeInTheDocument();
         await user.click(trigger);
         expect(onNoModelsClick).toHaveBeenCalledWith("api-keys");
@@ -240,13 +261,15 @@ describe("ModelToggle availability states", () => {
         const user = userEvent.setup();
         const onNoModelsClick = vi.fn();
         render(
-            <ModelToggle
-                value=""
-                onChange={vi.fn()}
-                apiKeys={keys({ openrouter: true })}
-                openRouterModels={[]}
-                onNoModelsClick={onNoModelsClick}
-            />,
+            withIntl(
+                <ModelToggle
+                    value=""
+                    onChange={vi.fn()}
+                    apiKeys={keys({ openrouter: true })}
+                    openRouterModels={[]}
+                    onNoModelsClick={onNoModelsClick}
+                />,
+            ),
         );
 
         await user.click(
@@ -257,18 +280,20 @@ describe("ModelToggle availability states", () => {
 
     it("filters to configured providers when keys are loaded", () => {
         render(
-            <ModelToggle
-                value="claude-fable-5"
-                onChange={vi.fn()}
-                apiKeys={keys({ gemini: true })}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="claude-fable-5"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ gemini: true })}
+                />,
+            ),
         );
 
         // Claude has no key: the stored selection is not offered, so the
         // trigger falls back to the picker prompt.
         expect(
             screen.getByRole("button", { name: "Choose model" }),
-        ).toHaveTextContent("Select model");
+        ).toHaveTextContent("Selecionar modelo");
     });
 });
 
@@ -285,12 +310,14 @@ describe("ModelToggle provider grouping", () => {
     it("offers the user's saved OpenCode Go models once the key is configured", async () => {
         const user = userEvent.setup();
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeys={keys({ gemini: true, "opencode-go": true })}
-                openCodeGoModels={["glm-5"]}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ gemini: true, "opencode-go": true })}
+                    openCodeGoModels={["glm-5"]}
+                />,
+            ),
         );
 
         await user.click(screen.getByRole("button", { name: "Choose model" }));
@@ -303,12 +330,14 @@ describe("ModelToggle provider grouping", () => {
     it("hides the group when the OpenCode Go key is missing", async () => {
         const user = userEvent.setup();
         render(
-            <ModelToggle
-                value="gemini-3-flash-preview"
-                onChange={vi.fn()}
-                apiKeys={keys({ gemini: true })}
-                openCodeGoModels={["glm-5"]}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="gemini-3-flash-preview"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ gemini: true })}
+                    openCodeGoModels={["glm-5"]}
+                />,
+            ),
         );
 
         await user.click(screen.getByRole("button", { name: "Choose model" }));
@@ -319,17 +348,19 @@ describe("ModelToggle provider grouping", () => {
     it("shows route labels only when the same provider model has duplicates", async () => {
         const user = userEvent.setup();
         render(
-            <ModelToggle
-                value="claude-fable-5"
-                onChange={vi.fn()}
-                apiKeys={keys({ claude: true, openrouter: true })}
-                openRouterModels={["anthropic/claude-fable-5"]}
-            />,
+            withIntl(
+                <ModelToggle
+                    value="claude-fable-5"
+                    onChange={vi.fn()}
+                    apiKeys={keys({ claude: true, openrouter: true })}
+                    openRouterModels={["anthropic/claude-fable-5"]}
+                />,
+            ),
         );
 
         await user.click(screen.getByRole("button", { name: "Choose model" }));
 
-        expect(screen.getByText("Direct")).toBeInTheDocument();
+        expect(screen.getByText("Direto")).toBeInTheDocument();
         expect(screen.getByText("OpenRouter")).toBeInTheDocument();
     });
 });

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { login } from "@/app/lib/authApi";
 import { Input } from "@/app/components/ui/input";
 import { PillButton } from "@/app/components/ui/pill-button";
@@ -19,12 +20,12 @@ import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
 
-const LOGIN_ERROR_MESSAGES = {
-    invalid_credentials: "The email or password is incorrect.",
-    email_not_confirmed: "Confirm your email address before logging in.",
-} as const;
-
 export default function LoginPage() {
+    const t = useTranslations("auth.login");
+    const loginErrorMessages: Record<string, string> = {
+        invalid_credentials: t("erroCredenciais"),
+        email_not_confirmed: t("erroEmailNaoConfirmado"),
+    };
     const router = useRouter();
     const {
         isAuthenticated,
@@ -57,8 +58,8 @@ export default function LoginPage() {
             setError(
                 knownErrorCodeMessage(
                     error,
-                    LOGIN_ERROR_MESSAGES,
-                    "Unable to log in right now. Please try again.",
+                    loginErrorMessages,
+                    t("erroPadrao"),
                 ),
             );
         } finally {
@@ -75,11 +76,13 @@ export default function LoginPage() {
                 {/* Login Form */}
                 <div className={cn(authGlassCardClassName, "mb-4")}>
                     <h2 className="mb-6 text-left text-2xl font-medium font-serif text-gray-950">
-                        Log In
+                        {t("titulo")}
                     </h2>
                     <form onSubmit={handleLogin} className="space-y-4">
                         <div>
-                            <FieldLabel htmlFor="email">Email</FieldLabel>
+                            <FieldLabel htmlFor="email">
+                                {t("labelEmail")}
+                            </FieldLabel>
                             <Input
                                 id="email"
                                 type="email"
@@ -93,13 +96,13 @@ export default function LoginPage() {
                         <div>
                             <div className="flex items-start justify-between gap-3">
                                 <FieldLabel htmlFor="password">
-                                    Password
+                                    {t("labelSenha")}
                                 </FieldLabel>
                                 <Link
                                     href="/forgot-password"
                                     className="text-xs font-medium text-gray-500 transition-colors hover:text-gray-950"
                                 >
-                                    Forgot password?
+                                    {t("forgotPassword")}
                                 </Link>
                             </div>
                             <Input
@@ -123,7 +126,7 @@ export default function LoginPage() {
                                         }
                                         className="ml-2 underline underline-offset-2"
                                     >
-                                        Retry
+                                        {t("retry")}
                                     </button>
                                 )}
                             </div>
@@ -137,7 +140,7 @@ export default function LoginPage() {
                                 disabled={loading}
                                 className="w-full"
                             >
-                                {loading ? "Logging in..." : "Log in"}
+                                {loading ? t("botaoEntrando") : t("botaoEntrar")}
                             </PillButton>
                         </div>
                         <AuthDivider />
@@ -150,12 +153,12 @@ export default function LoginPage() {
                     </form>
                 </div>
                 <div className="text-center text-sm text-gray-500">
-                    Don&apos;t have an account?{" "}
+                    {t("semConta")}{" "}
                     <Link
                         href="/signup"
                         className="font-medium transition-colors hover:text-gray-950"
                     >
-                        Sign up
+                        {t("cadastre")}
                     </Link>
                 </div>
             </div>

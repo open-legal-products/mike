@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listOrgs } from "@/app/lib/mikeApi";
 import type { Project } from "@/app/components/shared/types";
+import { withIntl } from "@/test/withIntl";
 import { ProjectDetailsModal } from "./ProjectDetailsModal";
 
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
@@ -47,16 +48,18 @@ describe("ProjectDetailsModal", () => {
 
     it("shows the current organisation in project details", async () => {
         render(
-            <ProjectDetailsModal
-                open
-                project={project}
-                canEdit
-                onClose={vi.fn()}
-                onSave={vi.fn()}
-            />,
+            withIntl(
+                <ProjectDetailsModal
+                    open
+                    project={project}
+                    canEdit
+                    onClose={vi.fn()}
+                    onSave={vi.fn()}
+                />,
+            ),
         );
 
-        const organisation = await screen.findByLabelText("Organisation");
+        const organisation = await screen.findByLabelText("Organização");
         expect(organisation).toBeDisabled();
         expect(organisation).toHaveTextContent("Elite Law LLP");
     });

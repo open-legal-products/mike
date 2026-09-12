@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { EditCardsSection } from "./EditCardsSection";
 
 const { resolveDocumentEdit } = vi.hoisted(() => ({
@@ -25,7 +26,7 @@ describe("EditCardsSection", () => {
 
     it("pushes the bulk View action to the right edge", () => {
         render(
-            <EditCardsSection
+            withIntl(<EditCardsSection
                 pending={[{ annotation, filename: "agreement.docx" }]}
                 filenameByDocId={
                     new Map([["document-1", "agreement.docx"]])
@@ -36,17 +37,17 @@ describe("EditCardsSection", () => {
                 ]}
                 resolvedCount={0}
                 onViewClick={vi.fn()}
-            />,
+            />),
         );
 
-        const view = screen.getByRole("button", { name: "View" });
+        const view = screen.getByRole("button", { name: "Ver" });
         expect(view).toHaveClass("ml-auto");
         expect(view.parentElement).toHaveClass("w-full");
     });
 
     it.each([
-        ["accept", "Accept all", "Accepting all..."],
-        ["reject", "Reject all", "Rejecting all..."],
+        ["accept", "Aceitar tudo", "Aceitando tudo..."],
+        ["reject", "Rejeitar tudo", "Rejeitando tudo..."],
     ] as const)(
         "shows the %s-all action while the bulk request is pending",
         async (verb, idleLabel, busyLabel) => {
@@ -59,7 +60,7 @@ describe("EditCardsSection", () => {
             const onResolved = vi.fn();
 
             render(
-                <EditCardsSection
+                withIntl(<EditCardsSection
                     pending={[{ annotation, filename: "agreement.docx" }]}
                     filenameByDocId={
                         new Map([["document-1", "agreement.docx"]])
@@ -70,7 +71,7 @@ describe("EditCardsSection", () => {
                     ]}
                     resolvedCount={0}
                     onResolved={onResolved}
-                />,
+                />),
             );
 
             fireEvent.click(
@@ -81,7 +82,7 @@ describe("EditCardsSection", () => {
             ).toBeDisabled();
             expect(
                 screen.getByRole("button", {
-                    name: verb === "accept" ? "Reject all" : "Accept all",
+                    name: verb === "accept" ? "Rejeitar tudo" : "Aceitar tudo",
                 }),
             ).toBeDisabled();
 

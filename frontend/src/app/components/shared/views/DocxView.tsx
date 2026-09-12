@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { API_BASE } from "@/app/lib/mikeApi";
 import { authenticatedFetch } from "@/app/lib/authEvents";
@@ -205,6 +206,7 @@ export function DocxView({
     onScrollChange,
     rounded = true,
 }: Props) {
+    const t = useTranslations("painelDocumento.visualizacoes");
     const scrollRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const lastScrollTopRef = useRef(0);
@@ -471,7 +473,7 @@ export function DocxView({
                         type="button"
                         onClick={() => onWarningDismiss?.()}
                         className="text-amber-600 hover:text-amber-900"
-                        aria-label="Dismiss warning"
+                        aria-label={t("dispensarAviso")}
                     >
                         ×
                     </button>

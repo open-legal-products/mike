@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { withIntl, type WithIntlMessages } from "@/test/withIntl";
 import { getTabularReview, updateTabularReview } from "@/app/lib/mikeApi";
+import ptBR from "../../../../messages/pt-BR.json";
 import type { TabularReview } from "@/app/components/shared/types";
 import { TRView } from "./TabularReviewView";
 
@@ -100,17 +102,25 @@ function mockDetail(over: Partial<TabularReview>) {
 
 async function openActionsMenu() {
     await waitFor(() =>
-        expect(screen.getByLabelText("Actions")).toBeInTheDocument(),
+        expect(screen.getByLabelText("Ações")).toBeInTheDocument(),
     );
     fireEvent.pointerDown(
-        screen.getByLabelText("Actions"),
+        screen.getByLabelText("Ações"),
         new MouseEvent("pointerdown", { bubbles: true }),
     );
-    fireEvent.click(screen.getByLabelText("Actions"));
+    fireEvent.click(screen.getByLabelText("Ações"));
     await waitFor(() =>
-        expect(screen.getByText("Edit details")).toBeInTheDocument(),
+        expect(screen.getByText("Editar detalhes")).toBeInTheDocument(),
     );
 }
+
+const messages: WithIntlMessages = {
+    ...ptBR,
+    shell: {
+        ...ptBR.shell,
+        menuAcoes: { acoes: ptBR.projects.visaoGeral.acoes },
+    },
+};
 
 describe("TabularReviewView details gate", () => {
     beforeEach(() => {
@@ -133,10 +143,10 @@ describe("TabularReviewView details gate", () => {
         // access.manage, so a member was refused at the door for a save the
         // server would have accepted.
         mockDetail({ access_role: "editor" });
-        render(<TRView reviewId="r1" />);
+        render(withIntl(<TRView reviewId="r1" />, messages));
 
         await openActionsMenu();
-        fireEvent.click(screen.getByText("Edit details"));
+        fireEvent.click(screen.getByText("Editar detalhes"));
 
         expect(screen.getByTestId("details-can-edit")).toHaveTextContent("true");
         fireEvent.click(screen.getByText("save details"));
@@ -149,14 +159,14 @@ describe("TabularReviewView details gate", () => {
 
     it("refuses a viewer with the editor tier, not the owner one", async () => {
         mockDetail({ access_role: "viewer" });
-        render(<TRView reviewId="r1" />);
+        render(withIntl(<TRView reviewId="r1" />, messages));
 
         await openActionsMenu();
-        fireEvent.click(screen.getByText("Edit details"));
+        fireEvent.click(screen.getByText("Editar detalhes"));
 
         expect(
             await screen.findByText(
-                "Only an editor can edit tabular review details.",
+                "Somente um editor pode editar os detalhes desta revisão tabular.",
             ),
         ).toBeInTheDocument();
         expect(screen.queryByTestId("details-can-edit")).not.toBeInTheDocument();
@@ -167,15 +177,15 @@ describe("TabularReviewView details gate", () => {
         // the creator's account is gone. Gating this on access.manage let an
         // admin who did not create the review through to a 403.
         mockDetail({ access_role: "owner", user_id: "someone-else" });
-        render(<TRView reviewId="r1" />);
+        render(withIntl(<TRView reviewId="r1" />, messages));
 
         await openActionsMenu();
-        fireEvent.click(screen.getByText("Edit details"));
+        fireEvent.click(screen.getByText("Editar detalhes"));
         fireEvent.click(screen.getByText("move to p9"));
 
         expect(
             await screen.findByText(
-                "Only the person who created this review can move it to another project.",
+                "Somente a pessoa que criou esta revisão pode movê-la para outro projeto.",
             ),
         ).toBeInTheDocument();
         expect(updateTabularReview).not.toHaveBeenCalled();
@@ -183,10 +193,10 @@ describe("TabularReviewView details gate", () => {
 
     it("lets the review's creator move it", async () => {
         mockDetail({ access_role: "editor", user_id: "me" });
-        render(<TRView reviewId="r1" />);
+        render(withIntl(<TRView reviewId="r1" />, messages));
 
         await openActionsMenu();
-        fireEvent.click(screen.getByText("Edit details"));
+        fireEvent.click(screen.getByText("Editar detalhes"));
         fireEvent.click(screen.getByText("move to p9"));
 
         await waitFor(() =>
@@ -199,10 +209,10 @@ describe("TabularReviewView details gate", () => {
 
     it("lets an admin move a review whose creator's account is gone", async () => {
         mockDetail({ access_role: "owner", user_id: null as unknown as string });
-        render(<TRView reviewId="r1" />);
+        render(withIntl(<TRView reviewId="r1" />, messages));
 
         await openActionsMenu();
-        fireEvent.click(screen.getByText("Edit details"));
+        fireEvent.click(screen.getByText("Editar detalhes"));
         fireEvent.click(screen.getByText("move to p9"));
 
         await waitFor(() =>
@@ -219,7 +229,7 @@ describe("TabularReviewView details gate", () => {
         // leftover of the ownership model — which refused admins and members
         // a change the server accepts, with admin-tier popup copy.
         mockDetail({ access_role: "owner", is_owner: false });
-        render(<TRView reviewId="r1" />);
+        render(withIntl(<TRView reviewId="r1" />, messages));
 
         await waitFor(() =>
             expect(screen.getByText("change model")).toBeInTheDocument(),
@@ -235,7 +245,7 @@ describe("TabularReviewView details gate", () => {
 
     it("refuses a viewer's model change with the member tier", async () => {
         mockDetail({ access_role: "viewer", is_owner: false });
-        render(<TRView reviewId="r1" />);
+        render(withIntl(<TRView reviewId="r1" />, messages));
 
         await waitFor(() =>
             expect(screen.getByText("change model")).toBeInTheDocument(),
@@ -243,7 +253,7 @@ describe("TabularReviewView details gate", () => {
         fireEvent.click(screen.getByText("change model"));
 
         expect(
-            await screen.findByText(/Only an editor can change the tabular review model/,
+            await screen.findByText(/Somente um editor pode alterar o modelo/,
             ),
         ).toBeInTheDocument();
         expect(updateTabularReview).not.toHaveBeenCalled();

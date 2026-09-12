@@ -1,12 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { AskInputPopup } from "./AskInputPopup";
 
 describe("AskInputPopup", () => {
     it("submits an open-ended answer entered in a textarea", async () => {
         const onSubmit = vi.fn();
         render(
-            <AskInputPopup
+             withIntl(<AskInputPopup
                 assistantMessageId="assistant-1"
                 event={{
                     type: "ask_inputs",
@@ -20,7 +21,7 @@ describe("AskInputPopup", () => {
                     ],
                 }}
                 onSubmit={onSubmit}
-            />,
+            />),
         );
 
         const input = screen.getByRole("textbox", {
@@ -41,7 +42,7 @@ describe("AskInputPopup", () => {
             target: { value: "1 Legal Plaza\nSingapore 048583" },
         });
         expect(screen.getByText("30 / 5,000")).toBeInTheDocument();
-        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
 
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
         expect(onSubmit.mock.calls[0][0]).toEqual({
@@ -66,7 +67,7 @@ describe("AskInputPopup", () => {
     it("requires confirmation again after a confirmed answer is edited", async () => {
         const onSubmit = vi.fn();
         render(
-            <AskInputPopup
+             withIntl(<AskInputPopup
                 assistantMessageId="assistant-1"
                 event={{
                     type: "ask_inputs",
@@ -85,7 +86,7 @@ describe("AskInputPopup", () => {
                     ],
                 }}
                 onSubmit={onSubmit}
-            />,
+            />),
         );
 
         fireEvent.change(
@@ -94,18 +95,18 @@ describe("AskInputPopup", () => {
             }),
             { target: { value: "Old Name" } },
         );
-        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
 
-        fireEvent.click(screen.getAllByRole("button", { name: "Question" })[0]);
+        fireEvent.click(screen.getAllByRole("button", { name: "Pergunta" })[0]);
         const nameInput = screen.getByRole("textbox", {
             name: "What is the company name?",
         });
         fireEvent.change(nameInput, { target: { value: "New Name" } });
         expect(
-            screen.getByRole("button", { name: "Confirm" }),
+            screen.getByRole("button", { name: "Confirmar" }),
         ).toBeEnabled();
         expect(onSubmit).not.toHaveBeenCalled();
-        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
 
         fireEvent.change(
             screen.getByRole("textbox", {
@@ -113,7 +114,7 @@ describe("AskInputPopup", () => {
             }),
             { target: { value: "1 Legal Plaza" } },
         );
-        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
 
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
         expect(onSubmit.mock.calls[0][0].responses[0]).toMatchObject({
@@ -125,7 +126,7 @@ describe("AskInputPopup", () => {
     it("allows multiple options to be selected and returned together", async () => {
         const onSubmit = vi.fn();
         render(
-            <AskInputPopup
+             withIntl(<AskInputPopup
                 assistantMessageId="assistant-1"
                 event={{
                     type: "ask_inputs",
@@ -146,7 +147,7 @@ describe("AskInputPopup", () => {
                     ],
                 }}
                 onSubmit={onSubmit}
-            />,
+            />),
         );
 
         fireEvent.click(
@@ -162,7 +163,7 @@ describe("AskInputPopup", () => {
             screen.getByRole("button", { name: /Non-solicitation/ }),
         ).toHaveAttribute("aria-pressed", "true");
 
-        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        fireEvent.click(screen.getByRole("button", { name: "Confirmar" }));
 
         await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
         expect(onSubmit.mock.calls[0][0]).toEqual({

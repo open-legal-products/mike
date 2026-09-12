@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import type {
     AccessAssignmentRole,
     ProjectPeople,
@@ -13,6 +14,7 @@ import { Modal } from "./Modal";
 import {
     OrganizationAccessEditor,
     AccessEditor,
+    type AccessResourceKind,
     type OrganizationAccessAssignment,
     type AccessRow,
 } from "./AccessEditor";
@@ -29,6 +31,7 @@ export interface AccessControls {
     inheritedFromProjectId?: string | null;
     canManage: boolean;
     ownerLabel?: string;
+    resourceKind?: AccessResourceKind;
     onGrant: (email: string, role: AccessAssignmentRole) => Promise<void>;
     onRevoke: (email: string) => Promise<void>;
 }
@@ -52,6 +55,7 @@ export function AccessModal({
     breadcrumb,
     access,
 }: Props) {
+    const t = useTranslations("modals.acesso");
     const [busy, setBusy] = useState(false);
     const [pendingEmail, setPendingEmail] = useState<string | null>(null);
     const [newRole, setNewRole] = useState<ProjectRole>("editor");
@@ -108,7 +112,7 @@ export function AccessModal({
                     setError(
                         userFacingApiError(
                             cause,
-                            "Could not load access details.",
+                            t("erroCarregar"),
                         ),
                     );
                     setLoadedRosterKey(rosterKey);
@@ -196,11 +200,12 @@ export function AccessModal({
     const currentEmail = currentUserEmail?.trim().toLowerCase() ?? null;
 
     function validateEmail(email: string) {
-        if (recipientEmails.includes(email)) return `${email} already has access.`;
+        if (recipientEmails.includes(email))
+            return t("jaTemAcesso", { email });
         if (ownerEmail && email === ownerEmail)
-            return `${email} created this and is already an owner.`;
+            return t("criadorJaDono", { email });
         if (currentEmail && email === currentEmail)
-            return "You cannot share this with yourself.";
+            return t("naoCompartilharConsigo");
         return null;
     }
 
@@ -229,7 +234,7 @@ export function AccessModal({
         try {
             await access.onGrant(row.email, role);
         } catch (cause) {
-            setError(userFacingApiError(cause, "Could not change that role."));
+            setError(userFacingApiError(cause, t("erroAlterarPapel")));
         } finally {
             setBusy(false);
             setPendingEmail(null);
@@ -244,7 +249,7 @@ export function AccessModal({
         try {
             await access.onRevoke(row.email);
         } catch (cause) {
-            setError(userFacingApiError(cause, "Could not remove access."));
+            setError(userFacingApiError(cause, t("erroRemoverAcesso")));
         } finally {
             setBusy(false);
             setPendingEmail(null);
@@ -314,7 +319,7 @@ export function AccessModal({
                 onClose={onClose}
                 breadcrumbs={[
                     ...breadcrumb.slice(0, -1),
-                    "Organisational Access",
+                    t("acessoOrganizacional"),
                 ]}
             >
                 <div className="flex min-h-0 flex-1 flex-col pb-5">
@@ -327,6 +332,7 @@ export function AccessModal({
                                 : null
                         }
                         ownerLabel={access.ownerLabel}
+                        resourceKind={access.resourceKind}
                         loading={
                             accessLoading || loadedRosterKey !== rosterKey
                         }
@@ -346,7 +352,7 @@ export function AccessModal({
         <Modal
             open={open}
             onClose={onClose}
-            breadcrumbs={[...breadcrumb.slice(0, -1), "Access"]}
+            breadcrumbs={[...breadcrumb.slice(0, -1), t("acesso")]}
         >
             <div className="flex min-h-0 flex-1 flex-col pb-5">
                 <AccessEditor

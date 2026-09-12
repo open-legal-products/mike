@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import {
@@ -16,7 +17,6 @@ import {
   TableRow,
   TableScrollArea,
   TableStickyCell,
-  type TableFilterOption,
   type TableSortDirection,
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
@@ -31,7 +31,7 @@ import {
   type Org,
   type OrgInvitation,
 } from "@/app/lib/mikeApi";
-import { ORG_ROLE_LABELS } from "@/app/lib/permissions";
+import { type OrgRole } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { LIQUID_SUBTLE_PANEL_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import { CreateOrganizationModal } from "./OrganizationModals";
@@ -39,10 +39,25 @@ import { CreateOrganizationModal } from "./OrganizationModals";
 type OrganizationFilter = "managed" | "joined" | "invites";
 type OrganizationSortKey = "name" | "members" | "created";
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
+const SORT_OPTIONS = [
+  { value: "asc" as TableSortDirection, labelKey: "crescente" },
+  { value: "desc" as TableSortDirection, labelKey: "decrescente" },
 ];
+
+const PAPEL_KEYS: Record<OrgRole, string> = {
+  admin: "papelAdmin",
+  member: "papelMembro",
+};
+
+function withLabels<T extends { labelKey: string }>(
+  options: T[],
+  t: (key: string) => string,
+): (Omit<T, "labelKey"> & { label: string })[] {
+  return options.map(({ labelKey, ...rest }) => ({
+    ...rest,
+    label: t(labelKey),
+  }));
+}
 
 function formatDate(value?: string) {
   if (!value) return "—";
@@ -57,6 +72,8 @@ function formatDate(value?: string) {
 
 export function OrganizationsOverview() {
   const router = useRouter();
+  const t = useTranslations("organizations.overview");
+  const tg = useTranslations("organizations.geral");
   const [orgs, setOrgs] = useState<Org[] | null>(null);
   const [invitations, setInvitations] = useState<OrgInvitation[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -81,10 +98,10 @@ export function OrganizationsOverview() {
       setLoadError(null);
     } catch (error) {
       console.error("Failed to load organizations", error);
-      setLoadError("Could not load organizations.");
+      setLoadError(t("erroCarregamento"));
       setOrgs([]);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
@@ -99,7 +116,7 @@ export function OrganizationsOverview() {
       await load();
     } catch (error) {
       setInvitationError(
-        userFacingApiError(error, "Could not answer that invitation."),
+        userFacingApiError(error, t("erroConvite")),
       );
       await load();
     } finally {
@@ -112,17 +129,17 @@ export function OrganizationsOverview() {
     { id: OrganizationFilter; label: string }[]
   >(
     () => [
-      { id: "managed", label: "Managing" },
-      { id: "joined", label: "Joined" },
+      { id: "managed", label: t("gerenciando") },
+      { id: "joined", label: t("participando") },
       {
         id: "invites",
         label:
           invitations.length > 0
-            ? `Invites (${invitations.length})`
-            : "Invites",
+            ? t("convitesComContagem", { count: invitations.length })
+            : t("convites"),
       },
     ],
-    [invitations.length],
+    [invitations.length, t],
   );
   const visibleOrgs = useMemo(() => {
     if (activeFilter === "invites") return [];
@@ -155,13 +172,13 @@ export function OrganizationsOverview() {
         actions={[
           {
             type: "new",
-            title: "New organization",
+            title: tg("novaOrganizacao"),
             onClick: () => setCreateOpen(true),
           },
         ]}
       >
         <h1 className="font-serif text-2xl font-medium text-gray-900">
-          Organizations
+          {t("titulo")}
         </h1>
       </PageHeader>
 
@@ -183,8 +200,8 @@ export function OrganizationsOverview() {
         ) : invitations.length === 0 ? (
           <div className="mx-4 mb-3 flex min-h-0 flex-1 items-center justify-center md:mx-8">
             <EmptyState
-              title="Invitations"
-              description="You have no active organization invitations."
+              title={t("convitesTitulo")}
+              description={t("semConvitesAtivos")}
             />
           </div>
         ) : (
@@ -199,9 +216,12 @@ export function OrganizationsOverview() {
                 >
                   <p className="min-w-0 flex-1 text-xs text-gray-600">
                     <span className="font-medium text-gray-800">
-                      {invitation.org_name ?? "An organization"}
+                      {invitation.org_name ?? t("umaOrganizacao")}
                     </span>{" "}
-                    invited you as {ORG_ROLE_LABELS[invitation.role]}.
+                    {t("convidouComo", {
+                      organizacao: invitation.org_name ?? t("umaOrganizacao"),
+                      papel: tg(PAPEL_KEYS[invitation.role]),
+                    })}
                   </p>
                   <div className="flex gap-2">
                     <PillButton
@@ -212,7 +232,7 @@ export function OrganizationsOverview() {
                       onClick={() => void answer(invitation, true)}
                     >
                       <Check className="h-3.5 w-3.5" />
-                      Accept
+                      {t("aceitar")}
                     </PillButton>
                     <PillButton
                       tone="white"
@@ -220,7 +240,7 @@ export function OrganizationsOverview() {
                       disabled={answeringId === invitation.id}
                       onClick={() => void answer(invitation, false)}
                     >
-                      Decline
+                      {t("recusar")}
                     </PillButton>
                   </div>
                 </div>
@@ -233,13 +253,13 @@ export function OrganizationsOverview() {
           header={
             <TableHeaderRow>
               <TableStickyCell header>
-                <span className="mr-1">Name</span>
+                <span className="mr-1">{tg("colunaNome")}</span>
                 {!loading ? (
                   <TableFilters
-                    label="Sort by organization name"
+                    label={t("ordenarPorNome")}
                     value={sort?.key === "name" ? sort.direction : null}
-                    allLabel="Default order"
-                    options={SORT_OPTIONS}
+                    allLabel={tg("ordemPadrao")}
+                    options={withLabels(SORT_OPTIONS, tg)}
                     align="right"
                     widthClassName="w-40"
                     onChange={(direction) => setSortFor("name", direction)}
@@ -247,26 +267,26 @@ export function OrganizationsOverview() {
                 ) : null}
               </TableStickyCell>
               <TableHeaderCell className="ml-auto w-32">
-                <span className="mr-1">Members</span>
+                <span className="mr-1">{t("colunaMembros")}</span>
                 {!loading ? (
                   <TableFilters
-                    label="Sort by member count"
+                    label={t("ordenarPorMembros")}
                     value={sort?.key === "members" ? sort.direction : null}
-                    allLabel="Default order"
-                    options={SORT_OPTIONS}
+                    allLabel={tg("ordemPadrao")}
+                    options={withLabels(SORT_OPTIONS, tg)}
                     widthClassName="w-40"
                     onChange={(direction) => setSortFor("members", direction)}
                   />
                 ) : null}
               </TableHeaderCell>
               <TableHeaderCell className="w-36">
-                <span className="mr-1">Created</span>
+                <span className="mr-1">{tg("colunaCriacao")}</span>
                 {!loading ? (
                   <TableFilters
-                    label="Sort by creation date"
+                    label={t("ordenarPorCriacao")}
                     value={sort?.key === "created" ? sort.direction : null}
-                    allLabel="Default order"
-                    options={SORT_OPTIONS}
+                    allLabel={tg("ordemPadrao")}
+                    options={withLabels(SORT_OPTIONS, tg)}
                     widthClassName="w-40"
                     onChange={(direction) => setSortFor("created", direction)}
                   />
@@ -299,7 +319,7 @@ export function OrganizationsOverview() {
             <TableEmptyState>
               <EmptyState
                 icon={<OrganizationSkeuoIcon />}
-                title="Organizations"
+                title={t("titulo")}
                 description={loadError}
                 tone="error"
                 action={
@@ -308,7 +328,7 @@ export function OrganizationsOverview() {
                     size="sm"
                     onClick={() => void load()}
                   >
-                    Try again
+                    {tg("tentarNovamente")}
                   </PillButton>
                 }
               />
@@ -317,15 +337,15 @@ export function OrganizationsOverview() {
             <TableEmptyState>
               <EmptyState
                 icon={<OrganizationSkeuoIcon />}
-                title="Organizations"
-                description="Create an organization to share projects, chats and reviews with your team."
+                title={t("titulo")}
+                description={t("estadoVazioDescricao")}
                 action={
                   <PillButton
                     tone="black"
                     size="sm"
                     onClick={() => setCreateOpen(true)}
                   >
-                    Create
+                    {tg("criar")}
                   </PillButton>
                 }
               />
@@ -334,8 +354,8 @@ export function OrganizationsOverview() {
             <TableEmptyState>
               <p className="text-sm text-gray-400">
                 {activeFilter === "managed"
-                  ? "No managed organizations"
-                  : "No joined organizations"}
+                  ? t("semGerenciadas")
+                  : t("semParticipantes")}
               </p>
             </TableEmptyState>
           ) : (
@@ -345,7 +365,7 @@ export function OrganizationsOverview() {
                   key={org.id}
                   role="link"
                   tabIndex={0}
-                  aria-label={`Open ${org.name}`}
+                  aria-label={t("abrir", { nome: org.name })}
                   onClick={() => router.push(`/organizations/${org.id}`)}
                   onKeyDown={(event) => {
                     if (event.target !== event.currentTarget) return;
@@ -362,8 +382,7 @@ export function OrganizationsOverview() {
                     </span>
                   </TableStickyCell>
                   <TableCell className="ml-auto w-32">
-                    {org.member_count ?? 0}{" "}
-                    {org.member_count === 1 ? "member" : "members"}
+                    {t("contagemMembros", { count: org.member_count ?? 0 })}
                   </TableCell>
                   <TableCell className="w-36">
                     {formatDate(org.created_at)}
@@ -385,7 +404,7 @@ export function OrganizationsOverview() {
       />
       <WarningPopup
         open={invitationError !== null}
-        title="Invitation not updated"
+        title={t("erroConviteTitulo")}
         message={invitationError}
         onClose={() => setInvitationError(null)}
       />

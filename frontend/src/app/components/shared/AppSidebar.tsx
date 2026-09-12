@@ -18,6 +18,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useRouter, usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
 import { SidebarChatItem } from "@/app/components/shared/SidebarChatItem";
@@ -43,16 +44,16 @@ import {
 } from "@/app/components/ui/liquid-surface";
 
 const NAV_ITEMS = [
-    { href: "/assistant", label: "Assistant", icon: ChatSkeuoIcon },
-    { href: "/projects", label: "Projects", icon: FolderSkeuoIcon },
-    { href: "/library", label: "Library", icon: LibrarySkeuoIcon },
+    { href: "/assistant", labelKey: "navAssistente", icon: ChatSkeuoIcon },
+    { href: "/projects", labelKey: "navProjetos", icon: FolderSkeuoIcon },
+    { href: "/library", labelKey: "navBiblioteca", icon: LibrarySkeuoIcon },
     {
         href: "/tabular-reviews",
-        label: "Tabular Review",
+        labelKey: "navRevisoesTabulares",
         icon: TabularReviewSkeuoIcon,
     },
-    { href: "/workflows", label: "Workflows", icon: WorkflowSkeuoIcon },
-];
+    { href: "/workflows", labelKey: "navWorkflows", icon: WorkflowSkeuoIcon },
+] as const;
 
 const RECENT_PROJECT_PAGE_SIZE = 10;
 const RECENT_PROJECT_LIST_HEIGHT_CLASS = "h-44";
@@ -79,6 +80,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         useChatHistoryContext();
     const router = useRouter();
     const pathname = usePathname();
+    const t = useTranslations("shell.sidebar");
     const routeChatId = useMemo(() => {
         if (pathname.startsWith("/assistant/chat/")) {
             return pathname.split("/").pop() ?? null;
@@ -240,7 +242,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
 
     const getUserTier = () => {
         if (!profile) return "";
-        return profile.tier || "Free";
+        return profile.tier || t("planoGratuito");
     };
 
     if (!user) return null;
@@ -297,7 +299,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                             "rounded-md",
                             LIQUID_GLASS_HOVER_CLASS,
                         )}
-                        title={isOpen ? "Close sidebar" : "Open sidebar"}
+                        title={isOpen ? t("fecharMenu") : t("abrirMenu")}
                     >
                         <PanelLeft className="h-4 w-4 shrink-0" />
                     </button>
@@ -305,7 +307,8 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
 
                 {/* Nav items */}
                 <div className="pt-2">
-                    {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+                    {NAV_ITEMS.map(({ href, labelKey, icon: Icon }) => {
+                        const label = t(labelKey);
                         const isActive =
                             href === "/assistant"
                                 ? pathname === href
@@ -360,7 +363,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     shouldAnimate ? "sidebar-fade-in" : ""
                                 }`}
                             >
-                                <span>Recent Projects</span>
+                                <span>{t("projetosRecentes")}</span>
                                 <ChevronDown
                                     className={`h-3.5 w-3.5 transition-transform ${
                                         projectsCollapsed ? "-rotate-90" : ""
@@ -399,7 +402,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                     : ""
                                             }`}
                                         >
-                                            No projects yet
+                                            {t("nenhumProjeto")}
                                         </div>
                                     ) : (
                                         <div
@@ -468,7 +471,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     shouldAnimate ? "sidebar-fade-in" : ""
                                 }`}
                             >
-                                <span>Assistant History</span>
+                                <span>{t("historicoAssistente")}</span>
                                 <ChevronDown
                                     className={`h-3.5 w-3.5 transition-transform ${
                                         historyCollapsed ? "-rotate-90" : ""
@@ -505,7 +508,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                 : ""
                                         }`}
                                     >
-                                        No chats yet
+                                        {t("nenhumaConversa")}
                                     </div>
                                 ) : (
                                     <>
@@ -621,7 +624,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         )}
                                     >
                                         <HistorySkeuoIcon className="h-4 w-4" />
-                                        History
+                                        {t("historico")}
                                     </button>
                                     <button
                                         type="button"
@@ -635,7 +638,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         )}
                                     >
                                         <SettingsSkeuoIcon className="h-4 w-4" />
-                                        Settings
+                                        {t("configConta")}
                                     </button>
                                     <button
                                         type="button"
@@ -649,7 +652,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         )}
                                     >
                                         <OrganizationSkeuoIcon className="h-4 w-4" />
-                                        Organizations
+                                        {t("organizacoes")}
                                     </button>
                                     <button
                                         type="button"
@@ -659,7 +662,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                 .then(() => router.push("/"))
                                                 .catch(() => {
                                                     window.alert(
-                                                        "Unable to sign out. Please try again.",
+                                                        t("erroSair"),
                                                     );
                                                 });
                                         }}
@@ -669,7 +672,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         )}
                                     >
                                         <SignOutSkeuoIcon className="h-4 w-4" />
-                                        Sign out
+                                        {t("sair")}
                                     </button>
                                 </div>
                             )}

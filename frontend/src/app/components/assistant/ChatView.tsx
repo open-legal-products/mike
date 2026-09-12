@@ -3,6 +3,7 @@
 import { useCallback, useState, useRef, useEffect } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ArrowDown, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
@@ -98,6 +99,9 @@ export function ChatView({
     canSend,
 }: Props) {
     const router = useRouter();
+    const t = useTranslations("assistant.chatView");
+    const tAssistente = useTranslations("assistant");
+    const tShared = useTranslations("shared.assistantChat");
     const [tabs, setTabs] = useState<AssistantSidePanelTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [panelMounted, setPanelMounted] = useState(false);
@@ -659,7 +663,7 @@ export function ChatView({
         if (!activeChat) return;
         if (!can(activeChatRole, "access.manage")) {
             setActionGate({
-                action: "share this chat",
+                action: t("compartilharEstaConversa"),
                 requiredRole: "owner",
             });
             return;
@@ -671,24 +675,24 @@ export function ChatView({
         if (!activeChat) return;
         if (!can(activeChatRole, "content.edit")) {
             setActionGate({
-                action: "rename this chat",
+                action: tAssistente("renomearConversa"),
                 requiredRole: "editor",
             });
             return;
         }
         const title = window.prompt(
-            "Rename chat",
-            activeChat.title?.trim() || "Untitled chat",
+            t("tituloRenomear"),
+            activeChat.title?.trim() || tAssistente("conversaSemTitulo"),
         );
         if (!title?.trim()) return;
         try {
             await renameChat(activeChat.id, title.trim());
         } catch (error) {
             setActionError({
-                title: "Chat not renamed",
+                title: t("erroRenomearTitulo"),
                 message: userFacingApiError(
                     error,
-                    "The chat could not be renamed. Please try again.",
+                    t("erroRenomearMensagem"),
                 ),
             });
         }
@@ -698,7 +702,7 @@ export function ChatView({
         if (!activeChat) return;
         if (!can(activeChatRole, "container.delete")) {
             setActionGate({
-                action: "delete this chat",
+                action: tAssistente("excluirConversa"),
                 requiredRole: "owner",
             });
             return;
@@ -708,10 +712,10 @@ export function ChatView({
             router.push("/assistant");
         } catch (error) {
             setActionError({
-                title: "Chat not deleted",
+                title: t("erroExcluirTitulo"),
                 message: userFacingApiError(
                     error,
-                    "The chat could not be deleted. Please try again.",
+                    t("erroExcluirMensagem"),
                 ),
             });
         }
@@ -721,29 +725,29 @@ export function ChatView({
         <HeaderButtonsUI className="pointer-events-auto">
             <HeaderButtonUI
                 iconOnly
-                aria-label="New chat"
-                title="New chat"
+                aria-label={tShared("novaConversa")}
+                title={tShared("novaConversa")}
                 onClick={handleNewChat}
             >
                 <Plus className="h-4 w-4" />
             </HeaderButtonUI>
             <HeaderActionsMenu
-                title="Chat actions"
+                title={t("acoesConversa")}
                 items={[
                     {
-                        label: "Share",
+                        label: t("compartilhar"),
                         icon: Users,
                         onSelect: handleShareChat,
                         disabled: !activeChat,
                     },
                     {
-                        label: "Rename",
+                        label: tAssistente("renomear"),
                         icon: Pencil,
                         onSelect: () => void handleRenameChat(),
                         disabled: !activeChat,
                     },
                     {
-                        label: "Delete",
+                        label: tAssistente("excluir"),
                         icon: Trash2,
                         onSelect: () => void handleDeleteChat(),
                         disabled: !activeChat,
@@ -1086,7 +1090,7 @@ export function ChatView({
 
             <WarningPopup
                 open={!!actionError}
-                title={actionError?.title ?? "Chat action failed"}
+                title={actionError?.title ?? t("erroAcaoTitulo")}
                 message={actionError?.message ?? null}
                 onClose={() => setActionError(null)}
             />

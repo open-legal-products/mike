@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 
 const mocks = vi.hoisted(() => {
@@ -60,7 +61,7 @@ describe("WorkflowPromptEditor table picker", () => {
   it("preserves the workflow surface while using the shared editor", async () => {
     const user = userEvent.setup();
     const { container } = render(
-      <WorkflowPromptEditor value="Prompt" onChange={vi.fn()} />,
+      withIntl(<WorkflowPromptEditor value="Prompt" onChange={vi.fn()} />),
     );
 
     expect(container.firstElementChild).toHaveClass(
@@ -68,9 +69,9 @@ describe("WorkflowPromptEditor table picker", () => {
       "liquid-glass-flat",
     );
 
-    await user.click(screen.getByRole("button", { name: "Insert table" }));
+    await user.click(screen.getByRole("button", { name: "Inserir tabela" }));
     const gridCell = screen.getByRole("menuitem", {
-      name: "Insert 3 by 4 table",
+      name: "Inserir tabela de 3 por 4",
     });
     await user.hover(gridCell);
     expect(screen.getByText("3 x 4")).toBeVisible();

@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import ptBR from "../../../../messages/pt-BR.json";
+import { withIntl } from "@/test/withIntl";
 import { listProjectSummaries } from "@/app/lib/mikeApi";
 import { AppSidebar } from "./AppSidebar";
 
@@ -44,6 +46,18 @@ vi.mock("@/app/components/chat/mike-icon", () => ({
 }));
 
 describe("AppSidebar account dropdown", () => {
+  const messages = {
+    ...ptBR,
+    shell: {
+      ...ptBR.shell,
+      sidebar: {
+        ...ptBR.shell.sidebar,
+        ...ptBR.shared.appSidebar,
+        sair: ptBR.auth.signOut,
+      },
+    },
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listProjectSummaries).mockResolvedValue([]);
@@ -51,11 +65,13 @@ describe("AppSidebar account dropdown", () => {
 
   it("keeps memory navigation inside Settings", async () => {
     const user = userEvent.setup();
-    render(<AppSidebar isOpen onToggle={vi.fn()} />);
+    render(withIntl(<AppSidebar isOpen onToggle={vi.fn()} />, messages));
 
     await user.click(screen.getByText("Alice").closest("button")!);
 
-    expect(screen.getByRole("button", { name: "Settings" })).toBeVisible();
+    expect(
+        screen.getByRole("button", { name: "Configurações da Conta" }),
+    ).toBeVisible();
     expect(screen.queryByRole("button", { name: "Memory" })).toBeNull();
   });
 });

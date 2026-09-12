@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { providerLabel, type ModelProvider } from "@/app/lib/modelAvailability";
 import { WarningPopup } from "../popups/WarningPopup";
 
@@ -15,12 +16,11 @@ interface Props {
 
 export function ApiKeyMissingPopup({ open, onClose, provider, message }: Props) {
     const router = useRouter();
+    const t = useTranslations("modals.apiKeyMissing");
     if (!open) return null;
 
-    const providerName = provider ? providerLabel(provider) : "this provider";
-    const body =
-        message ??
-        `You haven't added a ${providerName} API key yet. Add one in Settings to use this model.`;
+    const providerName = provider ? providerLabel(provider) : t("provedorPadrao");
+    const body = message ?? t("corpo", { providerName });
 
     const handleGoToSettings = () => {
         onClose();
@@ -31,13 +31,13 @@ export function ApiKeyMissingPopup({ open, onClose, provider, message }: Props) 
         <WarningPopup
             open={open}
             onClose={onClose}
-            title="API key required"
+            title={t("titulo")}
             message={body}
             icon={
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
             }
             primaryAction={{
-                label: "Go to settings",
+                label: t("irConfiguracoes"),
                 onClick: handleGoToSettings,
             }}
         />

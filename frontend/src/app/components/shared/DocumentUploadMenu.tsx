@@ -1,6 +1,7 @@
 "use client";
 
 import { Files, FolderUp, Upload } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
     DropdownMenu,
     DropdownMenuTrigger,
@@ -24,6 +25,7 @@ export function DocumentUploadMenu({
     onUploadFolder,
     disabled = false,
 }: DocumentUploadMenuProps) {
+    const t = useTranslations("documentosMenu");
     const triggerDisabled =
         disabled || (!onSavedFiles && !onUploadFiles && !onUploadFolder);
 
@@ -32,8 +34,8 @@ export function DocumentUploadMenu({
             <DropdownMenuTrigger asChild>
                 <HeaderButtonUI
                     disabled={triggerDisabled}
-                    title="Upload"
-                    aria-label="Upload"
+                    title={t("upload")}
+                    aria-label={t("upload")}
                     iconOnly
                 >
                     <Upload className="h-3.5 w-3.5" />
@@ -50,7 +52,7 @@ export function DocumentUploadMenu({
                         className="flex items-center px-3 py-2"
                     >
                         <Files className="mr-2 h-3.5 w-3.5" />
-                        Saved files
+                        {t("arquivosSalvos")}
                     </LiquidDropdownItem>
                 )}
                 <LiquidDropdownItem
@@ -59,7 +61,7 @@ export function DocumentUploadMenu({
                     className="flex items-center px-3 py-2"
                 >
                     <Upload className="mr-2 h-3.5 w-3.5" />
-                    Upload files
+                    {t("enviarArquivos")}
                 </LiquidDropdownItem>
                 {onUploadFolder !== undefined && (
                     <LiquidDropdownItem
@@ -68,7 +70,7 @@ export function DocumentUploadMenu({
                         className="flex items-center px-3 py-2"
                     >
                         <FolderUp className="mr-2 h-3.5 w-3.5" />
-                        Upload folder
+                        {t("enviarPasta")}
                     </LiquidDropdownItem>
                 )}
             </LiquidDropdownContent>

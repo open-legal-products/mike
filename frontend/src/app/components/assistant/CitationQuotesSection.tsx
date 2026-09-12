@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { CiteButton } from "@/app/components/ui/cite-button";
 import { PillButton } from "@/app/components/ui/pill-button";
 import type { PanelDocument, PanelDocumentQuote } from "../shared/types";
@@ -94,6 +95,7 @@ export function CitationQuotesSection({
     onSelect,
     onIndexChange,
 }: Props) {
+    const tCitacoes = useTranslations("assistant.citacoes");
     const quotes = useMemo(
         () =>
             document ? documentQuoteItems(document) : (suppliedQuotes ?? []),
@@ -116,7 +118,12 @@ export function CitationQuotesSection({
         <div className="px-2 pb-2">
             <div className={`${RESPONSE_GLASS_SURFACE} p-2`}>
                 <div className="mb-2 flex items-center justify-between">
-                    <ContextNumberBadge number={citationRef} label="Citation" />
+                    {citationRef !== undefined && (
+                        <ContextNumberBadge
+                            number={citationRef}
+                            label={tCitacoes("citacao", { ref: citationRef })}
+                        />
+                    )}
                     <div className="ml-auto flex items-center gap-2">
                         {hasMultipleQuotes && (
                             <div className="flex items-center gap-1">

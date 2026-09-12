@@ -30,6 +30,8 @@ export type UploadProgressStatus =
 
 export type UploadProgress<T = unknown> = Omit<UploadOutcome<T>, "status"> & {
     status: UploadProgressStatus;
+    /** Backend resource id behind this file, known from session creation on. */
+    resourceId?: string | null;
 };
 
 /**
@@ -138,6 +140,7 @@ export function createControlRequestRetryPolicy(
 
 type UploadSessionFileResponse = {
     id: string;
+    resource_id: string;
     client_id: string;
     filename: string;
     status:
@@ -359,6 +362,7 @@ async function runUploadSession<T>(args: {
                           : file.status,
                 result: file.status === "completed" ? (file.result as T) : null,
                 errorCode: file.error_code,
+                resourceId: file.resource_id,
             });
         }
     };

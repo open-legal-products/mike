@@ -27,6 +27,7 @@ export interface ModalUIProps {
     secondaryAction?: ReactNode;
     cancelAction?: ReactNode;
     keepMounted?: boolean;
+    closeLabel?: string;
 }
 
 const sizeClassName: Record<ModalUISize, string> = {
@@ -50,6 +51,7 @@ export function ModalUI({
     secondaryAction,
     cancelAction,
     keepMounted = false,
+    closeLabel = "Close",
 }: ModalUIProps) {
     const [hasMounted, setHasMounted] = useState(false);
     const dialogRef = useRef<HTMLElement>(null);
@@ -160,7 +162,7 @@ export function ModalUI({
                             </div>
                             {headerAction}
                         </div>
-                        <GlassIconButtonUI onClick={onClose} aria-label="Close">
+                        <GlassIconButtonUI onClick={onClose} aria-label={closeLabel}>
                             <X className="h-3.5 w-3.5" />
                         </GlassIconButtonUI>
                     </header>

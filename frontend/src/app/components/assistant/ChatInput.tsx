@@ -16,6 +16,7 @@ import {
     Waypoints,
     X,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { AddDocButton } from "./AddDocButton";
 import { UploadOverlay } from "./UploadOverlay";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
@@ -122,6 +123,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     }: Props,
     ref,
 ) {
+    const t = useTranslations("assistant.chatInput");
+    const tAssistente = useTranslations("assistant");
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<Document[]>([]);
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
@@ -321,9 +324,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     const handleDroppedFiles = useCallback(
         async (files: File[]) => {
             if (!canSend) {
-                setUploadWarning(
-                    "Only someone with edit access can add documents.",
-                );
+                setUploadWarning(t("avisoSemPermissaoUpload"));
                 return;
             }
             const { supported, unsupported } =
@@ -392,14 +393,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         ? failedUploadMessage(error.outcomes)
                         : userFacingApiError(
                               error,
-                              "Documents could not be uploaded. Please try again.",
+                              t("erroUpload"),
                           ),
                 );
             } finally {
                 setUploadingFiles([]);
             }
         },
-        [addAttachedDocuments, canSend, onDocumentsUploaded, projectId],
+        [addAttachedDocuments, canSend, onDocumentsUploaded, projectId, t],
     );
 
     useEffect(() => {
@@ -593,7 +594,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                             );
                                             setWorkflowModalOpen(true);
                                         }}
-                                        aria-label={`Open workflow ${selectedWorkflow.title}`}
+                                        aria-label={t(
+                                            "abrirWorkflow",
+                                            {
+                                                title:
+                                                    selectedWorkflow.title,
+                                            },
+                                        )}
                                         className="inline-flex min-w-0 items-center gap-1 rounded-full transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
                                     >
                                         <Waypoints className="h-2.5 w-2.5 shrink-0" />
@@ -635,7 +642,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                                 onClick={() =>
                                                     onDocumentClick(doc)
                                                 }
-                                                aria-label={`Open ${doc.filename}`}
+                                                aria-label={t(
+                                                    "abrirDocumento",
+                                                    { filename: doc.filename },
+                                                )}
                                                 className="inline-flex min-w-0 items-center gap-1 py-0.5 pl-2 transition-colors hover:text-gray-950"
                                             >
                                                 {documentLabel}
@@ -654,7 +664,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                                     ),
                                                 )
                                             }
-                                            aria-label={`Remove ${doc.filename}`}
+                                            aria-label={t("removerDocumento", {
+                                                filename: doc.filename,
+                                            })}
                                             className="mx-1 rounded-full p-0.5 text-gray-400 transition-colors hover:bg-gray-900/5 hover:text-gray-700"
                                         >
                                             <X className="h-2.5 w-2.5" />
@@ -689,8 +701,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                             disabled={!canSend}
                             placeholder={
                                 canSend
-                                    ? "How can I help?"
-                                    : "Viewing only — sending needs edit access"
+                                    ? t("placeholder")
+                                    : t("somenteVisualizacao")
                             }
                             value={value}
                             onChange={handleChange}
@@ -737,7 +749,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                         setWorkflowModalInitialId(undefined);
                                         setWorkflowModalOpen(true);
                                     }}
-                                    aria-label="Open workflows"
+                                    aria-label={t("abrirWorkflows")}
                                     className={cn(
                                         "flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm transition-colors",
                                         selectedWorkflow
@@ -757,7 +769,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                                 : "hidden sm:inline"
                                         }
                                     >
-                                        Workflows
+                                        {t("workflows")}
                                     </span>
                                 </button>
                             )}
@@ -784,7 +796,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                             <button
                                 type="button"
                                 aria-label={
-                                    isLoading ? "Stop response" : "Send message"
+                                    isLoading
+                                        ? t("pararResposta")
+                                        : t("enviarMensagem")
                                 }
                                 className={cn(
                                     "relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[11px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border-0 active:enabled:scale-95 transition-all duration-150",
@@ -825,8 +839,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 uploadStateId={`assistant-chat:${projectId ?? "standalone"}`}
                 breadcrumb={
                     selectedWorkflow
-                        ? ["Assistant", selectedWorkflow.title, "Add Documents"]
-                        : ["Assistant", "Add Documents"]
+                        ? [
+                              tAssistente("title"),
+                              selectedWorkflow.title,
+                              t("adicionarDocumentos"),
+                          ]
+                        : [tAssistente("title"), t("adicionarDocumentos")]
                 }
             />
             <AssistantWorkflowModal
@@ -855,8 +873,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             <WarningPopup
                 open={modelRequiredWarning}
                 onClose={() => setModelRequiredWarning(false)}
-                title="Select a model"
-                message="Choose a model before sending your message."
+                title={t("selecionarModelo")}
+                message={t("selecionarModeloMensagem")}
             />
             <UploadOverlay
                 open={isDraggingFiles}

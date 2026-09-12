@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { MoreHorizontal } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
@@ -26,6 +27,8 @@ interface InitialViewProps {
 const ICON_SIZE = 30;
 const GAP = 12; // gap-4 = 1rem = 16px
 export function InitialView({ onSubmit }: InitialViewProps) {
+    const t = useTranslations("assistant.inicial");
+    const tAssistente = useTranslations("assistant");
     const { user } = useAuth();
     const { profile } = useUserProfile();
     const [loaded, setLoaded] = useState(false);
@@ -37,7 +40,9 @@ export function InitialView({ onSubmit }: InitialViewProps) {
     const chatInputRef = useRef<ChatInputHandle>(null);
 
     const username =
-        profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
+        profile?.displayName?.trim() ||
+        user?.email?.split("@")[0] ||
+        t("semNome");
     const visibleQuickActions = quickActions.filter((action) => action.enabled);
 
     useEffect(() => {
@@ -207,7 +212,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                                 "transform 900ms cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 800ms ease-in-out 300ms",
                         }}
                     >
-                        Hi, {username}
+                        {tAssistente("initialView.saudacao", { username })}
                     </h1>
                 </div>
             </div>
@@ -224,7 +229,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
             <div className="min-h-0 w-full max-w-4xl justify-self-center px-0 pt-1 xl:px-8">
                 <div className="text-center">
                     <p className="text-xs py-2 mb-12 text-gray-500">
-                        AI can make mistakes. Answers are not legal advice.
+                        {tAssistente("avisoIA")}
                     </p>
                 </div>
 
@@ -241,12 +246,12 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                                     aria-hidden="true"
                                     className="h-3.5 w-3.5 shrink-0"
                                 />
-                                Quick actions
+                                {t("acoesRapidas")}
                             </span>
                             <button
                                 type="button"
                                 onClick={() => setQuickActionsModalOpen(true)}
-                                aria-label="Configure quick actions"
+                                aria-label={t("configurarAcoesRapidas")}
                                 className="absolute left-full ml-1.5 flex h-5 w-5 items-center justify-center text-gray-400 opacity-0 transition-all hover:text-gray-700 group-hover:opacity-100 focus:opacity-100"
                             >
                                 <MoreHorizontal className="h-3.5 w-3.5" />

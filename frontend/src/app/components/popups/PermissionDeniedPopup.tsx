@@ -1,11 +1,9 @@
 "use client";
 
 import { Lock } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { WarningPopup } from "../popups/WarningPopup";
-import {
-    PROJECT_ROLE_LABELS,
-    type ProjectRole,
-} from "@/app/lib/permissions";
+import type { ProjectRole } from "@/app/lib/permissions";
 
 /** Anyone the user could ask for access, as the API returns them. */
 export interface AccessContact {
@@ -35,12 +33,20 @@ interface Props {
     message?: string;
 }
 
-const ROLE_SUBJECT: Record<
+const ROLE_KEYS: Record<
     NonNullable<Props["requiredRole"]>,
-    { title: string; subject: string }
+    { titulo: string; sujeito: string; papel: string }
 > = {
-    owner: { title: "Owner-only action", subject: "an owner" },
-    editor: { title: "Editors only", subject: "an editor" },
+    owner: {
+        titulo: "tituloProprietario",
+        sujeito: "sujeitoProprietario",
+        papel: "papelProprietario",
+    },
+    editor: {
+        titulo: "tituloEditores",
+        sujeito: "sujeitoEditor",
+        papel: "papelEditor",
+    },
 };
 
 /**
@@ -97,15 +103,16 @@ export function PermissionDeniedPopup({
     contacts,
     message,
 }: Props) {
+    const t = useTranslations("popups.permissao");
     if (!open) return null;
 
-    const subject = ROLE_SUBJECT[requiredRole];
-    const heading = title ?? subject.title;
+    const roles = ROLE_KEYS[requiredRole];
+    const heading = title ?? t(roles.titulo);
     const body =
         message ??
         (action
-            ? `Only ${subject.subject} can ${action}.`
-            : `Only ${subject.subject} can perform this action.`);
+            ? t("somentePode", { sujeito: t(roles.sujeito), acao: action })
+            : t("semAcao", { sujeito: t(roles.sujeito) }));
     const contact = pickContact(contacts);
 
     return (
@@ -118,14 +125,15 @@ export function PermissionDeniedPopup({
         >
             {contact && (
                 <p className="mt-1 text-xs text-gray-600">
-                    Ask{" "}
-                    <span className="text-gray-600">
-                        {contact.name
+                    {t.rich("pedirContato", {
+                        nome: contact.name
                             ? `${contact.name} (${contact.email})`
-                            : contact.email}
-                    </span>{" "}
-                    if you need {PROJECT_ROLE_LABELS[requiredRole].toLowerCase()}{" "}
-                    access.
+                            : contact.email,
+                        tag: (chunks) => (
+                            <span className="text-gray-600">{chunks}</span>
+                        ),
+                        papel: t(roles.papel),
+                    })}
                 </p>
             )}
         </WarningPopup>

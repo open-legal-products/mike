@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
 import { displayCitationQuote, formatCitationPage } from "../../shared/types";
@@ -9,6 +10,7 @@ import {
     citationVerificationAriaLabel,
     citationVerificationDescription,
     citationVerificationPillClassName,
+    type CitationsTranslator,
 } from "./citationVerification";
 
 type CitationSourceRow = {
@@ -25,21 +27,31 @@ function citationSourceKey(annotation: Citation): string {
     return `document:${annotation.document_id}`;
 }
 
-function citationSourceLabel(annotation: Citation): string {
+function citationSourceLabel(
+    annotation: Citation,
+    t?: CitationsTranslator,
+): string {
     if (annotation.kind === "case") {
         const caseName = annotation.case_name?.trim();
         const citation = annotation.citation?.trim();
         if (caseName && citation) return `${caseName}, ${citation}`;
-        return caseName || citation || `Case ${annotation.cluster_id}`;
+        return (
+            caseName ||
+            citation ||
+            (t ? t("caso", { clusterId: annotation.cluster_id }) : `Case ${annotation.cluster_id}`)
+        );
     }
     return annotation.filename;
 }
 
-export function citationTooltip(annotation: Citation): string {
+export function citationTooltip(
+    annotation: Citation,
+    t?: CitationsTranslator,
+): string {
     const locator = formatCitationPage(annotation);
     const quote = displayCitationQuote(annotation);
     const source = locator ? `${locator}: "${quote}"` : `"${quote}"`;
-    const verification = citationVerificationDescription(annotation);
+    const verification = citationVerificationDescription(annotation, t);
     return verification ? `${source} — ${verification}` : source;
 }
 
@@ -61,7 +73,10 @@ function CitationSourceIcon({ annotation }: { annotation: Citation }) {
     );
 }
 
-function buildCitationSourceRows(citations: Citation[]): CitationSourceRow[] {
+function buildCitationSourceRows(
+    citations: Citation[],
+    t?: CitationsTranslator,
+): CitationSourceRow[] {
     const rows = new Map<string, CitationSourceRow>();
     citations.forEach((annotation, index) => {
         const key = citationSourceKey(annotation);
@@ -72,7 +87,7 @@ function buildCitationSourceRows(citations: Citation[]): CitationSourceRow[] {
         }
         rows.set(key, {
             key,
-            label: citationSourceLabel(annotation),
+            label: citationSourceLabel(annotation, t),
             source: annotation,
             entries: [{ annotation, index }],
         });
@@ -93,15 +108,19 @@ function ensureTerminalPeriod(value: string): string {
     return /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
 }
 
-export function buildCitationAppendix(citations: Citation[]) {
+export function buildCitationAppendix(
+    citations: Citation[],
+    t?: CitationsTranslator,
+) {
     if (citations.length === 0) return { html: "", text: "" };
+    const heading = t ? t("titulo") : "Citations";
     let previousSourceKey: string | null = null;
     const entries = citations.map((annotation) => {
         const sourceKey = citationSourceKey(annotation);
         const label =
             sourceKey === previousSourceKey
                 ? "Id."
-                : citationSourceLabel(annotation);
+                : citationSourceLabel(annotation, t);
         previousSourceKey = sourceKey;
         return {
             number: annotation.ref,
@@ -111,7 +130,7 @@ export function buildCitationAppendix(citations: Citation[]) {
     });
     const textLines = [
         "",
-        "Citations",
+        heading,
         ...entries.map((entry) => {
             const quote = entry.quote ? ` "${entry.quote}"` : "";
             return `${entry.number} ${ensureTerminalPeriod(entry.label)}${quote}`;
@@ -119,7 +138,7 @@ export function buildCitationAppendix(citations: Citation[]) {
     ];
     const html = [
         `<section class="copied-citations">`,
-        `<h3>Citations</h3>`,
+        `<h3>${escapeHtmlText(heading)}</h3>`,
         ...entries.map((entry) => {
             const label = escapeHtmlText(ensureTerminalPeriod(entry.label));
             const quote = entry.quote
@@ -149,7 +168,8 @@ export function CitationsBlock({
     showWhenEmpty?: boolean;
     isLoading?: boolean;
 }) {
-    const rows = buildCitationSourceRows(citations);
+    const t = useTranslations("assistant.citacoes");
+    const rows = buildCitationSourceRows(citations, t);
     if (rows.length === 0 && !showWhenEmpty) return null;
 
     return (
@@ -157,7 +177,7 @@ export function CitationsBlock({
             <div className={`overflow-hidden ${RESPONSE_GLASS_SURFACE}`}>
                 <div className="flex items-center justify-between gap-3 bg-white/25 px-3 py-2">
                     <h3 className="text-base font-serif text-gray-900">
-                        Citations
+                        {t("titulo")}
                     </h3>
                     {isLoading && (
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
@@ -205,9 +225,11 @@ export function CitationsBlock({
                                                 )}
                                                 aria-label={citationVerificationAriaLabel(
                                                     annotation,
+                                                    t,
                                                 )}
                                                 title={citationTooltip(
                                                     annotation,
+                                                    t,
                                                 )}
                                             >
                                                 {annotation.ref}

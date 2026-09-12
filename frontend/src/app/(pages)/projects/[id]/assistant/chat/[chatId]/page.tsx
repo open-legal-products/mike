@@ -11,6 +11,7 @@ import {
     useState,
 } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
     Brain,
     ChevronLeft,
@@ -212,6 +213,7 @@ function Divider({ onDrag }: { onDrag: (dx: number) => void }) {
 export default function ProjectAssistantChatPage({ params }: Props) {
     const { id: projectId, chatId } = use(params);
     const router = useRouter();
+    const tPermissao = useTranslations("popups.permissao");
 
     const { setSidebarOpen } = useSidebar();
     const { user } = useAuth();
@@ -670,7 +672,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     async function handleDeleteChat() {
         if (chatOwnerId && user?.id && chatOwnerId !== user.id) {
-            setOwnerOnlyAction("delete this chat");
+            setOwnerOnlyAction(tPermissao("acaoExcluir"));
             return;
         }
         setDeletingChat(true);
@@ -684,7 +686,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     async function handleRenameChat() {
         if (chatOwnerId && user?.id && chatOwnerId !== user.id) {
-            setOwnerOnlyAction("rename this chat");
+            setOwnerOnlyAction(tPermissao("acaoRenomear"));
             return;
         }
         const nextTitle = window.prompt(
@@ -703,7 +705,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         if (!canEditContent) {
             // Only accuse somebody of lacking a role once we know they do.
             if (projectRole) {
-                setEditorGateAction("upload documents to this project");
+                setEditorGateAction(tPermissao("acaoEnviarDocumentosProjeto"));
             }
             return;
         }

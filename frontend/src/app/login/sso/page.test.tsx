@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SsoLoginPage from "./page";
+import { withIntl } from "@/test/withIntl";
 
 const { startSso, replace } = vi.hoisted(() => ({
     startSso: vi.fn(),
@@ -31,12 +32,12 @@ describe("SsoLoginPage", () => {
 
     it("starts SSO with the company email", async () => {
         const user = userEvent.setup();
-        render(<SsoLoginPage />);
+        render(withIntl(<SsoLoginPage />));
 
-        const button = screen.getByRole("button", { name: "Continue" });
+        const button = screen.getByRole("button", { name: "Continuar" });
         expect(button).toBeDisabled();
         await user.type(
-            screen.getByRole("textbox", { name: "Email" }),
+            screen.getByRole("textbox", { name: "E-mail" }),
             " Lawyer@Example.com ",
         );
         await user.click(button);
@@ -46,24 +47,24 @@ describe("SsoLoginPage", () => {
             "Lawyer@Example.com",
         );
         expect(
-            screen.getByRole("button", { name: "Continuing…" }),
+            screen.getByRole("button", { name: "Continuando..." }),
         ).toBeDisabled();
     });
 
     it("shows an intentional error and allows retry", async () => {
         startSso.mockRejectedValue({ code: "sso_domain_not_allowed" });
         const user = userEvent.setup();
-        render(<SsoLoginPage />);
+        render(withIntl(<SsoLoginPage />));
 
         await user.type(
-            screen.getByRole("textbox", { name: "Email" }),
+            screen.getByRole("textbox", { name: "E-mail" }),
             "lawyer@other.example",
         );
-        await user.click(screen.getByRole("button", { name: "Continue" }));
+        await user.click(screen.getByRole("button", { name: "Continuar" }));
 
         expect(screen.getByRole("alert")).toHaveTextContent(
-            "Single sign-on is not available for this email domain.",
+            "O login único não está disponível para este domínio de e-mail.",
         );
-        expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "Continuar" })).toBeEnabled();
     });
 });

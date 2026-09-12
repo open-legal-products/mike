@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { NoModelsReason } from "../assistant/ModelToggle";
 import { WarningPopup } from "./WarningPopup";
 
@@ -25,23 +26,24 @@ function VisibleNoModelsWarning({
     onClose: () => void;
 }) {
     const router = useRouter();
+    const t = useTranslations("popups.semModelos");
 
     const routerModelsMissing = reason === "router-models";
     return (
         <WarningPopup
             open
             onClose={onClose}
-            title="No models available"
+            title={t("titulo")}
             message={
                 routerModelsMissing
-                    ? "Your router is connected, but it has no saved models. Add at least one under Bring Your Own Keys → Routers."
-                    : "Add an API key in Bring Your Own Keys before selecting a model."
+                    ? t("mensagemRoteador")
+                    : t("mensagemSemChave")
             }
             icon={
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-600" />
             }
             primaryAction={{
-                label: "Open Bring Your Own Keys",
+                label: t("abrirByok"),
                 onClick: () => {
                     onClose();
                     router.push(

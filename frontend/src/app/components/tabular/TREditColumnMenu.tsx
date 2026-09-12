@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
 import { ChevronDown, Loader2, MoreHorizontal, Plus, X } from "lucide-react";
 import type { ColumnConfig, ColumnFormat } from "../shared/types";
@@ -44,6 +45,7 @@ export function TREditColumnMenu({
     onSave,
     onDelete,
 }: TREditColumnMenuProps) {
+    const t = useTranslations("tabular.editarColuna");
     const [open, setOpen] = useState(false);
     const menuId = useId();
     const [name, setName] = useState(column.name);
@@ -252,17 +254,17 @@ export function TREditColumnMenu({
                     >
                     <div className="flex items-center justify-between mb-3">
                         <p className="font-serif text-lg font-medium text-gray-900">
-                            Edit Column
+                            {t("editarColuna")}
                         </p>
                         <GlassIconButton
                             onClick={() => setOpen(false)}
-                            aria-label="Close"
+                            aria-label={t("fechar")}
                         >
                             <X className="h-3.5 w-3.5" />
                         </GlassIconButton>
                     </div>
                     <FieldLabel htmlFor={`${menuId}-name`}>
-                        Label
+                        {t("rotulo")}
                     </FieldLabel>
                     <input
                         id={`${menuId}-name`}
@@ -275,7 +277,7 @@ export function TREditColumnMenu({
                     {/* Format */}
                     <div className="mt-3">
                         <FieldLabel htmlFor={`${menuId}-format`}>
-                            Format
+                            {t("formato")}
                         </FieldLabel>
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -361,7 +363,9 @@ export function TREditColumnMenu({
                                     onKeyDown={handleTagKeyDown}
                                     onBlur={commitTag}
                                     placeholder={
-                                        tags.length === 0 ? "Add tags…" : ""
+                                        tags.length === 0
+                                            ? t("adicionarEtiquetas")
+                                            : ""
                                     }
                                     className="min-w-[60px] flex-1 bg-transparent text-xs text-gray-700 placeholder-gray-300 focus:outline-none"
                                 />
@@ -373,7 +377,7 @@ export function TREditColumnMenu({
                     <div className="mt-3">
                         <div className="flex items-start justify-between">
                             <FieldLabel htmlFor={`${menuId}-prompt`}>
-                                Prompt
+                                {t("prompt")}
                             </FieldLabel>
                             <button
                                 type="button"
@@ -386,7 +390,7 @@ export function TREditColumnMenu({
                                 ) : (
                                     <Plus className="h-3 w-3" />
                                 )}
-                                Auto-generate
+                                {t("gerarAutomaticamente")}
                             </button>
                         </div>
                         <textarea
@@ -404,7 +408,7 @@ export function TREditColumnMenu({
                             onClick={handleDelete}
                             disabled={deleting || saving}
                         >
-                            Delete
+                            {t("excluir")}
                         </PillButton>
                         <PillButton
                             tone="black"
@@ -418,7 +422,7 @@ export function TREditColumnMenu({
                                 !prompt.trim()
                             }
                         >
-                            {saving ? "Saving…" : "Save"}
+                            {saving ? t("salvando") : t("salvar")}
                         </PillButton>
                     </div>
                     </div>,

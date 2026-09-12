@@ -2,6 +2,7 @@
 
 import type { Dispatch, SetStateAction } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { can, roleFrom } from "@/app/lib/permissions";
 import type { OwnerGate } from "@/app/components/projects/ProjectWorkspace";
 import {
@@ -99,6 +100,7 @@ export function ProjectReviewsTable({
     onRetry: () => void;
     loading?: boolean;
 }) {
+    const tPermissao = useTranslations("popups.permissao");
     function clearSelection() {
         setSelectedReviewIds([]);
     }
@@ -317,7 +319,9 @@ export function ProjectReviewsTable({
                                                                 ) {
                                                                     onOwnerOnlyAction(
                                                                         {
-                                                                            action: "edit tabular review details",
+                                                                            action: tPermissao(
+                                                                                "acaoEditarDetalhesRevisao",
+                                                                            ),
                                                                             requiredRole:
                                                                                 "editor",
                                                                         },
@@ -402,7 +406,9 @@ export function ProjectReviewsTable({
                                                 )
                                             ) {
                                                 onOwnerOnlyAction({
-                                                    action: "edit tabular review details",
+                                                    action: tPermissao(
+                                                        "acaoEditarDetalhesRevisao",
+                                                    ),
                                                     requiredRole: "editor",
                                                 });
                                                 return;

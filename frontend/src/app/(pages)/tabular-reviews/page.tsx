@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -39,7 +40,6 @@ import {
     TableCell,
     TableEmptyState,
     TableFilters,
-    type TableFilterOption,
     TableHeaderCell,
     TableHeaderRow,
     TablePrimaryCell,
@@ -63,15 +63,15 @@ import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 type ReviewScope = TabularReviewScope;
 type ReviewSortKey = "name" | "columns" | "documents" | "created";
 
-const REVIEW_SCOPES: { id: ReviewScope; label: string }[] = [
-    { id: "all", label: "All" },
-    { id: "in-project", label: "In Project" },
-    { id: "standalone", label: "Standalone" },
+const REVIEW_SCOPES: { id: ReviewScope; labelKey: string }[] = [
+    { id: "all", labelKey: "tabTodas" },
+    { id: "in-project", labelKey: "tabEmProjeto" },
+    { id: "standalone", labelKey: "tabIndependente" },
 ];
 const REVIEW_SCOPE_IDS = REVIEW_SCOPES.map((scope) => scope.id);
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-    { value: "asc", label: "Ascending" },
-    { value: "desc", label: "Descending" },
+const SORT_OPTIONS: { value: TableSortDirection; labelKey: string }[] = [
+    { value: "asc", labelKey: "ordenacaoCrescente" },
+    { value: "desc", labelKey: "ordenacaoDecrescente" },
 ];
 function formatDate(iso: string) {
     return new Date(iso).toLocaleDateString(undefined, {
@@ -82,6 +82,8 @@ function formatDate(iso: string) {
 }
 
 export default function TabularReviewsPage() {
+    const t = useTranslations("pages.revisoesTabulares");
+    const tPermissao = useTranslations("popups.permissao");
     const router = useRouter();
     const searchParams = useSearchParams();
     const [projects, setProjects] = useState<Project[]>([]);
@@ -320,7 +322,11 @@ export default function TabularReviewsPage() {
         // so the refusal must say "member", not "admin" (the review page and
         // this list previously disagreed about the same action).
         if (!can(roleFrom(review), "content.edit")) {
-            refuse(review.id, "edit tabular review details", "editor");
+            refuse(
+                review.id,
+                tPermissao("acaoEditarDetalhesRevisao"),
+                "editor",
+            );
             return;
         }
         setDetailsReview(review);
@@ -332,7 +338,11 @@ export default function TabularReviewsPage() {
     }) {
         if (!detailsReview) return;
         if (!can(roleFrom(detailsReview), "content.edit")) {
-            refuse(detailsReview.id, "edit tabular review details", "editor");
+            refuse(
+                detailsReview.id,
+                tPermissao("acaoEditarDetalhesRevisao"),
+                "editor",
+            );
             return;
         }
         const updated = await updateTabularReview(detailsReview.id, {
@@ -399,11 +409,9 @@ export default function TabularReviewsPage() {
             );
         }
         const notices = [
-            blocked > 0
-                ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only a review owner can delete them.`
-                : null,
+            blocked > 0 ? t("avisoIgnoradas", { count: blocked }) : null,
             failedIds.length > 0
-                ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
+                ? t("avisoFalhaExclusao", { count: failedIds.length })
                 : null,
         ].filter((notice): notice is string => notice !== null);
         if (notices.length > 0) setBulkDeleteNotice(notices.join(" "));
@@ -411,7 +419,7 @@ export default function TabularReviewsPage() {
 
     async function handleDeleteReviewRow(review: TabularReview) {
         if (!can(roleFrom(review), "container.delete")) {
-            refuse(review.id, "delete this tabular review");
+            refuse(review.id, tPermissao("acaoExcluirRevisao"));
             return;
         }
         const snapshot = reviews;
@@ -435,11 +443,16 @@ export default function TabularReviewsPage() {
         }
     }
 
+    const sortOptions = SORT_OPTIONS.map(({ value, labelKey }) => ({
+        value,
+        label: t(labelKey),
+    }));
+
     const projectFilterButton = (
         <TableFilters
-            label="Filter by project"
+            label={t("filtrarPorProjeto")}
             value={projectFilter}
-            allLabel="All Projects"
+            allLabel={t("todosProjetos")}
             options={projects.map((project) => ({
                 value: project.id,
                 label: project.name,
@@ -456,42 +469,42 @@ export default function TabularReviewsPage() {
         sort?.key === "created" ? sort.direction : null;
     const nameFilterButton = (
         <TableFilters
-            label="Sort by review name"
+            label={t("ordenarPorNome")}
             value={nameSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
             align="right"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("name", direction)}
         />
     );
     const columnsFilterButton = (
         <TableFilters
-            label="Sort by columns"
+            label={t("ordenarPorColunas")}
             value={columnsSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("columns", direction)}
         />
     );
     const documentsFilterButton = (
         <TableFilters
-            label="Sort by documents"
+            label={t("ordenarPorDocumentos")}
             value={documentsSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("documents", direction)}
         />
     );
     const createdFilterButton = (
         <TableFilters
-            label="Sort by created date"
+            label={t("ordenarPorCriadoEm")}
             value={createdSortDirection}
-            allLabel="Default Order"
+            allLabel={t("ordemPadrao")}
             widthClassName="w-40"
-            options={SORT_OPTIONS}
+            options={sortOptions}
             onChange={(direction) => handleSortChange("created", direction)}
         />
     );
@@ -500,7 +513,7 @@ export default function TabularReviewsPage() {
         selectedIds.length > 0 ? (
             <div ref={actionsRef} className="relative">
                 <TabPillButton onClick={() => setActionsOpen((v) => !v)}>
-                    Actions
+                    {t("acoes")}
                     <ChevronDown className="h-3.5 w-3.5" />
                 </TabPillButton>
                 {actionsOpen && (
@@ -509,7 +522,7 @@ export default function TabularReviewsPage() {
                             onClick={requestDeleteSelected}
                             className="w-full px-3 py-1.5 text-left text-xs text-red-600 transition-colors hover:bg-red-500/10"
                         >
-                            Delete
+                            {t("excluir")}
                         </button>
                     </LiquidDropdownSurface>
                 )}
@@ -526,23 +539,26 @@ export default function TabularReviewsPage() {
                         type: "search",
                         value: search,
                         onChange: setSearch,
-                        placeholder: "Search reviews…",
+                        placeholder: t("buscar"),
                     },
                     {
                         type: "new",
                         onClick: () => setNewTROpen(true),
                         loading: creating,
-                        title: "New tabular review",
+                        title: t("novaRevisaoTabular"),
                     },
                 ]}
             >
                 <h1 className="text-2xl font-medium font-serif text-gray-900">
-                    Tabular Reviews
+                    {t("titulo")}
                 </h1>
             </PageHeader>
 
             <TableToolbar
-                items={REVIEW_SCOPES}
+                items={REVIEW_SCOPES.map(({ id, labelKey }) => ({
+                    id,
+                    label: t(labelKey),
+                }))}
                 active={activeScope}
                 onChange={(scope) => {
                     setActiveScope(scope);
@@ -572,33 +588,33 @@ export default function TabularReviewsPage() {
                                     }}
                                     onChange={toggleAll}
                                     className={TABLE_CHECKBOX_CLASS}
-                                    aria-label="Select all reviews"
+                                    aria-label={t("selecionarTodas")}
                                 />
                             )}
-                            <span className="mr-1">Name</span>
+                            <span className="mr-1">{t("colNome")}</span>
                             {!loading && nameFilterButton}
                         </TableStickyCell>
                         <TableHeaderCell className="ml-auto w-24">
                             <div className="flex items-center gap-1">
-                                <span>Columns</span>
+                                <span>{t("colColunas")}</span>
                                 {!loading && columnsFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-24">
                             <div className="flex items-center gap-1">
-                                <span>Documents</span>
+                                <span>{t("colDocumentos")}</span>
                                 {!loading && documentsFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-52">
                             <div className="flex items-center gap-1">
-                                <span>Project</span>
+                                <span>{t("colProjeto")}</span>
                                 {!loading && projectFilterButton}
                             </div>
                         </TableHeaderCell>
                         <TableHeaderCell className="w-32">
                             <div className="flex items-center gap-1">
-                                <span>Created</span>
+                                <span>{t("colCriadoEm")}</span>
                                 {!loading && createdFilterButton}
                             </div>
                         </TableHeaderCell>
@@ -636,10 +652,10 @@ export default function TabularReviewsPage() {
                 ) : loadError ? (
                     <TableEmptyState>
                         <p className="text-lg font-medium font-serif text-gray-900">
-                            Unable to load reviews
+                            {t("erroCarregarTitulo")}
                         </p>
                         <p className="mt-1 text-xs text-gray-400">
-                            Check your connection and try again.
+                            {t("erroCarregarDescricao")}
                         </p>
                         <PillButton
                             tone="black"
@@ -647,7 +663,7 @@ export default function TabularReviewsPage() {
                             onClick={retry}
                             className="mt-4"
                         >
-                            Try again
+                            {t("tentarNovamente")}
                         </PillButton>
                     </TableEmptyState>
                 ) : filtered.length === 0 ? (
@@ -658,11 +674,10 @@ export default function TabularReviewsPage() {
                             <>
                                 <TabularReviewSkeuoIcon className="mb-4 h-8 w-8" />
                                 <p className="text-2xl font-medium font-serif text-gray-900">
-                                    Tabular Reviews
+                                    {t("tituloVazio")}
                                 </p>
                                 <p className="mt-1 text-xs text-gray-400 max-w-xs text-left">
-                                    Extract data from documents into tables
-                                    using AI.
+                                    {t("descricaoVazio")}
                                 </p>
                                 <PillButton
                                     tone="black"
@@ -671,12 +686,12 @@ export default function TabularReviewsPage() {
                                     disabled={creating}
                                     className="mt-4"
                                 >
-                                    Create
+                                    {t("criar")}
                                 </PillButton>
                             </>
                         ) : (
                             <p className="text-sm text-gray-400">
-                                No reviews found
+                                {t("nenhumaEncontrada")}
                             </p>
                         )}
                     </TableEmptyState>
@@ -717,7 +732,7 @@ export default function TabularReviewsPage() {
                                                                             : `/tabular-reviews/${review.id}`,
                                                                     )
                                                       }
-                                                      viewLabel="Open"
+                                                      viewLabel={t("abrir")}
                                                       onEditDetails={
                                                           appliesToSelection
                                                               ? undefined
@@ -734,11 +749,16 @@ export default function TabularReviewsPage() {
                                                                     review,
                                                                 )
                                                       }
-                                                      deleteLabel={
-                                                          appliesToSelection
-                                                              ? `Delete ${actionIds.length} reviews`
-                                                              : undefined
-                                                      }
+                                                       deleteLabel={
+                                                           appliesToSelection
+                                                               ? t(
+                                                                     "excluirSelecionadas",
+                                                                     {
+                                                                         count: actionIds.length,
+                                                                     },
+                                                                 )
+                                                               : undefined
+                                                       }
                                                   />
                                               )
                                     }
@@ -774,9 +794,9 @@ export default function TabularReviewsPage() {
                                         onSelectionChange={() =>
                                             toggleOne(review.id)
                                         }
-                                        label={
-                                            review.title ?? "Untitled Review"
-                                        }
+                                         label={
+                                             review.title ?? t("semTitulo")
+                                         }
                                     />
                                     <TableCell className="ml-auto w-24">
                                         {review.columns_config?.length ?? 0}
@@ -814,7 +834,7 @@ export default function TabularReviewsPage() {
                                                         : `/tabular-reviews/${review.id}`,
                                                 )
                                             }
-                                            viewLabel="Open"
+                                            viewLabel={t("abrir")}
                                             onEditDetails={() => {
                                                 requestReviewDetails(review);
                                             }}
@@ -870,15 +890,17 @@ export default function TabularReviewsPage() {
             />
             <WarningPopup
                 open={!!bulkDeleteNotice}
-                title="Some reviews were not deleted"
+                title={t("avisoNaoExcluidasTitulo")}
                 message={bulkDeleteNotice}
                 onClose={() => setBulkDeleteNotice(null)}
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}
-                title="Delete all selected reviews?"
-                message={`This will permanently delete every selected review you administer, including selected reviews not currently shown. Their review results and associated data will also be deleted. Reviews you cannot delete will be skipped. ${selectedIds.length} reviews are selected.`}
-                confirmLabel="Delete"
+                title={t("confirmarExcluirTodasTitulo")}
+                message={t("confirmarExcluirTodasMensagem", {
+                    count: selectedIds.length,
+                })}
+                confirmLabel={t("excluir")}
                 confirmVariant="danger"
                 onCancel={() => setConfirmDeleteAllOpen(false)}
                 onConfirm={() => void handleDeleteSelected()}

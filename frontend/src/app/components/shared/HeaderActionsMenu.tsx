@@ -1,6 +1,7 @@
 "use client";
 
 import { MoreHorizontal, type LucideIcon } from "lucide-react";
+import { useTranslations } from "next-intl";
 import {
     DropdownMenu,
     DropdownMenuTrigger,
@@ -22,11 +23,13 @@ export type HeaderActionsMenuItem = {
 
 export function HeaderActionsMenu({
     items,
-    title = "Actions",
+    title,
 }: {
     items: HeaderActionsMenuItem[];
     title?: string;
 }) {
+    const t = useTranslations("shell.menuAcoes");
+    const resolvedTitle = title ?? t("acoes");
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -37,8 +40,8 @@ export function HeaderActionsMenu({
                         LIQUID_GLASS_HOVER_CLASS,
                         "hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300",
                     )}
-                    aria-label={title}
-                    title={title}
+                    aria-label={resolvedTitle}
+                    title={resolvedTitle}
                 >
                     <MoreHorizontal className="h-4 w-4" />
                 </button>

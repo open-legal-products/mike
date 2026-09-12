@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { AccessModal } from "@/app/components/modals/AccessModal";
 import { useAuth } from "@/app/contexts/AuthContext";
 import {
@@ -21,6 +22,8 @@ interface Props {
 
 export function ChatAccessModal({ open, chat, onClose }: Props) {
     const { user } = useAuth();
+    const t = useTranslations("modals.acessoChat");
+    const tAssistente = useTranslations("assistant");
     const [accessState, setAccessState] = useState<{
         chatId: string;
         value: ContentAccess;
@@ -64,9 +67,9 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
             fetchAccess={getChatPeople}
             currentUserEmail={user?.email ?? null}
             breadcrumb={[
-                "Assistant",
-                chat.title?.trim() || "Untitled chat",
-                "Access",
+                tAssistente("title"),
+                chat.title?.trim() || tAssistente("conversaSemTitulo"),
+                t("acesso"),
             ]}
             access={{
                 grants: access?.grants ?? [],
@@ -75,7 +78,8 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                     access?.inherited_from_project_id ??
                     chat.project_id ??
                     null,
-                ownerLabel: "Owners",
+                ownerLabel: t("proprietarios"),
+                resourceKind: "project",
                 // Role-derived, so the Share Access label and input are there
                 // the moment the modal opens. Waiting for the access payload
                 // blanked them out mid-fetch and then popped them in; every

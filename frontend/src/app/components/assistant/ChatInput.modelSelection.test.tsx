@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { withIntl } from "@/test/withIntl";
 import { ChatInput } from "./ChatInput";
 
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -100,14 +101,16 @@ describe("ChatInput model selection vs. a degraded profile", () => {
     it("persists reasoning immediately for an existing chat", async () => {
         mockProfile(false);
         render(
-            <ChatInput
-                chatKey="chat-1"
-                chatModel="gpt-5.6-luna"
-                chatReasoningLevel="high"
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    chatKey="chat-1"
+                    chatModel="gpt-5.6-luna"
+                    chatReasoningLevel="high"
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         fireEvent.click(
@@ -125,11 +128,13 @@ describe("ChatInput model selection vs. a degraded profile", () => {
     it("persists an initial-view selection to the profile immediately", async () => {
         mockProfile(false);
         render(
-            <ChatInput
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         fireEvent.click(
@@ -147,14 +152,16 @@ describe("ChatInput model selection vs. a degraded profile", () => {
     it("persists an existing-chat selection to the chat and profile immediately", async () => {
         mockProfile(false);
         render(
-            <ChatInput
-                chatKey="chat-1"
-                chatModel="gpt-5.6-luna"
-                chatReasoningLevel="high"
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    chatKey="chat-1"
+                    chatModel="gpt-5.6-luna"
+                    chatReasoningLevel="high"
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         fireEvent.click(
@@ -173,14 +180,16 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         mockProfile(false);
         const tabularChatKey = "tabular-review-chat:review-1:chat-1";
         render(
-            <ChatInput
-                chatKey={tabularChatKey}
-                chatModel="gpt-5.6-luna"
-                chatReasoningLevel="high"
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    chatKey={tabularChatKey}
+                    chatModel="gpt-5.6-luna"
+                    chatReasoningLevel="high"
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         fireEvent.click(
@@ -198,14 +207,16 @@ describe("ChatInput model selection vs. a degraded profile", () => {
     it("hides the model toggle until existing-chat settings load", () => {
         mockProfile(false);
         const { rerender } = render(
-            <ChatInput
-                chatKey="chat-1"
-                chatModel={undefined}
-                chatReasoningLevel={undefined}
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    chatKey="chat-1"
+                    chatModel={undefined}
+                    chatReasoningLevel={undefined}
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         expect(
@@ -213,14 +224,16 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         ).not.toBeInTheDocument();
 
         rerender(
-            <ChatInput
-                chatKey="chat-1"
-                chatModel="gpt-5.6-luna"
-                chatReasoningLevel="high"
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    chatKey="chat-1"
+                    chatModel="gpt-5.6-luna"
+                    chatReasoningLevel="high"
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         expect(
@@ -233,18 +246,20 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         const onSubmit = vi.fn();
 
         render(
-            <ChatInput
-                chatModel={STORED}
-                onSubmit={onSubmit}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    chatModel={STORED}
+                    onSubmit={onSubmit}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         fireEvent.change(screen.getByRole("combobox"), {
             target: { value: "hello" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+        fireEvent.click(screen.getByRole("button", { name: "Enviar mensagem" }));
         await waitFor(() =>
             expect(onSubmit).toHaveBeenCalledWith(
                 expect.objectContaining({ model: STORED }),
@@ -257,18 +272,20 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         const onSubmit = vi.fn();
 
         render(
-            <ChatInput
-                chatModel={STORED}
-                onSubmit={onSubmit}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    chatModel={STORED}
+                    onSubmit={onSubmit}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         fireEvent.change(screen.getByRole("combobox"), {
             target: { value: "hello" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+        fireEvent.click(screen.getByRole("button", { name: "Enviar mensagem" }));
         await waitFor(() =>
             expect(onSubmit).toHaveBeenCalledWith(
                 expect.objectContaining({ model: "gpt-5.6-luna" }),

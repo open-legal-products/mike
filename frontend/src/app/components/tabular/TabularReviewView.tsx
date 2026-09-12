@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
     Plus,
     Loader2,
@@ -92,6 +93,8 @@ interface Props {
 }
 
 export function TRView({ reviewId, projectId }: Props) {
+    const t = useTranslations("tabular");
+    const tPermissao = useTranslations("popups.permissao");
     const { setSidebarOpen } = useSidebar();
     const [review, setReview] = useState<TabularReview | null>(null);
     const [project, setProject] = useState<Project | null>(null);
@@ -378,7 +381,7 @@ export function TRView({ reviewId, projectId }: Props) {
     async function handleAddDocuments(newDocs: Document[]) {
         // Changing the review's document set is a structure edit server-side
         // (PATCH document_ids 403s below member) — same gate as columns.
-        if (!requireStructure("edit the document set")) return;
+        if (!requireStructure(tPermissao("acaoEditarConjuntoDocumentos"))) return;
         const toAdd = newDocs.filter(
             (d) => !documents.some((existing) => existing.id === d.id),
         );
@@ -409,7 +412,8 @@ export function TRView({ reviewId, projectId }: Props) {
         // a viewer's upload succeeds and the attach PATCH 403s, leaving an
         // orphaned document. Mirror the DocTable drop gate, at the tier the
         // attach actually requires.
-        if (!requireStructure("add documents to this review")) return;
+        if (!requireStructure(tPermissao("acaoAdicionarDocumentosRevisao")))
+            return;
         setUploadingDroppedFilenames(files.map((file) => file.name));
         const uploaded: Document[] = [];
         let failedNames: string[] = [];
@@ -441,14 +445,18 @@ export function TRView({ reviewId, projectId }: Props) {
         if (failedNames.length > 0) {
             setDropUploadWarning(
                 failedNames.length === 1
-                    ? `"${failedNames[0]}" could not be uploaded. Please try again.`
-                    : `${failedNames.length} files could not be uploaded. Please try again.`,
+                    ? t("revisaoView.falhaUploadUnico", {
+                          name: failedNames[0],
+                      })
+                    : t("revisaoView.falhaUploadVarios", {
+                          count: failedNames.length,
+                      }),
             );
         }
     }
 
     async function handleRegenerateCell(rowId: string, colIndex: number) {
-        if (!requireContent("regenerate cells")) return;
+        if (!requireContent(tPermissao("acaoRegenerarCelulas"))) return;
         if (cellMutationsBlocked) {
             setGenerationGuard("running");
             return;
@@ -622,7 +630,7 @@ export function TRView({ reviewId, projectId }: Props) {
 
     async function handleGenerate() {
         if (!review || generating) return;
-        if (!requireContent("run generation")) return;
+        if (!requireContent(tPermissao("acaoExecutarGeracao"))) return;
 
         if (review.is_running) {
             setGenerationGuard("running");
@@ -759,7 +767,7 @@ export function TRView({ reviewId, projectId }: Props) {
         // `is_owner === false` check was the file's last leftover of the
         // ownership model: it refused org admins and members a change the
         // server accepts, and mislabelled the refusal admin-tier.
-        if (!requireContent("change the tabular review model")) return;
+        if (!requireContent(tPermissao("acaoAlterarModeloRevisao"))) return;
         const updated = await updateTabularReview(reviewId, { model });
         setReview((current) =>
             current ? { ...current, model: updated.model } : current,
@@ -803,7 +811,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleAddColumn(newColumns: ColumnConfig[]) {
-        if (!requireStructure("add columns")) return;
+        if (!requireStructure(tPermissao("acaoAdicionarColunas"))) return;
         const startIndex = getNextColumnIndex();
         const normalizedColumns = newColumns.map((column, index) => ({
             ...column,
@@ -866,7 +874,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleUpdateColumn(nextColumn: ColumnConfig) {
-        if (!requireStructure("edit columns")) return;
+        if (!requireStructure(tPermissao("acaoEditarColunas"))) return;
         const nextColumns = columns.map((column) =>
             column.index === nextColumn.index ? nextColumn : column,
         );
@@ -881,7 +889,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleDeleteColumn(columnIndex: number) {
-        if (!requireStructure("delete columns")) return;
+        if (!requireStructure(tPermissao("acaoExcluirColunas"))) return;
         const previousColumns = columns;
         const nextColumns = columns.filter(
             (column) => column.index !== columnIndex,
@@ -924,7 +932,8 @@ export function TRView({ reviewId, projectId }: Props) {
     async function handleDeleteDocuments() {
         // Removing documents deletes their cells — member tier, like every
         // other reshaping of the review.
-        if (!requireStructure("remove documents from this review")) return;
+        if (!requireStructure(tPermissao("acaoRemoverDocumentosRevisao")))
+            return;
         const rowIdsToDelete = [...selectedRowIds];
         if (rowIdsToDelete.length === 0) return;
         const documentIdsToDelete = new Set(
@@ -1000,12 +1009,12 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleClearResults() {
-        if (!requireStructure("clear results")) return;
+        if (!requireStructure(tPermissao("acaoLimparResultados"))) return;
         await clearResultsForRows([...selectedRowIds]);
     }
 
     async function handleClearAllResults() {
-        if (!requireStructure("clear results")) return;
+        if (!requireStructure(tPermissao("acaoLimparResultados"))) return;
         await clearResultsForRows(rows.map((row) => row.id));
     }
 
@@ -1042,7 +1051,7 @@ export function TRView({ reviewId, projectId }: Props) {
         if (!canEditDetails) {
             if (roleKnown) {
                 setOwnerOnlyAction({
-                    action: "edit tabular review details",
+                    action: tPermissao("acaoEditarDetalhesRevisao"),
                     requiredRole: "editor",
                 });
             }
@@ -1055,7 +1064,10 @@ export function TRView({ reviewId, projectId }: Props) {
         title: string;
         projectId?: string | null;
     }) {
-        if (!review || !requireStructure("edit tabular review details"))
+        if (
+            !review ||
+            !requireStructure(tPermissao("acaoEditarDetalhesRevisao"))
+        )
             return;
         // Only send project_id when it actually changes: moving a review
         // between projects is creator-only server-side, and sending an
@@ -1066,9 +1078,8 @@ export function TRView({ reviewId, projectId }: Props) {
         // gets an explanation instead of an unexplained failed save.
         if (projectChanged && !canMoveReview()) {
             setOwnerOnlyAction({
-                title: "Review creator only",
-                message:
-                    "Only the person who created this review can move it to another project.",
+                title: t("revisaoView.somenteCriadorTitulo"),
+                message: t("revisaoView.somenteCriadorMensagem"),
             });
             return;
         }
@@ -1094,7 +1105,8 @@ export function TRView({ reviewId, projectId }: Props) {
 
     function requestReviewDelete() {
         if (!can(reviewRole, "container.delete")) {
-            if (roleKnown) setOwnerOnlyAction("delete this tabular review");
+            if (roleKnown)
+                setOwnerOnlyAction(tPermissao("acaoExcluirRevisao"));
             return;
         }
         setDeleteReviewStatus("idle");
@@ -1121,7 +1133,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     function requestWorkflow() {
-        if (!requireStructure("apply a workflow")) return;
+        if (!requireStructure(tPermissao("acaoAplicarWorkflow"))) return;
         setWorkflowModalOpen(true);
     }
 
@@ -1202,7 +1214,7 @@ export function TRView({ reviewId, projectId }: Props) {
                         ...(projectId
                             ? [
                                   {
-                                      label: "Projects",
+                                      label: t("revisaoView.projetos"),
                                       onClick: () => router.push("/projects"),
                                   },
                                   loading
@@ -1213,7 +1225,9 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 router.push(
                                                     `/projects/${projectId}`,
                                                 ),
-                                            title: "Back to project",
+                                            title: t(
+                                                "revisaoView.voltarProjeto",
+                                            ),
                                         }
                                       : {
                                             label: project?.name ?? "",
@@ -1221,26 +1235,36 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 router.push(
                                                     `/projects/${projectId}`,
                                                 ),
-                                            title: "Back to project",
+                                            title: t(
+                                                "revisaoView.voltarProjeto",
+                                            ),
                                         },
                               ]
                             : [
                                   {
-                                      label: "Tabular Reviews",
+                                      label: t(
+                                          "revisaoView.revisoesTabulares",
+                                      ),
                                       onClick: () =>
                                           router.push("/tabular-reviews"),
-                                      title: "Back to Tabular Reviews",
+                                      title: t(
+                                          "revisaoView.voltarRevisoesTabulares",
+                                      ),
                                   },
                               ]),
                         ...(projectId
                             ? [
                                   {
-                                      label: "Tabular Reviews",
+                                      label: t(
+                                          "revisaoView.revisoesTabulares",
+                                      ),
                                       onClick: () =>
                                           router.push(
                                               `/projects/${projectId}/tabular-reviews`,
                                           ),
-                                      title: "Back to Tabular Reviews",
+                                      title: t(
+                                          "revisaoView.voltarRevisoesTabulares",
+                                      ),
                                   },
                               ]
                             : []),
@@ -1250,7 +1274,9 @@ export function TRView({ reviewId, projectId }: Props) {
                                   skeletonClassName: "w-40",
                               }
                             : {
-                                  label: review?.title || "Untitled Review",
+                                  label:
+                                      review?.title ||
+                                      t("revisaoView.revisaoSemTitulo"),
                               },
                     ]}
                     actionGroups={[
@@ -1259,14 +1285,14 @@ export function TRView({ reviewId, projectId }: Props) {
                                 type: "search",
                                 value: search,
                                 onChange: setSearch,
-                                placeholder: "Search rows…",
+                                placeholder: t("revisaoView.buscarLinhas"),
                             },
                             !projectId
                                 ? {
                                       onClick: () => setAccessModalOpen(true),
                                       disabled: loading,
                                       iconOnly: true,
-                                      title: "Access",
+                                      title: t("revisaoView.acesso"),
                                       icon: <Users className="h-4 w-4" />,
                                   }
                                 : null,
@@ -1276,25 +1302,31 @@ export function TRView({ reviewId, projectId }: Props) {
                                     <HeaderActionsMenu
                                         items={[
                                             {
-                                                label: "Edit details",
+                                                label: t(
+                                                    "revisaoView.editarDetalhes",
+                                                ),
                                                 icon: Pencil,
                                                 onSelect: requestReviewDetails,
                                                 disabled: !roleKnown,
                                             },
                                             {
-                                                label: "Apply workflow",
+                                                label: t(
+                                                    "revisaoView.aplicarWorkflow",
+                                                ),
                                                 icon: WandSparkles,
                                                 onSelect: requestWorkflow,
                                                 disabled: !roleKnown,
                                             },
                                             {
-                                                label: "Export",
+                                                label: t("revisaoView.exportar"),
                                                 icon: Download,
                                                 onSelect: () =>
                                                     exportTabularReviewToExcel({
                                                         reviewTitle:
                                                             review?.title ||
-                                                            "Tabular Review",
+                                                            t(
+                                                                "table.revisaoTabular",
+                                                            ),
                                                         columns,
                                                         rows,
                                                         cells,
@@ -1304,7 +1336,9 @@ export function TRView({ reviewId, projectId }: Props) {
                                                     rows.length === 0,
                                             },
                                             {
-                                                label: "Clear results",
+                                                label: t(
+                                                    "revisaoView.limparResultados",
+                                                ),
                                                 icon: X,
                                                 onSelect: handleClearAllResults,
                                                 disabled:
@@ -1313,7 +1347,9 @@ export function TRView({ reviewId, projectId }: Props) {
                                                     cellMutationsBlocked,
                                             },
                                             {
-                                                label: "Delete",
+                                                label: t(
+                                                    "revisaoView.excluir",
+                                                ),
                                                 icon: Trash2,
                                                 onSelect: requestReviewDelete,
                                                 variant: "danger",
@@ -1337,7 +1373,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 // a doomed submit.
                                                 if (
                                                     !requireStructure(
-                                                        "edit the document set",
+                                                        tPermissao("acaoEditarConjuntoDocumentos"),
                                                     )
                                                 )
                                                     return;
@@ -1346,7 +1382,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                             onUploadFiles={() => {
                                                 if (
                                                     !requireStructure(
-                                                        "edit the document set",
+                                                        tPermissao("acaoEditarConjuntoDocumentos"),
                                                     )
                                                 )
                                                     return;
@@ -1355,7 +1391,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                             onUploadFolder={() => {
                                                 if (
                                                     !requireStructure(
-                                                        "edit the document set",
+                                                        tPermissao("acaoEditarConjuntoDocumentos"),
                                                     )
                                                 )
                                                     return;
@@ -1410,10 +1446,10 @@ export function TRView({ reviewId, projectId }: Props) {
                                         rows.length === 0 ||
                                         savingColumnsConfig,
                                     title: stoppingGeneration
-                                        ? "Stopping generation"
+                                        ? t("revisaoView.parandoGeracao")
                                         : generating
-                                          ? "Stop generation"
-                                          : "Run review",
+                                          ? t("revisaoView.pararGeracao")
+                                          : t("revisaoView.executarRevisao"),
                                     icon: stoppingGeneration ? (
                                         <Loader2 className="h-4 w-4 animate-spin" />
                                     ) : generating ? (
@@ -1424,10 +1460,10 @@ export function TRView({ reviewId, projectId }: Props) {
                                     label: (
                                         <span className="hidden sm:inline">
                                             {stoppingGeneration
-                                                ? "Stopping…"
+                                                ? t("revisaoView.parando")
                                                 : generating
-                                                  ? "Stop"
-                                                  : "Run"}
+                                                  ? t("revisaoView.parar")
+                                                  : t("revisaoView.executar")}
                                         </span>
                                     ),
                                 },
@@ -1446,8 +1482,8 @@ export function TRView({ reviewId, projectId }: Props) {
                                         columns.length === 0 ||
                                         rows.length === 0,
                                     title: chatOpen
-                                        ? "Close chat"
-                                        : "Open chat",
+                                        ? t("revisaoView.fecharChat")
+                                        : t("revisaoView.abrirChat"),
                                     icon: chatOpen ? (
                                         <MessageSquareX className="h-4 w-4" />
                                     ) : (
@@ -1455,7 +1491,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                     ),
                                     label: (
                                         <span className="hidden sm:inline">
-                                            Chat
+                                            {t("revisaoView.chat")}
                                         </span>
                                     ),
                                 },
@@ -1495,7 +1531,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                                         )
                                                     }
                                                 >
-                                                    Actions
+                                                    {t("revisaoView.acoes")}
                                                     <ChevronDown className="h-3.5 w-3.5" />
                                                 </TabPillButton>
                                                 {actionsOpen && (
@@ -1511,7 +1547,9 @@ export function TRView({ reviewId, projectId }: Props) {
                                                             }
                                                             className="theme-dropdown-item w-full px-3 py-1.5 text-left text-xs text-gray-700 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                                                         >
-                                                            Clear results
+                                                            {t(
+                                                                "revisaoView.limparResultados",
+                                                            )}
                                                         </button>
                                                         <button
                                                             onClick={
@@ -1519,7 +1557,9 @@ export function TRView({ reviewId, projectId }: Props) {
                                                             }
                                                             className="w-full px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 transition-colors"
                                                         >
-                                                            Delete
+                                                            {t(
+                                                                "revisaoView.excluir",
+                                                            )}
                                                         </button>
                                                     </div>
                                                 )}
@@ -1530,13 +1570,15 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 disabled={cellMutationsBlocked}
                                                 className="md:hidden"
                                             >
-                                                Clear results
+                                                {t(
+                                                    "revisaoView.limparResultados",
+                                                )}
                                             </TabPillButton>
                                             <TabPillButton
                                                 onClick={handleDeleteDocuments}
                                                 className="md:hidden text-red-600"
                                             >
-                                                Delete
+                                                {t("revisaoView.excluir")}
                                             </TabPillButton>
                                         </>
                                     )}
@@ -1549,7 +1591,9 @@ export function TRView({ reviewId, projectId }: Props) {
                                             }
                                         >
                                             <Plus className="h-3.5 w-3.5" />
-                                            Add Columns
+                                            {t(
+                                                "revisaoView.adicionarColunas",
+                                            )}
                                         </TabPillButton>
                                     )}
                                 </div>
@@ -1631,7 +1675,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 onAddDocuments={() => {
                                     if (
                                         !requireStructure(
-                                            "edit the document set",
+                                            tPermissao("acaoEditarConjuntoDocumentos"),
                                         )
                                     )
                                         return;
@@ -1748,14 +1792,19 @@ export function TRView({ reviewId, projectId }: Props) {
                     onClose={() => setAddDocsOpen(false)}
                     onSelect={(docs: Document[]) => handleAddDocuments(docs)}
                     breadcrumb={[
-                        "Projects",
+                        t("revisaoView.projetos"),
                         project.name +
                             (project.cm_number
                                 ? ` (#${project.cm_number})`
                                 : ""),
-                        "Tabular Reviews",
-                        ...(review ? [review.title || "Untitled Review"] : []),
-                        "Add Documents",
+                        t("revisaoView.revisoesTabulares"),
+                        ...(review
+                            ? [
+                                  review.title ||
+                                      t("revisaoView.revisaoSemTitulo"),
+                              ]
+                            : []),
+                        t("revisaoView.adicionarDocumentos"),
                     ]}
                     uploadStateId={`tabular-review:${review?.id ?? "new"}:project`}
                     projectId={project.id}
@@ -1770,9 +1819,14 @@ export function TRView({ reviewId, projectId }: Props) {
                     onClose={() => setAddDocsOpen(false)}
                     onSelect={(docs: Document[]) => handleAddDocuments(docs)}
                     breadcrumb={[
-                        "Tabular Reviews",
-                        ...(review ? [review.title || "Untitled Review"] : []),
-                        "Add Documents",
+                        t("revisaoView.revisoesTabulares"),
+                        ...(review
+                            ? [
+                                  review.title ||
+                                      t("revisaoView.revisaoSemTitulo"),
+                              ]
+                            : []),
+                        t("revisaoView.adicionarDocumentos"),
                     ]}
                     uploadStateId={`tabular-review:${review?.id ?? "new"}:library`}
                     tabs={["files", "projects"]}
@@ -1796,14 +1850,15 @@ export function TRView({ reviewId, projectId }: Props) {
                 fetchAccess={getTabularReviewPeople}
                 currentUserEmail={user?.email ?? null}
                 breadcrumb={[
-                    "Tabular Reviews",
-                    review?.title || "Untitled Review",
-                    "Access",
+                    t("revisaoView.revisoesTabulares"),
+                    review?.title || t("revisaoView.revisaoSemTitulo"),
+                    t("revisaoView.acesso"),
                 ]}
                 access={{
                     grants: grants ?? [],
                     orgId: null,
-                    ownerLabel: "Review owners",
+                    ownerLabel: t("revisaoView.proprietariosRevisao"),
+                    resourceKind: "tabular_review",
                     inheritedFromProjectId: review?.project_id ?? null,
                     canManage: can(reviewRole, "access.manage"),
                     onGrant: async (email, role) => {
@@ -1827,25 +1882,25 @@ export function TRView({ reviewId, projectId }: Props) {
                 breadcrumbs={[
                     ...(project
                         ? [
-                              "Projects",
+                              t("revisaoView.projetos"),
                               project.name +
                                   (project.cm_number
                                       ? ` (#${project.cm_number})`
                                       : ""),
                           ]
                         : []),
-                    "Tabular Reviews",
-                    review?.title || "Untitled Review",
-                    "Add workflow",
+                    t("revisaoView.revisoesTabulares"),
+                    review?.title || t("revisaoView.revisaoSemTitulo"),
+                    t("revisaoView.adicionarWorkflow"),
                 ]}
                 applying={applyingWorkflow}
             />
 
             <ConfirmPopup
                 open={deleteReviewConfirmOpen}
-                title="Delete tabular review?"
-                message="This will permanently delete the tabular review and its generated cells."
-                confirmLabel="Delete"
+                title={t("revisaoView.confirmarExclusaoTitulo")}
+                message={t("revisaoView.confirmarExclusaoMensagem")}
+                confirmLabel={t("revisaoView.excluir")}
                 confirmVariant="danger"
                 confirmStatus={
                     deleteReviewStatus === "deleting"
@@ -1854,7 +1909,7 @@ export function TRView({ reviewId, projectId }: Props) {
                           ? "complete"
                           : "idle"
                 }
-                cancelLabel="Cancel"
+                cancelLabel={t("revisaoView.cancelar")}
                 onCancel={() => {
                     if (deleteReviewStatus === "deleting") return;
                     setDeleteReviewConfirmOpen(false);
@@ -1887,20 +1942,22 @@ export function TRView({ reviewId, projectId }: Props) {
 
             <WarningPopup
                 open={modelRequiredWarning}
-                title="Select a model"
-                message="Select a model for this tabular review before running it."
+                title={t("revisaoView.selecioneModelo")}
+                message={t("revisaoView.selecioneModeloMensagem")}
                 onClose={() => setModelRequiredWarning(false)}
             />
 
             <WarningPopup
                 open={generationGuard === "running"}
-                title="Tabular review is already running"
-                message="This review is being run in another tab or by another collaborator. Wait for that run to finish or be stopped before trying again."
+                title={t("revisaoView.jaEmExecucaoTitulo")}
+                message={t("revisaoView.jaEmExecucaoMensagem")}
                 onClose={() => {
                     if (!reloadingLatestReview) setGenerationGuard(null);
                 }}
                 primaryAction={{
-                    label: reloadingLatestReview ? "Checking…" : "Check again",
+                    label: reloadingLatestReview
+                        ? t("revisaoView.verificando")
+                        : t("revisaoView.verificarNovamente"),
                     disabled: reloadingLatestReview,
                     onClick: () => void loadLatestReview(),
                 }}
@@ -1908,13 +1965,15 @@ export function TRView({ reviewId, projectId }: Props) {
 
             <WarningPopup
                 open={generationGuard === "stale"}
-                title="A newer version is available"
-                message="Load the latest version of this tabular review before running it."
+                title={t("revisaoView.versaoMaisRecenteTitulo")}
+                message={t("revisaoView.versaoMaisRecenteMensagem")}
                 onClose={() => {
                     if (!reloadingLatestReview) setGenerationGuard(null);
                 }}
                 primaryAction={{
-                    label: reloadingLatestReview ? "Loading…" : "Load latest",
+                    label: reloadingLatestReview
+                        ? t("revisaoView.carregando")
+                        : t("revisaoView.carregarMaisRecente"),
                     disabled: reloadingLatestReview,
                     onClick: () => void loadLatestReview(),
                 }}

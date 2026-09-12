@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { Document, LibraryFolder, Project } from "./types";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProjectSvgIcon, SubfolderSvgIcon } from "./FolderSvgIcon";
@@ -39,10 +40,10 @@ const DIRECTORY_ROW_ACTION_CLASS =
 const DIRECTORY_CHECKBOX_CLASS =
     "h-2.5 w-2.5 shrink-0 justify-self-center cursor-pointer rounded border-gray-200 accent-black disabled:cursor-not-allowed";
 
-const DIRECTORY_TABS: { value: DirectoryTab; label: string }[] = [
-    { value: "files", label: "Files" },
-    { value: "templates", label: "Templates" },
-    { value: "projects", label: "Projects" },
+const DIRECTORY_TABS: { value: DirectoryTab; labelKey: string }[] = [
+    { value: "files", labelKey: "abaArquivos" },
+    { value: "templates", labelKey: "abaModelos" },
+    { value: "projects", labelKey: "abaProjetos" },
 ];
 const ALL_DIRECTORY_TAB_VALUES = DIRECTORY_TABS.map((tab) => tab.value);
 
@@ -173,6 +174,8 @@ export function FileDirectory({
   onLoadMoreRootDocuments,
   disabledDocumentIds,
 }: FileDirectoryProps) {
+  const t = useTranslations("exploradorArquivos");
+  const tDocs = useTranslations("documents");
   const autoLoadTriggeredRef = useRef(false);
     const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
         new Set(),
@@ -637,7 +640,7 @@ export function FileDirectory({
                     checked={selected}
                     indeterminate={false}
                     disabled={disabled}
-                    label={`Select ${doc.filename}`}
+                    label={t("selecionarArquivo", { filename: doc.filename })}
                     onChange={() => toggle(doc)}
                 />
                 <DocFileIcon fileType={doc.file_type} />
@@ -697,15 +700,19 @@ export function FileDirectory({
                             }
                             label={
                                 folderSelectionReady
-                                    ? `Select all files in ${folder.name}`
-                                    : `Expand ${folder.name} and load all files before selecting it`
+                                    ? t("selecionarTodosArquivos", {
+                                          nome: folder.name,
+                                      })
+                                    : t("expandirAntesSelecionar", {
+                                          nome: folder.name,
+                                      })
                             }
                             onChange={() => toggleDocuments(docsInFolder)}
                         />
                         <button
                             type="button"
                             aria-expanded={isExpanded}
-                            aria-label={`${isExpanded ? "Collapse" : "Expand"} ${folder.name}`}
+                            aria-label={`${isExpanded ? t("colapsar") : t("expandir")} ${folder.name}`}
                             onClick={() =>
                                 toggleLibraryFolder(
                                     folder.id,
@@ -734,8 +741,7 @@ export function FileDirectory({
                             {formatDate(folder.created_at) ?? "--"}
                         </span>
                         <span className="truncate text-right text-gray-400">
-                            {docsInFolder.length}{" "}
-                            {docsInFolder.length === 1 ? "file" : "files"}
+                            {t("nArquivos", { count: docsInFolder.length })}
                         </span>
                         </button>
                     </div>
@@ -826,7 +832,7 @@ export function FileDirectory({
                       paddingLeft: indentedRowPadding(depth + 1),
                                     }}
                                 >
-                                    Empty
+                                    {tDocs("pastaVazia")}
                                 </p>
                             )}
                         </div>
@@ -842,7 +848,7 @@ export function FileDirectory({
                 <SearchBar
                     value={search}
                     onValueChange={setSearch}
-                    placeholder="Search..."
+                    placeholder={t("buscar")}
                     autoFocus
                     wrapperClassName={showTabs ? "mb-4" : "mb-3"}
                 />
@@ -894,7 +900,7 @@ export function FileDirectory({
                 <SearchBar
                     value={search}
                     onValueChange={setSearch}
-                    placeholder="Search..."
+                    placeholder={t("buscar")}
                     autoFocus
                     wrapperClassName={showTabs ? "mb-4" : "mb-3"}
                 />
@@ -909,7 +915,7 @@ export function FileDirectory({
                 )}
                 <div className="min-h-0 flex-1 overflow-y-auto">
                     <p className="text-center text-sm text-gray-400 py-8">
-                        No documents yet
+                        {tDocs("nenhumDocumentoPadrao")}
                     </p>
                 </div>
             </div>
@@ -921,7 +927,7 @@ export function FileDirectory({
             <SearchBar
                 value={search}
                 onValueChange={setSearch}
-                placeholder="Search..."
+                placeholder={t("buscar")}
                 autoFocus
                 wrapperClassName={showTabs ? "mb-4" : "mb-3"}
             />
@@ -937,14 +943,14 @@ export function FileDirectory({
             {activeTabHasNoResults ? (
                 <div className="min-h-0 flex-1 overflow-y-auto">
                     <p className="text-center text-sm text-gray-400 py-8">
-                        No matches found
+                        {t("nenhumResultado")}
                     </p>
                 </div>
             ) : (
                 <div className="flex min-h-0 flex-1 flex-col">
                     <FileDirectoryHeader />
                     <div
-                      aria-label="File directory"
+                      aria-label={t("rotuloDiretorio")}
                       className="min-h-0 flex-1 overflow-y-auto"
                       onScroll={handleDirectoryScroll}
                     >
@@ -966,7 +972,7 @@ export function FileDirectory({
                                     </span>
                                     <FileDirectoryMetaCells
                                         version={null}
-                                        created="Uploading"
+                                        created={t("enviando")}
                                         size={null}
                                     />
                                 </div>
@@ -1038,7 +1044,7 @@ export function FileDirectory({
                                 directoryFileFolders.length === 0 &&
                                 visibleUploadingFilenames.length === 0 && (
                                     <p className="text-center text-sm text-gray-400 py-8">
-                                        No documents yet
+                                        {tDocs("nenhumDocumentoPadrao")}
                                     </p>
                                 )}
                         </>
@@ -1086,7 +1092,7 @@ export function FileDirectory({
                                 visibleTemplateDocs.length === 0 &&
                                 directoryTemplateFolders.length === 0 && (
                                     <p className="text-center text-sm text-gray-400 py-8">
-                                        No templates yet
+                                        {t("nenhumModelo")}
                                     </p>
                                 )}
                         </>
@@ -1134,8 +1140,18 @@ export function FileDirectory({
                                             }
                                             label={
                                                 projectSelectionReady
-                                                    ? `Select all files in ${project.name}`
-                                                    : `Expand ${project.name} and load all files before selecting it`
+                                                    ? t(
+                                                          "selecionarTodosArquivos",
+                                                          {
+                                                              nome: project.name,
+                                                          },
+                                                      )
+                                                    : t(
+                                                          "expandirAntesSelecionar",
+                                                          {
+                                                              nome: project.name,
+                                                          },
+                                                      )
                                             }
                                             onChange={() =>
                                                 toggleDocuments(docs)
@@ -1144,7 +1160,7 @@ export function FileDirectory({
                                         <button
                                             type="button"
                                             aria-expanded={isExpanded}
-                                            aria-label={`${isExpanded ? "Collapse" : "Expand"} ${project.name}`}
+                                            aria-label={`${isExpanded ? t("colapsar") : t("expandir")} ${project.name}`}
                                             onClick={() =>
                                                 toggleFolder(project.id)
                                             }
@@ -1169,7 +1185,7 @@ export function FileDirectory({
                         {formatDate(project.created_at) ?? "--"}
                                         </span>
                                         <span className="truncate text-right text-gray-400">
-                        {docs.length} {docs.length === 1 ? "file" : "files"}
+                        {t("nArquivos", { count: docs.length })}
                                         </span>
                                         </button>
                                     </div>
@@ -1178,11 +1194,11 @@ export function FileDirectory({
                         {loadingProjectLevels.has(`${project.id}:root`) ? (
                           <p className="flex items-center gap-2 pl-7 py-2 text-xs text-gray-400">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            Loading project files
+                            {t("carregandoArquivosProjeto")}
                           </p>
                         ) : docs.length === 0 && projectFolders.length === 0 ? (
                                                 <p className="pl-7 py-1 text-xs text-gray-400">
-                                                    Empty
+                                                    {tDocs("pastaVazia")}
                                                 </p>
                                             ) : (
                                                 <>
@@ -1231,7 +1247,7 @@ export function FileDirectory({
                         !q &&
                         visibleDirectoryProjects.length === 0 && (
                             <p className="text-center text-sm text-gray-400 py-8">
-                                No projects yet
+                                {t("nenhumProjeto")}
                             </p>
                         )}
             {activeTab === "projects" && !q && (
@@ -1262,14 +1278,15 @@ export function FileDirectory({
 }
 
 function FileDirectoryHeader() {
+    const tDocs = useTranslations("documents");
     return (
         <div
             className={`${DIRECTORY_GRID_CLASS} px-2 pb-1 pt-0.5 text-[11px] font-medium text-gray-400`}
         >
-            <span className="col-span-3">Name</span>
-            <span>Version</span>
-            <span>Created</span>
-            <span className="text-right">Size</span>
+            <span className="col-span-3">{tDocs("colunas.nome")}</span>
+            <span>{tDocs("colunas.versao")}</span>
+            <span>{tDocs("colunas.criado")}</span>
+            <span className="text-right">{tDocs("colunas.tamanho")}</span>
         </div>
     );
 }
@@ -1305,6 +1322,7 @@ function FileDirectoryControls({
     showTabs: boolean;
     tabs: typeof DIRECTORY_TABS;
 }) {
+    const t = useTranslations("exploradorArquivos");
     return (
         <div className="flex items-center justify-between gap-3 pr-2">
             {showTabs ? (
@@ -1317,7 +1335,7 @@ function FileDirectoryControls({
                                 active={active}
                                 onClick={() => onChange(tab.value)}
                             >
-                                {tab.label}
+                                {t(tab.labelKey)}
                             </TabPillButton>
                         );
                     })}
@@ -1327,7 +1345,7 @@ function FileDirectoryControls({
             )}
             {selectedCount > 0 && (
                 <span className="shrink-0 text-xs text-gray-400">
-                    {selectedCount} selected
+                    {t("selecionados", { count: selectedCount })}
                 </span>
             )}
         </div>

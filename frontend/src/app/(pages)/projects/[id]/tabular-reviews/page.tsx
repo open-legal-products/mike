@@ -2,6 +2,7 @@
 
 import { use, useCallback, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import { deleteTabularReview, updateTabularReview } from "@/app/lib/mikeApi";
 import { ProjectReviewsTable } from "@/app/components/projects/ProjectReviewsTable";
@@ -65,6 +66,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
     use(params);
     const workspace = useProjectWorkspace();
     const router = useRouter();
+    const tPermissao = useTranslations("popups.permissao");
     const searchParams = useSearchParams();
     const { user } = useAuth();
     const previewEmptyStates = searchParams.get("emptyStates") === "1";
@@ -118,7 +120,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         // list must refuse with the member sentence the review page uses.
         if (!can(roleFrom(review), "content.edit")) {
             setOwnerOnlyAction({
-                action: "edit tabular review details",
+                action: tPermissao("acaoEditarDetalhesRevisao"),
                 requiredRole: "editor",
             });
             return;
@@ -133,7 +135,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         if (!detailsReview) return;
         if (!can(roleFrom(detailsReview), "content.edit")) {
             setOwnerOnlyAction({
-                action: "edit tabular review details",
+                action: tPermissao("acaoEditarDetalhesRevisao"),
                 requiredRole: "editor",
             });
             return;
@@ -164,7 +166,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
 
     async function handleDeleteReviewRow(review: TabularReview) {
         if (!can(roleFrom(review), "container.delete")) {
-            setOwnerOnlyAction("delete this tabular review");
+            setOwnerOnlyAction(tPermissao("acaoExcluirRevisao"));
             return;
         }
         const snapshot = reviews;

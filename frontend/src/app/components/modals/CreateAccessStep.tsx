@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
     listOrgMembers,
     type AccessAssignmentRole,
@@ -11,6 +12,7 @@ import type { ProjectRole } from "@/app/lib/permissions";
 import {
     OrganizationAccessEditor,
     AccessEditor,
+    type AccessResourceKind,
     type OrganizationAccessAssignment,
     type AccessRow,
 } from "./AccessEditor";
@@ -37,7 +39,8 @@ export function CreateAccessStep({
     orgOverrides = [],
     onOrgOverridesChange,
     inheritedFromProject = false,
-    ownerLabel = "Project owners",
+    ownerLabel,
+    resourceKind,
 }: {
     orgId: string | null;
     organizationName?: string | null;
@@ -49,7 +52,9 @@ export function CreateAccessStep({
     onOrgOverridesChange?: (overrides: PendingOrgOverride[]) => void;
     inheritedFromProject?: boolean;
     ownerLabel?: string;
+    resourceKind?: AccessResourceKind;
 }) {
+    const t = useTranslations("modals.acesso");
     const [memberState, setMemberState] = useState<{
         orgId: string;
         members: OrgMember[];
@@ -72,7 +77,7 @@ export function CreateAccessStep({
                     setMemberState({
                         orgId,
                         members: [],
-                        error: "Could not load organization members.",
+                        error: t("erroCarregarMembros"),
                     });
                 }
             });
@@ -152,9 +157,9 @@ export function CreateAccessStep({
 
     function validateDirectEmail(email: string) {
         if (currentEmail && email === currentEmail)
-            return "You are already the owner.";
+            return t("voceJaDono");
         if (directGrants.some((grant) => grant.email === email))
-            return `${email} already has access.`;
+            return t("jaTemAcesso", { email });
         return null;
     }
 
@@ -198,7 +203,8 @@ export function CreateAccessStep({
                 members={organizationMembers}
                 assignments={organizationAssignments}
                 organizationName={organizationName}
-                ownerLabel={ownerLabel}
+                ownerLabel={ownerLabel ?? t("donosProjeto")}
+                resourceKind={resourceKind}
                 loading={loading}
                 error={loadError}
                 onAssign={assignOrganizationMember}

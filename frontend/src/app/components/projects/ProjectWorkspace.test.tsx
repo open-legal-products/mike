@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import {
     ProjectWorkspaceProvider,
     useProjectWorkspace,
@@ -73,9 +74,11 @@ function RegisterUploadAction() {
 describe("ProjectWorkspaceProvider", () => {
     it("keeps document upload actions registered on direct project load", async () => {
         render(
-            <ProjectWorkspaceProvider projectId="project-1">
-                <RegisterUploadAction />
-            </ProjectWorkspaceProvider>,
+            withIntl(
+                <ProjectWorkspaceProvider projectId="project-1">
+                    <RegisterUploadAction />
+                </ProjectWorkspaceProvider>,
+            ),
         );
 
         expect(

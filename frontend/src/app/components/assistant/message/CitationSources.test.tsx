@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { Citation, DocumentCitation } from "../../shared/types";
+import { withIntl } from "@/test/withIntl";
 import { citationTooltip, CitationsBlock } from "./CitationSources";
 
 function documentCitation(ref: number, verified?: boolean): DocumentCitation {
@@ -21,14 +22,14 @@ function documentCitation(ref: number, verified?: boolean): DocumentCitation {
 describe("CitationsBlock verification states", () => {
   it("marks unverified document citation buttons with the error colors", () => {
     render(
-      <CitationsBlock
+      withIntl(<CitationsBlock
         citations={[documentCitation(1, false), documentCitation(2)]}
-      />,
+      />),
     );
 
     expect(
       screen.getByRole("button", {
-        name: "Citation 1. Could not verify quote",
+        name: "Citação 1. Não foi possível verificar a citação",
       }),
     ).toHaveClass(
       "!bg-red-100/85",
@@ -37,7 +38,7 @@ describe("CitationsBlock verification states", () => {
       "dark:!text-white",
     );
     const verifiedButton = screen.getByRole("button", {
-      name: "Citation 2",
+      name: "Citação 2",
     });
     expect(verifiedButton).toHaveClass("bg-gray-200/80", "text-gray-800");
   });
@@ -58,9 +59,9 @@ describe("CitationsBlock verification states", () => {
       case_name: "Example v Example",
       quotes: [],
     };
-    render(<CitationsBlock citations={[citation]} />);
+    render(withIntl(<CitationsBlock citations={[citation]} />));
 
-    const button = screen.getByRole("button", { name: "Citation 4" });
+    const button = screen.getByRole("button", { name: "Citação 4" });
     expect(button).toHaveClass("bg-gray-200/80", "text-gray-800");
   });
 
@@ -69,21 +70,21 @@ describe("CitationsBlock verification states", () => {
     const active = documentCitation(2);
 
     render(
-      <CitationsBlock
+      withIntl(<CitationsBlock
         citations={[inactive, active]}
         activeCitation={active}
-      />,
+      />),
     );
 
-    expect(screen.getByRole("button", { name: "Citation 2" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Citação 2" })).toHaveAttribute(
       "data-active",
       "true",
     );
     expect(
-      screen.getByRole("button", { name: "Citation 2" }),
+      screen.getByRole("button", { name: "Citação 2" }),
     ).toHaveAttribute("aria-current", "true");
     expect(
-      screen.getByRole("button", { name: "Citation 1" }),
+      screen.getByRole("button", { name: "Citação 1" }),
     ).not.toHaveAttribute("data-active");
   });
 });

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { EditCardsSectionUI } from "@/shared/ui/EditCardsSectionUI";
 import { GLASS_CARD_SURFACE_CLASS } from "@/app/components/ui/glass-card";
 import { PillButton } from "@/app/components/ui/pill-button";
@@ -53,6 +54,8 @@ function BulkEditActions({
         done: number;
         total: number;
     } | null>(null);
+    const t = useTranslations("assistant.cartoesEdicao");
+    const tShared = useTranslations("shared.trackedChanges");
 
     if (pending.length === 0) return null;
 
@@ -113,8 +116,8 @@ function BulkEditActions({
                         versionId: annotation.version_id ?? null,
                         message:
                             verb === "accept"
-                                ? "Couldn't save one or more accepts."
-                                : "Couldn't save one or more rejects.",
+                                ? t("erroAceitarTudo")
+                                : t("erroRejeitarTudo"),
                     });
                 }
                 done++;
@@ -139,7 +142,7 @@ function BulkEditActions({
                 disabled={!!busy}
                 loading={busy === "accept"}
             >
-                {busy === "accept" ? "Accepting all..." : "Accept all"}
+                {busy === "accept" ? t("aceitandoTudo") : tShared("aceitarTudo")}
             </PillButton>
             <PillButton
                 tone="white"
@@ -148,7 +151,9 @@ function BulkEditActions({
                 disabled={!!busy}
                 loading={busy === "reject"}
             >
-                {busy === "reject" ? "Rejecting all..." : "Reject all"}
+                {busy === "reject"
+                    ? t("rejeitandoTudo")
+                    : tShared("rejeitarTudo")}
             </PillButton>
             {progress && (
                 <span className="text-xs font-sans text-gray-500">
@@ -165,7 +170,7 @@ function BulkEditActions({
                     disabled={!!busy}
                     className="ml-auto"
                 >
-                    View
+                    {tShared("ver")}
                 </PillButton>
             )}
         </div>
@@ -214,17 +219,28 @@ export function EditCardsSection({
         message: string;
     }) => void;
 }) {
+    const tShared = useTranslations("shared.trackedChanges");
     if (cards.length === 0) return null;
 
     const docCount = filenameByDocId.size;
     const summary =
         pending.length > 0
             ? docCount > 1
-                ? `${pending.length} tracked changes across ${docCount} documents`
-                : `${pending.length} tracked ${pending.length === 1 ? "change" : "changes"}`
+                ? tShared("alteracoesEmDocumentos", {
+                      n: pending.length,
+                      d: docCount,
+                  })
+                : pending.length === 1
+                  ? tShared("alteracaoRastreada", { n: pending.length })
+                  : tShared("alteracoesRastreadas", { n: pending.length })
             : docCount > 1
-              ? `${resolvedCount} resolved tracked changes across ${docCount} documents`
-              : `${resolvedCount} resolved tracked ${resolvedCount === 1 ? "change" : "changes"}`;
+              ? tShared("alteracoesResolvidasEmDocumentos", {
+                    n: resolvedCount,
+                    d: docCount,
+                })
+              : resolvedCount === 1
+                ? tShared("alteracaoResolvida", { n: resolvedCount })
+                : tShared("alteracoesResolvidas", { n: resolvedCount });
 
     return (
         <EditCardsSectionUI

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Users } from "lucide-react";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
@@ -35,6 +36,8 @@ export function ProjectDetailsModal({
     onSave,
     onShareProject,
 }: ProjectDetailsModalProps) {
+    const t = useTranslations("modals.detalhesProjeto");
+    const tPagina = useTranslations("projects.pagina");
     const [nameDraft, setNameDraft] = useState("");
     const [cmDraft, setCmDraft] = useState("");
     const [practiceDraft, setPracticeDraft] = useState("");
@@ -107,7 +110,7 @@ export function ProjectDetailsModal({
             });
             setSaved(true);
         } catch {
-            setError("Could not update project details.");
+            setError(t("erroSalvar"));
         } finally {
             setSaving(false);
         }
@@ -117,11 +120,15 @@ export function ProjectDetailsModal({
         <Modal
             open={open}
             onClose={onClose}
-            breadcrumbs={["Projects", project.name, "Details"]}
+            breadcrumbs={[
+                tPagina("projetos"),
+                project.name,
+                t("detalhes"),
+            ]}
             secondaryAction={
                 onShareProject
                     ? {
-                          label: "Share",
+                          label: t("compartilhar"),
                           icon: <Users className="h-4 w-4" />,
                           onClick: onShareProject,
                       }
@@ -131,13 +138,17 @@ export function ProjectDetailsModal({
                 error ? (
                     <span className="text-sm text-red-600">{error}</span>
                 ) : saved ? (
-                    <span className="text-sm text-gray-400">Updated</span>
+                    <span className="text-sm text-gray-400">
+                        {t("atualizado")}
+                    </span>
                 ) : null
             }
             primaryAction={
                 canEdit
                     ? {
-                          label: saving ? "Updating..." : "Update",
+                          label: saving
+                              ? t("atualizando")
+                              : t("atualizar"),
                           onClick: () => void handleSave(),
                           disabled: saving || !hasChanges || !trimmedName,
                       }
@@ -148,7 +159,7 @@ export function ProjectDetailsModal({
             <div className="flex min-h-0 flex-1 flex-col gap-6 py-1">
                 <div>
                     <FieldLabel htmlFor="project-details-name">
-                        Project name
+                        {t("nomeProjeto")}
                     </FieldLabel>
                     <FormTextInput
                         id="project-details-name"
@@ -159,14 +170,14 @@ export function ProjectDetailsModal({
                             setError(null);
                         }}
                         disabled={!canEdit || saving}
-                        placeholder="Add project name"
+                        placeholder={t("placeholderNomeProjeto")}
                         variant="minimal"
                     />
                 </div>
 
                 <div>
                     <FieldLabel htmlFor="project-details-cm">
-                        CM number
+                        {t("numeroCM")}
                     </FieldLabel>
                     <FormTextInput
                         id="project-details-cm"
@@ -177,7 +188,7 @@ export function ProjectDetailsModal({
                             setError(null);
                         }}
                         disabled={!canEdit || saving}
-                        placeholder="Add a CM number..."
+                        placeholder={t("placeholderCM")}
                         variant="minimal"
                         className="text-xl text-gray-600"
                     />
@@ -185,7 +196,7 @@ export function ProjectDetailsModal({
 
                 <div>
                     <FieldLabel htmlFor="project-details-practice">
-                        Practice
+                        {t("pratica")}
                     </FieldLabel>
                     <ProjectPracticeField
                         id="project-details-practice"
@@ -201,7 +212,7 @@ export function ProjectDetailsModal({
 
                 <div>
                     <FieldLabel htmlFor="project-details-org">
-                        Organisation
+                        {t("organizacao")}
                     </FieldLabel>
                     <ModalSelect
                         id="project-details-org"
@@ -211,7 +222,7 @@ export function ProjectDetailsModal({
                         options={[
                             {
                                 value: PERSONAL_WORKSPACE,
-                                label: "No organization",
+                                label: t("semOrganizacao"),
                             },
                             ...orgs.map((org) => ({
                                 value: org.id,

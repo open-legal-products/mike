@@ -8,6 +8,7 @@ import {
     type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 import { ChevronLeft, Loader2, Plus, Search, X } from "lucide-react";
 import { usePageChrome } from "@/app/contexts/PageChromeContext";
 import { cn } from "@/app/lib/utils";
@@ -271,7 +272,8 @@ function PageHeaderNewActionControl({
     action: PageHeaderNewAction;
     disabled: boolean;
 }) {
-    const title = action.title ?? "New";
+    const t = useTranslations("shell.cabecalho");
+    const title = action.title ?? t("novo");
     return (
         <HeaderButtonUI
             onClick={action.onClick}
@@ -296,9 +298,10 @@ function PageHeaderSearchActionControl({
     action: PageHeaderSearchAction;
     disabled: boolean;
 }) {
+    const t = useTranslations("shell.cabecalho");
     const [open, setOpen] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
-    const placeholder = action.placeholder ?? "Search…";
+    const placeholder = action.placeholder ?? t("buscar");
     const hasValue = action.value.length > 0;
     const expanded = open || hasValue;
 
@@ -342,7 +345,7 @@ function PageHeaderSearchActionControl({
                                 setOpen(false);
                             }}
                             disabled={disabled}
-                            aria-label="Clear search"
+                            aria-label={t("limparBusca")}
                             className="shrink-0 rounded-full p-0.5 text-gray-400 transition-colors hover:bg-black/5 hover:text-gray-600"
                         >
                             <X className="h-3.5 w-3.5" />
@@ -365,6 +368,7 @@ function PageHeaderSearchActionControl({
 }
 
 function PageHeaderBreadcrumbs({ items }: { items: PageHeaderBreadcrumb[] }) {
+    const t = useTranslations("shell.cabecalho");
     const containerRef = useRef<HTMLDivElement>(null);
     const measurementRefs = useRef<Array<HTMLSpanElement | null>>([]);
     const ellipsisMeasurementRef = useRef<HTMLSpanElement>(null);
@@ -436,8 +440,8 @@ function PageHeaderBreadcrumbs({ items }: { items: PageHeaderBreadcrumb[] }) {
                 <button
                     onClick={parent.onClick}
                     className="shrink-0 text-gray-400 transition-colors hover:text-gray-600 sm:hidden"
-                    title={parent.title ?? "Back"}
-                    aria-label={parent.title ?? "Back"}
+                    title={parent.title ?? t("voltar")}
+                    aria-label={parent.title ?? t("voltar")}
                 >
                     <ChevronLeft className="h-5 w-5" />
                 </button>
@@ -583,6 +587,7 @@ function CollapsedBreadcrumbGroup({
 }: {
     items: PageHeaderBreadcrumb[];
 }) {
+    const t = useTranslations("shell.cabecalho");
     return (
         <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
             <DropdownMenu>
@@ -590,8 +595,8 @@ function CollapsedBreadcrumbGroup({
                     <button
                         type="button"
                         className="text-gray-500 transition-colors hover:text-gray-700"
-                        aria-label="Show collapsed breadcrumbs"
-                        title="Show path"
+                        aria-label={t("mostrarTrilhasRecolhidas")}
+                        title={t("mostrarCaminho")}
                     >
                         …
                     </button>

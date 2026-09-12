@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { ApiKeyField } from "@/app/components/settings/ApiKeyField";
 import { RouterSettingsSection } from "@/app/components/settings/RouterSettingsSection";
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
@@ -10,53 +11,53 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 const MODEL_API_KEY_FIELDS = [
   {
     provider: "claude",
-    label: "Anthropic (Claude) API Key",
+    labelKey: "labelClaude",
     placeholder: "sk-ant-...",
   },
   {
     provider: "gemini",
-    label: "Google (Gemini) API Key",
+    labelKey: "labelGemini",
     placeholder: "AI...",
   },
   {
     provider: "openai",
-    label: "OpenAI API Key",
+    labelKey: "labelOpenai",
     placeholder: "sk-...",
   },
   {
     provider: "openrouter",
-    label: "OpenRouter API Key",
+    labelKey: "labelOpenrouter",
     placeholder: "sk-or-...",
   },
   {
     provider: "vercel",
-    label: "Vercel AI Gateway API Key",
+    labelKey: "labelVercel",
     placeholder: "vck_...",
   },
   {
     provider: "opencode-go",
-    label: "OpenCode Go API Key",
+    labelKey: "labelOpencodeGo",
     placeholder: "sk-...",
   },
 ] as const;
 
 export default function ByokPage() {
+  const t = useTranslations("configuracoes.byok");
+  const tModelos = useTranslations("pages.modelos");
   const { profile, updateApiKey } = useUserProfile();
 
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>API Keys</SettingsHeading>
+        <SettingsHeading>{tModelos("chavesTitulo")}</SettingsHeading>
         <SettingsDescription>
-          A personal API key saved here means all future requests for the
-          relevant provider will automatically be routed through your API key
-          and charged to your own API platform account.
+          {t("descricaoChaves")}
         </SettingsDescription>
         <SettingsCard>
           {MODEL_API_KEY_FIELDS.map((field) => (
             <div key={field.provider}>
               <ApiKeyField
-                label={field.label}
+                label={t(field.labelKey)}
                 placeholder={field.placeholder}
                 hasSavedKey={profile?.apiKeys[field.provider].source === "user"}
                 onSave={(value) =>

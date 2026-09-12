@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import type { Chat } from "@/app/components/shared/types";
 import { ProjectAssistantTable } from "./ProjectAssistantTable";
 
@@ -27,25 +28,27 @@ function renderTable(selectedChatIds: string[]) {
     const onOpenChat = vi.fn();
     const setSelectedChatIds = vi.fn();
     render(
-        <ProjectAssistantTable
-            chats={chats}
-            filteredChats={chats}
-            selectedChatIds={selectedChatIds}
-            allChatsSelected={selectedChatIds.length === chats.length}
-            someChatsSelected={selectedChatIds.length > 0}
-            renamingChatId={null}
-            renameChatValue=""
-            currentUserId="user-1"
-            onCreateChat={vi.fn()}
-            onOpenChat={onOpenChat}
-            onDeleteChat={onDeleteChat}
-            onDeleteSelectedChats={onDeleteSelectedChats}
-            onOwnerOnlyAction={vi.fn()}
-            submitChatRename={vi.fn()}
-            setSelectedChatIds={setSelectedChatIds}
-            setRenamingChatId={vi.fn()}
-            setRenameChatValue={vi.fn()}
-        />,
+        withIntl(
+            <ProjectAssistantTable
+                chats={chats}
+                filteredChats={chats}
+                selectedChatIds={selectedChatIds}
+                allChatsSelected={selectedChatIds.length === chats.length}
+                someChatsSelected={selectedChatIds.length > 0}
+                renamingChatId={null}
+                renameChatValue=""
+                currentUserId="user-1"
+                onCreateChat={vi.fn()}
+                onOpenChat={onOpenChat}
+                onDeleteChat={onDeleteChat}
+                onDeleteSelectedChats={onDeleteSelectedChats}
+                onOwnerOnlyAction={vi.fn()}
+                submitChatRename={vi.fn()}
+                setSelectedChatIds={setSelectedChatIds}
+                setRenamingChatId={vi.fn()}
+                setRenameChatValue={vi.fn()}
+            />,
+        ),
     );
     return {
         onDeleteChat,
@@ -64,9 +67,9 @@ describe("ProjectAssistantTable row context actions", () => {
         ]);
 
         fireEvent.contextMenu(screen.getByText("First chat"));
-        expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
-        expect(screen.queryByRole("button", { name: "View" })).toBeNull();
-        await user.click(screen.getByRole("button", { name: "Delete 2 chats" }));
+        expect(screen.queryByRole("button", { name: "Renomear" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Visualizar" })).toBeNull();
+        await user.click(screen.getByRole("button", { name: "Excluir 2 conversas" }));
 
         expect(onDeleteSelectedChats).toHaveBeenCalledOnce();
         expect(onDeleteChat).not.toHaveBeenCalled();
@@ -77,7 +80,7 @@ describe("ProjectAssistantTable row context actions", () => {
         const { onDeleteChat, onDeleteSelectedChats } = renderTable(["chat-2"]);
 
         fireEvent.contextMenu(screen.getByText("First chat"));
-        await user.click(screen.getByRole("button", { name: "Delete" }));
+        await user.click(screen.getByRole("button", { name: "Excluir" }));
 
         expect(onDeleteChat).toHaveBeenCalledWith(chats[0]);
         expect(onDeleteSelectedChats).not.toHaveBeenCalled();
@@ -88,7 +91,7 @@ describe("ProjectAssistantTable row context actions", () => {
         const { onOpenChat } = renderTable([]);
 
         fireEvent.contextMenu(screen.getByText("First chat"));
-        await user.click(screen.getByRole("button", { name: "View" }));
+        await user.click(screen.getByRole("button", { name: "Visualizar" }));
 
         expect(onOpenChat).toHaveBeenCalledWith("chat-1");
     });

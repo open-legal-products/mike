@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import type {
     ColumnConfig,
     Document,
@@ -53,28 +54,30 @@ describe("TRSidePanel", () => {
         } as TabularCell;
 
         render(
-            <TRSidePanel
-                cell={cell}
-                row={row}
-                rows={[row]}
-                document={document}
-                documents={[document]}
-                column={column}
-                columns={[column]}
-                displayDocument
-                documentOnly
-                onClose={vi.fn()}
-                onNavigate={vi.fn()}
-                onRegenerate={vi.fn()}
-            />,
+            withIntl(
+                <TRSidePanel
+                    cell={cell}
+                    row={row}
+                    rows={[row]}
+                    document={document}
+                    documents={[document]}
+                    column={column}
+                    columns={[column]}
+                    displayDocument
+                    documentOnly
+                    onClose={vi.fn()}
+                    onNavigate={vi.fn()}
+                    onRegenerate={vi.fn()}
+                />,
+            ),
         );
 
         expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
-        expect(screen.getByText("Version")).toBeInTheDocument();
+        expect(screen.getByText("Versão")).toBeInTheDocument();
         expect(screen.getByText("V3")).toBeInTheDocument();
-        expect(screen.queryByText("Column")).not.toBeInTheDocument();
-        expect(screen.queryByText("Results")).not.toBeInTheDocument();
-        expect(screen.queryByTitle("Regenerate")).not.toBeInTheDocument();
+        expect(screen.queryByText("Coluna")).not.toBeInTheDocument();
+        expect(screen.queryByText("Resultados")).not.toBeInTheDocument();
+        expect(screen.queryByTitle("Regenerar")).not.toBeInTheDocument();
     });
 
     it("opens the source document encoded in a grouped-row citation", () => {
@@ -116,16 +119,18 @@ describe("TRSidePanel", () => {
         } as TabularCell;
 
         const { container } = render(
-            <TRSidePanel
-                cell={cell}
-                row={row}
-                rows={[row]}
-                documents={documents}
-                column={column}
-                columns={[column]}
-                onClose={vi.fn()}
-                onNavigate={vi.fn()}
-            />,
+            withIntl(
+                <TRSidePanel
+                    cell={cell}
+                    row={row}
+                    rows={[row]}
+                    documents={documents}
+                    column={column}
+                    columns={[column]}
+                    onClose={vi.fn()}
+                    onNavigate={vi.fn()}
+                />,
+            ),
         );
 
         expect(
@@ -145,7 +150,7 @@ describe("TRSidePanel", () => {
 
         expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
 
-        fireEvent.click(screen.getByTitle('Page 4: "Exact language"'));
+        fireEvent.click(screen.getByTitle('Página 4: "Exact language"'));
 
         expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
     });

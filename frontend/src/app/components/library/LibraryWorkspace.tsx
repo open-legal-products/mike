@@ -13,6 +13,7 @@ import {
     useState,
 } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ChevronLeft, Plus } from "lucide-react";
 import { DocTable } from "@/app/components/documents/DocTable";
 import { NO_ROLE_MODEL } from "@/app/lib/permissions";
@@ -80,9 +81,9 @@ type LibraryWorkspaceContextValue = {
     ) => void;
 };
 
-const LIBRARY_TABS: { id: LibraryKind; label: string }[] = [
-    { id: "files", label: "Files" },
-    { id: "templates", label: "Templates" },
+const LIBRARY_TABS: { id: LibraryKind; labelKey: string }[] = [
+    { id: "files", labelKey: "abaArquivos" },
+    { id: "templates", labelKey: "abaModelos" },
 ];
 
 const EMPTY_COLLECTION: LibraryViewCollection = {
@@ -503,6 +504,7 @@ export function LibraryCollectionPage({
     folderId?: string | null;
 }) {
     const router = useRouter();
+    const t = useTranslations("library");
     const {
         collections,
         loadingByKind,
@@ -521,7 +523,7 @@ export function LibraryCollectionPage({
     const search = searchByKind[kind];
     const collectionRootPath = kind === "files" ? "/library" : "/library/templates";
   const debouncedSearch = useDebouncedValue(search, 250);
-    const title = kind === "files" ? "Files" : "Templates";
+    const title = kind === "files" ? t("abaArquivos") : t("abaModelos");
   const [documentTypeOptions, setDocumentTypeOptions] = useState<string[]>([]);
   const [tableQuery, setTableQuery] = useState<DocTableQuery>({
     search: "",
@@ -900,7 +902,7 @@ export function LibraryCollectionPage({
             <PageHeader
                 breadcrumbs={[
                     {
-                        label: "Library",
+                        label: t("tituloBiblioteca"),
                         onClick: () => router.push("/library"),
                     },
                     {
@@ -916,7 +918,9 @@ export function LibraryCollectionPage({
                                 type: "search",
                                 value: search,
                 onChange: (value) => setSearchForKind(kind, value),
-                                placeholder: `Search ${title.toLowerCase()}...`,
+                                placeholder: t("placeholderBusca", {
+                                    aba: title.toLowerCase(),
+                                }),
                             },
                         ],
                     },
@@ -939,7 +943,14 @@ export function LibraryCollectionPage({
 
             <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
                 <TableToolbar
-                    items={folderBackAction ? [] : LIBRARY_TABS}
+                    items={
+                        folderBackAction
+                            ? []
+                            : LIBRARY_TABS.map(({ id, labelKey }) => ({
+                                  id,
+                                  label: t(labelKey),
+                              }))
+                    }
                     active={kind}
                     onChange={(next) =>
                         router.push(
@@ -950,7 +961,7 @@ export function LibraryCollectionPage({
                         folderBackAction ? (
                             <TabPillButton onClick={folderBackAction}>
                                 <ChevronLeft className="h-3.5 w-3.5" />
-                                Back
+                                {t("voltar")}
                             </TabPillButton>
                         ) : undefined
                     }
@@ -960,7 +971,9 @@ export function LibraryCollectionPage({
                             disabled={!createFolderAction || loading}
                         >
                             <Plus className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Folder</span>
+                            <span className="hidden sm:inline">
+                                {t("pasta")}
+                            </span>
                         </TabPillButton>
                     }
                 />

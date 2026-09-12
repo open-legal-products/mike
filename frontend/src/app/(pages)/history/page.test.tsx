@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import {
   downloadUserExport,
   getAuditHistory,
@@ -114,19 +115,19 @@ describe("HistoryPage", () => {
   });
 
   it("renders the shared page header, toolbar, and table controls", async () => {
-    render(<HistoryPage />);
+    render(withIntl(<HistoryPage />));
 
     expect(
-      screen.getByRole("heading", { name: "History" }),
+      screen.getByRole("heading", { name: "Histórico" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Search history…" }),
+      screen.getByRole("button", { name: "Buscar no histórico…" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Export history" }),
+      screen.getByRole("button", { name: "Exportar histórico" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Select date range" }),
+      screen.getByRole("button", { name: "Selecionar intervalo de datas" }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("button", { name: "7 days" })).toBeNull();
     expect(screen.queryByRole("button", { name: "30 days" })).toBeNull();
@@ -134,18 +135,18 @@ describe("HistoryPage", () => {
     expect(await screen.findByText("Alex Lawyer")).toBeInTheDocument();
     expect(screen.getByText("Share purchase agreement")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Filter by status" }),
+      screen.getByRole("button", { name: "Filtrar por status" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Username")).toBeInTheDocument();
-    expect(screen.getByText("Email")).toBeInTheDocument();
+    expect(screen.getByText("Usuário")).toBeInTheDocument();
+    expect(screen.getByText("E-mail")).toBeInTheDocument();
     expect(screen.getByText("Alex Lawyer")).toHaveClass("text-xs");
     expect(screen.getByText("lawyer@example.com")).toHaveClass(
       "ml-auto",
       "w-52",
       "text-xs",
     );
-    expect(screen.getByText("Completed")).toHaveClass("text-green-600");
-    expect(screen.getByText("Completed")).not.toHaveClass("rounded-full");
+    expect(screen.getByText("Concluído")).toHaveClass("text-green-600");
+    expect(screen.getByText("Concluído")).not.toHaveClass("rounded-full");
     expect(screen.getByTestId("status-dot-event-1")).toHaveClass(
       "rounded-full",
       "border-white/80",
@@ -153,21 +154,21 @@ describe("HistoryPage", () => {
       "backdrop-blur-xl",
     );
     expect(screen.getByText("gpt-5")).toHaveClass("w-28", "text-xs");
-    expect(screen.getByText("Email").parentElement).toHaveClass("ml-auto");
+    expect(screen.getByText("E-mail").parentElement).toHaveClass("ml-auto");
     expect(
-      screen.getByRole("button", { name: "Sort by email" }),
+      screen.getByRole("button", { name: "Ordenar por e-mail" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Filter by type" }),
+      screen.getByRole("button", { name: "Filtrar por tipo" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Filter by application" }),
+      screen.getByRole("button", { name: "Filtrar por aplicação" }),
     ).toBeInTheDocument();
   });
 
   it("defaults to the previous 30 days and sends header controls to the audit query", async () => {
     const user = userEvent.setup();
-    render(<HistoryPage />);
+    render(withIntl(<HistoryPage />));
     await screen.findByText("Alex Lawyer");
 
     expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
@@ -178,8 +179,8 @@ describe("HistoryPage", () => {
       expect.any(AbortSignal),
     );
 
-    await user.click(screen.getByRole("button", { name: "Filter by status" }));
-    await user.click(screen.getByRole("menuitem", { name: "Completed" }));
+    await user.click(screen.getByRole("button", { name: "Filtrar por status" }));
+    await user.click(screen.getByRole("menuitem", { name: "Concluído" }));
     await waitFor(() =>
       expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
         expect.objectContaining({ status: "completed", page: 1 }),
@@ -187,8 +188,8 @@ describe("HistoryPage", () => {
       ),
     );
 
-    await user.click(screen.getByRole("button", { name: "Sort by title" }));
-    await user.click(screen.getByText("Ascending"));
+    await user.click(screen.getByRole("button", { name: "Ordenar por título" }));
+    await user.click(screen.getByText("Crescente"));
     await waitFor(() =>
       expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -213,26 +214,26 @@ describe("HistoryPage", () => {
 
   it("uses a liquid range calendar and exports the selected dates", async () => {
     const user = userEvent.setup();
-    render(<HistoryPage />);
+    render(withIntl(<HistoryPage />));
     await screen.findByText("Alex Lawyer");
 
-    await user.click(screen.getByRole("button", { name: "Select date range" }));
+    await user.click(screen.getByRole("button", { name: "Selecionar intervalo de datas" }));
     expect(screen.getByRole("menu")).toHaveClass("liquid-glass-float");
     expect(screen.getByRole("menu")).toHaveAttribute("data-align", "start");
     expect(screen.getAllByRole("grid")).toHaveLength(2);
     expect(
-      screen.getByRole("region", { name: "Start date" }),
+      screen.getByRole("region", { name: "Data inicial" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("region", { name: "End date" }),
+      screen.getByRole("region", { name: "Data final" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Start date" })).toHaveClass(
+    expect(screen.getByRole("region", { name: "Data inicial" })).toHaveClass(
       "w-56",
     );
-    expect(screen.getByRole("region", { name: "End date" })).toHaveClass(
+    expect(screen.getByRole("region", { name: "Data final" })).toHaveClass(
       "w-56",
     );
-    const confirmButton = screen.getByRole("button", { name: "Confirm" });
+    const confirmButton = screen.getByRole("button", { name: "Confirmar" });
     expect(confirmButton).toBeDisabled();
     const selectedStartCell = screen
       .getByTestId("start-date-picker")
@@ -276,9 +277,9 @@ describe("HistoryPage", () => {
         expect.any(AbortSignal),
       ),
     );
-    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Confirmar" })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Export history" }));
+    await user.click(screen.getByRole("button", { name: "Exportar histórico" }));
     await waitFor(() =>
       expect(mockedStartUserExport).toHaveBeenCalledWith(
         "audit-csv",
@@ -304,9 +305,9 @@ describe("HistoryPage", () => {
         filename: "history-export.csv",
       });
 
-    render(<HistoryPage />);
+    render(withIntl(<HistoryPage />));
     await screen.findByText("Alex Lawyer");
-    await user.click(screen.getByRole("button", { name: "Export history" }));
+    await user.click(screen.getByRole("button", { name: "Exportar histórico" }));
 
     await waitFor(() =>
       expect(mockedGetUserExportStatus).toHaveBeenCalledTimes(2),
@@ -321,15 +322,15 @@ describe("HistoryPage", () => {
       .mockImplementation(() => undefined);
     mockedGetUserExportStatus.mockResolvedValue({ status: "failed" });
 
-    render(<HistoryPage />);
+    render(withIntl(<HistoryPage />));
     await screen.findByText("Alex Lawyer");
-    await user.click(screen.getByRole("button", { name: "Export history" }));
+    await user.click(screen.getByRole("button", { name: "Exportar histórico" }));
 
-    await waitFor(() => expect(alerted).toHaveBeenCalledWith("Export failed."));
+    await waitFor(() => expect(alerted).toHaveBeenCalledWith("Falha na exportação."));
     expect(mockedDownloadUserExport).not.toHaveBeenCalled();
     // The button returns to its idle state instead of spinning forever.
     expect(
-      screen.getByRole("button", { name: "Export history" }),
+      screen.getByRole("button", { name: "Exportar histórico" }),
     ).toBeEnabled();
   });
 
@@ -341,10 +342,10 @@ describe("HistoryPage", () => {
       pageSize: 50,
     });
 
-    render(<HistoryPage />);
+    render(withIntl(<HistoryPage />));
 
-    expect(await screen.findByText("No history yet")).toBeInTheDocument();
-    expect(screen.getByText("No history yet").parentElement).toHaveClass(
+    expect(await screen.findByText("Nenhum histórico ainda")).toBeInTheDocument();
+    expect(screen.getByText("Nenhum histórico ainda").parentElement).toHaveClass(
       "max-w-[260px]",
       "items-start",
       "text-left",
@@ -363,7 +364,7 @@ describe("HistoryPage", () => {
       pageSize: 50,
     });
 
-    render(<HistoryPage />);
+    render(withIntl(<HistoryPage />));
 
     expect(await screen.findByText("lawyer@example.com")).toBeInTheDocument();
     expect(screen.queryByText("Alex Lawyer")).toBeNull();

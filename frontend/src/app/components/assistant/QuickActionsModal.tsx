@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import type { QuickAction, Workflow } from "../shared/types";
 import { Modal } from "../modals/Modal";
@@ -45,13 +46,16 @@ export function QuickActionsModal({
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const t = useTranslations("assistant.acoesRapidas");
+  const tAssistente = useTranslations("assistant");
+  const tInicial = useTranslations("assistant.inicial");
 
   useEffect(() => {
     if (!open || workflows.length > 0) return;
     void listWorkflows("assistant")
       .then((rows) => setWorkflows(rows))
-      .catch(() => setError("Could not load assistant workflows."));
-  }, [open, workflows.length]);
+      .catch(() => setError(t("erroCarregarWorkflows")));
+  }, [open, workflows.length, t]);
 
   const availableWorkflows = useMemo(() => {
     const used = new Set(actions.map((action) => action.workflow_id));
@@ -104,7 +108,7 @@ export function QuickActionsModal({
       await onSave(selected);
       resetToList();
     } catch (reason) {
-      setError(userFacingApiError(reason, "Could not save quick action."));
+      setError(userFacingApiError(reason, t("erroSalvar")));
     } finally {
       setSaving(false);
     }
@@ -123,7 +127,7 @@ export function QuickActionsModal({
       });
       resetToList();
     } catch (reason) {
-      setError(userFacingApiError(reason, "Could not create quick action."));
+      setError(userFacingApiError(reason, t("erroCriar")));
     } finally {
       setSaving(false);
     }
@@ -131,13 +135,13 @@ export function QuickActionsModal({
 
   const breadcrumbs =
     screen === "list"
-      ? ["Assistant", "Quick Actions"]
+      ? [tAssistente("title"), tInicial("acoesRapidas")]
       : [
-          "Assistant",
-          "Quick Actions",
+          tAssistente("title"),
+          tInicial("acoesRapidas"),
           screen === "create"
-            ? "New Quick Action"
-            : (selected?.name ?? "Quick Action"),
+            ? t("novaAcao")
+            : (selected?.name ?? t("acao")),
         ];
 
   return (
@@ -149,7 +153,7 @@ export function QuickActionsModal({
       secondaryAction={
         screen !== "list"
           ? {
-              label: "Back",
+              label: t("voltar"),
               variant: "primary",
               onClick: resetToList,
               disabled: saving,
@@ -160,7 +164,7 @@ export function QuickActionsModal({
       primaryAction={
         screen === "list"
           ? {
-              label: "Add",
+              label: t("adicionar"),
               icon: <Plus className="h-3.5 w-3.5" />,
               variant: "blue",
               onClick: () => setScreen("create"),
@@ -168,13 +172,13 @@ export function QuickActionsModal({
             }
           : screen === "create"
             ? {
-                label: saving ? "Creating…" : "Create",
+                label: saving ? t("criando") : t("criar"),
                 variant: "blue",
                 disabled: saving || !workflowId || !name.trim(),
                 onClick: () => void create(),
               }
             : {
-                label: saving ? "Saving…" : "Save",
+                label: saving ? t("salvando") : t("salvar"),
                 variant: "blue",
                 disabled:
                   saving || !selectedHasChanges || !selected?.name.trim(),
@@ -188,7 +192,7 @@ export function QuickActionsModal({
             <SearchBar
               value={search}
               onValueChange={setSearch}
-              placeholder="Search quick actions..."
+              placeholder={t("buscarPlaceholder")}
               autoFocus
             />
           </div>
@@ -203,7 +207,7 @@ export function QuickActionsModal({
             )}
             {filteredActions.length === 0 ? (
               <p className="py-10 text-center text-sm text-gray-400">
-                No quick actions found.
+                {t("nenhumaEncontrada")}
               </p>
             ) : (
               filteredActions.map((action) => (
@@ -226,7 +230,7 @@ export function QuickActionsModal({
                         : "text-xs text-gray-400"
                     }
                   >
-                    {action.enabled ? "Active" : "Inactive"}
+                    {action.enabled ? t("ativa") : t("inativa")}
                   </span>
                 </button>
               ))
@@ -327,52 +331,53 @@ function QuickActionForm({
   onEnabledChange?: (value: boolean) => void;
   error: string | null;
 }) {
+  const t = useTranslations("assistant.acoesRapidas");
   return (
     <div
       data-slot="quick-action-form"
       className="flex min-h-0 flex-1 flex-col gap-6 px-2 pt-1 pb-5"
     >
       <div>
-        <FieldLabel htmlFor="quick-action-name">Name</FieldLabel>
+        <FieldLabel htmlFor="quick-action-name">{t("nome")}</FieldLabel>
         <FormTextInput
           id="quick-action-name"
           value={name}
           onChange={(event) => onNameChange(event.target.value)}
-          placeholder="Quick action name"
+          placeholder={t("placeholderNome")}
           variant="minimal"
           autoFocus
         />
       </div>
       <div>
-        <FieldLabel htmlFor="quick-action-workflow">Workflow used</FieldLabel>
+        <FieldLabel htmlFor="quick-action-workflow">{t("workflowUsado")}</FieldLabel>
         <ModalSelect
           id="quick-action-workflow"
           value={workflowId}
-          placeholder="Select an assistant workflow"
+          placeholder={t("selecionarWorkflow")}
           options={workflowOptions}
           onChange={onWorkflowChange}
         />
       </div>
       <div>
-        <FieldLabel htmlFor="quick-action-prompt">Prompt</FieldLabel>
+        <FieldLabel htmlFor="quick-action-prompt">{t("prompt")}</FieldLabel>
         <ModalTextarea
           id="quick-action-prompt"
           value={prompt}
           onChange={(event) => onPromptChange(event.target.value)}
           className="h-28 min-h-28"
-          placeholder="Prompt placed in the Assistant composer"
+          placeholder={t("placeholderPrompt")}
         />
       </div>
       <ToggleRow
-        label="Request document upload"
-        caption="Ask for source documents before launching this workflow."
+        label={t("solicitarUpload")}
+        caption={t("solicitarUploadDescricao")}
         checked={documentUpload}
         onChange={onDocumentUploadChange}
       />
       {enabled !== undefined && onEnabledChange && (
         <ToggleRow
-          label="Active"
-          caption="Show this action in the Assistant initial view."
+          label={t("ativa")}
+          caption={t("ativaDescricao")}
           checked={enabled}
           onChange={onEnabledChange}
         />

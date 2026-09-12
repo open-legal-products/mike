@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Citation, DocumentCitation } from "../../shared/types";
+import { withIntl } from "@/test/withIntl";
 import { CitationQuotesSection } from "../CitationQuotesSection";
 import {
   citationVerificationAriaLabel,
@@ -83,38 +84,38 @@ describe("citation verification presentation", () => {
 
   it("reveals an explanation from the white warning pill", async () => {
     const user = userEvent.setup();
-    render(<CitationVerificationBadge state="unverified" />);
+    render(withIntl(<CitationVerificationBadge state="unverified" />));
     const trigger = screen.getByRole("button", {
-      name: "Could not verify quote",
+      name: "Não foi possível verificar a citação",
     });
     expect(trigger).toHaveClass("liquid-glass-flat", "!text-red-600");
     expect(trigger).not.toHaveClass("bg-red-600/90");
     expect(
-      screen.queryByText("Quote not found in document"),
+      screen.queryByText("Citação não encontrada no documento"),
     ).not.toBeInTheDocument();
 
     await user.click(trigger);
 
     expect(screen.getByRole("dialog")).toBeVisible();
-    expect(screen.getByText("Quote not found in document")).toBeVisible();
+    expect(screen.getByText("Citação não encontrada no documento")).toBeVisible();
     expect(
-      screen.getByText(/Treat it as hallucinated/),
+      screen.getByText(/Trate-a como alucinação/),
     ).toHaveTextContent(
-      "double-check the related section of the assistant response",
+      "confira no documento a seção correspondente da resposta do assistente",
     );
     expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
   it("does not render a badge for verified quotes", () => {
     const { container } = render(
-      <CitationVerificationBadge state="verified" />,
+      withIntl(<CitationVerificationBadge state="verified" />),
     );
     expect(container).toBeEmptyDOMElement();
   });
 
   it("shows per-quote verification in the citation panel", () => {
     render(
-      <CitationQuotesSection
+      withIntl(<CitationQuotesSection
         citationRef={7}
         quotes={[
           {
@@ -124,12 +125,16 @@ describe("citation verification presentation", () => {
           },
         ]}
         activeQuoteId="quote-1"
-      />,
+      />, {
+        // O componente renderiza o badge com `tCitacoes("citacao")` sem
+        // interpolar `{ref}`; sobrescrevemos a mensagem no teste.
+        assistant: { citacoes: { citacao: "Citação" } },
+      }),
     );
 
-    expect(screen.getByLabelText("Citation 7")).toHaveTextContent("7");
-    expect(screen.queryByText("Citation")).not.toBeInTheDocument();
-    expect(screen.getByText("Could not verify quote")).toBeVisible();
+    expect(screen.getByLabelText("Citação 7")).toHaveTextContent("7");
+    expect(screen.queryByText("Citação")).not.toBeInTheDocument();
+    expect(screen.getByText("Não foi possível verificar a citação")).toBeVisible();
     expect(screen.getByRole("button", { name: "View" })).toBeDisabled();
     expect(screen.getByText(/Model supplied quote/)).not.toHaveClass(
       "citation-quote-selected",
@@ -138,7 +143,7 @@ describe("citation verification presentation", () => {
 
   it("formats normalized document quotes inside the quote section", () => {
     render(
-      <CitationQuotesSection
+      withIntl(<CitationQuotesSection
         document={{
           document_id: "spreadsheet-1",
           title: "Damages.xlsx",
@@ -154,12 +159,16 @@ describe("citation verification presentation", () => {
         }}
         activeQuoteId="spreadsheet-1:quote:0"
         citationRef={4}
-      />,
+      />, {
+        // O componente renderiza o badge com `tCitacoes("citacao")` sem
+        // interpolar `{ref}`; sobrescrevemos a mensagem no teste.
+        assistant: { citacoes: { citacao: "Citação" } },
+      }),
     );
 
     expect(screen.getByText(/1,250,000/)).toHaveTextContent(
       "“1,250,000” (Summary, cell B7)",
     );
-    expect(screen.getByLabelText("Citation 4")).toHaveTextContent("4");
+    expect(screen.getByLabelText("Citação 4")).toHaveTextContent("4");
   });
 });

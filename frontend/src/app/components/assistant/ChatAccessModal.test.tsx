@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/app/components/shared/types";
+import { withIntl } from "@/test/withIntl";
 import { ChatAccessModal } from "./ChatAccessModal";
 
 const { getChatAccess, grantChatAccess, revokeChatAccess } = vi.hoisted(() => ({
@@ -82,14 +83,14 @@ beforeEach(() => {
 describe("ChatAccessModal", () => {
     it("loads owner controls and updates chat grants", async () => {
         render(
-            <ChatAccessModal
+            withIntl(<ChatAccessModal
                 open
                 chat={chat({ is_owner: true })}
                 onClose={vi.fn()}
-            />,
+            />),
         );
 
-        expect(screen.getByText("Assistant / Quarterly filing / Access")).toBeInTheDocument();
+        expect(screen.getByText("Assistente / Quarterly filing / Acesso")).toBeInTheDocument();
         expect(screen.getByTestId("current-email")).toHaveTextContent(
             "me@example.com",
         );
@@ -112,11 +113,11 @@ describe("ChatAccessModal", () => {
         getChatAccess.mockReturnValue(new Promise(() => {}));
 
         render(
-            <ChatAccessModal
+            withIntl(<ChatAccessModal
                 open
                 chat={chat({ is_owner: true })}
                 onClose={vi.fn()}
-            />,
+            />),
         );
 
         // Owners share from the moment the modal opens; the roster below is
@@ -126,11 +127,11 @@ describe("ChatAccessModal", () => {
 
     it("keeps shared editors read-only without requesting owner-only data", () => {
         render(
-            <ChatAccessModal
+            withIntl(<ChatAccessModal
                 open
                 chat={chat({ access_role: "editor" })}
                 onClose={vi.fn()}
-            />,
+            />),
         );
 
         expect(screen.getByTestId("can-manage")).toHaveTextContent("false");

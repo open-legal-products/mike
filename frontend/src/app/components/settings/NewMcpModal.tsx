@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, ChevronDown, Eye, EyeOff, Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {
     SETTINGS_CONTROL_CLASS,
@@ -54,6 +55,8 @@ export function NewMcpModal({
     onSubmit,
     onOpenConnector,
 }: NewMcpModalProps) {
+    const t = useTranslations("configuracoes.mcp");
+    const tComum = useTranslations("common");
     const canSubmit =
         draft.name.trim().length > 0 &&
         draft.serverUrl.trim().length > 0 &&
@@ -65,27 +68,27 @@ export function NewMcpModal({
             open={open}
             onClose={onClose}
             breadcrumbs={[
-                "Connectors",
+                t("trilhaConectores"),
                 step === "success"
-                    ? "Connector added"
+                    ? t("trilhaAdicionado")
                     : step === "auth"
-                      ? "Authenticate connector"
-                      : "New MCP connector",
+                      ? t("trilhaAutenticar")
+                      : t("trilhaNovo"),
             ]}
             size="lg"
             primaryAction={
                 step === "success" && result
                     ? {
-                          label: "View connector",
+                          label: t("verConector"),
                           onClick: () => onOpenConnector(result.id),
                       }
                     : {
                           label:
                               step === "working"
-                                  ? "Connecting..."
+                                  ? t("conectando")
                                   : step === "auth"
-                                    ? "Authorizing..."
-                                    : "Connect",
+                                    ? t("autorizando")
+                                    : t("conectar"),
                           icon:
                               step === "working" || step === "auth" ? (
                                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -98,7 +101,10 @@ export function NewMcpModal({
                 step === "working" || step === "auth"
                     ? false
                     : {
-                          label: step === "success" ? "Done" : "Cancel",
+                          label:
+                              step === "success"
+                                  ? t("concluido")
+                                  : tComum("cancel"),
                           onClick: onClose,
                       }
             }
@@ -115,15 +121,13 @@ export function NewMcpModal({
             ) : step === "auth" ? (
                 <NewMcpAuth
                     message={
-                        authMessage ??
-                        "Complete authorization in the popup to finish connecting this MCP server."
+                        authMessage ?? t("corpoAutenticacaoPadrao")
                     }
                 />
             ) : (
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-4">
                     <p className="text-sm text-gray-500">
-                        The assistant will have access to this MCP server and
-                        its enabled tools.
+                        {t("descricaoForm")}
                     </p>
                     <NewMcpForm
                         draft={draft}
@@ -157,23 +161,24 @@ function NewMcpForm({
     onShowTokenChange: (show: boolean) => void;
     onShowAdvancedChange: (show: boolean) => void;
 }) {
+    const t = useTranslations("configuracoes.mcp");
     return (
         <div className="grid gap-3 pt-1">
             <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
-                <FieldLabel htmlFor="new-mcp-label">Label</FieldLabel>
+                <FieldLabel htmlFor="new-mcp-label">{t("labelNome")}</FieldLabel>
                 <SettingsTextInput
                     id="new-mcp-label"
                     value={draft.name}
                     onChange={(event) =>
                         onDraftChange({ ...draft, name: event.target.value })
                     }
-                    placeholder="Connector label"
+                    placeholder={t("placeholderNome")}
                     className="h-8"
                     disabled={disabled}
                 />
             </div>
             <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center">
-                <FieldLabel htmlFor="new-mcp-url">URL endpoint</FieldLabel>
+                <FieldLabel htmlFor="new-mcp-url">{t("labelUrl")}</FieldLabel>
                 <SettingsTextInput
                     id="new-mcp-url"
                     value={draft.serverUrl}
@@ -189,7 +194,9 @@ function NewMcpForm({
                 />
             </div>
             <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-start">
-                <FieldLabel htmlFor="new-mcp-token">Bearer token</FieldLabel>
+                <FieldLabel htmlFor="new-mcp-token">
+                    {t("labelToken")}
+                </FieldLabel>
                 <div className="min-w-0">
                     <div className="relative">
                         <SettingsTextInput
@@ -202,7 +209,7 @@ function NewMcpForm({
                                 })
                             }
                             type={showToken ? "text" : "password"}
-                            placeholder="Bearer token"
+                            placeholder={t("placeholderToken")}
                             className="h-8 pr-10"
                             autoComplete="off"
                             spellCheck={false}
@@ -214,7 +221,9 @@ function NewMcpForm({
                                 className={`absolute inset-y-1 right-1.5 flex items-center ${settingsGlassIconButtonClassName}`}
                                 onClick={() => onShowTokenChange(!showToken)}
                                 aria-label={
-                                    showToken ? "Hide token" : "Show token"
+                                    showToken
+                                        ? t("ocultarToken")
+                                        : t("mostrarToken")
                                 }
                                 disabled={disabled}
                             >
@@ -227,7 +236,7 @@ function NewMcpForm({
                         )}
                     </div>
                     <p className="mt-1 text-right text-xs text-gray-500">
-                        Tokens are stored encrypted.
+                        {t("notaTokens")}
                     </p>
                 </div>
             </div>
@@ -238,7 +247,7 @@ function NewMcpForm({
                     className="inline-flex items-center gap-1 justify-self-start text-xs font-medium text-gray-500 transition-colors hover:text-gray-900"
                     disabled={disabled}
                 >
-                    Advanced
+                    {t("avancado")}
                     <ChevronDown
                         className={`h-3.5 w-3.5 transition-transform ${
                             showAdvanced ? "" : "-rotate-90"
@@ -248,7 +257,7 @@ function NewMcpForm({
                 {showAdvanced && (
                     <div className="grid gap-2 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-start">
                         <FieldLabel htmlFor="new-mcp-headers">
-                            Custom headers
+                            {t("labelHeaders")}
                         </FieldLabel>
                         <div className="min-w-0">
                             <textarea
@@ -267,7 +276,7 @@ function NewMcpForm({
                                 disabled={disabled}
                             />
                             <p className="mt-1 text-right text-xs text-gray-500">
-                                Secrets are stored encrypted.
+                                {t("notaSecrets")}
                             </p>
                         </div>
                     </div>
@@ -278,14 +287,17 @@ function NewMcpForm({
 }
 
 function NewMcpSuccess({ connector }: { connector: McpConnectorSummary }) {
+    const t = useTranslations("configuracoes.mcp");
     return (
         <div className="flex h-full min-h-0 flex-1 flex-col gap-4 pb-4">
             <div className="flex items-start gap-3 rounded-xl border border-green-100/80 bg-green-50/80 px-3 py-3 text-green-800 shadow-[0_3px_9px_rgba(15,23,42,0.03),inset_0_1px_0_rgba(255,255,255,0.9),inset_0_-4px_9px_rgba(255,255,255,0.05)] backdrop-blur-xl">
                 <Check className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
                 <p className="min-w-0 truncate text-sm font-medium">
-                    {connector.name} is connected.{" "}
+                    {t("conectado", { nome: connector.name })}{" "}
                     <span className="font-normal text-green-700">
-                        {connector.tools.length} tools discovered.
+                        {t("ferramentasDescobertas", {
+                            count: connector.tools.length,
+                        })}
                     </span>
                 </p>
             </div>
@@ -307,7 +319,9 @@ function NewMcpSuccess({ connector }: { connector: McpConnectorSummary }) {
                                 )}
                             </div>
                             <span className="text-xs text-gray-400">
-                                {tool.enabled ? "Enabled" : "Disabled"}
+                                {tool.enabled
+                                    ? t("ferramentaAtivada")
+                                    : t("ferramentaDesativada")}
                             </span>
                         </div>
                     ))}
@@ -318,6 +332,7 @@ function NewMcpSuccess({ connector }: { connector: McpConnectorSummary }) {
 }
 
 function NewMcpAuth({ message }: { message: string }) {
+    const t = useTranslations("configuracoes.mcp");
     return (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 pb-4 text-center">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/70 bg-white/75 text-gray-700 shadow-[0_3px_9px_rgba(15,23,42,0.03),inset_0_1px_0_rgba(255,255,255,0.9),inset_0_-4px_9px_rgba(255,255,255,0.05)] backdrop-blur-xl">
@@ -325,7 +340,7 @@ function NewMcpAuth({ message }: { message: string }) {
             </div>
             <div className="max-w-sm space-y-1">
                 <h3 className="text-sm font-medium text-gray-700">
-                    Authentication required
+                    {t("autenticacaoRequerida")}
                 </h3>
                 <p className="text-sm text-gray-500">{message}</p>
             </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 // Extracted from the "Load more" button block that was duplicated verbatim
 // between the Tabular Reviews page and ProjectReviewsTable. Renders nothing
@@ -26,6 +27,7 @@ export function TableLoadMoreRow({
 }) {
     const rowRef = useRef<HTMLDivElement>(null);
     const requestedItemCountRef = useRef<number | null>(null);
+    const t = useTranslations("shell.tabela");
 
     useEffect(() => {
         if (
@@ -73,10 +75,10 @@ export function TableLoadMoreRow({
             >
                 {loadingMore && <Loader2 className="h-3 w-3 animate-spin" />}
                 {loadingMore
-                    ? "Loading…"
+                    ? t("carregando")
                     : hasError
-                      ? "Retry loading"
-                      : "Load more"}
+                      ? t("tentarNovamente")
+                      : t("carregarMais")}
             </button>
         </div>
     );

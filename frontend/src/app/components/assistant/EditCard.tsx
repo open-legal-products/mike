@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { EditCardUI } from "@/shared/ui/EditCardUI";
+import { useTranslations } from "next-intl";
 import { resolveDocumentEdit } from "@/app/lib/mikeApi";
 import type { EditAnnotation } from "../shared/types";
 import { RESPONSE_GLASS_SURFACE } from "./message/messageStyles";
@@ -194,6 +195,7 @@ export function EditCard({
     onResolved,
     onError,
 }: Props) {
+    const tRastreadas = useTranslations("shared.trackedChanges");
     const [busyAction, setBusyAction] = useState<
         "accept" | "reject" | null
     >(null);
@@ -265,6 +267,16 @@ export function EditCard({
 
     return (
         <EditCardUI
+            labels={{
+                aceitar: tRastreadas("aceitar"),
+                aceitando: tRastreadas("aceitando"),
+                aceito: tRastreadas("aceito"),
+                rejeitar: tRastreadas("rejeitar"),
+                rejeitando: tRastreadas("rejeitando"),
+                rejeitado: tRastreadas("rejeitado"),
+                ver: tRastreadas("ver"),
+                tooltipResolvido: tRastreadas("alteracaoJaResolvida"),
+            }}
             originalText={annotation.deleted_text}
             replacementText={annotation.inserted_text}
             reason={annotation.reason}

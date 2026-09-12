@@ -7,6 +7,7 @@ import {
 } from "@/shared/ui/ModalUI";
 import { PillButton } from "@/app/components/ui/pill-button";
 import { cn } from "@/app/lib/utils";
+import { useTranslations } from "next-intl";
 
 type ModalAction = Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
@@ -51,12 +52,14 @@ export function Modal({
   cancelAction,
   keepMounted = false,
 }: ModalProps) {
+  const t = useTranslations("common");
   const lastBreadcrumb = breadcrumbs?.at(-1);
 
   return (
     <ModalUI
       open={open}
       onClose={onClose}
+      closeLabel={t("fechar")}
       breadcrumbs={breadcrumbs}
       headerAction={headerAction}
       size={size}

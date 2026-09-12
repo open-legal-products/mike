@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import { ProjectsOverview } from "./ProjectsOverview";
 
 const { activeTab, projectRows, setActiveTab, usePaginatedProjectsSpy } =
@@ -85,9 +86,9 @@ describe("ProjectsOverview tabs", () => {
 
     it("shows All first and defaults to it", () => {
         activeTab.current = "unknown";
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
-        const tabs = ["All", "Shared", "Private"].map((label) =>
+        const tabs = ["Todos", "Compartilhados comigo", "Privados"].map((label) =>
             screen.getByRole("button", { name: label }),
         );
         expect(tabs[0].compareDocumentPosition(tabs[1])).toBe(
@@ -102,41 +103,43 @@ describe("ProjectsOverview tabs", () => {
     it("selects the All tab", async () => {
         const user = userEvent.setup();
         activeTab.current = "private";
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
-        await user.click(screen.getByRole("button", { name: "All" }));
+        await user.click(screen.getByRole("button", { name: "Todos" }));
 
         expect(setActiveTab).toHaveBeenCalledWith("all");
     });
 
     it("filters Private and Shared from the Access column header", async () => {
         const user = userEvent.setup();
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
         await user.click(
-            screen.getByRole("button", { name: "Filter by access" }),
+            screen.getByRole("button", { name: "Filtrar por acesso" }),
         );
-        await user.click(screen.getByRole("menuitem", { name: "Shared" }));
+        await user.click(
+            screen.getByRole("menuitem", { name: "Compartilhados comigo" }),
+        );
 
         expect(setActiveTab).toHaveBeenCalledWith("shared");
     });
 
     it("maps each tab to its backend scope", () => {
         activeTab.current = "shared";
-        const shared = render(<ProjectsOverview />);
+        const shared = render(withIntl(<ProjectsOverview />));
         expect(lastScope()).toBe("collaborative");
         shared.unmount();
 
         activeTab.current = "private";
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
         expect(lastScope()).toBe("private");
     });
 
     it("offers project creation when All is empty", () => {
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
         expect(
-            screen.getByRole("button", { name: "Create" }),
+            screen.getByRole("button", { name: "Criar" }),
         ).toBeInTheDocument();
         expect(screen.queryByText(/No all projects/i)).not.toBeInTheDocument();
     });
@@ -172,10 +175,10 @@ describe("ProjectsOverview tabs", () => {
             },
         ];
 
-        render(<ProjectsOverview />);
+        render(withIntl(<ProjectsOverview />));
 
-        expect(screen.getByText("Access")).toBeInTheDocument();
-        expect(screen.getAllByText("Private")).toHaveLength(2);
+        expect(screen.getByText("Acesso")).toBeInTheDocument();
+        expect(screen.getAllByText("Private")).toHaveLength(1);
         expect(screen.getByText("3 users")).toBeInTheDocument();
         expect(screen.getByText("Elite Law LLP")).toBeInTheDocument();
         expect(screen.getByTitle("Shared with Elite Law LLP")).toBeVisible();

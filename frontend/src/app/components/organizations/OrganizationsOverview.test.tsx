@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { withIntl } from "@/test/withIntl";
 import { OrganizationsOverview } from "./OrganizationsOverview";
 
 const mocks = vi.hoisted(() => ({
@@ -76,18 +77,18 @@ beforeEach(() => {
 describe("OrganizationsOverview", () => {
   it("renders organizations through the shared table columns and opens a row", async () => {
     const user = userEvent.setup();
-    render(<OrganizationsOverview />);
+    render(withIntl(<OrganizationsOverview />));
 
     expect(await screen.findByText("Elite Law LLP")).toBeInTheDocument();
-    expect(screen.getByText("3 members")).toBeInTheDocument();
-    expect(screen.getByText("Created")).toBeInTheDocument();
+    expect(screen.getByText("3 membros")).toBeInTheDocument();
+    expect(screen.getByText("Criação")).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Sort by organization name" }),
+      screen.getByRole("button", { name: "Ordenar por nome da organização" }),
     ).toBeInTheDocument();
 
     const organizationRow = screen.getByRole("link", {
-      name: "Open Elite Law LLP",
+      name: "Abrir Elite Law LLP",
     });
 
     await user.click(organizationRow);
@@ -101,20 +102,22 @@ describe("OrganizationsOverview", () => {
       id: "org-2",
       name: "New Chambers",
     });
-    render(<OrganizationsOverview />);
+    render(withIntl(<OrganizationsOverview />));
     await screen.findByText("Elite Law LLP");
-
-    await user.click(screen.getByRole("button", { name: "New organization" }));
+    await user.click(screen.getByRole("button", { name: "Nova organização" }));
     expect(
-      await screen.findByText(/You can also add people later/),
+      await screen.findByText(/Você também pode adicionar pessoas depois/),
     ).toBeInTheDocument();
-    await user.type(screen.getByLabelText("Organization name"), "New Chambers");
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    await user.type(screen.getByLabelText("Nome da organização"), "New Chambers");
     await user.type(
-      screen.getByPlaceholderText("Add member by email…"),
+      screen.getByPlaceholderText("Adicionar membro por e-mail…"),
       "jane@firm.example",
     );
-    await user.click(screen.getByRole("button", { name: "Add" }));
-    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(screen.getByRole("button", { name: "Adicionar" }));
+    await user.click(screen.getByRole("button", { name: "Criar" }));
 
     await waitFor(() =>
       expect(mocks.createOrg).toHaveBeenCalledWith("New Chambers"),
@@ -130,16 +133,16 @@ describe("OrganizationsOverview", () => {
   it("separates organizations into Managing and Joined tabs", async () => {
     const user = userEvent.setup();
     mocks.listOrgs.mockResolvedValue([ORG, JOINED_ORG]);
-    render(<OrganizationsOverview />);
+    render(withIntl(<OrganizationsOverview />));
 
     expect(await screen.findByText("Elite Law LLP")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Managing" }),
+      screen.getByRole("button", { name: "Que eu gerencio" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Invites" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Convites" })).toBeInTheDocument();
     expect(screen.queryByText("Community Legal")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Joined" }));
+    await user.click(screen.getByRole("button", { name: "De que participo" }));
     expect(screen.getByText("Community Legal")).toBeInTheDocument();
     expect(screen.queryByText("Elite Law LLP")).not.toBeInTheDocument();
   });
@@ -147,23 +150,23 @@ describe("OrganizationsOverview", () => {
   it("shows active invitations and their count under the Invites pill", async () => {
     const user = userEvent.setup();
     mocks.listMyOrgInvitations.mockResolvedValueOnce([INVITATION]);
-    render(<OrganizationsOverview />);
+    render(withIntl(<OrganizationsOverview />));
 
     const invites = await screen.findByRole("button", {
-      name: "Invites (1)",
+      name: "Convites (1)",
     });
     expect(screen.queryByText("Inviting Chambers")).not.toBeInTheDocument();
 
     await user.click(invites);
     expect(screen.getByText("Inviting Chambers")).toBeInTheDocument();
-    expect(screen.getByText(/invited you as Member/)).toBeInTheDocument();
+    expect(screen.getByText(/convidou você como Membro/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await user.click(screen.getByRole("button", { name: "Aceitar" }));
     await waitFor(() =>
       expect(mocks.acceptOrgInvitation).toHaveBeenCalledWith("invite-1"),
     );
     expect(
-      await screen.findByRole("button", { name: "Invites" }),
+      await screen.findByRole("button", { name: "Convites" }),
     ).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Download, Trash2 } from "lucide-react";
 import { PillButton } from "@/app/components/ui/pill-button";
 import {
@@ -41,36 +42,44 @@ const devLog = (...args: Parameters<typeof console.log>) => {
   if (isDev) console.log(...args);
 };
 
+type DeleteDataCopyKey =
+  | "confirmarExcluirConversasTitulo"
+  | "confirmarExcluirRevisoesTitulo"
+  | "confirmarExcluirProjetosTitulo"
+  | "confirmarExcluirMemoriaTitulo"
+  | "confirmarExcluirConversasCorpo"
+  | "confirmarExcluirRevisoesCorpo"
+  | "confirmarExcluirProjetosCorpo"
+  | "confirmarExcluirMemoriaCorpo";
+
 const DELETE_DATA_COPY: Record<
   DeleteDataAction,
   {
-    title: string;
-    message: string;
+    titleKey: DeleteDataCopyKey;
+    messageKey: DeleteDataCopyKey;
   }
 > = {
   chats: {
-    title: "Delete all chats?",
-    message:
-      "This will permanently delete your assistant and tabular review chat history. This action cannot be undone.",
+    titleKey: "confirmarExcluirConversasTitulo",
+    messageKey: "confirmarExcluirConversasCorpo",
   },
   "tabular-reviews": {
-    title: "Delete all tabular reviews?",
-    message:
-      "This will permanently delete all tabular reviews you own, including their cells and review chats. This action cannot be undone.",
+    titleKey: "confirmarExcluirRevisoesTitulo",
+    messageKey: "confirmarExcluirRevisoesCorpo",
   },
   projects: {
-    title: "Delete all projects?",
-    message:
-      "This will permanently delete all projects you own, including their documents, chats, and tabular reviews. This action cannot be undone.",
+    titleKey: "confirmarExcluirProjetosTitulo",
+    messageKey: "confirmarExcluirProjetosCorpo",
   },
   memory: {
-    title: "Delete all memory?",
-    message:
-      "This permanently deletes your app memory and memories for private projects you created. Project collaborators will also lose those memories. Memory remains enabled and can be rebuilt from future conversations. This action cannot be undone.",
+    titleKey: "confirmarExcluirMemoriaTitulo",
+    messageKey: "confirmarExcluirMemoriaCorpo",
   },
 };
 
 export default function PrivacyDataPage() {
+  const t = useTranslations("configuracoes.privacidade");
+  const tComum = useTranslations("common");
   const { loadChats, setCurrentChatId } = useChatHistoryContext();
   const [pendingDeleteAction, setPendingDeleteAction] =
     useState<DeleteDataAction | null>(null);
@@ -110,14 +119,16 @@ export default function PrivacyDataPage() {
     for (let i = 0; i < EXPORT_POLL_LIMIT; i++) {
       await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_MS));
       const status = await getUserExportStatus(export_id);
-      if (status.status === "failed") throw new Error("Export build failed");
+      if (status.status === "failed") {
+        throw new Error(t("erroFalhaGeracao"));
+      }
       if (status.status === "done") {
         const { blob, filename } = await downloadUserExport(export_id);
         downloadBlob(blob, filename ?? status.filename ?? fallbackFilename);
         return;
       }
     }
-    throw new Error("Export timed out");
+    throw new Error(t("erroTempoEsgotado"));
   };
 
   const handleExportAccountData = async () => {
@@ -138,7 +149,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-account");
         return;
       }
-      alert("Failed to export account data. Please try again.");
+      alert(t("erroExportarConta"));
     } finally {
       setIsExportingAccount(false);
     }
@@ -162,7 +173,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-chats");
         return;
       }
-      alert("Failed to export chats. Please try again.");
+      alert(t("erroExportarConversas"));
     } finally {
       setIsExportingChats(false);
     }
@@ -189,7 +200,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-tabular-reviews");
         return;
       }
-      alert("Failed to export tabular reviews. Please try again.");
+      alert(t("erroExportarRevisoes"));
     } finally {
       setIsExportingTabularReviews(false);
     }
@@ -213,7 +224,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-memory");
         return;
       }
-      alert("Failed to export memory. Please try again.");
+      alert(t("erroExportarMemoria"));
     } finally {
       setIsExportingMemory(false);
     }
@@ -253,7 +264,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction(action);
         return;
       }
-      alert("Failed to delete data. Please try again.");
+      alert(t("erroExcluir"));
     } finally {
       setDeletingAction(null);
     }
@@ -285,13 +296,13 @@ export default function PrivacyDataPage() {
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <SettingsHeading>Export data</SettingsHeading>
+        <SettingsHeading>{t("tituloExportar")}</SettingsHeading>
         <SettingsCard>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Export chats</SettingsLabel>
+              <SettingsLabel>{t("exportarConversas")}</SettingsLabel>
               <SettingsDescription>
-                Download assistant and tabular review chat history as JSON.
+                {t("descricaoExportarConversas")}
               </SettingsDescription>
             </div>
             <PillButton
@@ -303,15 +314,14 @@ export default function PrivacyDataPage() {
               className="shrink-0"
             >
               <Download className="h-4 w-4 shrink-0" />
-              {isExportingChats ? "Exporting..." : "Export"}
+              {isExportingChats ? t("exportando") : t("exportar")}
             </PillButton>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Export tabular reviews</SettingsLabel>
+              <SettingsLabel>{t("exportarRevisoes")}</SettingsLabel>
               <SettingsDescription>
-                Download all owned tabular reviews, cells, and review chat
-                records as JSON.
+                {t("descricaoExportarRevisoes")}
               </SettingsDescription>
             </div>
             <PillButton
@@ -323,15 +333,14 @@ export default function PrivacyDataPage() {
               className="shrink-0"
             >
               <Download className="h-4 w-4 shrink-0" />
-              {isExportingTabularReviews ? "Exporting..." : "Export"}
+              {isExportingTabularReviews ? t("exportando") : t("exportar")}
             </PillButton>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Export account JSON</SettingsLabel>
+              <SettingsLabel>{t("exportarConta")}</SettingsLabel>
               <SettingsDescription>
-                Download account metadata, projects, document metadata,
-                workflows, and review data as JSON.
+                {t("descricaoExportarConta")}
               </SettingsDescription>
             </div>
             <PillButton
@@ -343,42 +352,40 @@ export default function PrivacyDataPage() {
               className="shrink-0"
             >
               <Download className="h-4 w-4 shrink-0" />
-              {isExportingAccount ? "Exporting..." : "Export"}
+              {isExportingAccount ? t("exportando") : t("exportar")}
             </PillButton>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Export memory</SettingsLabel>
+              <SettingsLabel>{t("exportarMemoria")}</SettingsLabel>
               <SettingsDescription>
-                Download your app memory and every project memory you can access
-                as Markdown files in a ZIP archive.
+                {t("descricaoExportarMemoria")}
               </SettingsDescription>
             </div>
             <PillButton
               tone="black"
               size="sm"
-              aria-label="Export memory"
+              aria-label={t("exportarMemoria")}
               onClick={handleExportMemoryData}
               disabled={isExportingMemory}
               loading={isExportingMemory}
               className="shrink-0"
             >
               <Download className="h-4 w-4 shrink-0" />
-              {isExportingMemory ? "Exporting..." : "Export"}
+              {isExportingMemory ? t("exportando") : t("exportar")}
             </PillButton>
           </SettingsRow>
         </SettingsCard>
       </section>
 
       <section className="space-y-3">
-        <SettingsHeading>Delete data</SettingsHeading>
+        <SettingsHeading>{t("tituloExcluir")}</SettingsHeading>
         <SettingsCard>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Delete all chats</SettingsLabel>
+              <SettingsLabel>{t("excluirConversas")}</SettingsLabel>
               <SettingsDescription>
-                Permanently delete your assistant and tabular review chat
-                history.
+                {t("descricaoExcluirConversas")}
               </SettingsDescription>
             </div>
             <PillButton
@@ -390,15 +397,14 @@ export default function PrivacyDataPage() {
               className="w-full shrink-0 sm:w-auto"
             >
               <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
+              {tComum("delete")}
             </PillButton>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Delete all tabular reviews</SettingsLabel>
+              <SettingsLabel>{t("excluirRevisoes")}</SettingsLabel>
               <SettingsDescription>
-                Permanently delete all tabular reviews you own, including cells
-                and review chats.
+                {t("descricaoExcluirRevisoes")}
               </SettingsDescription>
             </div>
             <PillButton
@@ -410,15 +416,14 @@ export default function PrivacyDataPage() {
               className="w-full shrink-0 sm:w-auto"
             >
               <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
+              {tComum("delete")}
             </PillButton>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Delete all projects</SettingsLabel>
+              <SettingsLabel>{t("excluirProjetos")}</SettingsLabel>
               <SettingsDescription>
-                Permanently delete all projects you own, including documents,
-                chats, and tabular reviews.
+                {t("descricaoExcluirProjetos")}
               </SettingsDescription>
             </div>
             <PillButton
@@ -430,40 +435,41 @@ export default function PrivacyDataPage() {
               className="w-full shrink-0 sm:w-auto"
             >
               <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
+              {tComum("delete")}
             </PillButton>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
-              <SettingsLabel>Delete all memory</SettingsLabel>
+              <SettingsLabel>{t("excluirMemoria")}</SettingsLabel>
               <SettingsDescription>
-                Permanently delete your app memory and memories for private
-                projects you created.
+                {t("descricaoExcluirMemoria")}
               </SettingsDescription>
             </div>
             <PillButton
               tone="danger"
               size="sm"
-              aria-label="Delete all memory"
+              aria-label={t("excluirMemoria")}
               onClick={() => setPendingDeleteAction("memory")}
               disabled={!!deletingAction}
               loading={deletingAction === "memory"}
               className="w-full shrink-0 sm:w-auto"
             >
               <Trash2 className="h-4 w-4 shrink-0" />
-              Delete
+              {tComum("delete")}
             </PillButton>
           </SettingsRow>
         </SettingsCard>
       </section>
       <ConfirmPopup
         open={!!pendingDeleteAction}
-        title={pendingDeleteCopy?.title}
-        message={pendingDeleteCopy?.message}
-        confirmLabel="Delete"
+        title={pendingDeleteCopy ? t(pendingDeleteCopy.titleKey) : undefined}
+        message={
+          pendingDeleteCopy ? t(pendingDeleteCopy.messageKey) : undefined
+        }
+        confirmLabel={tComum("delete")}
         confirmVariant="danger"
         confirmStatus={deletingAction ? "loading" : "idle"}
-        cancelLabel="Cancel"
+        cancelLabel={tComum("cancel")}
         onCancel={() => {
           if (deletingAction) return;
           setPendingDeleteAction(null);
@@ -477,8 +483,8 @@ export default function PrivacyDataPage() {
         open={!!pendingMfaAction}
         onCancel={() => setPendingMfaAction(null)}
         onVerified={() => void handleMfaVerified()}
-        title="Two-factor verification required"
-        message="This action is sensitive. Enter a code from your authenticator app to continue."
+        title={t("tituloVerificacao")}
+        message={t("mensagemVerificacao")}
       />
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Upload } from "lucide-react";
 import {
     type Org,
@@ -38,6 +39,7 @@ interface Props {
 }
 
 export function NewProjectModal({ open, onClose, onCreated }: Props) {
+    const t = useTranslations("projects.novoModal");
     const [step, setStep] = useState<"details" | "access" | "documents">(
         "details",
     );
@@ -212,7 +214,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                             ? failedUploadMessage(uploadError.outcomes)
                             : userFacingApiError(
                                   uploadError,
-                                  "The attached files could not be uploaded. Please try again.",
+                                  t("erroUploadAnexos"),
                               );
                 }
             }
@@ -223,7 +225,9 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
             const failureMessage = [
                 uploadFailure,
                 failedLinkNames.length > 0
-                    ? `${failedLinkNames.join(", ")} could not be added to the project.`
+                    ? t("erroArquivosNaoAdicionados", {
+                          files: failedLinkNames.join(", "),
+                      })
                     : null,
             ]
                 .filter(Boolean)
@@ -247,7 +251,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 } catch (err: unknown) {
                     grantFailures.push({
                         email: entry.email,
-                        detail: userFacingApiError(err, "the request failed"),
+                        detail: userFacingApiError(err, t("erroSolicitacao")),
                     });
                 }
             }
@@ -257,9 +261,12 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 // did not happen. Pressing Create again retries the grants
                 // against the same project.
                 setError(
-                    `Project created, but access was not granted to ${grantFailures
-                        .map((failure) => failure.email)
-                        .join(", ")}: ${grantFailures[0].detail}`,
+                    t("erroPermissoes", {
+                        emails: grantFailures
+                            .map((failure) => failure.email)
+                            .join(", "),
+                        detail: grantFailures[0].detail,
+                    }),
                 );
                 // Stay open on THIS dialog: createdProjectRef holds the
                 // project, so pressing Create again retries only the grants.
@@ -308,7 +315,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
             finishCreation({ ...stamped, document_count: attachedCount });
         } catch (err: unknown) {
-            setError(userFacingApiError(err, "Failed to create project"));
+            setError(userFacingApiError(err, t("erroCriar")));
         } finally {
             setLoading(false);
         }
@@ -341,27 +348,32 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
             open={open}
             onClose={handleClose}
             breadcrumbs={[
-                "Projects",
-                "New project",
+                t("projetos"),
+                t("novoProjeto"),
                 step === "details"
-                    ? "Details"
+                    ? t("detalhes")
                     : step === "access"
                       ? orgId === PERSONAL_WORKSPACE
-                          ? "Access"
-                          : "Organisational Access"
-                      : "Add Documents",
+                          ? t("acesso")
+                          : t("acessoOrganizacional")
+                      : t("adicionarDocumentos"),
             ]}
             secondaryAction={
                 step === "documents"
                     ? {
-                          label: `Upload${pendingFiles.length > 0 ? ` (${pendingFiles.length})` : ""}`,
+                          label:
+                              pendingFiles.length > 0
+                                  ? t("enviarArquivosComContagem", {
+                                        count: pendingFiles.length,
+                                    })
+                                  : t("enviarArquivos"),
                           icon: <Upload className="h-3.5 w-3.5" />,
                           onClick: () => fileInputRef.current?.click(),
                           disabled: loading,
                       }
                     : step === "access"
                       ? {
-                            label: "Back",
+                            label: t("voltar"),
                             type: "button",
                             onClick: () => setStep("details"),
                             disabled: loading,
@@ -371,13 +383,13 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
             cancelAction={
                 step === "documents"
                     ? {
-                          label: "Back",
+                          label: t("voltar"),
                           onClick: () => setStep("access"),
                           disabled: loading,
                       }
                     : step === "access"
                       ? {
-                            label: "Skip",
+                            label: t("pular"),
                             type: "button",
                             onClick: () => {
                                 setSharedUsers([]);
@@ -391,24 +403,24 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
             primaryAction={
                 step === "details"
                     ? {
-                          label: "Next",
+                          label: t("proximo"),
                           type: "button",
                           onClick: () => setStep("access"),
                           disabled: !name.trim() || loading,
                       }
                     : step === "access"
                       ? {
-                            label: "Next",
+                            label: t("proximo"),
                             type: "button",
                             onClick: () => setStep("documents"),
                             disabled: loading,
                         }
                       : {
                             label: loading
-                                ? "Creating…"
+                                ? t("criando")
                                 : pendingProject
-                                  ? "Continue"
-                                  : "Create project",
+                                  ? t("continuar")
+                                  : t("criarProjeto"),
                             type: "button",
                             onClick: () => void createProjectFromDocuments(),
                             disabled: !name.trim() || loading,
@@ -431,14 +443,14 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                     <div className="space-y-6">
                         <div>
                             <FieldLabel htmlFor="new-project-name">
-                                Project name
+                                {t("labelNomeProjeto")}
                             </FieldLabel>
                             <FormTextInput
                                 id="new-project-name"
                                 type="text"
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
-                                placeholder="Add project name"
+                                placeholder={t("placeholderAdicionarNome")}
                                 variant="minimal"
                                 autoFocus
                             />
@@ -446,14 +458,14 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
                         <div>
                             <FieldLabel htmlFor="new-project-cm-number">
-                                CM number
+                                {t("labelReferencia")}
                             </FieldLabel>
                             <FormTextInput
                                 id="new-project-cm-number"
                                 type="text"
                                 value={cmNumber}
                                 onChange={(e) => setCmNumber(e.target.value)}
-                                placeholder="Add a CM number..."
+                                placeholder={t("placeholderReferencia")}
                                 variant="minimal"
                                 className="text-xl text-gray-600"
                             />
@@ -461,7 +473,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
                         <div>
                             <FieldLabel htmlFor="new-project-practice">
-                                Practice
+                                {t("labelAreaPratica")}
                             </FieldLabel>
                             <ProjectPracticeField
                                 id="new-project-practice"
@@ -475,7 +487,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
                         <div>
                             <FieldLabel htmlFor="new-project-org">
-                                Share across Organisation
+                                {t("labelCompartilharOrganizacao")}
                             </FieldLabel>
                             <ModalSelect
                                 id="new-project-org"
@@ -488,7 +500,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                                 options={[
                                     {
                                         value: PERSONAL_WORKSPACE,
-                                        label: "No organization",
+                                        label: t("semOrganizacao"),
                                     },
                                     ...orgs.map((org) => ({
                                         value: org.id,
@@ -499,16 +511,18 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                         </div>
 
                         <div>
-                            <FieldLabel as="p">Project memory</FieldLabel>
+                            <FieldLabel as="p">
+                                {t("memoriaProjeto")}
+                            </FieldLabel>
                             <ToggleSwitch
                                 checked={memoryEnabled}
                                 onCheckedChange={(enabled) => {
                                     memoryEditedRef.current = true;
                                     setMemoryEnabled(enabled);
                                 }}
-                                aria-label="Enable project memory"
+                                aria-label={t("ariaAtivarMemoria")}
                             >
-                                Let Mike remember shared project context
+                                {t("descricaoMemoria")}
                             </ToggleSwitch>
                         </div>
                     </div>
@@ -524,7 +538,8 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                         onDirectGrantsChange={setSharedUsers}
                         orgOverrides={orgOverrides}
                         onOrgOverridesChange={setOrgOverrides}
-                        ownerLabel="Project owners"
+                        ownerLabel={t("donosProjeto")}
+                        resourceKind="project"
                     />
                 ) : (
                     <div className="flex min-h-0 flex-1 flex-col">

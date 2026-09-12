@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
     Brain,
     CornerDownRight,
@@ -107,6 +108,7 @@ export function DocVersionHistory({
     );
     const [editingValue, setEditingValue] = useState("");
     const committingVersionId = useRef<string | null>(null);
+    const t = useTranslations("projects.pagina");
 
     const commit = async (versionId: string) => {
         if (committingVersionId.current === versionId) return;
@@ -178,7 +180,7 @@ export function DocVersionHistory({
                     className={`sticky left-0 z-[60] ${DOC_NAME_COL_W} bg-gray-50/80 py-2 pl-3 pr-2`}
                     style={treeNameCellStyle(depth)}
                 >
-                    <div>No version history.</div>
+                    <div>{t("semHistoricoVersoes")}</div>
                 </div>
             </div>
         );
@@ -198,7 +200,7 @@ export function DocVersionHistory({
                     v.version_number >= 1
                         ? `${v.version_number}`
                         : v.source === "upload"
-                          ? "Original"
+                          ? t("versaoOriginal")
                           : "—";
                 const displayLabel = v.filename?.trim() || numberLabel;
                 const downloadFilename = v.filename?.trim() || filename;
@@ -282,7 +284,7 @@ export function DocVersionHistory({
                                     >
                                         {isDeleted && (
                                             <span className="font-medium text-gray-500">
-                                                [Deleted]{" "}
+                                                {t("versaoExcluida")}{" "}
                                             </span>
                                         )}
                                         {displayLabel}
@@ -345,7 +347,7 @@ export function DocVersionHistory({
                                               }
                                             : undefined
                                     }
-                                    renameLabel="Rename version"
+                                    renameLabel={t("renomearVersao")}
                                     onDownload={() =>
                                         onDownloadVersion(
                                             docId,
@@ -415,6 +417,7 @@ export function ProjectPageHeader({
         onClick: () => void;
     }>;
 }) {
+    const t = useTranslations("projects.pagina");
     const sectionAction: PageHeaderAction | null =
         activeSection === "documents"
             ? {
@@ -436,8 +439,12 @@ export function ProjectPageHeader({
                     ) : (
                         <Plus className="h-4 w-4" />
                     ),
-                    label: <span className="hidden sm:inline">Chat</span>,
-                    title: "Create chat",
+                    label: (
+                        <span className="hidden sm:inline">
+                            {t("novaConversa")}
+                        </span>
+                    ),
+                    title: t("tituloCriarConversa"),
                 }
               : activeSection === "reviews"
                 ? {
@@ -448,8 +455,12 @@ export function ProjectPageHeader({
                     ) : (
                         <Plus className="h-4 w-4" />
                     ),
-                    label: <span className="hidden sm:inline">Review</span>,
-                    title: "Create review",
+                    label: (
+                        <span className="hidden sm:inline">
+                            {t("novaRevisao")}
+                        </span>
+                    ),
+                    title: t("tituloCriarRevisao"),
                   }
                 : null;
 
@@ -457,16 +468,16 @@ export function ProjectPageHeader({
         <PageHeader
             breadcrumbs={[
                 {
-                    label: "Projects",
+                    label: t("projetos"),
                     onClick: onBackToProjects,
-                    title: "Back to Projects",
+                    title: t("voltarProjetos"),
                 },
                 {
                     ...(project
                         ? {
                               label: project.name,
                               onClick: onProjectRoot,
-                              title: "Back to project documents",
+                              title: t("voltarDocumentosProjeto"),
                           }
                         : {
                               loading: true,
@@ -474,9 +485,9 @@ export function ProjectPageHeader({
                           }),
                 },
                 ...(activeSection === "assistant"
-                    ? [{ label: "Chats" }]
+                    ? [{ label: t("colunaConversas") }]
                     : activeSection === "reviews"
-                      ? [{ label: "Tabular Reviews" }]
+                      ? [{ label: t("tabRevisoes") }]
                       : (documentFolderBreadcrumbs ?? [])),
             ]}
             actionGroups={[
@@ -485,12 +496,12 @@ export function ProjectPageHeader({
                         type: "search",
                         value: search,
                         onChange: onSearchChange,
-                        placeholder: "Search…",
+                        placeholder: t("buscar"),
                     },
                     {
                         onClick: onOpenAccess,
                         iconOnly: true,
-                        title: "Access",
+                        title: t("acesso"),
                         icon: <Users className="h-4 w-4" />,
                     },
                     {
@@ -500,14 +511,14 @@ export function ProjectPageHeader({
                                 items={[
                                     {
                                         label: canManageProject
-                                            ? "Edit details"
-                                            : "View details",
+                                            ? t("editarDetalhes")
+                                            : t("verDetalhes"),
                                         icon: Pencil,
                                         onSelect: onOpenDetails,
                                         disabled: !roleKnown,
                                     },
                                     {
-                                        label: "Memory",
+                                        label: t("memoria"),
                                         icon: Brain,
                                         onSelect: onOpenMemory,
                                         disabled: !roleKnown,
@@ -517,7 +528,7 @@ export function ProjectPageHeader({
                                         // refusal can name someone who can
                                         // lift it; disabled only while the
                                         // role itself is still unknown.
-                                        label: "Delete",
+                                        label: t("excluir"),
                                         icon: Trash2,
                                         onSelect: onDeleteProject,
                                         variant: "danger",

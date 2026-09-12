@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withIntl } from "@/test/withIntl";
 import SignupCheckEmailPage from "./page";
 
 const { replace, useAuth } = vi.hoisted(() => ({
@@ -27,13 +28,13 @@ describe("SignupCheckEmailPage", () => {
     });
 
     it("shows the confirmation instructions on a dedicated route", () => {
-        render(<SignupCheckEmailPage />);
+        render(withIntl(<SignupCheckEmailPage />));
 
         expect(
-            screen.getByRole("heading", { name: "Check your email" }),
+            screen.getByRole("heading", { name: "Verifique seu e-mail" }),
         ).toBeInTheDocument();
         expect(
-            screen.getByRole("link", { name: "Return to login" }),
+            screen.getByRole("link", { name: "Voltar para o login" }),
         ).toHaveAttribute("href", "/login");
     });
 
@@ -43,13 +44,13 @@ describe("SignupCheckEmailPage", () => {
             authLoading: false,
         });
 
-        render(<SignupCheckEmailPage />);
+        render(withIntl(<SignupCheckEmailPage />));
 
         await waitFor(() => {
             expect(replace).toHaveBeenCalledWith("/onboarding/profile");
         });
         expect(
-            screen.queryByRole("heading", { name: "Check your email" }),
+            screen.queryByRole("heading", { name: "Verifique seu e-mail" }),
         ).not.toBeInTheDocument();
     });
 });

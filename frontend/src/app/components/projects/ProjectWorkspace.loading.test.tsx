@@ -2,6 +2,7 @@ import { useState } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { getProject } from "@/app/lib/mikeApi";
+import { withIntl } from "@/test/withIntl";
 import type { Project } from "@/app/components/shared/types";
 import {
     ProjectWorkspaceProvider,
@@ -88,9 +89,11 @@ function Probe() {
 
 function renderWorkspace() {
     return render(
-        <ProjectWorkspaceProvider projectId="p1">
-            <Probe />
-        </ProjectWorkspaceProvider>,
+        withIntl(
+            <ProjectWorkspaceProvider projectId="p1">
+                <Probe />
+            </ProjectWorkspaceProvider>,
+        ),
     );
 }
 
@@ -127,7 +130,7 @@ describe("ProjectWorkspace while the project is still loading", () => {
 
         // Not the old fail-open: no confirmation for an action we cannot
         // know is allowed …
-        expect(screen.queryByText("Delete project?")).not.toBeInTheDocument();
+        expect(screen.queryByText("Excluir projeto?")).not.toBeInTheDocument();
         // … and not a false accusation either, because the affordance that
         // produced this click is disabled in the real header.
         expect(
@@ -156,7 +159,7 @@ describe("ProjectWorkspace while the project is still loading", () => {
         expect(screen.getByTestId("role-known")).toHaveTextContent("true");
 
         fireEvent.click(screen.getByText("delete project"));
-        expect(screen.getByText("Delete project?")).toBeInTheDocument();
+        expect(screen.getByText("Excluir projeto?")).toBeInTheDocument();
     });
 
     it("forgets the previous project's role the moment the id changes", async () => {
@@ -169,9 +172,11 @@ describe("ProjectWorkspace while the project is still loading", () => {
         // enough; the role must return to unknown every time the id changes.
         vi.mocked(getProject).mockResolvedValueOnce(OWNER_PROJECT);
         const { rerender } = render(
-            <ProjectWorkspaceProvider projectId="p1">
-                <Probe />
-            </ProjectWorkspaceProvider>,
+            withIntl(
+                <ProjectWorkspaceProvider projectId="p1">
+                    <Probe />
+                </ProjectWorkspaceProvider>,
+            ),
         );
         await waitFor(() =>
             expect(screen.getByTestId("role")).toHaveTextContent("owner"),
@@ -184,9 +189,11 @@ describe("ProjectWorkspace while the project is still loading", () => {
         // point is what the window before it arrives looks like.
         vi.mocked(getProject).mockReturnValue(new Promise(() => {}));
         rerender(
-            <ProjectWorkspaceProvider projectId="p2">
-                <Probe />
-            </ProjectWorkspaceProvider>,
+            withIntl(
+                <ProjectWorkspaceProvider projectId="p2">
+                    <Probe />
+                </ProjectWorkspaceProvider>,
+            ),
         );
 
         await waitFor(() =>
@@ -199,7 +206,7 @@ describe("ProjectWorkspace while the project is still loading", () => {
         expect(screen.getByTestId("role-known")).toHaveTextContent("false");
 
         fireEvent.click(screen.getByText("delete project"));
-        expect(screen.queryByText("Delete project?")).not.toBeInTheDocument();
+        expect(screen.queryByText("Excluir projeto?")).not.toBeInTheDocument();
         expect(
             screen.queryByText(/Only an admin can/),
         ).not.toBeInTheDocument();
@@ -226,7 +233,7 @@ describe("ProjectWorkspace while the project is still loading", () => {
 
         fireEvent.click(screen.getByText("delete project"));
         expect(
-            screen.getByText("Only an owner can delete this project."),
+            screen.getByText("Somente o proprietário pode excluir este projeto."),
         ).toBeInTheDocument();
         expect(
             screen.getByText(/Dana Reyes \(dana@firm.test\)/),

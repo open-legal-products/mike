@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { uploadProjectDocument } from "@/app/lib/mikeApi";
+import { withIntl } from "@/test/withIntl";
 import { ChatInput } from "./ChatInput";
 
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -59,13 +60,15 @@ function mockProfile() {
 
 function renderInput(canSend: boolean, onSubmit = vi.fn()) {
     render(
-        <ChatInput
-            onSubmit={onSubmit}
-            onCancel={vi.fn()}
-            isLoading={false}
-            canSend={canSend}
-            projectId="p1"
-        />,
+        withIntl(
+            <ChatInput
+                onSubmit={onSubmit}
+                onCancel={vi.fn()}
+                isLoading={false}
+                canSend={canSend}
+                projectId="p1"
+            />,
+        ),
     );
     return onSubmit;
 }
@@ -82,17 +85,17 @@ describe("ChatInput canSend gating", () => {
         renderInput(false);
 
         const textarea = screen.getByPlaceholderText(
-            "Viewing only — sending needs edit access",
+            "Somente visualização — enviar requer acesso de edição",
         );
         expect(textarea).toBeDisabled();
         expect(
-            screen.getByRole("button", { name: "Send message" }),
+            screen.getByRole("button", { name: "Enviar mensagem" }),
         ).toBeDisabled();
         expect(
             screen.queryByRole("button", { name: "Add documents" }),
         ).toBeNull();
         expect(
-            screen.queryByRole("button", { name: "Open workflows" }),
+            screen.queryByRole("button", { name: "Abrir fluxos de trabalho" }),
         ).toBeNull();
     });
 
@@ -121,16 +124,20 @@ describe("ChatInput canSend gating", () => {
 
     it("keeps the default composer when canSend is omitted", () => {
         render(
-            <ChatInput
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-                projectId="p1"
-            />,
+            withIntl(
+                <ChatInput
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                    projectId="p1"
+                />,
+            ),
         );
 
         expect(
-            screen.getByPlaceholderText("How can I help?"),
+            screen.getByPlaceholderText(
+                "Faça uma pergunta sobre seus documentos...",
+            ),
         ).not.toBeDisabled();
         expect(
             screen.getByRole("button", { name: "Add documents" }),

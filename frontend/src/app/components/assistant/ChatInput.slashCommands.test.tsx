@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listWorkflows } from "@/app/lib/mikeApi";
+import { withIntl } from "@/test/withIntl";
 import type { Document, Workflow } from "../shared/types";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 
@@ -70,18 +71,20 @@ describe("ChatInput workflow slash commands", () => {
         } as Document;
 
         render(
-            <ChatInput
-                ref={ref}
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-                onDocumentClick={onDocumentClick}
-            />,
+            withIntl(
+                <ChatInput
+                    ref={ref}
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                    onDocumentClick={onDocumentClick}
+                />,
+            ),
         );
 
         act(() => ref.current?.addDoc(document));
         const openButton = screen.getByRole("button", {
-            name: "Open agreement.docx",
+            name: "Abrir agreement.docx",
         });
         expect(openButton.parentElement).toHaveClass("liquid-glass-flat");
         expect(openButton.parentElement).not.toHaveClass(
@@ -91,7 +94,7 @@ describe("ChatInput workflow slash commands", () => {
 
         expect(onDocumentClick).toHaveBeenCalledWith(document);
         expect(
-            screen.getByRole("button", { name: "Remove agreement.docx" }),
+            screen.getByRole("button", { name: "Remover agreement.docx" }),
         ).toBeInTheDocument();
     });
 
@@ -108,12 +111,14 @@ describe("ChatInput workflow slash commands", () => {
         } as Document;
 
         render(
-            <ChatInput
-                ref={ref}
-                onSubmit={onSubmit}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    ref={ref}
+                    onSubmit={onSubmit}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         act(() => ref.current?.addDoc(document));
@@ -138,11 +143,13 @@ describe("ChatInput workflow slash commands", () => {
         const onSubmit = vi.fn();
         const user = userEvent.setup();
         render(
-            <ChatInput
-                onSubmit={onSubmit}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    onSubmit={onSubmit}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         const input = screen.getByRole("combobox");
@@ -178,11 +185,13 @@ describe("ChatInput workflow slash commands", () => {
         const onSubmit = vi.fn();
         const user = userEvent.setup();
         render(
-            <ChatInput
-                onSubmit={onSubmit}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    onSubmit={onSubmit}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         const input = screen.getByRole("combobox");
@@ -202,12 +211,14 @@ describe("ChatInput workflow slash commands", () => {
         const ref = createRef<ChatInputHandle>();
         const user = userEvent.setup();
         render(
-            <ChatInput
-                ref={ref}
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    ref={ref}
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         const input = screen.getByRole("combobox");
@@ -255,11 +266,13 @@ describe("ChatInput workflow slash commands", () => {
         const onSubmit = vi.fn();
         const user = userEvent.setup();
         render(
-            <ChatInput
-                onSubmit={onSubmit}
-                onCancel={vi.fn()}
-                isLoading={false}
-            />,
+            withIntl(
+                <ChatInput
+                    onSubmit={onSubmit}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                />,
+            ),
         );
 
         const input = screen.getByRole("combobox");

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import LuckyExcel, { type LuckyExcelSheet } from "luckyexcel";
 import type { WorkbookInstance } from "@fortune-sheet/react";
 import type { Cell, Sheet } from "@fortune-sheet/core";
@@ -243,6 +244,7 @@ export function SpreadsheetView({
     highlightCells,
     rounded = true,
 }: Props) {
+    const t = useTranslations("painelDocumento.visualizacoes");
     const workbookRef = useRef<WorkbookInstance>(null);
     // The frame element, used to reach Fortune-sheet's scrollbars for measuring
     // the current scroll offset and viewport size when deciding whether to scroll.
@@ -290,7 +292,7 @@ export function SpreadsheetView({
     useEffect(() => {
         if (!result) return;
         if (result.type !== "spreadsheet") {
-            setError("This spreadsheet could not be displayed.");
+            setError(t("erroExibirPlanilha"));
             return;
         }
         let cancelled = false;
@@ -306,12 +308,11 @@ export function SpreadsheetView({
                     applyExcelTextOverflow(exportJson.sheets);
                     setSheets(exportJson.sheets as unknown as Sheet[]);
                 } else {
-                    setError("This spreadsheet could not be displayed.");
+                    setError(t("erroExibirPlanilha"));
                 }
             });
         } catch {
-            if (!cancelled)
-                setError("This spreadsheet could not be displayed.");
+            if (!cancelled) setError(t("erroExibirPlanilha"));
         }
 
         return () => {
@@ -492,7 +493,8 @@ export function SpreadsheetView({
     const frameClass = `fortune-sheet-viewer relative flex flex-col flex-1 min-h-0 overflow-hidden ${rounded ? "rounded-lg" : ""}`;
 
     const message =
-        error ?? (fetchError ? "Failed to load spreadsheet." : null);
+        error ??
+        (fetchError ? t("erroCarregarPlanilha") : null);
     if (message) {
         return (
             <div className={frameClass}>

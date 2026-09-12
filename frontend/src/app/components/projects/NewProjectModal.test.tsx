@@ -18,6 +18,7 @@ import {
   uploadProjectDocuments,
 } from "@/app/lib/mikeApi";
 import { NewProjectModal } from "./NewProjectModal";
+import { withIntl } from "@/test/withIntl";
 
 const { useUserProfile } = vi.hoisted(() => ({
     useUserProfile: vi.fn(),
@@ -69,14 +70,14 @@ async function fillAndAdd(
     email: string,
     role: string,
 ) {
-    await user.type(screen.getByPlaceholderText("Add project name"), "Matter");
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "Matter");
     expect(
-        screen.queryByPlaceholderText("Add by email..."),
+        screen.queryByPlaceholderText("Adicionar por e-mail…"),
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Próximo" }));
     if (role !== "editor") {
         await user.click(
-            screen.getByRole("button", { name: /Role for the new recipient/ }),
+            screen.getByRole("button", { name: /Papel do novo destinatário/ }),
         );
         await user.click(
             screen.getByRole("menuitem", {
@@ -84,30 +85,32 @@ async function fillAndAdd(
             }),
         );
     }
-    await user.type(screen.getByPlaceholderText("Add by email..."), email);
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    await user.type(screen.getByPlaceholderText("Adicionar por e-mail…"), email);
+    await user.click(screen.getByRole("button", { name: "Adicionar" }));
 }
 
 async function submit(user: ReturnType<typeof userEvent.setup>) {
-    if (!screen.queryByRole("button", { name: "Create project" })) {
-        const detailsNext = screen.getByRole("button", { name: "Next" });
+    if (!screen.queryByRole("button", { name: "Criar projeto" })) {
+        const detailsNext = screen.getByRole("button", { name: "Próximo" });
         await waitFor(() => expect(detailsNext).toBeEnabled());
         await user.click(detailsNext);
     }
-    if (!screen.queryByRole("button", { name: "Create project" })) {
+    if (!screen.queryByRole("button", { name: "Criar projeto" })) {
         await waitFor(() =>
-      expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible(),
+      expect(screen.getByRole("dialog", { name: "Acesso" })).toBeVisible(),
         );
-        expect(screen.getByText("Share Access")).toBeInTheDocument();
-        await user.click(screen.getByRole("button", { name: "Next" }));
+        expect(screen.getByText("Compartilhar acesso")).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
     }
     await user.click(
-        await screen.findByRole("button", { name: "Create project" }),
+        await screen.findByRole("button", { name: "Criar projeto" }),
     );
 }
 
 function renderModal(onCreated = vi.fn()) {
-    render(<NewProjectModal open onClose={vi.fn()} onCreated={onCreated} />);
+    render(
+        withIntl(<NewProjectModal open onClose={vi.fn()} onCreated={onCreated} />),
+    );
     return onCreated;
 }
 
@@ -148,7 +151,9 @@ describe("NewProjectModal sharing", () => {
         });
         renderModal();
 
-        expect(await screen.findByLabelText("Practice")).toHaveTextContent(
+        expect(
+            await screen.findByLabelText("Área de prática"),
+        ).toHaveTextContent(
             "Corporate and M&A",
         );
     });
@@ -158,9 +163,9 @@ describe("NewProjectModal sharing", () => {
     renderModal();
 
     expect(
-      screen.getByRole("switch", { name: "Enable project memory" }),
+      screen.getByRole("switch", { name: "Ativar memória do projeto" }),
     ).toBeChecked();
-    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "P");
     await submit(user);
 
     await waitFor(() =>
@@ -182,9 +187,9 @@ describe("NewProjectModal sharing", () => {
     renderModal();
 
     expect(
-      screen.getByRole("switch", { name: "Enable project memory" }),
+      screen.getByRole("switch", { name: "Ativar memória do projeto" }),
     ).not.toBeChecked();
-    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "P");
     await submit(user);
 
     await waitFor(() =>
@@ -206,9 +211,9 @@ describe("NewProjectModal sharing", () => {
     renderModal();
 
     await user.click(
-      screen.getByRole("switch", { name: "Enable project memory" }),
+      screen.getByRole("switch", { name: "Ativar memória do projeto" }),
     );
-    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "P");
     await submit(user);
 
     await waitFor(() =>
@@ -227,9 +232,9 @@ describe("NewProjectModal sharing", () => {
     renderModal();
 
     await user.click(
-      screen.getByRole("switch", { name: "Enable project memory" }),
+      screen.getByRole("switch", { name: "Ativar memória do projeto" }),
     );
-    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "P");
     await submit(user);
 
     await waitFor(() =>
@@ -274,12 +279,12 @@ describe("NewProjectModal sharing", () => {
 
         expect(
             await screen.findByText(
-                "future@firm.test does not belong to a Mike user.",
+                "future@firm.test não pertence a um usuário do Mike.",
             ),
         ).toBeInTheDocument();
         expect(grantProjectAccess).not.toHaveBeenCalled();
         expect(
-            screen.queryByRole("button", { name: "Role for future@firm.test" }),
+            screen.queryByRole("button", { name: "Papel de future@firm.test" }),
         ).not.toBeInTheDocument();
     });
 
@@ -291,7 +296,7 @@ describe("NewProjectModal sharing", () => {
         // say what the server will serve for it on every future load.
         const user = userEvent.setup({ delay: null });
         const onCreated = renderModal();
-        await user.type(screen.getByPlaceholderText("Add project name"), "P");
+        await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "P");
         await submit(user);
 
         await waitFor(() => expect(onCreated).toHaveBeenCalled());
@@ -308,16 +313,16 @@ describe("NewProjectModal sharing", () => {
         const user = userEvent.setup({ delay: null });
         const onCreated = renderModal();
 
-    await user.type(screen.getByPlaceholderText("Add project name"), "Matter");
-        await user.click(screen.getByRole("button", { name: "Next" }));
-        expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible();
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "Matter");
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
+        expect(screen.getByRole("dialog", { name: "Acesso" })).toBeVisible();
         expect(createProject).not.toHaveBeenCalled();
         expect(onCreated).not.toHaveBeenCalled();
 
-        const accessNext = screen.getByRole("button", { name: "Next" });
+        const accessNext = screen.getByRole("button", { name: "Próximo" });
         expect(accessNext).toHaveAttribute("type", "button");
         await user.click(accessNext);
-    expect(screen.getByRole("dialog", { name: "Add Documents" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Adicionar Documentos" })).toBeVisible();
         expect(createProject).not.toHaveBeenCalled();
         expect(onCreated).not.toHaveBeenCalled();
 
@@ -326,7 +331,7 @@ describe("NewProjectModal sharing", () => {
         fireEvent.submit(form!);
         expect(createProject).not.toHaveBeenCalled();
 
-        const create = screen.getByRole("button", { name: "Create project" });
+        const create = screen.getByRole("button", { name: "Criar projeto" });
         expect(create).toHaveAttribute("type", "button");
         await user.click(create);
         await waitFor(() => expect(createProject).toHaveBeenCalledTimes(1));
@@ -362,22 +367,22 @@ describe("NewProjectModal sharing", () => {
 
         await fillAndAdd(user, "one@firm.test", "owner");
         await user.click(
-            screen.getByRole("button", { name: /Role for the new recipient/ }),
+            screen.getByRole("button", { name: /Papel do novo destinatário/ }),
         );
         await user.click(screen.getByRole("menuitem", { name: "Viewer" }));
         await user.type(
-            screen.getByPlaceholderText("Add by email..."),
+            screen.getByPlaceholderText("Adicionar por e-mail…"),
             "two@firm.test",
         );
-        await user.click(screen.getByRole("button", { name: "Add" }));
+        await user.click(screen.getByRole("button", { name: "Adicionar" }));
 
         // Each row carries its own picker, and changing one leaves the other.
         await user.click(
-            screen.getByRole("button", { name: "Role for one@firm.test" }),
+            screen.getByRole("button", { name: "Papel de one@firm.test" }),
         );
         await user.click(screen.getByRole("menuitem", { name: "Editor" }));
         expect(
-            screen.getByRole("button", { name: "Role for two@firm.test" }),
+            screen.getByRole("button", { name: "Papel de two@firm.test" }),
         ).toHaveTextContent("Viewer");
 
         await submit(user);
@@ -411,14 +416,14 @@ describe("NewProjectModal sharing", () => {
 
         expect(
             await screen.findByText(
-                /Project created, but access was not granted to counsel@firm.test: The project creator already has owner access/,
+                /Projeto criado, mas o acesso não foi concedido a counsel@firm.test: The project creator already has owner access/,
             ),
         ).toBeInTheDocument();
         // The dialog stays open on the only screen that knows sharing failed.
         expect(onCreated).not.toHaveBeenCalled();
 
         // Retry: the project already exists, so it must not be created twice.
-    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Criar projeto" }));
         await waitFor(() => expect(onCreated).toHaveBeenCalled());
         expect(createProject).toHaveBeenCalledTimes(1);
         expect(grantProjectAccess).toHaveBeenCalledTimes(2);
@@ -436,16 +441,16 @@ describe("NewProjectModal sharing", () => {
 
     await fillAndAdd(user, "counsel@firm.test", "editor");
     await submit(user);
-    await screen.findByText(/Project created, but access was not granted/);
+    await screen.findByText(/Projeto criado, mas o acesso não foi concedido/);
 
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByRole("button", { name: "Voltar" }));
+    await user.click(screen.getByRole("button", { name: "Voltar" }));
     await user.click(
-      screen.getByRole("switch", { name: "Enable project memory" }),
+      screen.getByRole("switch", { name: "Ativar memória do projeto" }),
     );
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await user.click(screen.getByRole("button", { name: "Create project" }));
+    await user.click(screen.getByRole("button", { name: "Próximo" }));
+    await user.click(screen.getByRole("button", { name: "Próximo" }));
+    await user.click(screen.getByRole("button", { name: "Criar projeto" }));
 
     await waitFor(() =>
       expect(setProjectMemoryEnabled).toHaveBeenCalledWith("p1", false),
@@ -476,7 +481,7 @@ describe("NewProjectModal sharing", () => {
       },
     ]);
 
-    await user.type(screen.getByPlaceholderText("Add project name"), "P");
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "P");
     const fileInput =
       document.querySelector<HTMLInputElement>('input[type="file"]');
     expect(fileInput).not.toBeNull();
@@ -489,16 +494,16 @@ describe("NewProjectModal sharing", () => {
       },
     });
     await submit(user);
-    await screen.findByRole("button", { name: "Continue" });
+    await screen.findByRole("button", { name: "Continuar" });
 
-    await user.click(screen.getByRole("button", { name: "Back" }));
-    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(screen.getByRole("button", { name: "Voltar" }));
+    await user.click(screen.getByRole("button", { name: "Voltar" }));
     await user.click(
-      screen.getByRole("switch", { name: "Enable project memory" }),
+      screen.getByRole("switch", { name: "Ativar memória do projeto" }),
     );
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Próximo" }));
+    await user.click(screen.getByRole("button", { name: "Próximo" }));
+    await user.click(screen.getByRole("button", { name: "Continuar" }));
 
     await waitFor(() =>
       expect(setProjectMemoryEnabled).toHaveBeenCalledWith("p1", false),
@@ -511,22 +516,22 @@ describe("NewProjectModal sharing", () => {
     it("shows direct sharing only on step two with Owner, Editor and Viewer", async () => {
         const user = userEvent.setup({ delay: null });
         renderModal();
-    await user.type(screen.getByPlaceholderText("Add project name"), "Matter");
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "Matter");
         expect(
-            screen.queryByPlaceholderText("Add by email..."),
+            screen.queryByPlaceholderText("Adicionar por e-mail…"),
         ).not.toBeInTheDocument();
-        const next = screen.getByRole("button", { name: "Next" });
+        const next = screen.getByRole("button", { name: "Próximo" });
         await waitFor(() => expect(next).toBeEnabled());
         await user.click(next);
-        const skip = screen.getByRole("button", { name: "Skip" });
-        const accessNext = screen.getByRole("button", { name: "Next" });
+        const skip = screen.getByRole("button", { name: "Pular" });
+        const accessNext = screen.getByRole("button", { name: "Próximo" });
         expect(skip.parentElement).toBe(accessNext.parentElement);
         expect(skip).toHaveClass("text-gray-500");
-        expect(screen.getByRole("button", { name: "Back" })).toHaveClass(
+        expect(screen.getByRole("button", { name: "Voltar" })).toHaveClass(
             "bg-blue-600/90",
         );
         const trigger = await screen.findByRole("button", {
-            name: /Role for the new recipient/,
+            name: /Papel do novo destinatário/,
         });
         expect(trigger).toHaveTextContent("Editor");
         await user.click(trigger);
@@ -571,39 +576,41 @@ describe("NewProjectModal sharing", () => {
             },
         ] as never);
         renderModal();
-        await user.click(screen.getByLabelText("Share across Organisation"));
+        await user.click(
+            screen.getByLabelText("Compartilhar na organização"),
+        );
         await user.click(
             await screen.findByRole("menuitem", { name: "Elite Law LLP" }),
         );
-    await user.type(screen.getByPlaceholderText("Add project name"), "Matter");
-        await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.type(screen.getByPlaceholderText("Adicionar nome do projeto"), "Matter");
+        await user.click(screen.getByRole("button", { name: "Próximo" }));
         expect(
-            screen.getByRole("dialog", { name: "Organisational Access" }),
+            screen.getByRole("dialog", { name: "Acesso organizacional" }),
         ).toBeVisible();
-        await screen.findByRole("searchbox", { name: "Project owners" });
+        await screen.findByRole("searchbox", { name: "Donos do projeto" });
         expect(
             screen.getByText(
-                "Add Elite Law LLP members as owners with rights to manage access, settings and delete the project.",
+                "Adicione membros de Elite Law LLP como donos, com direitos para gerenciar o acesso e as configurações e excluir o projeto.",
             ),
         ).not.toHaveClass("pl-3");
         expect(screen.queryByText("Project Lead")).not.toBeInTheDocument();
         expect(screen.queryByText("Blocked Member")).not.toBeInTheDocument();
 
         const ownerPicker = screen.getByRole("searchbox", {
-            name: "Project owners",
+            name: "Donos do projeto",
         });
-        const denyToggle = screen.getByRole("button", { name: "Deny list" });
+        const denyToggle = screen.getByRole("button", { name: "Lista de bloqueio" });
         expect(denyToggle).toHaveAttribute("aria-expanded", "false");
         expect(
-            screen.queryByRole("searchbox", { name: "Deny list" }),
+            screen.queryByRole("searchbox", { name: "Lista de bloqueio" }),
         ).not.toBeInTheDocument();
         await user.click(denyToggle);
         const denyPicker = screen.getByRole("searchbox", {
-            name: "Deny list",
+            name: "Lista de bloqueio",
         });
         expect(
             screen.getByText(
-                "Deny Elite Law LLP members from accessing this project.",
+                "Negue a membros de Elite Law LLP o acesso a este projeto.",
             ),
         ).not.toHaveClass("pl-3");
         await user.type(ownerPicker, "Organization Admin");
@@ -627,10 +634,10 @@ describe("NewProjectModal sharing", () => {
         );
 
         const ownerList = screen.getByRole("list", {
-            name: "Project owners list",
+            name: "Lista de Donos do projeto",
         });
         const denyList = screen.getByRole("list", {
-            name: "Deny list entries",
+            name: "Lista de bloqueio",
         });
         expect(within(ownerList).getByText("Project Lead")).toBeInTheDocument();
     expect(within(ownerList).getByText("Project Creator")).toBeInTheDocument();
@@ -639,7 +646,7 @@ describe("NewProjectModal sharing", () => {
         );
         expect(
             within(ownerList).queryByRole("button", {
-                name: "Remove me@firm.test",
+                name: "Remover me@firm.test",
             }),
         ).not.toBeInTheDocument();
     expect(within(denyList).getByText("Blocked Member")).toBeInTheDocument();

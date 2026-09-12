@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { OnboardingShell } from "@/app/components/auth/OnboardingShell";
 import { authInputClassName } from "@/app/components/auth/authStyles";
 import { Input } from "@/app/components/ui/input";
@@ -43,6 +44,7 @@ function ProfileDetailsForm({
 }) {
     const router = useRouter();
     const { reloadProfile } = useUserProfile();
+    const t = useTranslations("onboarding.perfil");
     const [name, setName] = useState(initialName);
     const [organisation, setOrganisation] = useState(initialOrganisation);
     const [submitting, setSubmitting] = useState(false);
@@ -65,7 +67,7 @@ function ProfileDetailsForm({
             setError(
                 submitError instanceof Error
                     ? submitError.message
-                    : "Unable to save your details",
+                    : t("erroSalvar"),
             );
         } finally {
             setSubmitting(false);
@@ -74,14 +76,14 @@ function ProfileDetailsForm({
 
     return (
         <OnboardingShell
-            step="Step 1 of 2"
-            title="Tell us about you"
-            description="Add the details we should use across Mike."
+            step={t("passo")}
+            title={t("titulo")}
+            description={t("descricao")}
         >
             <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
                     <FieldLabel htmlFor="name">
-                        Name
+                        {t("labelNome")}
                     </FieldLabel>
                     <Input
                         id="name"
@@ -95,7 +97,7 @@ function ProfileDetailsForm({
 
                 <div>
                     <FieldLabel htmlFor="organisation">
-                        Organisation
+                        {t("labelOrganizacao")}
                     </FieldLabel>
                     <Input
                         id="organisation"
@@ -126,7 +128,7 @@ function ProfileDetailsForm({
                         disabled={submitting}
                         className="w-full"
                     >
-                        {submitting ? "Saving..." : "Continue"}
+                        {submitting ? t("botaoSalvando") : t("botaoContinuar")}
                     </PillButton>
                 </div>
             </form>

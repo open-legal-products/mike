@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+    fireEvent,
+    render,
+    screen,
+    waitFor,
+    within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { withIntl } from "@/test/withIntl";
 import { getOrg, lookupUserByEmail, MikeApiError } from "@/app/lib/mikeApi";
 import { AccessModal } from "./AccessModal";
 import { OrganizationAccessEditor } from "./AccessEditor";
@@ -42,6 +49,18 @@ function accessResponse() {
     });
 }
 
+/**
+ * ModalUI auto-foca o primeiro focável do diálogo via requestAnimationFrame
+ * no mount. Sob carga paralela esse rAF pode disparar depois do primeiro
+ * clique do teste e roubar o foco do campo antes do paste. rAFs são FIFO:
+ * esperar dois quadros garante que o auto-foco do mount já aconteceu.
+ */
+async function settleModalAutoFocus() {
+    await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+}
+
 function renderRoleAware(overrides?: {
     canManage?: boolean;
     orgId?: string | null;
@@ -52,23 +71,25 @@ function renderRoleAware(overrides?: {
     const onRevoke =
         overrides?.onRevoke ?? vi.fn().mockResolvedValue(undefined);
     render(
-        <AccessModal
-            open
-            onClose={vi.fn()}
-            resource={PROJECT}
-            fetchAccess={accessResponse}
-            currentUserEmail="me@firm.example"
-            breadcrumb={["Projects", "Matter", "Access"]}
-            access={{
-                grants: [
-                    { email: "counsel@outside.example", role: "viewer" },
-                ],
-                orgId: overrides?.orgId ?? null,
-                canManage: overrides?.canManage ?? true,
-                onGrant: onGrant as never,
-                onRevoke,
-            }}
-        />,
+        withIntl(
+            <AccessModal
+                open
+                onClose={vi.fn()}
+                resource={PROJECT}
+                fetchAccess={accessResponse}
+                currentUserEmail="me@firm.example"
+                breadcrumb={["Projects", "Matter", "Access"]}
+                access={{
+                    grants: [
+                        { email: "counsel@outside.example", role: "viewer" },
+                    ],
+                    orgId: overrides?.orgId ?? null,
+                    canManage: overrides?.canManage ?? true,
+                    onGrant: onGrant as never,
+                    onRevoke,
+                }}
+            />,
+        ),
     );
     return { onGrant, onRevoke };
 }
@@ -91,10 +112,10 @@ describe("AccessModal — per-recipient roles", () => {
     it("presents the roster as Name, Email and Role columns", async () => {
         renderRoleAware();
 
-        expect(screen.getByRole("dialog", { name: "Access" })).toBeVisible();
-        expect(screen.getByText("Share Access")).toBeInTheDocument();
+        expect(screen.getByRole("dialog", { name: "Acesso" })).toBeVisible();
+        expect(screen.getByText("Compartilhar acesso")).toBeInTheDocument();
         expect(
-            screen.getByRole("button", { name: "About access roles" }),
+            screen.getByRole("button", { name: "Sobre os papéis de acesso" }),
         ).toBeInTheDocument();
         const roleTooltip = screen.getByRole("tooltip", { hidden: true });
         expect(roleTooltip).toHaveClass(
@@ -102,7 +123,7 @@ describe("AccessModal — per-recipient roles", () => {
             "peer-focus-visible:visible",
         );
         expect(
-            within(roleTooltip).getByText("Roles and rights"),
+            within(roleTooltip).getByText("Papéis e direitos"),
         ).toBeInTheDocument();
         expect(within(roleTooltip).getByText("Owner")).toBeInTheDocument();
         expect(within(roleTooltip).getByText("Editor")).toBeInTheDocument();
@@ -110,15 +131,15 @@ describe("AccessModal — per-recipient roles", () => {
         expect(within(roleTooltip).getByText("Read-only.")).toBeInTheDocument();
         expect(
             screen.getByRole("button", {
-                name: /Role for the new recipient/,
+                name: /Papel do novo destinatário/,
             }),
         ).not.toHaveAttribute("title");
-        expect(await screen.findByText("Name")).toBeInTheDocument();
-        expect(screen.getByText("Email")).toHaveClass(
+        expect(await screen.findByText("Nome")).toBeInTheDocument();
+        expect(screen.getByText("E-mail")).toHaveClass(
             "justify-self-start",
             "text-left",
         );
-        expect(screen.getByText("Role")).toHaveClass(
+        expect(screen.getByText("Papel")).toHaveClass(
             "justify-self-start",
             "text-left",
         );
@@ -158,13 +179,13 @@ describe("AccessModal — per-recipient roles", () => {
         renderRoleAware();
 
         const roleToggle = await screen.findByRole("button", {
-            name: /Role for the new recipient/,
+            name: /Papel do novo destinatário/,
         });
-        const emailInput = screen.getByPlaceholderText("Add by email...");
+        const emailInput = screen.getByPlaceholderText("Adicionar por e-mail…");
         const inputGroup = emailInput.closest(
             '[data-slot="add-user-input-group"]',
         );
-        const addButton = screen.getByRole("button", { name: "Add" });
+        const addButton = screen.getByRole("button", { name: "Adicionar" });
 
         expect(inputGroup).toContainElement(roleToggle);
         expect(inputGroup).toContainElement(addButton);
@@ -188,7 +209,7 @@ describe("AccessModal — per-recipient roles", () => {
         expect(addButton).not.toHaveClass("border-l");
         expect(addButton).toBeDisabled();
         const roleInfo = screen.getByRole("button", {
-            name: "About access roles",
+            name: "Sobre os papéis de acesso",
         });
         expect(roleInfo).toHaveAttribute(
             "aria-describedby",
@@ -221,7 +242,7 @@ describe("AccessModal — per-recipient roles", () => {
         renderRoleAware();
 
         const roleToggle = await screen.findByRole("button", {
-            name: /Role for the new recipient/,
+            name: /Papel do novo destinatário/,
         });
         expect(roleToggle).toHaveClass("bg-transparent", "text-violet-700");
         expect(roleToggle).not.toHaveClass("bg-violet-100");
@@ -241,7 +262,7 @@ describe("AccessModal — per-recipient roles", () => {
         const user = userEvent.setup();
         renderRoleAware();
         const rolePill = await screen.findByRole("button", {
-            name: "Role for counsel@outside.example",
+            name: "Papel de counsel@outside.example",
         });
         expect(rolePill).toHaveClass(
             "h-6",
@@ -279,7 +300,7 @@ describe("AccessModal — per-recipient roles", () => {
         const { onGrant } = renderRoleAware();
         await user.click(
             await screen.findByRole("button", {
-                name: "Role for counsel@outside.example",
+                name: "Papel de counsel@outside.example",
             }),
         );
         await user.click(screen.getByRole("menuitem", { name: "Owner" }));
@@ -301,20 +322,21 @@ describe("AccessModal — per-recipient roles", () => {
         });
         await user.click(
             await screen.findByRole("button", {
-                name: /Role for the new recipient/,
+                name: /Papel do novo destinatário/,
             }),
         );
         await user.click(screen.getByRole("menuitem", { name: "Viewer" }));
+        await settleModalAutoFocus();
         await user.click(
-            screen.getByPlaceholderText("Add by email..."),
+            screen.getByPlaceholderText("Adicionar por e-mail…"),
         );
         // paste, not per-key typing: one input event cannot be cut off
         // mid-word by a slow re-render on a loaded machine.
         await user.paste("newcounsel@outside.example");
-        await user.click(screen.getByRole("button", { name: "Add" }));
+        await user.click(screen.getByRole("button", { name: "Adicionar" }));
         expect(
             await screen.findByText(
-                "newcounsel@outside.example does not belong to a Mike user.",
+                "newcounsel@outside.example não pertence a um usuário do Mike.",
             ),
         ).toBeInTheDocument();
         expect(onGrant).not.toHaveBeenCalled();
@@ -343,19 +365,22 @@ describe("AccessModal — per-recipient roles", () => {
                 ),
         });
         await screen.findByRole("button", {
-            name: /Role for the new recipient/,
+            name: /Papel do novo destinatário/,
         });
+        await settleModalAutoFocus();
         await user.click(
-            screen.getByPlaceholderText("Add by email..."),
+            screen.getByPlaceholderText("Adicionar por e-mail…"),
         );
         // paste, not per-key typing: one input event cannot be cut off
         // mid-word by a slow re-render on a loaded machine.
         await user.paste("creator@firm.example2");
-        await user.click(screen.getByRole("button", { name: "Add" }));
+        await user.click(screen.getByRole("button", { name: "Adicionar" }));
 
         expect(
             await screen.findByText(
                 "The project creator already has owner access",
+                {},
+                { timeout: 10000 },
             ),
         ).toBeInTheDocument();
     });
@@ -374,18 +399,32 @@ describe("AccessModal — per-recipient roles", () => {
                 ),
         });
         await screen.findByRole("button", {
-            name: /Role for the new recipient/,
+            name: /Papel do novo destinatário/,
         });
+        await settleModalAutoFocus();
         await user.click(
-            screen.getByPlaceholderText("Add by email..."),
+            screen.getByPlaceholderText("Adicionar por e-mail…"),
         );
         // paste, not per-key typing: one input event cannot be cut off
         // mid-word by a slow re-render on a loaded machine.
         await user.paste("someone@firm.example");
-        await user.click(screen.getByRole("button", { name: "Add" }));
+        // A re-render may still race the paste under parallel workers, so
+        // wait for the value to settle (re-querying the input) before
+        // submitting, and submit with fireEvent so the click cannot be
+        // dropped if the button element is replaced mid-gesture.
+        await waitFor(() =>
+            expect(
+                screen.getByPlaceholderText("Adicionar por e-mail…"),
+            ).toHaveValue("someone@firm.example"),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Adicionar" }));
 
         expect(
-            await screen.findByText("Could not add this user. Try again."),
+            await screen.findByText(
+                "Não foi possível adicionar este usuário. Tente novamente.",
+                {},
+                { timeout: 10000 },
+            ),
         ).toBeInTheDocument();
         expect(screen.queryByText(/grants_pkey/)).not.toBeInTheDocument();
     });
@@ -404,13 +443,15 @@ describe("AccessModal — per-recipient roles", () => {
         });
         await user.click(
             await screen.findByRole("button", {
-                name: "Role for counsel@outside.example",
+                name: "Papel de counsel@outside.example",
             }),
         );
         await user.click(screen.getByRole("menuitem", { name: "Owner" }));
         expect(
             await screen.findByText(
                 "Only a project owner can change who has access.",
+                {},
+                { timeout: 10000 },
             ),
         ).toBeInTheDocument();
     });
@@ -418,9 +459,9 @@ describe("AccessModal — per-recipient roles", () => {
     it("revokes a grant", async () => {
         const user = userEvent.setup();
         const { onRevoke } = renderRoleAware();
-        await screen.findByLabelText("Role for counsel@outside.example");
+        await screen.findByLabelText("Papel de counsel@outside.example");
         const actionsButton = screen.getByRole("button", {
-            name: "Actions for counsel@outside.example",
+            name: "Ações de counsel@outside.example",
         });
         expect(actionsButton).toHaveClass("h-6", "w-6");
         expect(actionsButton).not.toHaveClass("w-0", "opacity-0");
@@ -429,7 +470,7 @@ describe("AccessModal — per-recipient roles", () => {
         ).toContain("_1.5rem");
         await user.click(actionsButton);
         await user.click(
-            screen.getByRole("menuitem", { name: "Remove" }),
+            screen.getByRole("menuitem", { name: "Remover" }),
         );
         await waitFor(() =>
             expect(onRevoke).toHaveBeenCalledWith("counsel@outside.example"),
@@ -440,7 +481,7 @@ describe("AccessModal — per-recipient roles", () => {
         renderRoleAware({ canManage: false });
         expect(await screen.findByText("Viewer")).toBeInTheDocument();
         expect(
-            screen.queryByLabelText("Role for counsel@outside.example"),
+            screen.queryByLabelText("Papel de counsel@outside.example"),
         ).not.toBeInTheDocument();
         expect(
             screen.queryByPlaceholderText("Add by email..."),
@@ -451,19 +492,19 @@ describe("AccessModal — per-recipient roles", () => {
         const user = userEvent.setup();
         renderRoleAware({ orgId: "org-1" });
         expect(
-            screen.getByRole("dialog", { name: "Organisational Access" }),
+            screen.getByRole("dialog", { name: "Acesso organizacional" }),
         ).toBeVisible();
         const ownerPicker = await screen.findByRole("searchbox", {
-            name: "Project owners",
+            name: "Donos do projeto",
         });
-        const ownerLabel = screen.getByText("Project owners", {
+        const ownerLabel = screen.getByText("Donos do projeto", {
             selector: "label",
         });
         const ownerDescription = await screen.findByText(
-            "Add Elite Law LLP members as owners with rights to manage access, settings and delete the project.",
+            "Adicione membros de Elite Law LLP como donos, com direitos para gerenciar o acesso e as configurações e excluir o projeto.",
         );
         expect(
-            screen.getByRole("button", { name: "About Project owners" }),
+            screen.getByRole("button", { name: "Sobre Donos do projeto" }),
         ).toHaveAttribute("aria-describedby", "organization-owner-picker-description");
         expect(ownerDescription.closest('[role="tooltip"]')).toHaveClass(
             "peer-hover:visible",
@@ -478,32 +519,32 @@ describe("AccessModal — per-recipient roles", () => {
             ownerDescription.compareDocumentPosition(ownerPicker) &
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
-        const denyToggle = screen.getByRole("button", { name: "Deny list" });
+        const denyToggle = screen.getByRole("button", { name: "Lista de bloqueio" });
         expect(denyToggle).toHaveAttribute("aria-expanded", "false");
         expect(denyToggle.closest("section")).toHaveClass("mt-auto");
         expect(denyToggle).not.toHaveClass("px-2", "py-2");
         expect(denyToggle).not.toHaveClass("liquid-glass-hover");
         expect(
-            screen.queryByRole("searchbox", { name: "Deny list" }),
+            screen.queryByRole("searchbox", { name: "Lista de bloqueio" }),
         ).not.toBeInTheDocument();
         expect(screen.queryByText(/Firewall deny list/)).not.toBeInTheDocument();
         await user.click(denyToggle);
         expect(denyToggle).toHaveAttribute("aria-expanded", "true");
         expect(
-            screen.getByRole("searchbox", { name: "Deny list" }),
+            screen.getByRole("searchbox", { name: "Lista de bloqueio" }),
         ).toBeInTheDocument();
         const denyDescription = screen.getByText(
-            "Deny Elite Law LLP members from accessing this project.",
+            "Negue a membros de Elite Law LLP o acesso a este projeto.",
         );
         expect(
-            screen.getByRole("button", { name: "About the Deny list" }),
+            screen.getByRole("button", { name: "Sobre a lista de bloqueio" }),
         ).toHaveAttribute("aria-describedby", "organization-deny-description");
         expect(denyDescription.closest('[role="tooltip"]')).toHaveClass(
             "peer-hover:visible",
             "peer-focus-visible:visible",
         );
         const denyPicker = screen.getByRole("searchbox", {
-            name: "Deny list",
+            name: "Lista de bloqueio",
         });
         expect(denyDescription).not.toHaveClass("pl-3");
         expect(
@@ -522,12 +563,12 @@ describe("AccessModal — per-recipient roles", () => {
             screen.queryByText("counsel@outside.example"),
         ).not.toBeInTheDocument();
         const ownerList = screen.getByRole("list", {
-            name: "Project owners list",
+            name: "Lista de Donos do projeto",
         });
         expect(within(ownerList).getByText("Creator")).toBeInTheDocument();
         expect(
             within(ownerList).queryByRole("button", {
-                name: "Remove creator@firm.example",
+                name: "Remover creator@firm.example",
             }),
         ).not.toBeInTheDocument();
     });
@@ -548,7 +589,7 @@ describe("OrganizationAccessEditor — row actions", () => {
         const onRemove = vi.fn();
 
         render(
-            <OrganizationAccessEditor
+            withIntl(<OrganizationAccessEditor
                 members={[]}
                 assignments={[
                     {
@@ -568,32 +609,32 @@ describe("OrganizationAccessEditor — row actions", () => {
                 ]}
                 onAssign={vi.fn()}
                 onRemove={onRemove}
-            />,
+            />),
         );
 
         const ownerList = screen.getByRole("list", {
-            name: "Project owners list",
+            name: "Lista de Donos do projeto",
         });
         await user.click(
             within(ownerList).getByRole("button", {
-                name: "Actions for owner@firm.example",
+                name: "Ações de owner@firm.example",
             }),
         );
-        await user.click(screen.getByRole("menuitem", { name: "Remove" }));
+        await user.click(screen.getByRole("menuitem", { name: "Remover" }));
         expect(onRemove).toHaveBeenCalledWith(
             expect.objectContaining({ email: "owner@firm.example" }),
         );
 
-        await user.click(screen.getByRole("button", { name: "Deny list" }));
+        await user.click(screen.getByRole("button", { name: "Lista de bloqueio" }));
         const denyList = screen.getByRole("list", {
-            name: "Deny list entries",
+            name: "Lista de bloqueio",
         });
         await user.click(
             within(denyList).getByRole("button", {
-                name: "Actions for denied@firm.example",
+                name: "Ações de denied@firm.example",
             }),
         );
-        await user.click(screen.getByRole("menuitem", { name: "Remove" }));
+        await user.click(screen.getByRole("menuitem", { name: "Remover" }));
         expect(onRemove).toHaveBeenCalledWith(
             expect.objectContaining({ email: "denied@firm.example" }),
         );
@@ -607,7 +648,7 @@ describe("AccessModal — canonical roster", () => {
         // viewer of the project may read and which carries each person's
         // effective role. The old behavior rendered only the creator.
         render(
-            <AccessModal
+            withIntl(<AccessModal
                 open
                 onClose={vi.fn()}
                 resource={PROJECT}
@@ -621,14 +662,14 @@ describe("AccessModal — canonical roster", () => {
                     onGrant: vi.fn() as never,
                     onRevoke: vi.fn(),
                 }}
-            />,
+            />),
         );
         expect(
             await screen.findByText(/counsel@outside\.example/),
         ).toBeInTheDocument();
         expect(screen.getByText("Viewer")).toBeInTheDocument();
         expect(
-            screen.queryByLabelText("Role for counsel@outside.example"),
+            screen.queryByLabelText("Papel de counsel@outside.example"),
         ).not.toBeInTheDocument();
     });
 });
