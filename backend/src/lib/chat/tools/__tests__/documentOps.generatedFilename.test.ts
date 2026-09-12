@@ -86,6 +86,7 @@ type Generated = {
 
 async function generate(extension: "docx" | "xlsx" | "pptx", title: string) {
   const db = makeDb();
+  const uploadCallStart = uploadFile.mock.calls.length;
   const result =
     extension === "docx"
       ? await generateDocx(title, SECTIONS, "user-1", db as never)
@@ -96,7 +97,7 @@ async function generate(extension: "docx" | "xlsx" | "pptx", title: string) {
   expect(result).not.toHaveProperty("error");
   const generated = result as Generated;
   const version = db.inserts.find((i) => i.table === "document_versions");
-  const upload = uploadFile.mock.calls.find(
+  const upload = uploadFile.mock.calls.slice(uploadCallStart).find(
     (call) => typeof call[0] === "string" && call[0].endsWith(`.${extension}`),
   ) as unknown as [string, ArrayBuffer, string] | undefined;
   expect(upload).toBeDefined();
