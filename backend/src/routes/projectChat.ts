@@ -28,6 +28,7 @@ import {
     parseOptionalDisplayedDoc,
     parseOptionalModel,
     parseOptionalReasoning,
+    openAssistantSse,
     type ChatMessage,
 } from "../lib/chat";
 import { getUserModelSettings } from "../lib/userSettings";
@@ -435,18 +436,14 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
 
     const workflowStore = await buildWorkflowStore(userId, userEmail, db);
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    const write = (line: string) => res.write(line);
-    const streamAbort = new AbortController();
-    let streamFinished = false;
-    res.on("close", () => {
-        if (!streamFinished) streamAbort.abort();
-    });
+    // Go through the shared SSE seam rather than writing to res directly: it
+    // drops any line that arrives after the stream has finished. The title
+    // promise below settles on its own schedule, and the abort signal only
+    // fires when the *client* closes early — never when the route itself ends
+    // the response — so an unguarded late write lands on an ended stream as an
+    // asynchronous ERR_STREAM_WRITE_AFTER_END that no catch here can reach.
+    const stream = openAssistantSse(res);
+    const write = stream.write;
 
     try {
       write(
@@ -483,7 +480,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
                           .eq("id", chatId);
                       if (error) throw error;
                       chatTitle = title;
-                      if (!streamAbort.signal.aborted) {
+                      if (!stream.signal.aborted) {
                           write(
                               `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
                           );
@@ -514,7 +511,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             model: selectedModel,
             reasoning: selectedReasoningLevel,
             apiKeys,
-            signal: streamAbort.signal,
+            signal: stream.signal,
         projectId,
         includeMemory: true,
         memoryProjectId: projectId,
@@ -566,7 +563,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             const title = lastUser.content.slice(0, 120);
             await db.from("chats").update({ title }).eq("id", chatId);
             chatTitle = title;
-            if (shouldGenerateTitle && !streamAbort.signal.aborted) {
+            if (shouldGenerateTitle && !stream.signal.aborted) {
                 write(
                     `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
                 );
@@ -704,8 +701,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             /* ignore */
         }
     } finally {
-        streamFinished = true;
-        res.end();
+        stream.finish();
     }
   } finally {
     if (memoryTurn && !memoryTurnScheduled) {

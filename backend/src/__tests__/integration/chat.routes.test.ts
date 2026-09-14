@@ -9,6 +9,22 @@ vi.hoisted(() => {
     process.env.RATE_LIMIT_CHAT_MAX = "1000";
 });
 
+// Integration tests must never leave the process: anything a route needs from
+// the network has to arrive through a mock. A real fetch is what made this
+// suite flaky — chat-title generation called the live provider with the test's
+// fake key, so the test's fate rode on that socket (fast 401 = pass, slow
+// response or SDK retry loop = 20s timeout). Reject instantly and loudly
+// instead, so the next unmocked path fails in milliseconds with a URL in the
+// message rather than an unexplained timeout.
+vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: unknown) => {
+        throw new Error(
+            `integration test attempted a real network call: ${String(input)}`,
+        );
+    }),
+);
+
 // Hoisted mock fn so the vi.mock factory below (which is itself hoisted above
 // the imports) can reference it. Lets each test drive the stream outcome.
 const {

@@ -1,6 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
+// Integration tests must never leave the process: anything a route needs
+// from the network has to arrive through a mock. A real fetch is what made
+// this suite flaky — chat-title generation called the live provider with the
+// test's fake key, so the test's fate rode on that socket (fast 401 = pass,
+// slow response or SDK retry loop = 20s timeout). Reject instantly and
+// loudly instead, so the next unmocked path fails in milliseconds with a
+// URL in the message rather than an unexplained timeout.
+vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: unknown) => {
+        throw new Error(
+            `integration test attempted a real network call: ${String(input)}`,
+        );
+    }),
+);
+
 const {
     runLLMStream,
     checkProjectAccess,
@@ -154,6 +170,18 @@ vi.mock("../../lib/access", () => ({
   projectHasSharedAudience: vi.fn(async () => false),
   resolveContentOrgId: vi.fn(async () => ({ ok: true, orgId: null })),
 }));
+
+// generate-title calls completeText; stub it so the success-path tests don't
+// reach a real LLM. Everything else in lib/llm stays real. This mirrors the
+// stub chat.routes.test.ts already carries — projectChat's title path is the
+// same one and was still live.
+vi.mock("../../lib/llm", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../lib/llm")>();
+    return {
+        ...actual,
+        completeText: vi.fn(async () => "Generated Title"),
+    };
+});
 
 import { app } from "../../app";
 import { spotlight } from "../../lib/chat";

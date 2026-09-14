@@ -25,6 +25,9 @@ function fakeSseResponse() {
         on: vi.fn((event: string, cb: () => void) => {
             (listeners[event] ??= []).push(cb);
         }),
+        emit: (event: string) => {
+            for (const cb of listeners[event] ?? []) cb();
+        },
     };
     return res;
 }
@@ -41,6 +44,28 @@ describe("openAssistantSse", () => {
         // handed to an ended stream.
         expect(sse.write("data: too late\n\n")).toBe(false);
         expect(res.write).toHaveBeenCalledTimes(1);
+    });
+
+    it("aborts only when the client closes before finish()", () => {
+        // This asymmetry is why routes cannot use the abort signal as their
+        // late-write guard, and why the write() guard above has to exist: a
+        // client that disconnects mid-stream aborts, but a route that ends its
+        // own stream never does. A title promise resolving after a short
+        // stream therefore sees an un-aborted signal and would write into an
+        // ended response.
+        const closedEarly = fakeSseResponse();
+        const earlyStream = openAssistantSse(closedEarly as unknown as Response);
+        closedEarly.emit("close");
+        expect(earlyStream.signal.aborted).toBe(true);
+
+        const finishedNormally = fakeSseResponse();
+        const lateStream = openAssistantSse(
+            finishedNormally as unknown as Response,
+        );
+        lateStream.finish();
+        finishedNormally.emit("close");
+        expect(lateStream.signal.aborted).toBe(false);
+        expect(lateStream.write("data: too late\n\n")).toBe(false);
     });
 
     it("makes finish() idempotent so a double-end cannot throw either", () => {
