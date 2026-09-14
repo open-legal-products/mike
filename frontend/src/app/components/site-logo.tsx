@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { SambanovaLogo } from "@/shared/ui/SambanovaLogo";
 
 interface SiteLogoProps {
     size?: "sm" | "md" | "lg" | "xl";
@@ -43,7 +43,7 @@ export function SiteLogo({
             <span
                 className={`inline-flex shrink-0 items-center leading-none ${iconClassName}`}
             >
-                <MikeIcon size={iconSizes[size]} />
+                <SambanovaLogo size={iconSizes[size]} />
             </span>
             <span>SambaNova</span>
         </h1>

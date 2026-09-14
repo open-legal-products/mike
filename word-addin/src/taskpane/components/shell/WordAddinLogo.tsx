@@ -1,5 +1,5 @@
 import React from "react";
-import { MikeIcon } from "../../../shared/chat/mike-icon";
+import { SambanovaLogo } from "../../../shared/chat/sambanova-logo";
 import { cn } from "../../../shared/lib/utils";
 
 interface WordAddinLogoProps {
@@ -15,7 +15,7 @@ export function WordAddinLogo({
   const large = size === "lg";
   return (
     <div className={cn("flex items-center gap-1.5", className)}>
-      <MikeIcon size={large ? 30 : 22} />
+      <SambanovaLogo size={large ? 30 : 22} />
       <span
         className={cn(
           "font-serif font-light text-foreground",
