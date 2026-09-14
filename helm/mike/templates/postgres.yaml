@@ -45,12 +45,20 @@ spec:
               set -eu
               chown -R postgres:postgres /var/lib/postgresql/data
               chmod 700 /var/lib/postgresql/data
-              # An earlier revision set PGDATA to a subdirectory the image then
-              # ignored, leaving an empty `pgdata` behind. Anything in the data
-              # directory makes the entrypoint skip initdb, so postgres would
-              # start against a database that was never created. rmdir removes
-              # it only if it is empty, so a real database is never touched.
-              rmdir /var/lib/postgresql/data/pgdata 2>/dev/null || true
+
+              # A data directory with contents but no PG_VERSION is not a
+              # database: initdb refuses to run into a non-empty directory, and
+              # the server then dies on the missing file. Say so here, because
+              # postgres reports it as "is not a valid data directory" several
+              # restarts later.
+              if [ ! -f /var/lib/postgresql/data/PG_VERSION ] \
+                 && [ -n "$(ls -A /var/lib/postgresql/data)" ]; then
+                echo "ERROR: /var/lib/postgresql/data has contents but no PG_VERSION," >&2
+                echo "so no database was ever initialised here. Contents:" >&2
+                ls -A /var/lib/postgresql/data >&2
+                echo "Delete the claim (kubectl delete pvc data-<release>-db-0) and redeploy." >&2
+                exit 1
+              fi
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
