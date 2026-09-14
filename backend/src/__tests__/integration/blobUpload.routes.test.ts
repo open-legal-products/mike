@@ -1,4 +1,5 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
@@ -31,9 +32,16 @@ async function loadApp() {
   const { blobUploadHandler } = await import("../../modules/downloads/downloads.routes");
 
   const app = express();
-  // Mirrors app.ts: the PUT is registered ahead of the JSON body parser so the
-  // body reaches the handler unconsumed and is streamed to disk.
-  app.put("/download/signed/:token", blobUploadHandler);
+  // Mirrors app.ts on both counts: the PUT sits in its own rate-limit lane, and
+  // it is registered ahead of the JSON body parser so the body reaches the
+  // handler unconsumed and is streamed to disk. The limiter's ceiling is high
+  // enough never to fire here; it is present so the test exercises the same
+  // middleware stack the real route has.
+  app.put(
+    "/download/signed/:token",
+    rateLimit({ windowMs: 60_000, max: 10_000, validate: false }),
+    blobUploadHandler,
+  );
   app.use(express.json());
   return { app, storage, tokens };
 }
