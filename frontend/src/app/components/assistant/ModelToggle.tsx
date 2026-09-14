@@ -16,6 +16,11 @@ export type ModelOption = ModelToggleOption;
 export type { ReasoningLevel };
 
 export const MODELS: ModelOption[] = [
+  { id: "sambanova/MiniMax-M3", label: "MiniMax M3", group: "SambaNova" },
+  { id: "sambanova/MiniMax-M2.7", label: "MiniMax M2.7", group: "SambaNova" },
+  { id: "sambanova/gpt-oss-120b", label: "GPT-OSS 120B", group: "SambaNova" },
+  { id: "sambanova/DeepSeek-V3.1", label: "DeepSeek V3.1", group: "SambaNova" },
+  { id: "sambanova/DeepSeek-V3.2", label: "DeepSeek V3.2", group: "SambaNova" },
   { id: "claude-fable-5", label: "Claude Fable 5", group: "Anthropic" },
   { id: "claude-opus-5", label: "Claude Opus 5", group: "Anthropic" },
   { id: "claude-sonnet-5", label: "Claude Sonnet 5", group: "Anthropic" },
@@ -37,6 +42,16 @@ export const MODELS: ModelOption[] = [
 
 export const SETTINGS_MODELS: ModelOption[] = [
   ...MODELS,
+  {
+    id: "sambanova/gemma-4-31B-it",
+    label: "Gemma 4 31B",
+    group: "SambaNova",
+  },
+  {
+    id: "sambanova/Meta-Llama-3.3-70B-Instruct",
+    label: "Llama 3.3 70B",
+    group: "SambaNova",
+  },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", group: "Anthropic" },
   {
     id: "gemini-3.5-flash-lite",

@@ -11,6 +11,7 @@ export type ModelProvider =
     | "openrouter"
     | "vercel"
     | "opencode-go"
+    | "sambanova"
     | "ollama";
 
 export function getModelProvider(modelId: string): ModelProvider | null {
@@ -18,6 +19,7 @@ export function getModelProvider(modelId: string): ModelProvider | null {
     if (modelId.startsWith("openrouter/")) return "openrouter";
     if (modelId.startsWith("vercel/")) return "vercel";
     if (modelId.startsWith("opencode-go/")) return "opencode-go";
+    if (modelId.startsWith("sambanova/")) return "sambanova";
     const model = SETTINGS_MODELS.find((m) => m.id === modelId);
     if (!model) return null;
     return modelGroupToProvider(model.group);
@@ -46,6 +48,7 @@ export function providerLabel(provider: ModelProvider): string {
     if (provider === "openrouter") return "OpenRouter";
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
+    if (provider === "sambanova") return "SambaNova";
     if (provider === "ollama") return "Local (Ollama)";
     return "Google (Gemini)";
 }
@@ -58,6 +61,7 @@ export function modelGroupToProvider(
     if (group === "OpenRouter") return "openrouter";
     if (group === "Vercel AI Gateway") return "vercel";
     if (group === "OpenCode Go") return "opencode-go";
+    if (group === "SambaNova") return "sambanova";
     if (group === "Local") return "ollama";
     return "gemini";
 }
