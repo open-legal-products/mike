@@ -124,7 +124,7 @@ type OpenSourceSubmissionSummary = Pick<
 };
 
 const DEFAULT_WORKFLOW_CONTRIBUTOR: WorkflowContributor = {
-  name: "Mike",
+  name: "SambaNova",
   organisation: null,
   role: null,
   linkedin: null,

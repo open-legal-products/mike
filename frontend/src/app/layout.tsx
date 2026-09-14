@@ -16,38 +16,38 @@ const ebGaramond = EB_Garamond({
 
 export const metadata: Metadata = {
     metadataBase: new URL("https://app.mikeoss.com"),
-    title: "Mike - AI Legal Platform",
+    title: "SambaNova Legal",
     description:
-        "AI-powered legal document analysis and contract review platform.",
+        "AI-powered legal document analysis and contract review platform, powered by SambaNova.",
     icons: {
         icon: [
-            { url: "/icon.svg", type: "image/svg+xml" },
+            { url: "/sambanova-icon.svg", type: "image/svg+xml" },
             { url: "/favicon.ico" },
         ],
-        apple: "/apple-touch-icon.png",
+        apple: "/sambanova-icon.svg",
     },
     openGraph: {
         type: "website",
         url: "https://app.mikeoss.com",
-        siteName: "Mike",
-        title: "Mike - AI Legal Platform",
+        siteName: "SambaNova Legal",
+        title: "SambaNova Legal",
         description:
-            "AI-powered legal document analysis and contract review platform.",
+            "AI-powered legal document analysis and contract review platform, powered by SambaNova.",
         images: [
             {
-                url: "/link-image.jpg",
+                url: "/sambanova-logo.svg",
                 width: 1200,
                 height: 651,
-                alt: "Mike",
+                alt: "SambaNova Legal",
             },
         ],
     },
     twitter: {
         card: "summary_large_image",
-        title: "Mike - AI Legal Platform",
+        title: "SambaNova Legal",
         description:
-            "AI-powered legal document analysis and contract review platform.",
-        images: ["/link-image.jpg"],
+            "AI-powered legal document analysis and contract review platform, powered by SambaNova.",
+        images: ["/sambanova-logo.svg"],
     },
 };
 

@@ -108,7 +108,7 @@ describe("applyTrackedEdits", () => {
         const xml = await readDocumentXml(result.bytes);
         expect(xml).toContain("<w:del");
         expect(xml).toContain("<w:ins");
-        expect(xml).toContain(`w:author="Mike"`);
+        expect(xml).toContain(`w:author="SambaNova"`);
         expect(xml).toContain("<w:delText");
 
         // Accepted view of the output shows the replacement applied.

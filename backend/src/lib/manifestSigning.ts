@@ -9,7 +9,7 @@ import crypto from "crypto";
  * holding the deployment's public key can tell an untouched manifest from an
  * edited one.
  *
- * Optional by design. Mike self-hosts, and a deployment that has not set up a
+ * Optional by design. SambaNova self-hosts, and a deployment that has not set up a
  * key should still be able to export — it just gets `signature: null` and the
  * weaker guarantee. Set MANIFEST_SIGNING_KEY to turn signing on; a malformed
  * key throws rather than silently downgrading to unsigned, because a manifest

@@ -7,7 +7,7 @@ interface WordAddinLogoProps {
   className?: string;
 }
 
-/** Mike logo lockup shared by branded Word add-in surfaces. */
+/** SambaNova logo lockup shared by branded Word add-in surfaces. */
 export function WordAddinLogo({
   size = "md",
   className,
@@ -22,7 +22,7 @@ export function WordAddinLogo({
           large ? "text-4xl" : "text-2xl"
         )}
       >
-        Mike
+        SambaNova
       </span>
     </div>
   );

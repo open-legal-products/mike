@@ -124,7 +124,7 @@ export function normalizeReasoningLevelForModel(
 // OpenAI Responses, Anthropic Messages, and OpenAI Chat Completions. The live
 // /models payload does not identify a model's protocol, so keep these lists
 // fail-closed and in sync with https://opencode.ai/docs/go/#endpoints. A new
-// catalog entry is not offered until Mike can actually speak its protocol.
+// catalog entry is not offered until SambaNova can actually speak its protocol.
 export const OPENCODE_GO_CHAT_COMPLETIONS_MODEL_IDS: ReadonlySet<string> =
     new Set([
         "glm-5",

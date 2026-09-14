@@ -431,7 +431,7 @@ export async function setUserMcpToolEnabled(
             (data as { requires_confirmation?: boolean }).requires_confirmation
         ) {
             throw new Error(
-                "This MCP tool needs human confirmation before Mike can expose it to chat.",
+                "This MCP tool needs human confirmation before SambaNova can expose it to chat.",
             );
         }
     }

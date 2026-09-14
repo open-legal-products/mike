@@ -44,7 +44,7 @@ export default function SupportPage() {
         {
             value: "question",
             label: "Question",
-            description: "Ask a question about using Mike",
+            description: "Ask a question about using SambaNova",
         },
         {
             value: "other",

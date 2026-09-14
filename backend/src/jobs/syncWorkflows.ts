@@ -10,6 +10,6 @@ async function main() {
 }
 
 void main().catch((error) => {
-  console.error("Mike workflow sync failed", error);
+  console.error("SambaNova workflow sync failed", error);
   process.exit(1);
 });

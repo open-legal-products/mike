@@ -45,7 +45,7 @@ export default function AppearancePage() {
           <div className="min-w-0 space-y-1">
             <SettingsLabel>Dark mode</SettingsLabel>
             <SettingsDescription>
-              Use a darker color palette throughout Mike.
+              Use a darker color palette throughout SambaNova.
             </SettingsDescription>
             {darkModeError && (
               <p role="alert" className="text-xs text-red-600">

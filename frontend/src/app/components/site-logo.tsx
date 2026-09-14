@@ -45,7 +45,7 @@ export function SiteLogo({
             >
                 <MikeIcon size={iconSizes[size]} />
             </span>
-            <span>Mike</span>
+            <span>SambaNova</span>
         </h1>
     );
 

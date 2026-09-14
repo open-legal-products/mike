@@ -1,5 +1,5 @@
 /**
- * Cloudflare R2 storage utilities for Mike document management.
+ * Cloudflare R2 storage utilities for SambaNova document management.
  * R2 is S3-compatible — uses @aws-sdk/client-s3.
  *
  * Required env vars:

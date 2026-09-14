@@ -12,7 +12,7 @@ vi.mock("@/app/lib/authApi", () => ({
 }));
 
 vi.mock("@/app/components/site-logo", () => ({
-    SiteLogo: () => <div>Mike</div>,
+    SiteLogo: () => <div>SambaNova</div>,
 }));
 
 describe("ForgotPasswordPage", () => {
