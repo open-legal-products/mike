@@ -1,6 +1,11 @@
 # The aisk-dev-1 cluster, alongside sambachat in the default namespace.
-publicUrl: https://aiskmike-dev.cloud.snova.ai
+#
+# aiskshowcase5 is an existing spare showcase record; sambachat's own
+# components hold showcase2, 3 and 4. Both clusters sit behind one platform
+# ingress that routes by Host, so a hostname can only be claimed once across
+# the two.
+publicUrl: https://aiskshowcase5.cloud.snova.ai
 
 ingress:
   enabled: true
-  host: aiskmike-dev.cloud.snova.ai
+  host: aiskshowcase5.cloud.snova.ai
