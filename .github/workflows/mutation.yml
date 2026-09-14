@@ -1,15 +1,30 @@
 # Mutation testing: prove the security-critical unit tests assert behavior.
 #
-# Stryker mutates src/lib/access.ts, downloadTokens.ts, and chat/citations.ts
-# (scope defined in backend/stryker.config.json) and
-# re-runs the vitest suite per mutant. A surviving mutant = a behavior
-# change (e.g. an access check inverted) that no test caught.
+# Stryker mutates the security-critical modules listed in
+# backend/stryker.config.json (access control, download-token signing,
+# citation extraction + verification, the SSRF IP guard) and re-runs the
+# vitest suite per mutant. A surviving mutant = a behavior change (e.g. an
+# access check inverted, a blocked IP range allowed) that no test caught.
 #
-# ON-DEMAND, NOT a merge gate: it takes ~10 minutes of CI per run, which is
-# too slow to put in front of every PR for a solo maintainer. Run it
-# manually from the Actions tab, or let the monthly cron catch drift. The
-# `thresholds.break` in stryker.config.json fails the run if the mutation
-# score regresses below the documented floor. See docs/test-depth.md.
+# ON-DEMAND + monthly cron, NOT a PR gate. It was going to become a
+# path-filtered PR gate in this PR (the step docs/test-depth.md named as the
+# natural next stage, and a measured run takes ~2 minutes, not the ~10 the
+# original header guessed). That promotion is held back because the harness
+# cannot currently produce a real score: @stryker-mutator/vitest-runner 10
+# does not work with vitest 5, which landed in #455 on 2026-09-11. The
+# runner starts the mutant runs but reads back zero test results, so every
+# mutant is scored "survived" and the total is 0.00 — a red run that says
+# "your tests collapsed" when nothing about the tests changed. Gating PRs on
+# that would be worse than not gating them at all.
+#
+# The last honest score is the 2026-09-03 cron run (green, on vitest 4).
+# docs/test-depth.md records the evidence and the revival condition; when
+# @stryker-mutator/* ships vitest 5 support, bump it, confirm a real score
+# locally, and add the `pull_request:` trigger with a path filter matching
+# the `mutate` array in backend/stryker.config.json.
+#
+# `thresholds.break` in stryker.config.json fails any run whose score
+# regresses below the documented floor. See docs/test-depth.md.
 name: Mutation testing
 
 on:

@@ -1,14 +1,23 @@
 {
   "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
-  "_comment": "Mutation testing for the SECURITY-CRITICAL libs only (access control, download-token signing, citation extraction). These are the modules where a test suite that merely *executes* lines without *asserting* behavior is dangerous, so we pay the mutation-testing cost here and nowhere else. Deliberately NOT a merge gate — run on demand via `npm run test:mutation` or the monthly mutation.yml workflow. Floors only go up: when tests kill more mutants, raise thresholds.break in the same PR. Widen mutate only alongside tests that keep the score above the floor.",
+  "_comment": "Mutation testing for the SECURITY-CRITICAL libs only (access control, download-token signing, citation extraction + verification, the SSRF private-IP guard). These are the modules where a test suite that merely *executes* lines without *asserting* behavior is dangerous, so we pay the mutation-testing cost here and nowhere else. Run on demand via `npm run test:mutation`, and monthly via mutation.yml's cron.",
+  "_comment_blocked": "BLOCKED since 2026-09-11: @stryker-mutator/vitest-runner 10 cannot drive vitest 5 (bumped in #455). The mutant runs start but no test results are read back, so every mutant scores 'survived' and the total is 0.00 regardless of the tests. Nothing in this file can work around it and stryker 10.0.0 is the latest release. Last honest score: 70.01 with all five files on 2026-08-27 (vitest 4), confirmed green by the 2026-09-03 cron run. Revival: bump @stryker-mutator/* once vitest 5 support ships, re-measure, raise thresholds.break to the new floor, and re-add the pull_request trigger to mutation.yml. See docs/test-depth.md.",
+  "_comment_tsconfigFile": "Deliberately points at a file that does not exist. Stryker's sandbox rewrites tsconfig 'extends'/'references' paths using ts.parseConfigFileTextToJson, an API TypeScript 7 removed — with a real tsconfig here, stryker crashes before it mutates anything. backend/tsconfig.json has no 'extends' and no 'references', and its include/exclude globs are all sandbox-relative, so the rewrite it skips is a no-op for this project. Delete this key if stryker ever stops touching tsconfig.",
+  "_comment_ignoreStatic": "Module-load-time mutants (e.g. the BlockList subnet tables in privateIp.ts) cannot be toggled by Stryker's mutation switching and would survive spuriously; runtime behavior of those tables is asserted by privateIp.test.ts instead. Floors only go up: when tests kill more mutants, raise thresholds.break in the same PR. Widen mutate only alongside tests that keep the score above the floor.",
   "testRunner": "vitest",
   "mutate": [
     "src/lib/access.ts",
     "src/lib/downloadTokens.ts",
-    "src/lib/chat/citations.ts"
+    "src/lib/chat/citations.ts",
+    "src/lib/privateIp.ts",
+    "src/lib/chat/verifyCitations.ts"
   ],
   "coverageAnalysis": "perTest",
-  "reporters": ["html", "clear-text", "progress"],
+  "reporters": [
+    "html",
+    "clear-text",
+    "progress"
+  ],
   "htmlReporter": {
     "fileName": "reports/mutation/mutation.html"
   },
@@ -17,5 +26,7 @@
     "low": 70,
     "break": 69
   },
-  "tempDirName": ".stryker-tmp"
+  "tempDirName": ".stryker-tmp",
+  "ignoreStatic": true,
+  "tsconfigFile": "tsconfig.stryker-disabled.json"
 }

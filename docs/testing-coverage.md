@@ -113,8 +113,14 @@ better exercised by the e2e suite.
 ## Ratchet policy
 
 `backend/vitest.config.mts` enforces global coverage **floors** (currently
-statements 39 / branches 35 / functions 42 / lines 40). They are a
-no-regression ratchet, not a target:
+statements 64 / branches 55 / functions 69 / lines 66, re-measured
+2026-09-14). They are a no-regression ratchet, not a target.
+
+CI runs `npm run test:coverage` in the backend job of `ci.yml`, so a drop
+below a floor fails the build. That was not always true: from 2026-07-22 to
+2026-09-14 the job ran plain `npm test`, so the floors existed but nothing
+enforced them, and coverage drifted up unnoticed — which is why the floors
+jumped when the gate was finally wired up. Rules:
 
 - **Floors only go up.** Never lower them to get a PR green — that means your
   change removed tested behavior or added a large untested lib; add tests

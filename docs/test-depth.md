@@ -1,7 +1,9 @@
 # Test Depth: Mutation Testing and the SSE Load Harness
 
-Two on-demand tools that go a level deeper than the regular vitest suite.
-**Neither gates merges** — see "Why not merge gates?" at the bottom.
+Two tools that go a level deeper than the regular vitest suite. Neither
+gates merges today: the mutation harness is blocked on upstream tool
+support (see below), and the load harness is local/on-demand — see "What
+gates merges?" at the bottom.
 
 ## Mutation testing (backend security libs)
 
@@ -20,6 +22,10 @@ dangerous (scope in `backend/stryker.config.json`):
 - `src/lib/downloadTokens.ts` — HMAC-signed download tokens
 - `src/lib/chat/citations.ts` — citation extraction (what the model may
   cite from which document)
+- `src/lib/chat/verifyCitations.ts` — quote-against-source verification
+  (the "verified" badge)
+- `src/lib/privateIp.ts` — the SSRF private/reserved-IP guard for
+  server-side connector fetches
 
 ### Running it
 
@@ -29,8 +35,46 @@ npm ci
 npm run test:mutation
 ```
 
-Takes about 3 minutes locally. Or run the **Mutation testing** workflow
-from the Actions tab (it also runs itself monthly as a drift check).
+Takes about a minute locally (~2 in CI). The **Mutation testing**
+workflow can be dispatched from the Actions tab and runs itself monthly
+as a drift check. It is **not** a PR gate — see "Blocked on vitest 5"
+below for why the promotion to one was held back.
+
+### Blocked on vitest 5 (since 2026-09-11)
+
+`npm run test:mutation` cannot currently produce a real score.
+`@stryker-mutator/vitest-runner` 10.0.0 — the latest release — does not
+work with vitest 5, which the repo moved to in #455 on 2026-09-11. Two
+separate breakages, both reproduced locally on 2026-09-14:
+
+1. **Hard crash.** Stryker's sandbox rewrites `tsconfig.json` with
+   `ts.parseConfigFileTextToJson`, an API TypeScript 7 removed, so the run
+   dies with `TypeError: ts.parseConfigFileTextToJson is not a function`
+   before mutating anything. `stryker.config.json` works around this by
+   pointing `tsconfigFile` at a name that does not exist — safe here
+   because `backend/tsconfig.json` has no `extends` and no `references`,
+   so the rewrite it skips is a no-op for this project.
+2. **Silent zero, no workaround.** Past the crash, the initial dry run
+   succeeds and per-test mutant coverage is collected, but the per-mutant
+   runs read back no test results at all (`Ran 0.00 tests per mutant on
+   average`). Every mutant is therefore scored "survived" and the total
+   is **0.00** — a red run that reads as "the tests collapsed" when
+   nothing about the tests changed. `coverageAnalysis: "all"`,
+   `vitest.related: false` and forced static mutant activation were all
+   tried; none of them changes the result.
+
+So the harness fails loudly rather than lying green — but its failure
+message is misleading, and a 0.00 PR gate would block every
+security-lib PR for a reason that has nothing to do with the PR. That is
+why `mutation.yml` kept its dispatch + cron triggers instead of gaining
+the `pull_request:` trigger it was about to get.
+
+**Revival:** when `@stryker-mutator/*` ships vitest 5 support, bump it,
+run `npm run test:mutation`, confirm a real score, raise
+`thresholds.break` to the new measured floor, and add back the
+`pull_request:` trigger with a `paths:` filter matching the `mutate`
+array in `backend/stryker.config.json`. The last honest measurement is
+below.
 
 ### Reading the report
 
@@ -44,13 +88,17 @@ Open `backend/reports/mutation/mutation.html` (in CI: download the
 - **No coverage** — no test even runs that code. Coverage gap, not an
   assertion gap.
 
-Scores measured when this harness landed varied by file (citations ~78–80,
-downloadTokens 65.4, access 63.6). The access figure is mostly
-no-coverage mutants in
+Scores last measured 2026-08-27 with all five files in scope, on vitest 4
+(green cron run 2026-09-03; see "Blocked on vitest 5" above for why there
+is no newer number): total 70.0
+(citations 79.2, verifyCitations 63.5, downloadTokens 65.4, access 63.8,
+privateIp 65.9). The access figure is mostly no-coverage mutants in
 `listAccessibleProjectIds`/`filterAccessibleDocumentIds` — its score on
-*covered* code is 82.4.
-`thresholds.break` is set to **69**, ~5 points under the lowest measured
-score, so a run fails only on a genuine regression.
+*covered* code is 82.2. `ignoreStatic` is on: module-load-time mutants
+(the BlockList subnet tables) can't be toggled by mutation switching and
+would survive spuriously; their runtime behavior is asserted directly in
+`privateIp.test.ts`. `thresholds.break` is **69**, just under the
+measured total, so a run fails only on a genuine regression.
 When you kill survivors, raise `break` in the same PR — floors only go up.
 
 ## SSE load harness (k6)
@@ -102,26 +150,26 @@ missed an SLO we never agreed on".
 
 Tune with `VUS`, `RAMP_DURATION`, `HOLD_DURATION`, `PROMPT`.
 
-### Running from GitHub Actions
+There is deliberately no GitHub Actions workflow for the load harness.
+One existed (`.github/workflows/loadtest.yml`, 2026-08-12 to 2026-08-27)
+but was removed without ever having run: it required an externally
+deployed non-production stack and a `LOADTEST_AUTH_TOKEN` repository
+secret, neither of which ever existed, so it sat in the Actions tab as a
+gate that could not execute. The k6 scenario above is the actual tool;
+if the project ever gains a permanent staging stack, a smoke-scale
+post-deploy run of it is the natural workflow to (re)add — resurrect the
+removed workflow from git history as a starting point.
 
-The **SSE load test** workflow (`.github/workflows/loadtest.yml`) is
-manual-only and boots nothing itself: give it the base URL of an already
-running non-production stack you deployed — anything serving the backend
-API (`POST /chat` behind Supabase bearer auth) with real provider keys —
-and store a test user's token in the `LOADTEST_AUTH_TOKEN` repository
-secret. **Never point it at production.**
+## What gates merges?
 
-## Why not merge gates?
-
-- **Cost/latency.** Mutation testing multiplies suite runtime by the
-  mutant count; the load test needs a live stack with real provider keys.
-  Both are too slow/stateful to sit in front of every PR for a solo
-  maintainer, and a flaky required check is worse than none.
-- **They detect drift, not correctness of a single diff.** The monthly
-  mutation cron catches "tests went hollow" over time; the load harness
-  is for before/after checks around streaming changes and incident
-  reproduction.
-
-If the project grows contributors and a permanent staging stack, the
-natural next step is: mutation testing on changed security-lib files in
-PRs, and a small smoke-scale k6 run post-deploy. Until then: on demand.
+- **Mutation testing does not gate anything today.** It is blocked on
+  vitest 5 support in `@stryker-mutator/vitest-runner` (above). The
+  monthly cron still runs, so the block stays visible in the Actions tab
+  instead of being forgotten. When the block lifts, the intended shape is
+  a path-filtered PR gate on the mutated security libs, their tests and
+  the harness itself: a measured run costs ~2 minutes, so gating those
+  PRs is cheap and unrelated PRs never pay it.
+- **The load harness never gates.** It needs a live stack and real
+  provider keys, and it detects capacity/stability drift, not the
+  correctness of a single diff — it is for before/after checks around
+  streaming changes and incident reproduction.
