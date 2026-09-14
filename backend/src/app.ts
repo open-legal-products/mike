@@ -17,7 +17,7 @@ import { quickActionsRouter } from "./routes/quickActions";
 import { workflowAddonsRouter } from "./routes/workflowAddons";
 import { userRouter } from "./routes/user";
 import { modelsRouter } from "./routes/models";
-import { downloadsRouter } from "./routes/downloads";
+import { blobUploadHandler, downloadsRouter } from "./routes/downloads";
 import { sourceDocumentsRouter } from "./routes/sourceDocuments";
 import { auditRouter } from "./routes/audit";
 import { authRouter } from "./routes/auth";
@@ -77,6 +77,10 @@ function makeLimiter(options: {
 // tool-deadline stall per call inside a held SSE stream.
 const TOOL_RESULT_PATH = "/word-chat/tool-result";
 
+// Path prefix of the filesystem driver's signed blob PUT, used both to give it
+// its own rate-limit lane and to keep it out of the shared one.
+const BLOB_UPLOAD_PREFIX = "/download/signed/";
+
 const generalLimiter = makeLimiter({
   windowMs: minutes(envInt("RATE_LIMIT_GENERAL_WINDOW_MINUTES", 15)),
   max: envInt("RATE_LIMIT_GENERAL_MAX", 300),
@@ -85,7 +89,21 @@ const generalLimiter = makeLimiter({
   skip: (req) =>
     req.path === TOOL_RESULT_PATH ||
     req.path === "/upload-sessions" ||
-    req.path.startsWith("/upload-sessions/"),
+    req.path.startsWith("/upload-sessions/") ||
+    (req.method === "PUT" && req.path.startsWith(BLOB_UPLOAD_PREFIX)),
+});
+
+// The filesystem storage driver's signed PUT (see routes/downloads.ts) is the
+// local-mode stand-in for a direct browser upload to object storage — which,
+// on every other deployment, never reaches this process at all. Leaving it on
+// the shared 300-request budget would mean one 50-file drag-and-drop spending a
+// sixth of a user's whole quota, so it gets its own generous lane instead, the
+// same way the upload-session endpoints do. Still bounded: a stolen or replayed
+// token cannot be used to hammer the disk indefinitely.
+const blobUploadLimiter = makeLimiter({
+  windowMs: minutes(envInt("RATE_LIMIT_BLOB_UPLOAD_WINDOW_MINUTES", 15)),
+  max: envInt("RATE_LIMIT_BLOB_UPLOAD_MAX", 1000),
+  message: "Too many uploads. Please try again later.",
 });
 
 const toolResultLimiter = makeLimiter({
@@ -278,6 +296,11 @@ app.delete("/user/account", dataDeleteLimiter);
 app.delete("/user/chats", dataDeleteLimiter);
 app.delete("/user/projects", dataDeleteLimiter);
 app.delete("/user/tabular-reviews", dataDeleteLimiter);
+
+// Registered ahead of the global JSON parser: the filesystem storage driver's
+// signed PUT streams its body straight to disk (see routes/downloads.ts), so
+// no body parser may consume it first — a .json upload otherwise would be.
+app.put("/download/signed/:token", blobUploadLimiter, blobUploadHandler);
 
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 

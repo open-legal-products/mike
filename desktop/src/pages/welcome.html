@@ -1,0 +1,144 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mike</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1c1c1e;
+        --muted: #6e6e73;
+        --card: #ffffff;
+        --bg: #f2f2f4;
+        --accent: #1a56db;
+        --border: rgba(0, 0, 0, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #f2f2f4;
+          --muted: #98989e;
+          --card: #1f1f23;
+          --bg: #141417;
+          --accent: #6ea8ff;
+          --border: rgba(255, 255, 255, 0.14);
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          sans-serif;
+        -webkit-app-region: drag;
+        user-select: none;
+      }
+      main {
+        -webkit-app-region: no-drag;
+        width: min(680px, calc(100vw - 48px));
+        text-align: center;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      .sub {
+        color: var(--muted);
+        margin: 0 0 28px;
+      }
+      .choices {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      @media (max-width: 560px) {
+        .choices {
+          grid-template-columns: 1fr;
+        }
+      }
+      button.card {
+        font: inherit;
+        text-align: left;
+        background: var(--card);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 22px;
+        cursor: pointer;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.10);
+        transition: border-color 0.15s ease, transform 0.1s ease;
+      }
+      button.card:hover {
+        border-color: var(--accent);
+        transform: translateY(-1px);
+      }
+      .card h2 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .foot {
+        margin-top: 22px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .foot a {
+        color: var(--accent);
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Welcome to Mike</h1>
+      <p class="sub">Where should Mike run? You can change this any time (⌘⇧,).</p>
+      <div class="choices">
+        <button class="card" id="cloud">
+          <h2>Use Mike Cloud</h2>
+          <p>
+            Sign in at app.mikeoss.com. Fastest way to start — your work syncs
+            wherever you sign in.
+          </p>
+        </button>
+        <button class="card" id="local">
+          <h2>Run everything on this Mac</h2>
+          <p>
+            Private, offline-capable. Documents and data never leave this
+            computer. First start takes about a minute.
+          </p>
+        </button>
+      </div>
+      <p class="foot">
+        Self-hosting Mike? <a id="server">Connect to your own server…</a>
+      </p>
+    </main>
+    <script>
+      document.getElementById("cloud").addEventListener("click", () => {
+        window.mikeDesktop.chooseCloud();
+      });
+      document.getElementById("local").addEventListener("click", () => {
+        window.mikeDesktop.startLocal();
+      });
+      document.getElementById("server").addEventListener("click", () => {
+        window.mikeDesktop.openConnect();
+      });
+    </script>
+  </body>
+</html>

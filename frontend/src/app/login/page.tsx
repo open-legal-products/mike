@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { login } from "@/app/lib/authApi";
+import { login, signup } from "@/app/lib/authApi";
 import { Input } from "@/app/components/ui/input";
 import { PillButton } from "@/app/components/ui/pill-button";
 import Link from "next/link";
@@ -24,6 +24,20 @@ const LOGIN_ERROR_MESSAGES = {
     email_not_confirmed: "Confirm your email address before logging in.",
 } as const;
 
+// The Mac desktop shell's preload bridge. Only its local ("everything on
+// this Mac") mode answers guestCredentials with a value — in a browser the
+// bridge doesn't exist, and against a hosted server it returns null — so
+// gating the guest button on the answer keeps this page byte-identical in
+// behavior everywhere else.
+type GuestCredentials = { email: string; password: string };
+declare global {
+    interface Window {
+        mikeDesktop?: {
+            guestCredentials?: () => Promise<GuestCredentials | null>;
+        };
+    }
+}
+
 export default function LoginPage() {
     const router = useRouter();
     const {
@@ -37,12 +51,28 @@ export default function LoginPage() {
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [guest, setGuest] = useState<GuestCredentials | null>(null);
 
     useEffect(() => {
         if (!authLoading && isAuthenticated) {
             router.replace("/onboarding/profile");
         }
     }, [authLoading, isAuthenticated, router]);
+
+    useEffect(() => {
+        let cancelled = false;
+        window.mikeDesktop
+            ?.guestCredentials?.()
+            .then((creds) => {
+                if (!cancelled && creds?.email && creds?.password) {
+                    setGuest(creds);
+                }
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -59,6 +89,51 @@ export default function LoginPage() {
                     error,
                     LOGIN_ERROR_MESSAGES,
                     "Unable to log in right now. Please try again.",
+                ),
+            );
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleGuestLogin = async () => {
+        if (!guest) return;
+        setLoading(true);
+        setError(null);
+
+        try {
+            try {
+                await login(guest.email, guest.password);
+            } catch {
+                // First use: the guest account doesn't exist yet. Local mode
+                // autoconfirms signups, so /signup returns a session directly
+                // and requiresEmailConfirmation is false; if a deployment ever
+                // did require confirmation there is no inbox to confirm from,
+                // so surface that as an error rather than a dead end.
+                const result = await signup(
+                    guest.email,
+                    guest.password,
+                    "/onboarding/profile",
+                );
+                if (result.requiresEmailConfirmation) {
+                    throw new Error(
+                        "Guest sign-in needs an auto-confirming local stack.",
+                    );
+                }
+            }
+            // Session lives in the httpOnly cookie the auth routes set, so the
+            // context has to re-read it before any gated route will let us in.
+            await refreshSession();
+            // Same destination as a password login: OnboardingGate sends a
+            // brand-new guest through onboarding and a returning one straight
+            // on to /assistant.
+            router.push("/onboarding/profile");
+        } catch (error: unknown) {
+            setError(
+                knownErrorCodeMessage(
+                    error,
+                    LOGIN_ERROR_MESSAGES,
+                    "Unable to continue as guest right now. Please try again.",
                 ),
             );
         } finally {
@@ -147,6 +222,18 @@ export default function LoginPage() {
                             onLoadingChange={setLoading}
                         />
                         <SsoAuthButton disabled={loading} />
+                        {guest && (
+                            <PillButton
+                                type="button"
+                                tone="white"
+                                size="normal"
+                                className="w-full"
+                                onClick={handleGuestLogin}
+                                disabled={loading}
+                            >
+                                Continue as guest
+                            </PillButton>
+                        )}
                     </form>
                 </div>
                 <div className="text-center text-sm text-gray-500">
