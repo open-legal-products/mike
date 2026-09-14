@@ -71,18 +71,16 @@ spec:
           requests:
             storage: {{ .Values.storage.size }}
 ---
-{{/* Bucket + CORS, idempotent, as a hook so it precedes the app on every release. */}}
+{{/* Bucket + CORS, idempotent. An ordinary job for the same reason as db-init:
+     a hook would wait behind pods that are not Ready until it has run. */}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "mike.fullname" . }}-createbucket
+  name: {{ include "mike.fullname" . }}-createbucket-{{ .Release.Revision }}
   labels: {{- include "mike.labels" . | nindent 4 }}
-  annotations:
-    helm.sh/hook: post-install,pre-upgrade
-    helm.sh/hook-weight: "-20"
-    helm.sh/hook-delete-policy: before-hook-creation
 spec:
-  backoffLimit: 3
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:

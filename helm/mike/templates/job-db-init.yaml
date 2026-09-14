@@ -1,7 +1,13 @@
 {{/*
   Applies the schema once auth.users exists (GoTrue builds that on first start).
-  A Helm hook rather than a plain Job so it re-runs on every upgrade and is
-  recreated rather than conflicting with the immutable spec of the previous one.
+
+  Deliberately NOT a helm hook. `helm --wait` holds post-install/post-upgrade
+  hooks until every pod is Ready, and the backend is not Ready until this job
+  has run — a hook here deadlocks the release against itself. As an ordinary
+  job it is applied with everything else and converges on its own.
+
+  A job's spec is immutable, so the name carries the revision rather than
+  colliding with the previous release's job.
 
   Only schema.sql is applied: upstream documents it as the complete current
   shape for a fresh database, and every install here is fresh. The compose
@@ -12,14 +18,11 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "mike.fullname" . }}-db-init
+  name: {{ include "mike.fullname" . }}-db-init-{{ .Release.Revision }}
   labels: {{- include "mike.labels" . | nindent 4 }}
-  annotations:
-    helm.sh/hook: post-install,pre-upgrade
-    helm.sh/hook-weight: "-20"
-    helm.sh/hook-delete-policy: before-hook-creation
 spec:
-  backoffLimit: 3
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:
