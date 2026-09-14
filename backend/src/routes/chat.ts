@@ -29,6 +29,14 @@ import {
     openAssistantSse,
     reserveAssistantMessage,
     withoutEmptyAssistantReservations,
+    MAX_ACTIVE_CHAT_AGENTS,
+    buildChatAgentSystemPrompt,
+    countPendingEditProposals,
+    createEditProposalToolsAdapter,
+    deriveChatAgentStatus,
+    parseAssistantMessageContent,
+    parseOptionalAgentAssignment,
+    setEditProposalStatus,
 } from "../lib/chat";
 import {
     getUserModelSettings,
@@ -83,6 +91,10 @@ type AccessibleChat = {
     model: string | null;
     reasoning_level: string | null;
     org_id?: string | null;
+    parent_chat_id?: string | null;
+    agent_instruction?: string | null;
+    source_message_id?: string | null;
+    source_excerpt?: string | null;
 } & Record<string, unknown>;
 
 async function validateAccessibleProjectId(
@@ -171,6 +183,13 @@ chatRouter.get("/", requireAuth, async (req, res) => {
 });
 
 // POST /chat/create
+//
+// Also creates an assigned agent when `parent_chat_id` is present: a chat
+// parented to the conversation whose response the user highlighted. Three
+// rules keep that safe, all enforced here rather than in the schema because
+// they are product rules, not data integrity ones — the parent must be a chat
+// the user can already reach, it must not itself be an agent (one level only),
+// and one response may carry at most MAX_ACTIVE_CHAT_AGENTS of them.
 chatRouter.post("/create", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
@@ -178,8 +197,84 @@ chatRouter.post("/create", requireAuth, async (req, res) => {
     if (!parsedProjectId.ok) {
         return void res.status(400).json({ detail: parsedProjectId.detail });
     }
-    const projectId = parsedProjectId.value.projectId;
+    const parsedAgent = parseOptionalAgentAssignment(req.body);
+    if (!parsedAgent.ok) {
+        return void res.status(400).json({ detail: parsedAgent.detail });
+    }
+    const agent = parsedAgent.value;
     const db = createServerSupabase();
+
+    if (agent) {
+        const parentAccess = await getAccessibleChat(
+            agent.parentChatId,
+            userId,
+            userEmail,
+            db,
+        );
+        if (!parentAccess.ok) {
+            return void res
+                .status(404)
+                .json({ detail: "Parent chat not found" });
+        }
+        // Assigning an agent appends content to the conversation, so it is a
+        // write: the same member+ gate every other chat mutation carries.
+        if (!can(parentAccess.projectRole, "content.edit")) {
+            return void res.status(403).json({
+                detail: "You do not have permission to modify this chat",
+            });
+        }
+        const parent = parentAccess.chat;
+        if (parent.parent_chat_id) {
+            return void res
+                .status(400)
+                .json({ detail: "An agent cannot be assigned its own agents" });
+        }
+        // A project chat's agents inherit the binding rather than take one, so
+        // an explicit mismatch is a client bug worth surfacing.
+        const parentProjectId = parent.project_id ?? null;
+        if (
+            parsedProjectId.value.provided &&
+            parsedProjectId.value.projectId !== parentProjectId
+        ) {
+            return void res
+                .status(400)
+                .json({ detail: "project_id does not match parent chat" });
+        }
+
+        const { count, error: countError } = await db
+            .from("chats")
+            .select("id", { count: "exact", head: true })
+            .eq("parent_chat_id", agent.parentChatId);
+        if (countError) return void sendInternalError(res, countError);
+        if ((count ?? 0) >= MAX_ACTIVE_CHAT_AGENTS) {
+            return void res.status(400).json({
+                detail: `This response already has ${MAX_ACTIVE_CHAT_AGENTS} agents. Dismiss one before assigning another.`,
+            });
+        }
+
+        const { data: created, error } = await db
+            .from("chats")
+            .insert({
+                user_id: userId,
+                project_id: parentProjectId,
+                parent_chat_id: agent.parentChatId,
+                agent_instruction: agent.agentInstruction,
+                source_message_id: agent.sourceMessageId,
+                source_excerpt: agent.sourceExcerpt,
+                // Agents are labelled by their instruction in the dock, so a
+                // generated title would be noise — and title generation is
+                // what puts a chat in the history list's mental model.
+                title: agent.agentInstruction.slice(0, 120),
+            })
+            .select(
+                "id, title, agent_instruction, source_message_id, source_excerpt, created_at",
+            )
+            .single();
+        if (error) return void sendInternalError(res, error);
+        return void res.json(created);
+    }
+
+    const projectId = parsedProjectId.value.projectId;
     const projectAccess = await validateAccessibleProjectId(
         projectId,
         userId,
@@ -483,6 +578,185 @@ async function hydrateEditStatuses(
   });
 }
 
+// GET /chat/:chatId/agents
+//
+// The dock rebuilds from this on every load. Status is derived here rather
+// than stored, because the only durable fact is what the agent's messages
+// contain; whether a stream is open is a property of a live connection, so the
+// client overlays "Processing" itself and an interrupted agent reads as
+// "empty" with a rerun affordance.
+chatRouter.get("/:chatId/agents", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
+    const { chatId } = req.params;
+    const db = createServerSupabase();
+
+    // Reading the dock only needs visibility, matching GET /chat/:chatId.
+    const access = await getAccessibleChat(chatId, userId, userEmail, db);
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Chat not found" });
+
+    const { data: agentRows, error } = await db
+        .from("chats")
+        .select(
+            "id, title, agent_instruction, source_message_id, source_excerpt, created_at",
+        )
+        .eq("parent_chat_id", chatId)
+        .order("created_at", { ascending: true });
+    if (error) return void sendInternalError(res, error);
+
+    const agents = (agentRows ?? []) as {
+        id: string;
+        title: string | null;
+        agent_instruction: string | null;
+        source_message_id: string | null;
+        source_excerpt: string | null;
+        created_at: string;
+    }[];
+    if (agents.length === 0) return void res.json([]);
+
+    // One query for every agent's messages, grouped in memory — a per-agent
+    // round trip would multiply the cost of the dock by the agent cap.
+    const { data: messageRows } = await db
+        .from("chat_messages")
+        .select("chat_id, role, content, created_at")
+        .in(
+            "chat_id",
+            agents.map((agent) => agent.id),
+        )
+        .order("created_at", { ascending: true });
+
+    const byChat = new Map<string, Record<string, unknown>[]>();
+    for (const row of (messageRows ?? []) as Record<string, unknown>[]) {
+        const key = String(row.chat_id ?? "");
+        const list = byChat.get(key);
+        if (list) list.push(row);
+        else byChat.set(key, [row]);
+    }
+
+    res.json(
+        agents.map((agent) => {
+            const messages = byChat.get(agent.id) ?? [];
+            return {
+                ...agent,
+                status: deriveChatAgentStatus(messages),
+                pending_proposals: countPendingEditProposals(messages),
+            };
+        }),
+    );
+});
+
+// PATCH /chat/:chatId/messages/:messageId
+//
+// Rewrites one assistant message's stored events. Used when the user accepts
+// an agent's proposed edit: the client applies the replacement to the message
+// it is looking at and sends the result back. Access is `getAccessibleChat` —
+// the same derivation that gates sending into this chat — so anyone who could
+// have continued the conversation can revise it, and nobody else can.
+chatRouter.patch(
+    "/:chatId/messages/:messageId",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { chatId, messageId } = req.params;
+        const parsedContent = parseAssistantMessageContent(req.body?.content);
+        if (!parsedContent.ok) {
+            return void res.status(400).json({ detail: parsedContent.detail });
+        }
+
+        const db = createServerSupabase();
+        const access = await getAccessibleChat(chatId, userId, userEmail, db);
+        if (!access.ok)
+            return void res.status(404).json({ detail: "Chat not found" });
+        // Rewriting a stored message is a write to the chat: member+, the same
+        // gate the streaming route applies before appending to it.
+        if (!can(access.projectRole, "content.edit"))
+            return void res.status(403).json({
+                detail: "You do not have permission to modify this chat",
+            });
+
+        const { data, error } = await db
+            .from("chat_messages")
+            .update({
+                content: parsedContent.value,
+                edited_at: new Date().toISOString(),
+            })
+            .eq("id", messageId)
+            .eq("chat_id", chatId)
+            // Only assistant prose is revisable. A user's own message is a
+            // record of what they said, not a draft.
+            .eq("role", "assistant")
+            .select("id, content, edited_at")
+            .maybeSingle();
+
+        if (error) return void sendInternalError(res, error);
+        if (!data)
+            return void res.status(404).json({ detail: "Message not found" });
+        res.json(data);
+    },
+);
+
+// PATCH /chat/:chatId/proposals/:proposalId
+//
+// Marks one proposal accepted or rejected. `:chatId` is the agent's own chat —
+// the proposal lives in the message the agent produced, so resolving it is a
+// write to that message's events, not to the parent response.
+chatRouter.patch(
+    "/:chatId/proposals/:proposalId",
+    requireAuth,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        const userEmail = res.locals.userEmail as string | undefined;
+        const { chatId, proposalId } = req.params;
+        const status = req.body?.status;
+        if (status !== "accepted" && status !== "rejected") {
+            return void res
+                .status(400)
+                .json({ detail: 'status must be "accepted" or "rejected"' });
+        }
+
+        const db = createServerSupabase();
+        const access = await getAccessibleChat(chatId, userId, userEmail, db);
+        if (!access.ok)
+            return void res.status(404).json({ detail: "Chat not found" });
+        // Resolving a proposal rewrites the agent's stored message: member+.
+        if (!can(access.projectRole, "content.edit"))
+            return void res.status(403).json({
+                detail: "You do not have permission to modify this chat",
+            });
+
+        const { data: messages, error } = await db
+            .from("chat_messages")
+            .select("id, content")
+            .eq("chat_id", chatId)
+            .eq("role", "assistant")
+            .order("created_at", { ascending: true });
+        if (error) return void sendInternalError(res, error);
+
+        for (const message of (messages ?? []) as {
+            id: string;
+            content: unknown;
+        }[]) {
+            const next = setEditProposalStatus(
+                message.content,
+                proposalId,
+                status,
+            );
+            if (!next) continue;
+            const { error: updateError } = await db
+                .from("chat_messages")
+                .update({ content: next })
+                .eq("id", message.id)
+                .eq("chat_id", chatId);
+            if (updateError) return void sendInternalError(res, updateError);
+            return void res.json({ proposal_id: proposalId, status });
+        }
+
+        res.status(404).json({ detail: "Proposal not found" });
+    },
+);
+
 // PATCH /chat/:chatId — rename and/or edit sharing.
 chatRouter.patch("/:chatId", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
@@ -746,6 +1020,10 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     // note in routes/projectChat.ts — this is the same partition on the
     // route that serves standalone and project chats alike.
     let allowDocumentMutation = true;
+    // Set only when this turn belongs to an assigned agent. It is what unlocks
+    // the propose_edit tool and the agent's role prompt; every other chat runs
+    // exactly as before.
+    let agentChat: AccessibleChat | null = null;
 
     if (chatId) {
         const access = await getAccessibleChat(chatId, userId, userEmail, db);
@@ -759,6 +1037,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
                 detail: "You do not have permission to modify this chat",
             });
         const existing = access.chat;
+        if (existing.parent_chat_id) agentChat = existing;
 
         const existingProjectId = existing.project_id ?? null;
         if (
@@ -980,10 +1259,17 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         personalisation,
         nonce,
     );
+    const systemPromptExtra =
+        [
+            personalisationPrompt,
+            agentChat ? buildChatAgentSystemPrompt(agentChat) : "",
+        ]
+            .filter(Boolean)
+            .join("\n\n") || undefined;
     const apiMessages = buildMessages(
         enrichedMessages,
         docAvailability,
-        personalisationPrompt || undefined,
+        systemPromptExtra,
         undefined,
         legalResearchUs,
         nonce,
@@ -1093,6 +1379,13 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             includeResearchTools: legalResearchUs,
             model: selectedModel,
             reasoning: selectedReasoningLevel,
+            // An agent's thread renders in a narrow side panel with a plain
+            // composer, which has no ask_inputs picker to answer with. Offer
+            // the tool only where the answer can actually be given.
+            includeAskInputs: !agentChat,
+            routeTools: agentChat
+                ? createEditProposalToolsAdapter()
+                : undefined,
             apiKeys,
             signal: stream.signal,
             projectId: resolvedProjectId,

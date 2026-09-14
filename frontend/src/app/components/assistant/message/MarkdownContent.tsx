@@ -17,6 +17,7 @@ import {
     citationVerificationPillClassName,
 } from "./citationVerification";
 import { internalCaseHref } from "./citationUtils";
+import { QUOTABLE_ATTRIBUTE } from "@/app/hooks/useQuotableSelection";
 
 export function MarkdownContent({
     text,
@@ -49,6 +50,11 @@ export function MarkdownContent({
     return (
         <div
             ref={divRef}
+            // Marks this prose as quotable, so highlighting inside it offers
+            // "Add to Chat". Deliberately narrower than the whole message:
+            // reasoning blocks, edit cards, and the citation list are chrome,
+            // not the answer the reader wants to quote back.
+            {...{ [QUOTABLE_ATTRIBUTE]: "" }}
             className="text-gray-900 mb-4 text-base prose prose-sm max-w-none font-serif"
         >
             <ReactMarkdown

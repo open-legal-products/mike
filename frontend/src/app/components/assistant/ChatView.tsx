@@ -43,6 +43,9 @@ import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedP
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { can, roleFrom } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { useQuotableSelection } from "@/app/hooks/useQuotableSelection";
+import { QuoteSelectionPopup } from "@/app/components/shared/QuoteSelectionPopup";
+import { useAgentSurface } from "@/app/components/assistant/agents/useAgentSurface";
 
 interface Props {
     chatId?: string | null;
@@ -68,6 +71,11 @@ interface Props {
      * read-only caller gets the disabled composer instead of a 403 on send.
      */
     canSend?: boolean;
+    /**
+     * Applies an accepted agent proposal back onto the transcript. Optional so
+     * a surface that has not adopted agents renders unchanged.
+     */
+    onMessageRevised?: (message: Message) => void;
 }
 
 const ASSISTANT_PANEL_TRANSITION_MS = 500;
@@ -96,6 +104,7 @@ export function ChatView({
     handleChat,
     cancel,
     canSend,
+    onMessageRevised,
 }: Props) {
     const router = useRouter();
     const [tabs, setTabs] = useState<AssistantSidePanelTab[]>([]);
@@ -791,6 +800,48 @@ export function ChatView({
 
     const messagesBottomPadding = DEFAULT_ASSISTANT_BOTTOM_PADDING;
 
+    // Highlighting inside an assistant response offers "Add to Chat". Disabled
+    // while AskInputPopup has replaced the composer — there is no chip row to
+    // attach the excerpt to.
+    const { selection: quotableSelection, clear: clearQuotableSelection } =
+        useQuotableSelection(messagesContainerRef, {
+            enabled: activeInput === null,
+        });
+
+    const addQuotedExcerpt = useCallback(
+        (text: string) => {
+            chatInputRef.current?.addQuotedExcerpt(text);
+            clearQuotableSelection();
+        },
+        [clearQuotableSelection],
+    );
+
+    const noopRevision = useCallback(() => {}, []);
+    const {
+        dock: agentDock,
+        panel: agentPanel,
+        panelOpen: agentPanelOpen,
+        assignFromSelection,
+        assignDisabledReason,
+        markersFor,
+    } = useAgentSurface({
+        chatId,
+        messages,
+        onMessageRevised: onMessageRevised ?? noopRevision,
+    });
+
+    const assignToAgent = useCallback(
+        (text: string) => {
+            assignFromSelection(text);
+            clearQuotableSelection();
+            // The agent panel and the document panel share the right-hand
+            // column. Tabs survive in state, so a citation opened later
+            // re-mounts its panel unchanged.
+            setPanelMounted(false);
+        },
+        [assignFromSelection, clearQuotableSelection],
+    );
+
     return (
         <div className="h-full w-full flex relative">
             {/* Chat column */}
@@ -891,6 +942,7 @@ export function ChatView({
                                                 }}
                                             />
                                         ) : (
+                                            <>
                                             <AssistantMessage
                                                 events={msg.events}
                                                 isStreaming={
@@ -957,6 +1009,13 @@ export function ChatView({
                                                     resolvedEditStatuses
                                                 }
                                             />
+                                            {msg.edited_at && (
+                                                <p className="mt-1 text-[11px] text-gray-400">
+                                                    Revised
+                                                </p>
+                                            )}
+                                            {markersFor(msg.id)}
+                                            </>
                                         )}
                                     </div>
                                 ));
@@ -1004,6 +1063,10 @@ export function ChatView({
                         className="relative z-20 w-full max-w-4xl mx-auto px-4 md:px-6"
                     >
                         <div className="w-full rounded-t-[20px] bg-transparent">
+                            {/* Agent cards sit inside the measured composer
+                                block, so the transcript's bottom padding and
+                                the scroll-to-bottom button move with them. */}
+                            {agentDock}
                             {activeInput ? (
                                 <AskInputPopup
                                     key={activeInput.key}
@@ -1062,6 +1125,13 @@ export function ChatView({
                 </div>
             </div>
 
+            <QuoteSelectionPopup
+                selection={quotableSelection}
+                onAdd={addQuotedExcerpt}
+                onAssign={chatId ? assignToAgent : undefined}
+                assignDisabledReason={assignDisabledReason}
+            />
+
             <AssistantWorkflowModal
                 open={workflowModalOpen}
                 onClose={() => setWorkflowModalOpen(false)}
@@ -1091,7 +1161,13 @@ export function ChatView({
                 onClose={() => setActionError(null)}
             />
 
-            {panelMounted && (
+            {agentPanelOpen && (
+                <div className="fixed inset-0 z-40 flex justify-center p-3 md:relative md:inset-auto md:z-auto md:block md:h-full md:min-w-0 md:flex-shrink-0 md:p-0">
+                    {agentPanel}
+                </div>
+            )}
+
+            {panelMounted && !agentPanelOpen && (
                 <div
                     className={`fixed inset-0 z-40 flex justify-center p-3 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] md:relative md:inset-auto md:z-auto md:block md:h-full md:min-w-0 md:flex-shrink-0 md:p-0 ${panelVisible ? "translate-x-0" : "translate-x-full"}`}
                 >
