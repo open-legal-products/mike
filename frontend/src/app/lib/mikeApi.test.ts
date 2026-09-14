@@ -33,6 +33,7 @@ import {
     deleteWorkflow,
     deleteWorkflowAsset,
     deleteWorkflowShare,
+    disconnectGoogleDrive,
     downloadDocumentsZip,
     downloadUserExport,
     exportAccountData,
@@ -56,6 +57,7 @@ import {
     getLibraryFilterOptions,
     getLibraryFolderChildren,
     getLibraryFolderPath,
+    getGoogleDriveStatus,
     getMcpConnector,
     getOllamaModels,
     getOpenCodeGoModels,
@@ -151,6 +153,7 @@ import {
     setProjectMemoryEnabled,
     setUserMemoryEnabled,
     shareWorkflow,
+    startGoogleDriveOAuth,
     startMcpConnectorOAuth,
     startUserExport,
     streamChat,
@@ -2106,6 +2109,27 @@ describe("thin endpoint wrappers", () => {
             url: "/user/mcp-connectors/m1/tools/t1",
             method: "PATCH",
             body: { enabled: true },
+        },
+        // Native Google Drive. Unlike the MCP connectors above these are
+        // first-party endpoints under /user/integrations, and the three verbs
+        // share one path — so the route/method pairing is what keeps
+        // "check status" from accidentally becoming "revoke my tokens".
+        {
+            name: "getGoogleDriveStatus",
+            call: () => getGoogleDriveStatus(),
+            url: "/user/integrations/google-drive",
+        },
+        {
+            name: "startGoogleDriveOAuth",
+            call: () => startGoogleDriveOAuth(),
+            url: "/user/integrations/google-drive/oauth/start",
+            method: "POST",
+        },
+        {
+            name: "disconnectGoogleDrive",
+            call: () => disconnectGoogleDrive(),
+            url: "/user/integrations/google-drive",
+            method: "DELETE",
         },
         // Projects
         {
