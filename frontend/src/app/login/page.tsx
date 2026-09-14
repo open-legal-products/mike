@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { login } from "@/app/lib/authApi";
+import { login, signup } from "@/app/lib/authApi";
 import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import Link from "next/link";
@@ -102,13 +102,28 @@ export default function LoginPage() {
         setError(null);
 
         try {
-            const { error } = await supabase.auth.signInWithPassword(guest);
-            if (error) {
+            try {
+                await login(guest.email, guest.password);
+            } catch {
                 // First use: the guest account doesn't exist yet. Local mode
-                // autoconfirms signups, so this returns a session directly.
-                const { error: signUpError } = await supabase.auth.signUp(guest);
-                if (signUpError) throw signUpError;
+                // autoconfirms signups, so /signup returns a session directly
+                // and requiresEmailConfirmation is false; if a deployment ever
+                // did require confirmation there is no inbox to confirm from,
+                // so surface that as an error rather than a dead end.
+                const result = await signup(
+                    guest.email,
+                    guest.password,
+                    "/onboarding/profile",
+                );
+                if (result.requiresEmailConfirmation) {
+                    throw new Error(
+                        "Guest sign-in needs an auto-confirming local stack.",
+                    );
+                }
             }
+            // Session lives in the httpOnly cookie the auth routes set, so the
+            // context has to re-read it before any gated route will let us in.
+            await refreshSession();
             // Same destination as a password login: OnboardingGate sends a
             // brand-new guest through onboarding and a returning one straight
             // on to /assistant.
