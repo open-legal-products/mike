@@ -130,11 +130,16 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
   );
   if (!projectAccess.ok)
     return void res.status(404).json({ detail: "Project not found" });
-  let memorySharedAudience = await projectHasSharedAudience(
-    db,
-    projectId,
-    projectAccess.project.org_id,
-  );
+  let memorySharedAudience = false;
+  try {
+    memorySharedAudience = await projectHasSharedAudience(
+      db,
+      projectId,
+      projectAccess.project.org_id,
+    );
+  } catch (error) {
+    return void sendInternalError(res, error);
+  }
 
   // Two different questions, deliberately answered by two different
   // derivations:
@@ -202,9 +207,13 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
       // No verdict at all means no write. `can(null, …)` is false, so
       // an unreadable chat cannot be written through this door either.
       writeRole = chatAccess.ok ? chatAccess.projectRole : null;
-      memorySharedAudience =
-        memorySharedAudience ||
-        (await hasDirectContentGrants(db, "chat", existing!.id));
+      try {
+        memorySharedAudience =
+          memorySharedAudience ||
+          (await hasDirectContentGrants(db, "chat", existing!.id));
+      } catch (error) {
+        return void sendInternalError(res, error);
+      }
     }
   }
 
@@ -328,16 +337,12 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     }
 
   if (askInputsResponse || lastUser) {
-    try {
-      memoryTurn = await beginMemoryConversationTurn({
-        db,
-        surface: "chat",
-        conversationId: chatId,
-        actorUserId: userId,
-      });
-    } catch (error) {
-      return void sendInternalError(res, error);
-    }
+    memoryTurn = await beginMemoryConversationTurn({
+      db,
+      surface: "chat",
+      conversationId: chatId,
+      actorUserId: userId,
+    });
   }
 
   try {
@@ -362,7 +367,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     );
     // Generate the nonce before adding request metadata or prior events so
     // every document filename is fenced wherever it enters the prompt.
-    const nonce = generateSpotlightNonce();
+    const nonce = generateSpotlightNonce(chatId);
     const documentPromptRef = (documentId: string, requestFilename: string) => {
         const document = documentsById.get(documentId);
         return {
@@ -516,6 +521,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             apiKeys,
             signal: streamAbort.signal,
         projectId,
+        conversationId: chatId,
         includeMemory: true,
         memoryProjectId: projectId,
         memorySharedAudience,

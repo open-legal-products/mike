@@ -26,8 +26,10 @@ the answer being shown to the user.
    user's app memory. Project conversations may also receive project memory.
    Shared-audience conversations never receive private app memory.
 3. **Memory is fenced as data.** The files are placed in the earliest synthetic
-   user message, inside randomized delimiters, and accompanied by a system
-   policy that says memory is untrusted reference material. Current chat input
+   user message, inside delimiters the body cannot forge, and accompanied by a
+   system policy that says memory is untrusted reference material. The
+   delimiter is derived from the fenced text, so the turn stays byte-identical
+   while memory is unchanged and provider prompt caches keep working. Current chat input
    outranks project memory, and project memory outranks app memory.
 4. **The answer is persisted.** Curation is considered only after a terminal
    assistant response has been saved successfully. Cancelled responses,
@@ -67,10 +69,13 @@ the answer being shown to the user.
   the account is created, and a new project's shared memory is enabled unless
   its creator clears the toggle. Turning either off is destructive — see
   "Disable, wipe, and deletion".
-- Standalone main chats and durable Word add-in chats may update app memory.
-  Chats and tabular reviews in a private personal project may update both app
-  and project memory. A project is private only while it has no organization
-  and no project access grants.
+- A user's own standalone main chats and durable Word add-in chats may update
+  app memory. Chats and tabular reviews in a private personal project may
+  update both app and project memory. A conversation is private only while it
+  belongs to the actor, has no organization, and has no direct access grants;
+  a project is private only while it has no organization and no project
+  access grants. The same three tests gate whether app memory is shown to the
+  model, so a conversation that cannot see private memory can never write it.
 - Organization projects and personal projects with any access grant may update
   project memory only. Their conversations never update a participant's app
   memory.

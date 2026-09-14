@@ -481,23 +481,25 @@ describe("POST /chat — streaming endpoint", () => {
     errorSpy.mockRestore();
   });
 
-  it("fails closed before streaming when memory activity cannot be fenced", async () => {
-    beginMemoryConversationTurn.mockRejectedValueOnce(
-      new Error("Memory activity could not be fenced"),
-    );
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("still answers, without curating the turn, when memory activity cannot be fenced", async () => {
+    // The lease is optional bookkeeping. beginMemoryConversationTurn fails
+    // open (returns null) and the route must stream as normal; the only
+    // consequence is that this turn is not scheduled as a learning
+    // checkpoint and there is no lease to release afterwards.
+    beginMemoryConversationTurn.mockResolvedValueOnce(null);
 
     const res = await request(app)
       .post("/chat")
       .set("Authorization", "Bearer test")
       .send(VALID_BODY);
 
-    expect(res.status).toBe(500);
-    expect(res.body.detail).toBe("Something went wrong. Please try again.");
-    expect(runLLMStream).not.toHaveBeenCalled();
-    expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
-    });
+    expect(res.status).toBe(200);
+    expect(runLLMStream).toHaveBeenCalledTimes(1);
+    expect(scheduleMemoryConsolidation).toHaveBeenCalledWith(
+      expect.objectContaining({ turn: null }),
+    );
+    expect(releaseMemoryConversationTurn).not.toHaveBeenCalled();
+  });
 
     it("rejects a chat without an explicit model before streaming", async () => {
         const res = await request(app)

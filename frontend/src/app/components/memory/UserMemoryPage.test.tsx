@@ -119,6 +119,108 @@ describe("UserMemoryPage", () => {
     expect(await screen.findByText("Saved")).toBeVisible();
   });
 
+  it("pauses curator polling while the tab is hidden and backs off while nothing changes", async () => {
+    vi.mocked(getUserMemory).mockResolvedValue(current({ status: "processing" }));
+    render(<UserMemoryPage />);
+    await screen.findByRole("textbox", { name: "App-wide memory" });
+    expect(getUserMemory).toHaveBeenCalledTimes(1);
+
+    const visibility = Object.getOwnPropertyDescriptor(
+      Document.prototype,
+      "visibilityState",
+    );
+    const setVisibility = (state: DocumentVisibilityState) => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+      fireEvent(document, new Event("visibilitychange"));
+    };
+    vi.useFakeTimers();
+    try {
+      // The first timer was armed on real timers; a visibility round trip
+      // re-arms it on the fake clock.
+      await act(async () => {
+        setVisibility("hidden");
+      });
+      await act(async () => {
+        setVisibility("visible");
+      });
+      // First poll after 3 s; the file is unchanged so the next wait doubles.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(getUserMemory).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(getUserMemory).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(getUserMemory).toHaveBeenCalledTimes(3);
+
+      // A hidden tab has nobody to show the status to: no requests at all.
+      await act(async () => {
+        setVisibility("hidden");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(getUserMemory).toHaveBeenCalledTimes(3);
+
+      // Coming back resets the backoff so the status is fresh quickly.
+      await act(async () => {
+        setVisibility("visible");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(getUserMemory).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+      if (visibility) {
+        Object.defineProperty(document, "visibilityState", visibility);
+      } else {
+        delete (document as { visibilityState?: unknown }).visibilityState;
+      }
+    }
+  });
+
+  it("explains a save refused because memory was turned off meanwhile", async () => {
+    vi.mocked(updateUserMemory).mockRejectedValueOnce(
+      new MikeApiError({
+        status: 409,
+        code: "memory_disabled",
+        message: "Enable memory before editing it.",
+      }),
+    );
+    const user = userEvent.setup();
+    render(<UserMemoryPage />);
+    const editor = await screen.findByRole("textbox", {
+      name: "App-wide memory",
+    });
+    // The refetch after the refusal reports the file as disabled.
+    vi.mocked(getUserMemory).mockResolvedValue(
+      current({ enabled: false, content: "", hash: null, revision: 5 }),
+    );
+    await user.clear(editor);
+    await user.type(editor, "# Lost");
+
+    expect(
+      await screen.findByText(
+        "Memory was turned off while you were editing, so your changes were not saved.",
+        {},
+        { timeout: 2000 },
+      ),
+    ).toBeVisible();
+    // The toggle stops claiming memory is on, and nothing is retried.
+    expect(
+      screen.getByRole("switch", { name: "App-wide memory" }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(updateUserMemory).toHaveBeenCalledTimes(1);
+  });
+
   it("adopts server-normalized Markdown without repeatedly saving it", async () => {
     vi.mocked(updateUserMemory).mockResolvedValue(
       current({ content: "# Normalized", revision: 3, hash: "hash-3" }),

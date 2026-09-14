@@ -12,6 +12,7 @@ import {
 } from "../curator";
 import {
   MemoryRevisionConflictError,
+  MemoryValidationError,
   type MemoryFileRow,
 } from "../files";
 
@@ -39,6 +40,31 @@ describe("memory curator model selection", () => {
         chatModel: "gpt-5.6-sol",
       }),
     ).toBe("gpt-5.6-sol");
+  });
+
+  it("ignores a preferred model the actor holds no key for", () => {
+    // A stale preference or a deployment-wide override for another provider
+    // must not fail every curator run for this user; the verified chat
+    // model is the safe choice.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        memoryCuratorModelForChat({
+          chatModel: "gpt-5.6-sol",
+          memoryCuratorModel: "claude-haiku-4-5",
+          apiKeys: { openai: "sk-test" },
+        }),
+      ).toBe("gpt-5.6-sol");
+      expect(
+        memoryCuratorModelForChat({
+          chatModel: "gpt-5.6-sol",
+          environmentOverride: "claude-haiku-4-5",
+          apiKeys: { openai: "sk-test", claude: "sk-ant" },
+        }),
+      ).toBe("claude-haiku-4-5");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
@@ -502,6 +528,57 @@ describe("scope-bound memory curator tool", () => {
       reason: "access_revoked",
     });
     expect(svc.write).not.toHaveBeenCalled();
+  });
+
+  it("hands a rejected body back to the model instead of failing the job", async () => {
+    // Validation failures are the model's mistake. The job must not burn a
+    // retry (and a fresh model call) on them: the tool result carries the
+    // reason so the same run can correct itself.
+    const svc = services({
+      write: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new MemoryValidationError("content contains executable HTML"),
+        )
+        .mockResolvedValueOnce({
+          applied: true,
+          current: { revision: 2 },
+        } as never),
+    });
+    const seen: string[] = [];
+    svc.stream = vi.fn(async (params: StreamChatParams) => {
+      const first = await params.runTools?.([
+        {
+          id: "call-1",
+          name: "write_memory_file",
+          input: {
+            expectedRevision: 1,
+            markdown: "<script>alert(1)</script>",
+            changeSummary: "Bad",
+          },
+        },
+      ]);
+      seen.push(first?.[0]?.content ?? "");
+      await params.runTools?.([
+        {
+          id: "call-2",
+          name: "write_memory_file",
+          input: {
+            expectedRevision: 1,
+            markdown: "# Clean",
+            changeSummary: "Fixed",
+          },
+        },
+      ]);
+      return { fullText: "" };
+    });
+    const result = await runMemoryCuratorScope(args(), svc);
+    expect(JSON.parse(seen[0]!)).toEqual({
+      ok: false,
+      error: "invalid_memory_write",
+      detail: "content contains executable HTML",
+    });
+    expect(result).toEqual({ outcome: "updated", revision: 2 });
   });
 
   it("retries a concurrent edit so the next run rebases on latest memory", async () => {

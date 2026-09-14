@@ -86,6 +86,13 @@ export type StreamChatParams = {
      */
     reasoning?: ReasoningLevel;
     abortSignal?: AbortSignal;
+    /**
+     * Durable id of the conversation this request belongs to. Adapters use it
+     * to keep provider prefix caches warm across turns (an OpenAI
+     * prompt_cache_key, an Anthropic cache breakpoint). Leave unset for
+     * one-shot calls such as the memory curator.
+     */
+    conversationId?: string | null;
 };
 
 export type StreamChatResult = {

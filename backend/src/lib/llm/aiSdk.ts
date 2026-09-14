@@ -255,12 +255,52 @@ function usesCourtlistenerTool(
   );
 }
 
+/**
+ * Provider-specific hints that let a multi-turn conversation reuse the
+ * already-processed prompt prefix instead of paying for it on every turn.
+ *
+ * OpenAI caches automatically but routes by `prompt_cache_key`; sending the
+ * conversation id keeps consecutive turns on the same cache. Anthropic only
+ * caches up to an explicit breakpoint, so the last message gets one: it
+ * covers the system prompt, tool definitions, and every earlier turn, and
+ * the next request hits that prefix as long as it is byte-identical.
+ * Providers ignore namespaces they do not own, so both hints are sent.
+ */
+type StreamTextProviderOptions = NonNullable<
+  Parameters<typeof AiSdk.streamText>[0]["providerOptions"]
+>;
+
+export function withPrefixCacheHints(params: StreamChatParams): {
+  messages: AiSdk.ModelMessage[];
+  providerOptions?: StreamTextProviderOptions;
+} {
+  if (!params.conversationId || !params.messages.length) {
+    return { messages: params.messages };
+  }
+  const last = params.messages.length - 1;
+  const breakpoint = {
+    anthropic: { cacheControl: { type: "ephemeral" } },
+  };
+  return {
+    messages: params.messages.map((message, index): AiSdk.ModelMessage => {
+      if (index !== last) return message;
+      return message.role === "assistant"
+        ? { role: "assistant", content: message.content, providerOptions: breakpoint }
+        : { role: "user", content: message.content, providerOptions: breakpoint };
+    }),
+    providerOptions: {
+      openai: { promptCacheKey: params.conversationId },
+    },
+  };
+}
+
 export async function streamAiSdk(
   params: StreamChatParams,
   config: AiSdkAdapterConfig,
 ): Promise<StreamChatResult> {
   const sdk = await import("ai");
   const tools = toAiSdkTools(params.tools ?? [], params.runTools, sdk);
+  const cacheHints = withPrefixCacheHints(params);
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,
@@ -273,7 +313,10 @@ export async function streamAiSdk(
     const result = sdk.streamText({
       model: config.model,
       system: params.systemPrompt,
-      messages: params.messages,
+      messages: cacheHints.messages,
+      ...(cacheHints.providerOptions
+        ? { providerOptions: cacheHints.providerOptions }
+        : {}),
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       stopWhen: sdk.stepCountIs(params.maxIterations ?? 10),

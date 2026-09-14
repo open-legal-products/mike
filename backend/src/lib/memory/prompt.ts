@@ -1,9 +1,25 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { Db } from "../dbq/types";
 import { getMemoryCurrent } from "./files";
 
+/**
+ * A delimiter the memory body cannot forge that is also stable while the body
+ * is unchanged.
+ *
+ * The nonce is derived from the fenced text itself rather than minted per
+ * request. A per-request nonce rewrote the earliest user message on every
+ * turn, which invalidated provider prefix caches for the entire conversation
+ * that follows it; a content-derived nonce only changes when the body does,
+ * and a changed body alters the message anyway. It stays unforgeable: a body
+ * that carried its own closing tag would have to contain the SHA-256 of a
+ * text that includes that tag, and the split/join below neutralises an exact
+ * match regardless. Callers must never persist or reuse the nonce as a secret.
+ */
 function fenceMemory(content: string, scope: "app" | "project"): string {
-  const nonce = randomUUID();
+  const nonce = createHash("sha256")
+    .update(`${scope}\n${content}`, "utf8")
+    .digest("hex")
+    .slice(0, 32);
   const safeContent = content
     .split(`<memory-document nonce="${nonce}">`)
     .join("[redacted-memory-boundary]")

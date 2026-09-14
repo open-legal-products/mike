@@ -187,6 +187,18 @@ export function useMemoryAutosave<Result>({
     value,
   ]);
 
+  // The debounce window and an in-flight request are both moments where a
+  // reload or tab close would drop an edit the status line already calls
+  // "Saving…". Ask the browser to confirm while that is true.
+  useEffect(() => {
+    if (!enabled || value === persistedValue) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [enabled, persistedValue, value]);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {

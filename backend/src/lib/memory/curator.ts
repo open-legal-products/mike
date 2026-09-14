@@ -5,12 +5,17 @@ import {
   ensureReviewAccess,
   projectHasSharedAudience,
 } from "../access";
+import { hasDirectContentGrants } from "../contentAccess";
 import {
   streamChatWithTools,
   type OpenAIToolSchema,
   type UserApiKeys,
 } from "../llm";
-import { resolveEffectiveChatModel } from "../modelSelection";
+import {
+  hasApiKeyForModel,
+  resolveEffectiveChatModel,
+} from "../modelSelection";
+import { resolveModel } from "../llm/models";
 import { can } from "../permissions";
 import { getUserModelSettings } from "../userSettings";
 import { DbJobDeferredError, type Db, type DbJob } from "../dbq/types";
@@ -21,11 +26,13 @@ import {
   MemoryDisabledError,
   MemoryEpochSupersededError,
   MemoryJobSupersededError,
+  MemoryValidationError,
   writeMemoryFile,
   type MemoryFileRow,
   type MemoryScope,
   type MemorySurface,
 } from "./files";
+import { MEMORY_INACTIVITY_MS } from "./schedule";
 
 const TRANSCRIPT_MESSAGE_LIMIT = 120;
 const TRANSCRIPT_CHARACTER_LIMIT = 48_000;
@@ -102,12 +109,26 @@ export function memoryCuratorModelForChat(args: {
   chatModel: string;
   memoryCuratorModel?: string | null;
   environmentOverride?: string | null;
+  /**
+   * When given, a preferred model the actor has no key for falls back to the
+   * chat model instead of failing every curator run for that user. The chat
+   * model is already verified against these keys by the caller.
+   */
+  apiKeys?: UserApiKeys;
 }): string {
-  return (
+  const preferred =
     args.environmentOverride?.trim() ||
     args.memoryCuratorModel ||
-    args.chatModel
-  );
+    args.chatModel;
+  if (!args.apiKeys || preferred === args.chatModel) return preferred;
+  const canonical = resolveModel(preferred, "");
+  if (canonical && hasApiKeyForModel(canonical, args.apiKeys)) {
+    return canonical;
+  }
+  console.warn("[memory] curator model unavailable; using the chat model", {
+    preferred,
+  });
+  return args.chatModel;
 }
 
 function numeric(value: number | string): number {
@@ -465,6 +486,14 @@ async function loadConversation(
     );
     if (!access.ok) return null;
     projectId = (data.project_id as string | null) ?? null;
+    // App memory may only learn from a conversation nobody else can read:
+    // the chat must be the actor's own, outside any organization, with no
+    // direct grants. This mirrors memory_source_allows_app_memory and the
+    // routes' read-side audience check.
+    appMemoryEligible =
+      data.user_id === state.actor_user_id &&
+      !data.org_id &&
+      !(await hasDirectContentGrants(db, "chat", state.conversation_id));
     if (projectId) {
       const projectAccess = await checkProjectAccess(
         projectId,
@@ -474,13 +503,14 @@ async function loadConversation(
       );
       projectWritable =
         projectAccess.ok && can(projectAccess.projectRole, "content.edit");
-      appMemoryEligible = projectAccess.ok
-        ? !(await projectHasSharedAudience(
-            db,
-            projectId,
-            projectAccess.project.org_id,
-          ))
-        : false;
+      appMemoryEligible =
+        appMemoryEligible &&
+        projectAccess.ok &&
+        !(await projectHasSharedAudience(
+          db,
+          projectId,
+          projectAccess.project.org_id,
+        ));
     }
     model = (data.model as string | null) ?? null;
     messages = await loadEligibleMemoryMessages(
@@ -536,6 +566,13 @@ async function loadConversation(
     );
     if (!access.ok) return null;
     projectId = (review.project_id as string | null) ?? null;
+    // Same boundary as chat: a tabular review learns app memory only when it
+    // is the actor's own private review inside a private project.
+    appMemoryEligible =
+      projectId !== null &&
+      review.user_id === state.actor_user_id &&
+      !review.org_id &&
+      !(await hasDirectContentGrants(db, "tabular_review", review.id as string));
     if (projectId) {
       const projectAccess = await checkProjectAccess(
         projectId,
@@ -545,13 +582,14 @@ async function loadConversation(
       );
       projectWritable =
         projectAccess.ok && can(projectAccess.projectRole, "content.edit");
-      appMemoryEligible = projectAccess.ok
-        ? !(await projectHasSharedAudience(
-            db,
-            projectId,
-            projectAccess.project.org_id,
-          ))
-        : false;
+      appMemoryEligible =
+        appMemoryEligible &&
+        projectAccess.ok &&
+        !(await projectHasSharedAudience(
+          db,
+          projectId,
+          projectAccess.project.org_id,
+        ));
     }
     model = (chat.model as string | null) ?? null;
     messages = await loadEligibleMemoryMessages(
@@ -754,6 +792,23 @@ export async function runMemoryCuratorScope(
               }),
             });
           } catch (error) {
+            if (error instanceof MemoryValidationError) {
+              // The model produced a body the server refuses (too large,
+              // executable HTML, control characters). That is the model's
+              // mistake, not an infrastructure failure: tell it and let it
+              // retry within this run instead of failing the job and paying
+              // for a fresh model call on every retry.
+              invalidCalls += 1;
+              results.push({
+                tool_use_id: call.id,
+                content: JSON.stringify({
+                  ok: false,
+                  error: "invalid_memory_write",
+                  detail: error.message,
+                }),
+              });
+              continue;
+            }
             if (error instanceof MemoryJobSupersededError) {
               terminalReason = "generation_superseded";
             } else if (
@@ -992,11 +1047,16 @@ async function conversationGate(
   const quietUntil =
     typeof data.quiet_until === "string" ? Date.parse(data.quiet_until) : 0;
   if (lease || (Number.isFinite(quietUntil) && quietUntil > now.getTime())) {
-    // Recheck at least once a minute while a lease is live. These deferrals do
-    // not consume the job's retry budget; release/success may retime pending
-    // work earlier than a crash-recovery lease expiry.
+    // A live lease means someone is mid-turn. The turn's own completion or
+    // release retimes this conversation's pending work, so the worker only
+    // needs a backstop: recheck when the lease dies or after one quiet
+    // window, whichever is sooner. Rechecking every minute cost a full read
+    // cycle per active conversation for as long as it stayed active.
     const retryAt = lease
-      ? Math.min(Date.parse(String(lease.expires_at)), now.getTime() + 60_000)
+      ? Math.min(
+          Date.parse(String(lease.expires_at)),
+          now.getTime() + MEMORY_INACTIVITY_MS,
+        )
       : quietUntil;
     return {
       kind: "deferred",
@@ -1049,6 +1109,23 @@ export async function handleMemoryConsolidation(
     });
     return { skipped: "superseded" };
   }
+  // The quiet gate is conversation-wide for both scopes. A later
+  // successful turn re-arms this actor's unprocessed cursor in the scheduler;
+  // this older job must not invoke a model or mark that cursor processed.
+  //
+  // The gate runs before the processing claim on purpose. An active
+  // conversation defers its job once a minute for as long as it stays active,
+  // and a deferral consumes no retry budget, so it has to be cheap: three
+  // reads, no status writes. The file status is already "scheduled" from the
+  // scheduler, so there is nothing to restore either.
+  const gate = await conversationGate(db, state, job);
+  if (gate.kind === "superseded") {
+    await refreshJobFileStatuses({ db, job, state, status: "idle" });
+    return { skipped: "newer_conversation_activity" };
+  }
+  if (gate.kind === "deferred") {
+    throw new DbJobDeferredError(gate.runAt, "memory_quiet_period");
+  }
   if (
     !(await setStatus({
       db,
@@ -1071,25 +1148,6 @@ export async function handleMemoryConsolidation(
     state,
     status: "processing",
   });
-
-  // The quiet gate is conversation-wide for both scopes. A later
-  // successful turn re-arms this actor's unprocessed cursor in the scheduler;
-  // this older job must not invoke a model or mark that cursor processed.
-  const gate = await conversationGate(db, state, job);
-  if (gate.kind === "superseded") {
-    await refreshJobFileStatuses({ db, job, state, status: "idle" });
-    return { skipped: "newer_conversation_activity" };
-  }
-  if (gate.kind === "deferred") {
-    await setStatus({
-      db,
-      stateId,
-      generation: requestedGeneration,
-      status: "idle",
-    });
-    await refreshJobFileStatuses({ db, job, state, status: "scheduled" });
-    throw new DbJobDeferredError(gate.runAt, "memory_quiet_period");
-  }
 
   const conversation = await loadConversation(db, state);
   const files: Array<{
@@ -1222,6 +1280,7 @@ export async function handleMemoryConsolidation(
     chatModel: resolved.model,
     memoryCuratorModel: settings.memory_curator_model,
     environmentOverride: process.env.MEMORY_CURATOR_MODEL,
+    apiKeys: settings.api_keys,
   });
 
   let scopeFailures = 0;

@@ -23,11 +23,34 @@ import { catalogWorkflowId, ensureDefaultWorkflows } from "../workflowCatalog";
 // ---------------------------------------------------------------------------
 
 /**
- * Generates a random 16-byte hex nonce for use as the spotlighting fence.
- * A fresh nonce per request means injected content cannot predict the tag it
- * would need to forge in order to escape the <untrusted-content> block.
+ * Generates the 32-hex-char nonce used for the spotlighting fence.
+ *
+ * Without a conversation id the nonce is 16 random bytes, fresh per call.
+ * With one it is an HMAC of the conversation id under a server secret, so it
+ * is stable for the life of that conversation yet still unknowable to a
+ * document author: they never see the key, and the value never appears in a
+ * persisted message because `neutralizeFenceTokens` redacts any echo.
+ *
+ * Stability matters for latency. Providers reuse the already-processed prefix
+ * of a prompt only while it is byte-identical, and the nonce sits in the
+ * system prompt (personalisation, document list) and in every replayed
+ * turn. A nonce that changed per request invalidated that cache on every
+ * turn, so time-to-first-token grew with conversation length. Unpredictability
+ * is defence in depth here rather than the primary control: even a known
+ * nonce cannot close a fence, because `neutralizeFenceTokens` strips the
+ * nonce and HTML-encodes every literal fence tag inside the fenced data.
  */
-export function generateSpotlightNonce(): string {
+export function generateSpotlightNonce(conversationId?: string | null): string {
+  const secret =
+    process.env.SPOTLIGHT_NONCE_SECRET?.trim() ||
+    process.env.DOWNLOAD_SIGNING_SECRET?.trim();
+  if (conversationId && secret) {
+    return crypto
+      .createHmac("sha256", secret)
+      .update(`spotlight-nonce:${conversationId}`)
+      .digest("hex")
+      .slice(0, 32);
+  }
   return crypto.randomBytes(16).toString("hex");
 }
 

@@ -84,7 +84,7 @@ export function ProjectMemoryModal({
         changeDraft,
         setError,
         setAutosaveError,
-        useLatestConflict,
+        reloadLatest,
         keepDraftAfterConflict,
     } = useMemoryFileController({
         active: open,
@@ -101,6 +101,8 @@ export function ProjectMemoryModal({
             "Project memory changed while you were editing. Reopen memory before saving again.",
         saveError:
             "Project memory could not be saved. Your draft has been kept.",
+        disabledError:
+            "Project memory was turned off while you were editing, so your changes were not saved.",
         onCurrentChange: handleCurrentChange,
     });
 
@@ -290,7 +292,7 @@ export function ProjectMemoryModal({
                                 {conflict ? (
                                     <MemoryConflictNotice
                                         project
-                                        onReload={useLatestConflict}
+                                        onReload={reloadLatest}
                                         onKeepDraft={keepDraftAfterConflict}
                                     />
                                 ) : null}

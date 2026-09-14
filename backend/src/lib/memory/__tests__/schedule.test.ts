@@ -50,19 +50,59 @@ describe("scheduleMemoryConsolidation", () => {
     });
   });
 
-  it("fails closed with a safe error when the active lease cannot be fenced", async () => {
-    const rpc = vi.fn(async () => ({
-      data: null,
-      error: { message: "raw database internals" },
-    }));
-    await expect(
-      beginMemoryConversationTurn({
-        db: { rpc } as never,
-        surface: "chat",
-        conversationId: "chat-1",
-        actorUserId: "user-1",
-      }),
-    ).rejects.toThrow("Memory activity could not be fenced");
+  it("fails open when the active lease cannot be fenced so the chat turn still answers", async () => {
+    // The user's message is already persisted when this runs. A lease
+    // failure must degrade to "this turn is not curated", never to a 500.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rpc = vi.fn(async () => ({
+        data: null,
+        error: { message: "raw database internals" },
+      }));
+      await expect(
+        beginMemoryConversationTurn({
+          db: { rpc } as never,
+          surface: "chat",
+          conversationId: "chat-1",
+          actorUserId: "user-1",
+        }),
+      ).resolves.toBeNull();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        "raw database internals",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("leaves lease release to the caller when scheduling fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rpc = vi.fn(async (name: string) =>
+        name === "schedule_memory_consolidation"
+          ? { data: null, error: { message: "raw database internals" } }
+          : { data: null, error: null },
+      );
+      await expect(
+        scheduleMemoryConsolidation({
+          db: { rpc } as never,
+          surface: "chat",
+          conversationId: "chat",
+          actorUserId: "user",
+          turnId: "turn",
+          turn: { activityId: "activity" },
+        }),
+      ).resolves.toBeNull();
+      // One RPC only: the route's finally block releases every unscheduled
+      // turn, so a release here would run twice and fail the second time.
+      expect(rpc).toHaveBeenCalledTimes(1);
+      expect(rpc).not.toHaveBeenCalledWith(
+        "release_memory_conversation_turn",
+        expect.anything(),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("uses the five-minute quiet window", async () => {

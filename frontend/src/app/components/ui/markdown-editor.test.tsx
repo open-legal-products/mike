@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { MarkdownEditor } from "./markdown-editor";
 
 const mocks = vi.hoisted(() => {
@@ -215,6 +216,37 @@ describe("MarkdownEditor", () => {
           name: "Memory document (raw Markdown)",
         }),
       ).toHaveValue("Latest value"),
+    );
+  });
+
+  it("does not flag the user's own raw edits as lossy Markdown", async () => {
+    // In raw mode the rich document is deliberately stale, so comparing a
+    // keystroke against it would show the hint on every character typed.
+    mocks.editor.storage.markdown.getMarkdown = () => "Prompt";
+    const user = userEvent.setup();
+    function Harness() {
+      const [value, setValue] = useState("Prompt");
+      return (
+        <MarkdownEditor
+          value={value}
+          onChange={setValue}
+          ariaLabel="Memory document"
+        />
+      );
+    }
+    render(<Harness />);
+    await user.click(
+      screen.getByRole("button", { name: "Show raw Markdown" }),
+    );
+    const raw = screen.getByRole("textbox", {
+      name: "Memory document (raw Markdown)",
+    });
+    await user.type(raw, " edited");
+    expect(raw).toHaveValue("Prompt edited");
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Raw view preserves this Markdown"),
+      ).toBeNull(),
     );
   });
 

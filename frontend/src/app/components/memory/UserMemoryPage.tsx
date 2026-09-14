@@ -59,7 +59,7 @@ export function UserMemoryPage() {
     changeDraft,
     setError,
     setAutosaveError,
-    useLatestConflict,
+    reloadLatest,
     keepDraftAfterConflict,
   } = useMemoryFileController({
     canEdit: true,
@@ -70,6 +70,8 @@ export function UserMemoryPage() {
     conflictLoadError:
       "Memory changed while you were editing. Reload the page before saving again.",
     saveError: "Memory could not be saved. Your draft has been kept.",
+    disabledError:
+      "Memory was turned off while you were editing, so your changes were not saved.",
   });
 
   const interactionLocked =
@@ -80,6 +82,10 @@ export function UserMemoryPage() {
     if (interactionLocked) return;
     setSettingsMutation("enable");
     setError(null);
+    // A refusal from the disabled period ("your changes were not saved") is
+    // over once memory is on again; leaving it up next to the fresh file
+    // reads as if the new file were already failing.
+    setAutosaveError(null);
     try {
       syncCurrent(await setUserMemoryEnabled(true));
     } catch (cause) {
@@ -184,6 +190,13 @@ export function UserMemoryPage() {
             {error}
           </p>
         ) : null}
+        {!loading && memory && !memory.enabled && autosaveError ? (
+          // The editor (and its status line) is gone once memory is off, but
+          // the reason a draft was refused must still be visible.
+          <p className="text-sm text-red-600" role="alert">
+            {autosaveError}
+          </p>
+        ) : null}
       </section>
 
       {loading ? (
@@ -217,7 +230,7 @@ export function UserMemoryPage() {
 
           {conflict ? (
             <MemoryConflictNotice
-              onReload={useLatestConflict}
+              onReload={reloadLatest}
               onKeepDraft={keepDraftAfterConflict}
             />
           ) : null}

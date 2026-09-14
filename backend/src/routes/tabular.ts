@@ -2295,29 +2295,34 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
   // may read it, while only a project editor may curate it.
   let readableMemoryProjectId: string | null = null;
   let writableMemoryProjectId: string | null = null;
-  let memorySharedAudience =
-    !reviewAccess.isCreator ||
-    (await hasDirectContentGrants(db, "tabular_review", review.id));
-  if (review.project_id) {
-    const projectAccess = await checkProjectAccess(
-      review.project_id,
-            userId,
-            userEmail,
+  let memorySharedAudience = false;
+  try {
+    memorySharedAudience =
+      !reviewAccess.isCreator ||
+      (await hasDirectContentGrants(db, "tabular_review", review.id));
+    if (review.project_id) {
+      const projectAccess = await checkProjectAccess(
+        review.project_id,
+        userId,
+        userEmail,
+        db,
+      );
+      if (projectAccess.ok) {
+        readableMemoryProjectId = review.project_id;
+        memorySharedAudience =
+          memorySharedAudience ||
+          (await projectHasSharedAudience(
             db,
-    );
-    if (projectAccess.ok) {
-      readableMemoryProjectId = review.project_id;
-      memorySharedAudience =
-        memorySharedAudience ||
-        (await projectHasSharedAudience(
-          db,
-          review.project_id,
-          projectAccess.project.org_id,
-        ));
-      if (can(projectAccess.projectRole, "content.edit")) {
-        writableMemoryProjectId = review.project_id;
+            review.project_id,
+            projectAccess.project.org_id,
+          ));
+        if (can(projectAccess.projectRole, "content.edit")) {
+          writableMemoryProjectId = review.project_id;
+        }
       }
     }
+  } catch (error) {
+    return void sendInternalError(res, error);
   }
   // Fetch all cells and logical review rows for this review.
   const { data: cells } = await db
@@ -2454,17 +2459,13 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
   }
 
   if (chatId) {
-    try {
-      memoryTurn = await beginMemoryConversationTurn({
-        db,
-        surface: "tabular",
-        conversationId: chatId,
-        actorUserId: userId,
-        });
-    } catch (error) {
-      return void sendInternalError(res, error);
-    }
-    }
+    memoryTurn = await beginMemoryConversationTurn({
+      db,
+      surface: "tabular",
+      conversationId: chatId,
+      actorUserId: userId,
+    });
+  }
 
   try {
     const apiMessages = buildTabularMessages(
@@ -2506,6 +2507,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, async (req, res) => {
         reasoning: selectedReasoningLevel,
         apiKeys: api_keys,
             signal: streamAbort.signal,
+            conversationId: chatId,
             includeMemory: true,
             memoryProjectId: readableMemoryProjectId,
             memorySharedAudience,

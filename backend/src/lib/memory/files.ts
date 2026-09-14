@@ -179,31 +179,20 @@ export async function writeMemoryFile(args: {
 }): Promise<{ current: MemoryCurrent; applied: boolean }> {
   const content = normalizeMemoryMarkdown(args.content);
   const expectedRevision = numberValue(args.expectedRevision);
-  const fresh = await ensureMemoryFile(
-    args.db,
-    args.file.scope,
-    (args.file.user_id ?? args.file.project_id) as string,
-  );
-  if (!fresh.enabled) throw new MemoryDisabledError("Memory is disabled");
+  // The row lock inside write_memory_file is the only place the enabled,
+  // epoch, revision and unchanged-body decisions are made. A pre-check here
+  // would be a second copy of those rules evaluated outside the lock: it
+  // could only ever disagree with the authoritative answer, and skipping the
+  // RPC for an unchanged body also skipped the job receipt that makes a
+  // retried curator job idempotent.
   const expectedEpoch =
     args.expectedEpoch == null
-      ? numberValue(fresh.epoch)
+      ? numberValue(args.file.epoch)
       : numberValue(args.expectedEpoch);
-  if (numberValue(fresh.epoch) !== expectedEpoch) {
-    throw new MemoryEpochSupersededError("Memory scope was reset");
-  }
-  if (numberValue(fresh.revision) !== expectedRevision) {
-    throw new MemoryRevisionConflictError("Memory revision changed");
-  }
   const hash = memoryHash(content);
-  // An unchanged body is not a write: it would burn a revision and, for the
-  // curator, look like new learning in the audit trail.
-  if (fresh.content_sha256 === hash) {
-    return { applied: false, current: memoryCurrentFromFile(fresh) };
-  }
 
   const { data, error } = await args.db.rpc("write_memory_file", {
-    p_memory_file_id: fresh.id,
+    p_memory_file_id: args.file.id,
     p_expected_revision: expectedRevision,
     p_expected_epoch: expectedEpoch,
     p_content: content,
@@ -251,11 +240,13 @@ export async function writeMemoryFile(args: {
   const applied = result?.applied !== false;
   return {
     applied,
-    current: (await getMemoryCurrent(
-      args.db,
-      fresh.scope,
-      (fresh.user_id ?? fresh.project_id) as string,
-    )).current,
+    current: (
+      await getMemoryCurrent(
+        args.db,
+        args.file.scope,
+        (args.file.user_id ?? args.file.project_id) as string,
+      )
+    ).current,
   };
 }
 

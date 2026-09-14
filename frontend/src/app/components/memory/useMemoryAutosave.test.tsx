@@ -45,6 +45,29 @@ describe("useMemoryAutosave", () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it("asks the browser to confirm unload while an edit is still unsaved", async () => {
+    // The debounce window already reads "Saving…", so a reload inside it
+    // would silently drop the edit. The guard exists exactly for that gap.
+    vi.useFakeTimers();
+    const save = vi.fn(async (content: string) => ({ content }));
+    const { rerender } = renderHook(
+      ({ value }) => useMemoryAutosave(options(value, save)),
+      { initialProps: { value: "saved" } },
+    );
+    const unload = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(unload()).toBe(false);
+
+    rerender({ value: "draft" });
+    expect(unload()).toBe(true);
+
+    rerender({ value: "saved" });
+    expect(unload()).toBe(false);
+  });
+
   it("allows a failed value to be retried after the draft changes", async () => {
     vi.useFakeTimers();
     const save = vi

@@ -770,10 +770,14 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         .json({ detail: "project_id does not match chat" });
     }
     resolvedProjectId = existingProjectId;
-    memorySharedAudience =
-      !!existing.org_id ||
-      existing.user_id !== userId ||
-      (await hasDirectContentGrants(db, "chat", existing.id));
+    try {
+      memorySharedAudience =
+        !!existing.org_id ||
+        existing.user_id !== userId ||
+        (await hasDirectContentGrants(db, "chat", existing.id));
+    } catch (error) {
+      return void sendInternalError(res, error);
+    }
     chatTitle = existing.title;
     chatModel = existing.model;
     chatReasoningLevel = existing.reasoning_level;
@@ -791,13 +795,17 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         projectAccess.ok && can(projectAccess.projectRole, "content.edit");
       allowDocumentMutation = canCurateProjectMemory;
       if (projectAccess.ok) {
-        memorySharedAudience =
-          memorySharedAudience ||
-          (await projectHasSharedAudience(
-            db,
-            existingProjectId,
-            projectAccess.project.org_id,
-          ));
+        try {
+          memorySharedAudience =
+            memorySharedAudience ||
+            (await projectHasSharedAudience(
+              db,
+              existingProjectId,
+              projectAccess.project.org_id,
+            ));
+        } catch (error) {
+          return void sendInternalError(res, error);
+        }
       }
     }
   }
@@ -860,9 +868,17 @@ chatRouter.post("/", requireAuth, async (req, res) => {
       projectId: resolvedProjectId,
     });
     if (!resolvedOrg.ok) return void sendInternalError(res, resolvedOrg.detail);
-    memorySharedAudience = resolvedProjectId
-      ? await projectHasSharedAudience(db, resolvedProjectId, resolvedOrg.orgId)
-      : false;
+    try {
+      memorySharedAudience = resolvedProjectId
+        ? await projectHasSharedAudience(
+            db,
+            resolvedProjectId,
+            resolvedOrg.orgId,
+          )
+        : false;
+    } catch (error) {
+      return void sendInternalError(res, error);
+    }
     const { data: newChat, error } = await db
       .from("chats")
       .insert({
@@ -937,17 +953,13 @@ chatRouter.post("/", requireAuth, async (req, res) => {
   }
 
   if (askInputsResponse || lastUser) {
-    try {
-      memoryTurn = await beginMemoryConversationTurn({
-        db,
-        surface: "chat",
-        conversationId: chatId,
-        actorUserId: userId,
-        });
-    } catch (error) {
-      return void sendInternalError(res, error);
-    }
-    }
+    memoryTurn = await beginMemoryConversationTurn({
+      db,
+      surface: "chat",
+      conversationId: chatId,
+      actorUserId: userId,
+    });
+  }
 
   try {
     const { docIndex, docStore } = await buildDocContext(
@@ -962,7 +974,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     }));
     // Generate the nonce before enriching prior events so document filenames
     // and workflow titles replayed from earlier turns are fenced as well.
-    const nonce = generateSpotlightNonce();
+    const nonce = generateSpotlightNonce(chatId);
     const enrichedMessages = await enrichWithPriorEvents(
         messages,
         chatId,
@@ -1096,6 +1108,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             apiKeys,
             signal: stream.signal,
             projectId: resolvedProjectId,
+            conversationId: chatId,
             includeMemory: true,
             memoryProjectId: canReadProjectMemory ? resolvedProjectId : null,
             memorySharedAudience,

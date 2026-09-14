@@ -135,8 +135,14 @@ describe("direct memory file writes", () => {
     expect(result.applied).toBe(true);
   });
 
-  it("does not spend a revision on an unchanged body", async () => {
-    const db = dbFor(file);
+  it("lets the row lock decide that an unchanged body is not a write", async () => {
+    // The RPC answers applied=false for a body whose digest matches, while
+    // still stamping the curator's job receipt. A client-side short-circuit
+    // would skip that receipt and make a retried job re-run the model.
+    const db = dbFor(file, () => ({
+      data: [{ applied: false, new_revision: 3 }],
+      error: null,
+    }));
 
     const result = await writeMemoryFile({
       db: db as never,
@@ -145,16 +151,20 @@ describe("direct memory file writes", () => {
       expectedRevision: 3,
       source: "curator",
       updatedBy: "user-1",
+      sourceJobId: "job-1",
     });
 
-    expect(db.rpc).not.toHaveBeenCalled();
+    expect(db.rpc).toHaveBeenCalledTimes(1);
     expect(result.applied).toBe(false);
     expect(result.current.content).toBe("# Existing");
     expect(result.current.revision).toBe(3);
   });
 
-  it("refuses a stale draft before it can reach the row", async () => {
-    const db = dbFor({ ...file, revision: 5 });
+  it("maps a stale draft to a revision conflict raised under the row lock", async () => {
+    const db = dbFor({ ...file, revision: 5 }, () => ({
+      data: null,
+      error: { message: "error: memory_revision_conflict" },
+    }));
 
     await expect(
       writeMemoryFile({
@@ -166,7 +176,7 @@ describe("direct memory file writes", () => {
         updatedBy: "user-1",
       }),
     ).rejects.toThrow("Memory revision changed");
-    expect(db.rpc).not.toHaveBeenCalled();
+    expect(db.rpc).toHaveBeenCalledTimes(1);
   });
 
   it.each([

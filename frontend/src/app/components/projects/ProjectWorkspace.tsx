@@ -317,8 +317,13 @@ export function ProjectWorkspaceProvider({
     // The memory dialog owns its own reads and writes; this keeps the loaded
     // project row agreeing with them.
     const syncProjectMemoryEnabled = useCallback((enabled: boolean) => {
+        // Called on every memory load and poll; only a real change may
+        // produce a new project object, or the whole workspace re-renders
+        // every few seconds while a curator runs.
         setProject((current) =>
-            current ? { ...current, memory_enabled: enabled } : current,
+            current && current.memory_enabled !== enabled
+                ? { ...current, memory_enabled: enabled }
+                : current,
         );
     }, []);
 

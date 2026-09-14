@@ -997,16 +997,12 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
   }
 
   if (lastUser && persistChat) {
-    try {
-      memoryTurn = await beginMemoryConversationTurn({
-        db,
-        surface: "word",
-        conversationId: chatId,
-        actorUserId: userId,
-      });
-    } catch (activityError) {
-      return void sendInternalError(res, activityError);
-    }
+    memoryTurn = await beginMemoryConversationTurn({
+      db,
+      surface: "word",
+      conversationId: chatId,
+      actorUserId: userId,
+    });
   }
 
   try {
@@ -1041,7 +1037,7 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
       filename: info.filename,
     })),
   ];
-  const nonce = generateSpotlightNonce();
+  const nonce = generateSpotlightNonce(persistChat ? chatId : null);
   const enrichedMessages = await enrichWithPriorEvents(
     messages,
     persistChat ? chatId : null,
@@ -1175,6 +1171,7 @@ wordChatRouter.post("/", requireAuth, async (req, res) => {
       reasoning: selectedReasoningLevel,
       apiKeys,
       signal: stream.signal,
+      conversationId: persistChat ? chatId : null,
         includeMemory: true,
         memoryProjectId: null,
       nonce,

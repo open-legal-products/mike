@@ -12,6 +12,12 @@ const safetyMigration = readFileSync(
   resolve(backendRoot, "migrations/20260909_01_memory_safety_boundaries.sql"),
   "utf8",
 );
+// #451 shipped the two migrations above; every later SQL change to memory
+// objects lands in the follow-up migration and in schema.sql.
+const followupMigration = readFileSync(
+  resolve(backendRoot, "migrations/20260912_01_memory_followup.sql"),
+  "utf8",
+);
 const sources = [
   ["schema", schemaSql],
   ["migration", memoryMigration],
@@ -194,12 +200,35 @@ describe.each([
     expect(body).toContain("event->>'ask_event_id' = p_ask_event_id");
   });
 
+});
+
+describe.each([
+  ["schema", schemaSql],
+  ["follow-up migration", followupMigration],
+] as const)("%s memory follow-ups", (_name, sql) => {
+  it("replaces the two-argument app-memory check with the conversation-aware one", () => {
+    expect(sql).toMatch(
+      /grant execute\s+on function public\.memory_source_allows_app_memory\(text, uuid, uuid, uuid\)\s+to service_role/,
+    );
+    expect(sql).toMatch(
+      /grant execute\s+on function public\.memory_project_is_private\(uuid\)\s+to service_role/,
+    );
+    // The two-argument form may only appear as the drop of the shipped object.
+    const twoArg = sql.match(/memory_source_allows_app_memory\(text, uuid\)/g) ?? [];
+    const drops = sql.match(
+      /drop function if exists public\.memory_source_allows_app_memory\(text, uuid\)/g,
+    ) ?? [];
+    expect(twoArg.length).toBe(drops.length);
+  });
+
   it("deletes app and private-project memory transactionally", () => {
     const body = functionBody(sql, "delete_user_private_memories");
-    expect(body).toContain("lock table public.projects in share mode");
-    expect(body).toContain(
-      "lock table public.project_access_grants in share mode",
-    );
+    // Eligibility is pinned with row locks on the caller's own private
+    // projects. A table-level SHARE lock also worked, but it stalled every
+    // project write in the system from a user-facing DELETE route.
+    expect(body).not.toContain("lock table");
+    expect(body).toContain("where project.user_id = p_user_id and project.org_id is null");
+    expect(body).toContain("for update;");
     expect(body).toContain("file.scope = 'user'");
     expect(body).toContain("project.org_id is null");
     expect(body).toContain("not exists (");

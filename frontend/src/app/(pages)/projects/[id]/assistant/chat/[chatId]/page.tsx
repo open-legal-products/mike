@@ -1492,7 +1492,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 canManage={canManageProject}
                 onMemoryEnabledChange={(enabled) =>
                     setProject((current) =>
-                        current
+                        current && current.memory_enabled !== enabled
                             ? { ...current, memory_enabled: enabled }
                             : current,
                     )
