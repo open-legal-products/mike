@@ -41,6 +41,11 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
     # Chat replies stream; buffering them holds the whole response back.
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # A signed-in response carries four Set-Cookie headers, one of them a 2.7KB
+    # session JWT, for ~4.8KB of headers. nginx's 4k default overflows and it
+    # answers 502 before the app logs anything.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 16k
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
 
 # Credentials live in a Secret that the deploy workflow creates and rotates;
 # the chart never renders them. `existingSecret` must contain:
