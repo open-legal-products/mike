@@ -1114,11 +1114,20 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         // (observed via OpenRouter). Silence reads as a hung composer, so
         // surface it — unless tools produced visible artifacts, which carry
         // their own completion signal.
-        if (
-            !fullText?.trim() &&
-            !events?.some((event) => event.type === "ask_inputs") &&
-            (!events || events.every((event) => !("error" in event)))
-        ) {
+        const hasToolOutput = events?.some(
+            (event) =>
+                "error" in event ||
+                [
+                    "error",
+                    "ask_inputs",
+                    "doc_created",
+                    "doc_download",
+                    "doc_edited",
+                    "doc_replicated",
+                    "workflow_applied",
+                ].includes(event.type),
+        );
+        if (!fullText?.trim() && !hasToolOutput) {
             write(
                 `data: ${JSON.stringify({
                     type: "error",

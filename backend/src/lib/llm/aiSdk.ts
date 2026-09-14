@@ -44,8 +44,21 @@ export async function aiSdkFetch(
       try {
         JSON.parse(partial.arguments);
       } catch {
+        // A clean terminal event proves that the transport delivered the
+        // complete provider response. Preserve malformed arguments exactly as
+        // sent so AI SDK can emit its recoverable dynamic tool-error instead
+        // of preempting its tool-validation path. A stream that just closes is
+        // still unsafe: its partial arguments must fail before any tool could
+        // run.
+        if (!endedCleanly) {
+          throw new Error(
+            `LLM stream ended with malformed JSON arguments for tool "${partial.name}".`,
+          );
+        }
+      }
+      if (!endedCleanly) {
         throw new Error(
-          `LLM stream ended with malformed JSON arguments for tool "${partial.name}".`,
+          `LLM stream ended before a clean terminal event for tool "${partial.name}".`,
         );
       }
     }
@@ -155,6 +168,8 @@ class ToolExecutionBatcher {
 
   constructor(
     private readonly runTools: NonNullable<StreamChatParams["runTools"]>,
+    /** Fired synchronously when runTools rejects, before the SDK learns of it. */
+    private readonly onFailure?: (error: unknown) => void,
   ) {}
 
   execute(call: NormalizedToolCall): Promise<string> {
@@ -193,6 +208,7 @@ class ToolExecutionBatcher {
         }
       }
     } catch (error) {
+      this.onFailure?.(error);
       for (const item of pending) item.reject(error);
     }
   }
@@ -208,10 +224,13 @@ function toAiSdkTools(
   schemas: OpenAIToolSchema[],
   runTools?: StreamChatParams["runTools"],
   sdk?: Pick<typeof AiSdk, "jsonSchema" | "tool">,
+  onRunToolsFailure?: (error: unknown) => void,
 ): ToolSet | undefined {
   if (!schemas.length) return undefined;
   if (!sdk) throw new Error("AI SDK tool helpers are unavailable.");
-  const batcher = runTools ? new ToolExecutionBatcher(runTools) : null;
+  const batcher = runTools
+    ? new ToolExecutionBatcher(runTools, onRunToolsFailure)
+    : null;
 
   return Object.fromEntries(
     schemas.map((schema) => {
@@ -245,6 +264,15 @@ function errorMessage(error: unknown, label: string): string {
   return `${label} stream failed.`;
 }
 
+/**
+ * The ORIGINAL Error instance from a `tool-error` / `error` part. Re-wrapping
+ * it discards error identity, including control-flow and user-facing error
+ * types thrown inside runTools (the SDK's tool `execute`).
+ */
+function rethrowable(error: unknown, label: string): Error {
+  return error instanceof Error ? error : new Error(errorMessage(error, label));
+}
+
 function usesCourtlistenerTool(
   steps: Array<{ toolCalls: Array<{ toolName: string }> }>,
 ) {
@@ -260,7 +288,33 @@ export async function streamAiSdk(
   config: AiSdkAdapterConfig,
 ): Promise<StreamChatResult> {
   const sdk = await import("ai");
-  const tools = toAiSdkTools(params.tools ?? [], params.runTools, sdk);
+  // Internal abort linked to the caller's signal: a runTools failure (e.g. the
+  // ask_inputs pause) ends the turn, but the SDK's step loop would fire the
+  // NEXT model request before this consumer sees the `tool-error` part — so
+  // abort synchronously in the batcher's failure path and keep that first
+  // failure (the stream may surface an `abort` part before the `tool-error`).
+  const internalAbort = new AbortController();
+  const forwardAbort = () => internalAbort.abort(params.abortSignal?.reason);
+  if (params.abortSignal?.aborted) forwardAbort();
+  else params.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
+  const runToolsFailure: { first: { error: unknown } | null } = { first: null };
+  const tools = toAiSdkTools(params.tools ?? [], params.runTools, sdk, (error) => {
+    runToolsFailure.first ??= { error };
+    internalAbort.abort();
+  });
+  // An exception that merely LOOKS like an abort (name "AbortError" or
+  // isAbortError's exact message) must not take streaming.ts's silent
+  // user-cancel path unless the caller's signal really is aborted.
+  const guardAbortShaped = (e: Error): Error =>
+    params.abortSignal?.aborted ||
+    (e.name !== "AbortError" && e.message !== "Stream aborted.")
+      ? e
+      : new Error(
+          e.message === "Stream aborted."
+            ? "Stream aborted. (no abort was requested; treated as an error)"
+            : e.message,
+          { cause: e },
+        );
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,
@@ -277,7 +331,7 @@ export async function streamAiSdk(
       tools,
       maxOutputTokens: MAX_OUTPUT_TOKENS,
       stopWhen: sdk.stepCountIs(params.maxIterations ?? 10),
-      abortSignal: params.abortSignal,
+      abortSignal: internalAbort.signal,
       reasoning:
         config.supportsReasoning === false
           ? undefined
@@ -350,9 +404,15 @@ export async function streamAiSdk(
           break;
         }
         case "tool-error":
-          throw new Error(errorMessage(part.error, config.label));
+          // `dynamic: true` = the SDK synthesized this part for a call it could
+          // not dispatch (unknown tool / unparseable input); it already queued
+          // the error as that call's result and continues the loop so the
+          // model can recover. Mike's tools are static, so only a genuine
+          // execute() failure reaches the throw.
+          if ((part as { dynamic?: boolean }).dynamic === true) break;
+          throw guardAbortShaped(rethrowable(part.error, config.label));
         case "error":
-          throw new Error(errorMessage(part.error, config.label));
+          throw guardAbortShaped(rethrowable(part.error, config.label));
         case "abort": {
           const error = new Error(part.reason || "Stream aborted.");
           error.name = "AbortError";
@@ -368,8 +428,16 @@ export async function streamAiSdk(
     await rawStreamRecorder?.flush("completed");
     return { fullText };
   } catch (error) {
-    await rawStreamRecorder?.flush("error", error);
-    throw error;
+    internalAbort.abort();
+    const fatal = runToolsFailure.first
+      ? guardAbortShaped(rethrowable(runToolsFailure.first.error, config.label))
+      : error instanceof Error
+        ? guardAbortShaped(error)
+        : error;
+    await rawStreamRecorder?.flush("error", fatal);
+    throw fatal;
+  } finally {
+    params.abortSignal?.removeEventListener("abort", forwardAbort);
   }
 }
 
