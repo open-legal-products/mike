@@ -9,6 +9,13 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 
 const MODEL_API_KEY_FIELDS = [
   {
+    // First: SambaNova is this deployment's primary provider, and without a
+    // personal key there is no server-side key to fall back on.
+    provider: "sambanova",
+    label: "SambaNova API Key",
+    placeholder: "...",
+  },
+  {
     provider: "claude",
     label: "Anthropic (Claude) API Key",
     placeholder: "sk-ant-...",

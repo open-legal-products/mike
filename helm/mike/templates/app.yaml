@@ -98,9 +98,6 @@ spec:
             - name: SUPABASE_SECRET_KEY
               valueFrom:
                 secretKeyRef: { name: {{ .Values.existingSecret }}, key: SUPABASE_SECRET_KEY }
-            - name: SAMBANOVA_API_KEY
-              valueFrom:
-                secretKeyRef: { name: {{ .Values.existingSecret }}, key: SAMBANOVA_API_KEY }
             - name: DOWNLOAD_SIGNING_SECRET
               valueFrom:
                 secretKeyRef: { name: {{ .Values.existingSecret }}, key: DOWNLOAD_SIGNING_SECRET }

@@ -10,6 +10,7 @@ export type ApiKeyProvider =
     | "openrouter"
     | "vercel"
     | "opencode-go"
+    | "sambanova"
     | "courtlistener";
 export type ApiKeySource = "user" | "env" | null;
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
@@ -30,6 +31,7 @@ const PROVIDERS: ApiKeyProvider[] = [
     "openrouter",
     "vercel",
     "opencode-go",
+    "sambanova",
     "courtlistener",
 ];
 
@@ -55,6 +57,8 @@ function envApiKey(provider: ApiKeyProvider): string | null {
             );
         case "opencode-go":
             return process.env.OPENCODE_API_KEY?.trim() || null;
+        case "sambanova":
+            return process.env.SAMBANOVA_API_KEY?.trim() || null;
         case "courtlistener":
             return process.env.COURTLISTENER_API_TOKEN?.trim() || null;
         default:
@@ -122,24 +126,13 @@ export async function getUserApiKeyStatus(
     userId: string,
     db: Db = createServerSupabase(),
 ): Promise<ApiKeyStatus> {
-    const status: ApiKeyStatus = {
-        claude: false,
-        gemini: false,
-        openai: false,
-        openrouter: false,
-        vercel: false,
-        "opencode-go": false,
-        courtlistener: false,
-        sources: {
-            claude: null,
-            gemini: null,
-            openai: null,
-            openrouter: null,
-            vercel: null,
-            "opencode-go": null,
-            courtlistener: null,
-        },
-    };
+    // Built from PROVIDERS so adding a provider cannot leave a hole here.
+    const status = {
+        ...Object.fromEntries(PROVIDERS.map((provider) => [provider, false])),
+        sources: Object.fromEntries(
+            PROVIDERS.map((provider) => [provider, null]),
+        ),
+    } as ApiKeyStatus;
 
     for (const provider of PROVIDERS) {
         if (hasEnvApiKey(provider)) {

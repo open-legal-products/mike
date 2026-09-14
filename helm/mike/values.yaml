@@ -31,7 +31,7 @@ ingress:
 # Credentials live in a Secret that the deploy workflow creates and rotates;
 # the chart never renders them. `existingSecret` must contain:
 #   POSTGRES_PASSWORD, JWT_SECRET, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY,
-#   SAMBANOVA_API_KEY, DOWNLOAD_SIGNING_SECRET, USER_API_KEYS_ENCRYPTION_SECRET,
+#   DOWNLOAD_SIGNING_SECRET, USER_API_KEYS_ENCRYPTION_SECRET,
 #   STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY
 existingSecret: mike-credentials
 
