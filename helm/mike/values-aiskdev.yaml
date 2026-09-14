@@ -1,0 +1,6 @@
+# The aisk-dev-1 cluster, alongside sambachat in the default namespace.
+publicUrl: https://aiskmike-dev.cloud.snova.ai
+
+ingress:
+  enabled: true
+  host: aiskmike-dev.cloud.snova.ai
