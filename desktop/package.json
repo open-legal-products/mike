@@ -1,0 +1,22 @@
+{
+  "name": "mike-desktop",
+  "productName": "Mike",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mike for Mac \u2014 desktop shell around the Mike web app",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "MIKE_DESKTOP_DEV=1 electron .",
+    "dist": "electron-builder --mac --config electron-builder.json",
+    "dist:signed": "electron-builder --mac --config electron-builder.release.json",
+    "e2e": "node e2e/app.e2e.mjs",
+    "e2e:flows": "node e2e/flows.e2e.mjs",
+    "icon": "electron scripts/render-icon.js && bash scripts/make-icns.sh"
+  },
+  "devDependencies": {
+    "electron": "^38.3.0",
+    "electron-builder": "^26.0.12",
+    "playwright-core": "^1.61.1"
+  }
+}
