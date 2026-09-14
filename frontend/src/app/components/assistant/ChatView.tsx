@@ -43,6 +43,8 @@ import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedP
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { can, roleFrom } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { useQuotableSelection } from "@/app/hooks/useQuotableSelection";
+import { QuoteSelectionPopup } from "@/app/components/shared/QuoteSelectionPopup";
 
 interface Props {
     chatId?: string | null;
@@ -791,6 +793,22 @@ export function ChatView({
 
     const messagesBottomPadding = DEFAULT_ASSISTANT_BOTTOM_PADDING;
 
+    // Highlighting inside an assistant response offers "Add to Chat". Disabled
+    // while AskInputPopup has replaced the composer — there is no chip row to
+    // attach the excerpt to.
+    const { selection: quotableSelection, clear: clearQuotableSelection } =
+        useQuotableSelection(messagesContainerRef, {
+            enabled: activeInput === null,
+        });
+
+    const addQuotedExcerpt = useCallback(
+        (text: string) => {
+            chatInputRef.current?.addQuotedExcerpt(text);
+            clearQuotableSelection();
+        },
+        [clearQuotableSelection],
+    );
+
     return (
         <div className="h-full w-full flex relative">
             {/* Chat column */}
@@ -1061,6 +1079,11 @@ export function ChatView({
                     </div>
                 </div>
             </div>
+
+            <QuoteSelectionPopup
+                selection={quotableSelection}
+                onAdd={addQuotedExcerpt}
+            />
 
             <AssistantWorkflowModal
                 open={workflowModalOpen}
