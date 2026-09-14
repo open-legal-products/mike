@@ -30,6 +30,30 @@ spec:
         {{- include "mike.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: db
     spec:
+      initContainers:
+        # The volume is created owned by root, and postgres refuses to start on
+        # a data directory it does not own. Chowning by NAME rather than uid
+        # uses the image's own passwd entry, so this stays correct if the image
+        # ever renumbers the postgres user.
+        - name: fix-data-ownership
+          image: {{ .Values.postgres.image }}
+          securityContext:
+            runAsUser: 0
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              chown -R postgres:postgres /var/lib/postgresql/data
+              chmod 700 /var/lib/postgresql/data
+              # An earlier revision set PGDATA to a subdirectory the image then
+              # ignored, leaving an empty `pgdata` behind. Anything in the data
+              # directory makes the entrypoint skip initdb, so postgres would
+              # start against a database that was never created. rmdir removes
+              # it only if it is empty, so a real database is never touched.
+              rmdir /var/lib/postgresql/data/pgdata 2>/dev/null || true
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
       containers:
         - name: postgres
           image: {{ .Values.postgres.image }}
@@ -51,11 +75,6 @@ spec:
                   key: JWT_SECRET
             - name: JWT_EXP
               value: "3600"
-            # The image's initdb only runs on an empty data directory, and it
-            # refuses to initialise into a directory that already holds lost+found,
-            # which is what a freshly attached PV looks like.
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data

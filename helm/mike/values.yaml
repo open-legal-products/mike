@@ -8,6 +8,11 @@
 nameOverride: ""
 fullnameOverride: "mike"
 
+# Every workload in this namespace pulls through regcred; without it the node
+# attempts an anonymous pull and the registry answers 403.
+imagePullSecrets:
+  - name: regcred
+
 image:
   registry: us-west2-docker.pkg.dev/acp-starterkits-development-57/oci-us-west2-starerkits
   # Both images are pinned to one tag: the fork commit's short SHA, set by the
