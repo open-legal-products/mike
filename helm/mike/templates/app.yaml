@@ -1,0 +1,262 @@
+{{- $tag := include "mike.imageTag" . -}}
+{{- $public := include "mike.publicUrl" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mike.backend" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 3001
+      targetPort: http
+      name: http
+  selector:
+    {{- include "mike.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mike.backend" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "mike.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+    spec:
+      initContainers:
+        # The schema is applied by a post-install hook, which by definition runs
+        # after this Deployment is created. Waiting here keeps the pod in Init
+        # until the tables exist instead of crash-looping the app against an
+        # empty database.
+        - name: wait-for-schema
+          image: {{ .Values.postgres.image }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: DB
+              value: postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "mike.db" . }}:5432/postgres
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -eu
+              until psql "$DB" -tAc "select to_regclass('public.user_profiles')" 2>/dev/null | grep -q user_profiles; do
+                echo "waiting for the mike schema..."; sleep 3
+              done
+              echo "schema present"
+      containers:
+        - name: backend
+          image: {{ .Values.image.registry }}/{{ .Values.image.backend }}:{{ $tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: NODE_ENV
+              value: production
+            - name: FRONTEND_URL
+              value: {{ $public }}
+            - name: API_PUBLIC_URL
+              value: {{ printf "%s/api" $public }}
+            - name: SUPABASE_URL
+              value: http://{{ include "mike.gateway" . }}:8000
+            - name: REDIS_URL
+              value: redis://{{ include "mike.redis" . }}:6379
+            - name: ASYNC_DOCUMENT_CONVERSION
+              value: "true"
+            - name: ASYNC_TABULAR_EXTRACTION
+              value: "true"
+            - name: WORKERS_MODE
+              value: thread
+            - name: R2_ENDPOINT_URL
+              value: http://{{ include "mike.storage" . }}:9000
+            - name: R2_PUBLIC_ENDPOINT_URL
+              value: http://{{ include "mike.storage" . }}:9000
+            - name: R2_BUCKET_NAME
+              value: {{ .Values.storage.bucket }}
+            - name: R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: STORAGE_ACCESS_KEY }
+            - name: R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: STORAGE_SECRET_KEY }
+            - name: SUPABASE_PUBLISHABLE_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: SUPABASE_PUBLISHABLE_KEY }
+            - name: SUPABASE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: SUPABASE_SECRET_KEY }
+            - name: SAMBANOVA_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: SAMBANOVA_API_KEY }
+            - name: DOWNLOAD_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: DOWNLOAD_SIGNING_SECRET }
+            - name: USER_API_KEYS_ENCRYPTION_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: USER_API_KEYS_ENCRYPTION_SECRET }
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources: {{- toYaml .Values.backend.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mike.frontend" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 3000
+      targetPort: http
+      name: http
+  selector:
+    {{- include "mike.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mike.frontend" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "mike.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: {{ .Values.image.registry }}/{{ .Values.image.frontend }}:{{ $tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Server-side only: the browser never sees this, it calls /api on
+            # its own origin and the frontend proxies onward.
+            - name: API_BASE_URL
+              value: http://{{ include "mike.backend" . }}:3001
+            - name: SUPABASE_PUBLIC_URL
+              value: {{ printf "%s/supabase" $public }}
+            - name: NODE_ENV
+              value: production
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          resources: {{- toYaml .Values.frontend.resources | nindent 12 }}
+{{- if .Values.workflowSync.enabled }}
+---
+{{/*
+  The workflow catalog import. Upstream runs this as a release job before
+  traffic shifts: backend startup only reads the catalog, it never populates
+  it. pre-upgrade so an upgrade's new catalog lands before the new backend
+  serves; post-install because on a first install the schema does not exist
+  until the db-init hook has run.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mike.fullname" . }}-workflow-sync
+  labels: {{- include "mike.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: workflow-sync
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: sync
+          image: {{ .Values.image.registry }}/{{ .Values.image.backend }}:{{ $tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["npm", "run", "sync:workflows"]
+          env:
+            - name: SUPABASE_URL
+              value: http://{{ include "mike.gateway" . }}:8000
+            - name: R2_ENDPOINT_URL
+              value: http://{{ include "mike.storage" . }}:9000
+            - name: R2_BUCKET_NAME
+              value: {{ .Values.storage.bucket }}
+            - name: R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: STORAGE_ACCESS_KEY }
+            - name: R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: STORAGE_SECRET_KEY }
+            - name: SUPABASE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.existingSecret }}, key: SUPABASE_SECRET_KEY }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 2Gi }
+{{- end }}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "mike.fullname" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+  annotations: {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ required "ingress.host is required when ingress is enabled" .Values.ingress.host }}
+      http:
+        paths:
+          # Supabase's auth and data API must be reachable from the browser on
+          # the same origin: confirmation links and supabase-js both target it.
+          - path: /supabase/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mike.gateway" . }}
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mike.frontend" . }}
+                port:
+                  number: 3000
+{{- end }}

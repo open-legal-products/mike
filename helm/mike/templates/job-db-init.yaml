@@ -1,0 +1,80 @@
+{{/*
+  Applies the schema once auth.users exists (GoTrue builds that on first start).
+  A Helm hook rather than a plain Job so it re-runs on every upgrade and is
+  recreated rather than conflicting with the immutable spec of the previous one.
+
+  Only schema.sql is applied: upstream documents it as the complete current
+  shape for a fresh database, and every install here is fresh. The compose
+  stack additionally replays historical migrations because its volumes predate
+  them — that does not apply to a new cluster install, and replaying them over
+  a fresh schema is exactly what upstream's docs warn against.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mike.fullname" . }}-db-init
+  labels: {{- include "mike.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: db-init
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql
+          image: {{ .Values.postgres.image }}
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: DB
+              value: postgres://postgres:$(POSTGRES_PASSWORD)@{{ include "mike.db" . }}:5432/postgres
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+              readOnly: true
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "waiting for the auth schema GoTrue creates on first start..."
+              for _ in $(seq 1 150); do
+                if psql "$DB" -tAc "select to_regclass('auth.users')" | grep -q auth; then
+                  break
+                fi
+                sleep 2
+              done
+              psql "$DB" -tAc "select to_regclass('auth.users')" | grep -q auth || {
+                echo "auth.users never appeared — is the auth deployment healthy?" >&2
+                exit 1
+              }
+
+              if psql "$DB" -tAc "select to_regclass('public.user_profiles')" | grep -q user_profiles; then
+                echo "schema already applied, skipping"
+              else
+                psql "$DB" -v ON_ERROR_STOP=1 -f /sql/schema.sql
+              fi
+
+              # PostgREST reads as service_role and caches the schema; without
+              # the reload it serves a stale catalogue until it restarts.
+              psql "$DB" -v ON_ERROR_STOP=1 -c "grant usage on schema public to service_role;
+                grant all privileges on all tables in schema public to service_role;
+                grant all privileges on all sequences in schema public to service_role;
+                notify pgrst, 'reload schema';"
+              echo "schema ready"
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: sql
+          configMap:
+            name: {{ include "mike.fullname" . }}-db-sql

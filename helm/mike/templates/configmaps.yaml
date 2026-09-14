@@ -1,0 +1,81 @@
+{{/*
+  schema.sql and roles.sql are copied into files/ by the deploy pipeline rather
+  than committed here, so the chart can never drift from the fork's schema. A
+  missing file fails the render instead of silently installing an empty schema.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mike.fullname" . }}-db-sql
+  labels: {{- include "mike.labels" . | nindent 4 }}
+data:
+  roles.sql: |
+{{ required "files/roles.sql is missing — the deploy pipeline copies it from docker/db-init/" (.Files.Get "files/roles.sql") | indent 4 }}
+  schema.sql: |
+{{ required "files/schema.sql is missing — the deploy pipeline copies it from backend/" (.Files.Get "files/schema.sql") | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mike.fullname" . }}-gateway
+  labels: {{- include "mike.labels" . | nindent 4 }}
+data:
+  # Ported from supabase/gateway.conf. Two changes were required for k8s: the
+  # resolver is kube-dns rather than Docker's 127.0.0.11, and the upstreams are
+  # this release's Services. Upstreams stay in variables so nginx resolves them
+  # per request and a restarted auth/rest pod doesn't leave it pinned to a dead
+  # IP.
+  default.conf: |
+    server {
+        listen 8000;
+        server_name _;
+        client_max_body_size 50m;
+        resolver kube-dns.kube-system.svc.cluster.local ipv6=off valid=10s;
+
+        location /auth/v1/ {
+            if ($request_method = OPTIONS) {
+                add_header Access-Control-Allow-Origin $http_origin always;
+                add_header Access-Control-Allow-Credentials true always;
+                add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
+                add_header Access-Control-Allow-Headers $http_access_control_request_headers always;
+                add_header Access-Control-Max-Age 86400 always;
+                add_header Content-Length 0;
+                return 204;
+            }
+            proxy_hide_header Access-Control-Allow-Origin;
+            add_header Access-Control-Allow-Origin $http_origin always;
+            add_header Access-Control-Allow-Credentials true always;
+
+            set $auth_upstream {{ include "mike.auth" . }}.{{ .Release.Namespace }}.svc.cluster.local:9999;
+            rewrite ^/auth/v1/(.*)$ /$1 break;
+            proxy_pass http://$auth_upstream;
+        }
+
+        location /rest/v1/ {
+            if ($request_method = OPTIONS) {
+                add_header Access-Control-Allow-Origin $http_origin always;
+                add_header Access-Control-Allow-Credentials true always;
+                add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
+                add_header Access-Control-Allow-Headers $http_access_control_request_headers always;
+                add_header Access-Control-Max-Age 86400 always;
+                add_header Content-Length 0;
+                return 204;
+            }
+            proxy_hide_header Access-Control-Allow-Origin;
+            add_header Access-Control-Allow-Origin $http_origin always;
+            add_header Access-Control-Allow-Credentials true always;
+
+            set $rest_upstream {{ include "mike.rest" . }}.{{ .Release.Namespace }}.svc.cluster.local:3000;
+            rewrite ^/rest/v1/(.*)$ /$1 break;
+            proxy_pass http://$rest_upstream;
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mike.fullname" . }}-storage-cors
+  labels: {{- include "mike.labels" . | nindent 4 }}
+data:
+  storage-cors.json: |
+{{ .Files.Get "files/storage-cors.json" | default "{}" | indent 4 }}

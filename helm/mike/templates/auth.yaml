@@ -1,0 +1,213 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mike.auth" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 9999
+      targetPort: http
+      name: http
+  selector:
+    {{- include "mike.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: auth
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mike.auth" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mike.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: auth
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: auth
+    spec:
+      containers:
+        - name: gotrue
+          image: {{ .Values.auth.image }}
+          ports:
+            - name: http
+              containerPort: 9999
+          env:
+            - name: GOTRUE_API_HOST
+              value: 0.0.0.0
+            - name: GOTRUE_API_PORT
+              value: "9999"
+            # Confirmation and OAuth callback links are built from this, so it
+            # must be the origin the browser actually uses, not a cluster name.
+            - name: API_EXTERNAL_URL
+              value: {{ include "mike.publicUrl" . }}
+            - name: GOTRUE_SITE_URL
+              value: {{ include "mike.publicUrl" . }}
+            - name: GOTRUE_URI_ALLOW_LIST
+              value: "*"
+            - name: GOTRUE_DB_DRIVER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: GOTRUE_DB_DATABASE_URL
+              value: postgres://supabase_auth_admin:$(POSTGRES_PASSWORD)@{{ include "mike.db" . }}:5432/postgres
+            - name: GOTRUE_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: JWT_SECRET
+            - name: GOTRUE_JWT_EXP
+              value: "3600"
+            - name: GOTRUE_JWT_AUD
+              value: authenticated
+            - name: GOTRUE_JWT_DEFAULT_GROUP_NAME
+              value: authenticated
+            - name: GOTRUE_JWT_ADMIN_ROLES
+              value: service_role
+            - name: GOTRUE_PASSWORD_MIN_LENGTH
+              value: "10"
+            - name: GOTRUE_DISABLE_SIGNUP
+              value: {{ .Values.auth.disableSignup | quote }}
+            - name: GOTRUE_EXTERNAL_EMAIL_ENABLED
+              value: "true"
+            - name: GOTRUE_EXTERNAL_PHONE_ENABLED
+              value: "false"
+            # No SMTP service in the cluster, so confirmation mail cannot be
+            # delivered: autoconfirm instead of stranding every signup.
+            - name: GOTRUE_MAILER_AUTOCONFIRM
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources: {{- toYaml .Values.auth.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mike.rest" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 3000
+      targetPort: http
+      name: http
+  selector:
+    {{- include "mike.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mike.rest" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mike.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rest
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rest
+    spec:
+      containers:
+        - name: postgrest
+          image: {{ .Values.rest.image }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: PGRST_DB_URI
+              value: postgres://authenticator:$(POSTGRES_PASSWORD)@{{ include "mike.db" . }}:5432/postgres
+            - name: PGRST_DB_SCHEMAS
+              value: public
+            - name: PGRST_DB_ANON_ROLE
+              value: anon
+            - name: PGRST_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: JWT_SECRET
+          resources: {{- toYaml .Values.rest.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mike.gateway" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 8000
+      targetPort: http
+      name: http
+  selector:
+    {{- include "mike.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mike.gateway" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mike.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+      annotations:
+        # Roll the gateway when its config changes; nginx does not reload on its
+        # own and a stale upstream here breaks every auth and data call.
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
+    spec:
+      containers:
+        - name: nginx
+          image: {{ .Values.gateway.image }}
+          ports:
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /rest/v1/
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30
+          resources: {{- toYaml .Values.gateway.resources | nindent 12 }}
+      volumes:
+        - name: conf
+          configMap:
+            name: {{ include "mike.fullname" . }}-gateway

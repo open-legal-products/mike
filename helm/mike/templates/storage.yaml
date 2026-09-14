@@ -1,0 +1,195 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mike.storage" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 9000
+      targetPort: s3
+      name: s3
+  selector:
+    {{- include "mike.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mike.storage" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "mike.storage" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mike.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: storage
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: storage
+    spec:
+      containers:
+        - name: rustfs
+          image: {{ .Values.storage.image }}
+          ports:
+            - name: s3
+              containerPort: 9000
+          env:
+            - name: RUSTFS_VOLUMES
+              value: /data
+            - name: RUSTFS_ADDRESS
+              value: 0.0.0.0:9000
+            # The console is a second listener with its own auth surface; the
+            # demo never uses it, so it stays off rather than open in-cluster.
+            - name: RUSTFS_CONSOLE_ENABLE
+              value: "false"
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: STORAGE_ACCESS_KEY
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: STORAGE_SECRET_KEY
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources: {{- toYaml .Values.storage.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.size }}
+---
+{{/* Bucket + CORS, idempotent, as a hook so it precedes the app on every release. */}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mike.fullname" . }}-createbucket
+  labels: {{- include "mike.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: createbucket
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: aws
+          image: amazon/aws-cli
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: STORAGE_ACCESS_KEY
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: STORAGE_SECRET_KEY
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: ENDPOINT
+              value: http://{{ include "mike.storage" . }}:9000
+          volumeMounts:
+            - name: cors
+              mountPath: /cors
+              readOnly: true
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              for _ in $(seq 1 60); do
+                aws --endpoint-url "$ENDPOINT" s3 ls >/dev/null 2>&1 && break
+                echo "waiting for storage"; sleep 2
+              done
+              aws --endpoint-url "$ENDPOINT" s3 mb "s3://{{ .Values.storage.bucket }}" || true
+              aws --endpoint-url "$ENDPOINT" s3api put-bucket-cors \
+                --bucket {{ .Values.storage.bucket }} \
+                --cors-configuration file:///cors/storage-cors.json
+              echo "bucket ready"
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: cors
+          configMap:
+            name: {{ include "mike.fullname" . }}-storage-cors
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mike.redis" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 6379
+      targetPort: redis
+      name: redis
+  selector:
+    {{- include "mike.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mike.redis" . }}
+  labels: {{- include "mike.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "mike.redis" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mike.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "mike.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          # AOF on: queued conversion and extraction jobs survive a restart.
+          args: ["redis-server", "--appendonly", "yes"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources: {{- toYaml .Values.redis.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.redis.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.redis.storage }}

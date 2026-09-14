@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mike
+description: Mike (SambaNova demo) — OSS legal AI platform with an embedded Supabase stack
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

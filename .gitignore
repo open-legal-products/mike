@@ -36,3 +36,7 @@ backend/supabase/*
 
 # Local review artifact; it is a nested repository, not application source.
 /pr-267-analysis-site/
+
+# Staged into the chart by the deploy pipeline from backend/ and docker/, so the
+# chart can never drift from the fork's schema.
+helm/mike/files/

@@ -1,0 +1,100 @@
+# Mike deployed as a self-contained demo: Postgres, GoTrue, PostgREST and an
+# nginx gateway stand in for managed Supabase, and RustFS stands in for S3.
+# Nothing here depends on an external account beyond the SambaNova endpoint.
+#
+# This release shares the `default` namespace with sambachat, aisk, agenttube
+# and grafana, so every rendered name is prefixed with the release name.
+
+nameOverride: ""
+fullnameOverride: "mike"
+
+image:
+  registry: us-west2-docker.pkg.dev/acp-starterkits-development-57/oci-us-west2-starerkits
+  # Both images are pinned to one tag: the fork commit's short SHA, set by the
+  # deploy workflow. There is deliberately no `latest` default — a tag that was
+  # never built must fail as an ImagePullBackOff, not silently roll back.
+  tag: ""
+  pullPolicy: IfNotPresent
+  frontend: mike-frontend
+  backend: mike-backend
+
+# The public origin the browser uses. Auth confirmation links and the OAuth
+# callback are built from it, so a wrong value makes sign-in uncompletable.
+publicUrl: ""
+
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  annotations: {}
+
+# Credentials live in a Secret that the deploy workflow creates and rotates;
+# the chart never renders them. `existingSecret` must contain:
+#   POSTGRES_PASSWORD, JWT_SECRET, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY,
+#   SAMBANOVA_API_KEY, DOWNLOAD_SIGNING_SECRET, USER_API_KEYS_ENCRYPTION_SECRET,
+#   STORAGE_ACCESS_KEY, STORAGE_SECRET_KEY
+existingSecret: mike-credentials
+
+postgres:
+  image: supabase/postgres:17.6.1.136
+  storage: 20Gi
+  storageClassName: ""
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 2Gi }
+
+auth:
+  image: supabase/gotrue:v2.189.0
+  # Open signup is how a demo audience gets in. Flip to true once the accounts
+  # that need to exist do.
+  disableSignup: false
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+rest:
+  image: postgrest/postgrest:v14.12
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+gateway:
+  image: nginx:alpine
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+storage:
+  image: rustfs/rustfs:latest
+  bucket: mike
+  size: 50Gi
+  storageClassName: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+redis:
+  image: redis:7-alpine
+  storage: 8Gi
+  storageClassName: ""
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+backend:
+  replicas: 1
+  # LibreOffice conversion and document extraction are memory-hungry.
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { memory: 4Gi }
+
+frontend:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+# The workflow catalog import. Runs as a pre-upgrade hook so the catalog is in
+# place before the new backend serves traffic.
+workflowSync:
+  enabled: true
