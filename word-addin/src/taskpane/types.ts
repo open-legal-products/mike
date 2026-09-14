@@ -196,3 +196,32 @@ export interface QuickAction {
   sort_order: number;
   workflow: { id: string; title: string };
 }
+
+/**
+ * Which model providers have a usable API key for the signed-in user, and
+ * where each key comes from. Lives here (not in api/client.ts) because
+ * frontend/src/wordAddin imports it across packages for parity tests and
+ * must not drag the API client's runtime dependencies into the web app's
+ * type-check.
+ */
+export interface ApiKeyStatus {
+  claude: boolean;
+  gemini: boolean;
+  openai: boolean;
+  openrouter: boolean;
+  vercel: boolean;
+  "opencode-go": boolean;
+  courtlistener: boolean;
+  sources?: Partial<
+    Record<
+      | "claude"
+      | "gemini"
+      | "openai"
+      | "openrouter"
+      | "vercel"
+      | "opencode-go"
+      | "courtlistener",
+      "user" | "env" | null
+    >
+  >;
+}

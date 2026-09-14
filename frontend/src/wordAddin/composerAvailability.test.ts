@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { isModelAvailable } from "../../../word-addin/src/taskpane/lib/modelCatalog";
 import { loadWithRetry } from "../../../word-addin/src/taskpane/lib/composerPreflight";
-import type { ApiKeyStatus } from "../../../word-addin/src/taskpane/api/client";
+import type { ApiKeyStatus } from "../../../word-addin/src/taskpane/types";
 
 const NO_KEYS: ApiKeyStatus = {
     claude: false,

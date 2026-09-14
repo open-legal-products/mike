@@ -27,7 +27,7 @@ import {
     openRouterModelOptions as addinOpenRouterModelOptions,
     vercelModelOptions as addinVercelModelOptions,
 } from "../../../word-addin/src/taskpane/lib/modelCatalog";
-import type { ApiKeyStatus } from "../../../word-addin/src/taskpane/api/client";
+import type { ApiKeyStatus } from "../../../word-addin/src/taskpane/types";
 import { isModelAvailable as webIsModelAvailable } from "../app/lib/modelAvailability";
 import { isAllowedModelId as webIsAllowedModelId } from "../app/hooks/useSelectedModel";
 import type { ApiKeyState } from "../app/lib/mikeApi";

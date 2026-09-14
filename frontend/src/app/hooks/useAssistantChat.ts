@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, streamProjectChat } from "@/app/lib/mikeApi";
 import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
+import { reportError } from "@/app/lib/errorReporting";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type {
@@ -1367,6 +1368,11 @@ export function useAssistantChat({
           ];
         });
       } else {
+        // The stream broke for a reason other than the user stopping it:
+        // the user sees a generic message, Sentry gets the real one.
+        reportError(error, {
+          tags: { component: "assistant-chat", project: Boolean(projectId) },
+        });
         finalizeStreamingContent();
         const errorMessage = "Sorry, something went wrong.";
         setMessages((prev) => {
