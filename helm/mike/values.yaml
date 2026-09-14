@@ -31,7 +31,16 @@ ingress:
   enabled: false
   className: nginx
   host: ""
-  annotations: {}
+  tlsSecretName: cloud-snova-ai-tls
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: 1024m
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    # Chat replies stream; buffering them holds the whole response back.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
 
 # Credentials live in a Secret that the deploy workflow creates and rotates;
 # the chart never renders them. `existingSecret` must contain:

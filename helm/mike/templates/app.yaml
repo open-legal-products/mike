@@ -168,7 +168,7 @@ spec:
             - name: API_BASE_URL
               value: http://{{ include "mike.backend" . }}:3001
             - name: SUPABASE_PUBLIC_URL
-              value: {{ printf "%s/supabase" $public }}
+              value: {{ $public }}
             - name: NODE_ENV
               value: {{ $nodeEnv }}
           readinessProbe:
@@ -261,13 +261,27 @@ metadata:
   annotations: {{- toYaml .Values.ingress.annotations | nindent 4 }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  {{- with .Values.ingress.tlsSecretName }}
+  tls:
+    - hosts:
+        - {{ required "ingress.host is required when ingress is enabled" $.Values.ingress.host }}
+      secretName: {{ . }}
+  {{- end }}
   rules:
     - host: {{ required "ingress.host is required when ingress is enabled" .Values.ingress.host }}
       http:
         paths:
-          # Supabase's auth and data API must be reachable from the browser on
-          # the same origin: confirmation links and supabase-js both target it.
-          - path: /supabase/
+          # The browser calls Supabase on the app's own origin, and the gateway
+          # already serves these two prefixes, so they route straight to it and
+          # need no rewriting.
+          - path: /auth/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mike.gateway" . }}
+                port:
+                  number: 8000
+          - path: /rest/v1
             pathType: Prefix
             backend:
               service:
