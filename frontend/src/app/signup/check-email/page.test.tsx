@@ -14,7 +14,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/contexts/AuthContext", () => ({ useAuth }));
 
 vi.mock("@/app/components/site-logo", () => ({
-    SiteLogo: () => <div>Mike</div>,
+    SiteLogo: () => <div>Weybre AI</div>,
 }));
 
 describe("SignupCheckEmailPage", () => {

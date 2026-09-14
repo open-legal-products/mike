@@ -34,7 +34,7 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
 }));
 
 vi.mock("@/app/components/site-logo", () => ({
-  SiteLogo: () => <div>Mike</div>,
+  SiteLogo: () => <div>Weybre AI</div>,
 }));
 
 describe("OnboardingPracticePage", () => {

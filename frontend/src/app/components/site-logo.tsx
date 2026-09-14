@@ -18,7 +18,7 @@ export function SiteLogo({
 }: SiteLogoProps) {
     const landingHref =
         process.env.NODE_ENV === "production"
-            ? "https://mikeoss.com"
+            ? "https://weybre.com"
             : "http://localhost:3000";
     const sizeClasses = {
         sm: "text-xl",
@@ -45,7 +45,7 @@ export function SiteLogo({
             >
                 <MikeIcon size={iconSizes[size]} />
             </span>
-            <span>Mike</span>
+            <span>Weybre AI</span>
         </h1>
     );
 
