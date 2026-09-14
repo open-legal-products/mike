@@ -1,5 +1,8 @@
 {{- $tag := include "mike.imageTag" . -}}
 {{- $public := include "mike.publicUrl" . -}}
+{{/* The app rejects production mode on a non-https origin, so the mode follows
+     the URL rather than being asserted independently of it. */}}
+{{- $nodeEnv := ternary "production" "development" (hasPrefix "https://" $public) -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -66,7 +69,7 @@ spec:
             - name: PORT
               value: "3001"
             - name: NODE_ENV
-              value: production
+              value: {{ $nodeEnv }}
             - name: FRONTEND_URL
               value: {{ $public }}
             - name: API_PUBLIC_URL
@@ -167,7 +170,7 @@ spec:
             - name: SUPABASE_PUBLIC_URL
               value: {{ printf "%s/supabase" $public }}
             - name: NODE_ENV
-              value: production
+              value: {{ $nodeEnv }}
           readinessProbe:
             httpGet:
               path: /

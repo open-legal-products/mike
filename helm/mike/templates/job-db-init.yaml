@@ -50,18 +50,6 @@ spec:
             - |
               set -euo pipefail
 
-              # roles.sql sets both login roles to the literal 'postgres',
-              # which is right for compose because POSTGRES_PASSWORD is that
-              # word there. This deployment generates a real password, so the
-              # roles must be realigned to it before anything can log in —
-              # including GoTrue, which the wait below depends on.
-              psql "$DB" -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" <<'SQL'
-              select format('alter role %I with login password %L', rolname, :'pw')
-              from pg_roles
-              where rolname in ('supabase_auth_admin', 'authenticator')
-              \gexec
-              SQL
-
               echo "waiting for the auth schema GoTrue creates on first start..."
               for _ in $(seq 1 150); do
                 if psql "$DB" -tAc "select to_regclass('auth.users')" | grep -q auth; then

@@ -90,6 +90,10 @@ spec:
               mountPath: /docker-entrypoint-initdb.d/zz-roles.sql
               subPath: roles.sql
               readOnly: true
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d/zz2-roles.sh
+              subPath: zz2-roles.sh
+              readOnly: true
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "postgres"]

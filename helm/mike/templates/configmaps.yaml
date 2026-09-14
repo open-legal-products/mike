@@ -13,6 +13,23 @@ data:
 {{ required "files/roles.sql is missing — the deploy pipeline copies it from docker/db-init/" (.Files.Get "files/roles.sql") | indent 4 }}
   schema.sql: |
 {{ required "files/schema.sql is missing — the deploy pipeline copies it from backend/" (.Files.Get "files/schema.sql") | indent 4 }}
+  zz2-roles.sh: |
+    #!/bin/bash
+    # roles.sql hardcodes the literal 'postgres', which is what compose's
+    # POSTGRES_PASSWORD is. Here the password is generated, so the two login
+    # roles are realigned to it.
+    #
+    # This has to happen during initdb: supabase_auth_admin is a reserved role
+    # that only a superuser may alter, and the postgres role reachable over the
+    # network afterwards is not one.
+    set -e
+    psql -v ON_ERROR_STOP=1 --username "${POSTGRES_USER:-postgres}" \
+         --dbname "${POSTGRES_DB:-postgres}" -v pw="$POSTGRES_PASSWORD" <<'EOSQL'
+    select format('alter role %I with login password %L', rolname, :'pw')
+    from pg_roles
+    where rolname in ('supabase_auth_admin', 'authenticator')
+    \gexec
+    EOSQL
 ---
 apiVersion: v1
 kind: ConfigMap
