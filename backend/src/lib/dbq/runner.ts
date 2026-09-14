@@ -65,10 +65,29 @@ export type DbJobFailureHook = (db: Db, job: DbJob) => Promise<void>;
 export const DB_JOB_FAILURE_HOOKS: Record<string, DbJobFailureHook> = {};
 
 /**
+ * "Retrying cannot fix this." A handler throws it when the job is refused by
+ * a rule, not defeated by a transient fault — and the state machine skips
+ * straight to `failed`, the same way an unknown kind does.
+ *
+ * The retry budget is for flaky networks and busy databases. Spending 20
+ * attempts over hours on a job the domain will refuse identically every time
+ * (account deletion for the only admin of an organization that still has
+ * members) buries the real reason under a wall of repeats and leaves the
+ * user's request in limbo far longer than it needs to be.
+ */
+export class NonRetryableJobError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "NonRetryableJobError";
+    }
+}
+
+/**
  * Run one claimed job through its handler and persist the outcome:
  *   handler resolves        -> done (+ optional result)
  *   handler throws, retries -> pending again with run_at pushed back
  *   handler throws, spent   -> failed (terminal, kept for inspection)
+ *   handler throws NonRetryableJobError -> failed immediately
  *   unknown kind            -> failed immediately (retrying can't fix it)
  * Exported for unit tests; the poll loop below is just claim + fan-in.
  */
@@ -134,11 +153,14 @@ export async function processClaimedJob(
         // cleanup job owns the object path. That job is the last durable
         // pointer, so storage cleanup must retry until success rather than
         // becoming a finite-attempt failed row that a later sweep can erase.
+        // A NonRetryableJobError is the handler saying the job can never
+        // succeed, which wins over both the retry budget and retry-until-success.
         const deferred = err instanceof DbJobDeferredError;
         const spent =
-            !deferred &&
-            job.attempts >= job.max_attempts &&
-            !retryUntilSuccess;
+            err instanceof NonRetryableJobError ||
+            (!deferred &&
+                job.attempts >= job.max_attempts &&
+                !retryUntilSuccess);
         const deferredAt = deferred ? Date.parse(err.runAt) : Number.NaN;
         const delayMs = deferred
             ? Math.max(

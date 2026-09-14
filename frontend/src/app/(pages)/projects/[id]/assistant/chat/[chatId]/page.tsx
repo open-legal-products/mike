@@ -47,6 +47,7 @@ import { PdfView } from "@/app/components/shared/views/PdfView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -72,6 +73,7 @@ import {
     removeDeletedDocumentTabs,
 } from "@/app/lib/folderDeleteState";
 import { can, roleFromLoaded } from "@/app/lib/permissions";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 
 interface Props {
     params: Promise<{ id: string; chatId: string }>;
@@ -221,11 +223,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     const [project, setProject] = useState<Project | null>(null);
     const [chatTitle, setChatTitle] = useState<string | null>(null);
-    const [chatOwnerId, setChatOwnerId] = useState<string | null>(null);
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
     const [editorGateAction, setEditorGateAction] = useState<string | null>(
         null,
     );
+    const [chatActionError, setChatActionError] = useState<{
+        title: string;
+        message: string;
+    } | null>(null);
     const [chatLoaded, setChatLoaded] = useState(false);
     const [creatingChat, setCreatingChat] = useState(false);
     const [deletingChat, setDeletingChat] = useState(false);
@@ -311,12 +316,30 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const projectRole = roleFromLoaded(project);
     const canEditContent = can(projectRole, "content.edit");
     const canManageProject = can(projectRole, "access.manage");
-    // The chat's own creator keeps writing to it whatever their project role,
-    // because the server puts a row's creator at the top of that row's ladder.
-    // That exception is knowable without the project, so it still applies
-    // during the load window.
-    const canSendChat =
-        canEditContent || (!!chatOwnerId && chatOwnerId === user?.id);
+    // There is no creator exception on a PROJECT chat. The server derives the
+    // caller's whole standing here from the project role
+    // (ensureSharedRowAccess): content.edit to write or rename, and
+    // container.delete to delete. Adding "…or I started this thread" to the
+    // client made all three gates disagree with the server in both
+    // directions — an editor who created the chat was offered a Delete that
+    // came back 403, and a viewer demoted after starting a thread kept a live
+    // composer on it. The ladder is the only answer this page asks for.
+    //
+    // Three answers, not two — the same tri-state the standalone chat page
+    // adopted. `can(null, …)` is false, and false here is a SENTENCE: the
+    // composer reads "Viewing only — sending needs edit access". A project
+    // owner opening their own chat cold saw that accusation for the length of
+    // GET /projects/:id. `null` keeps the composer closed while we wait
+    // without asserting anything about who the reader is.
+    const canSendChat = projectRole === null ? null : canEditContent;
+    const canDeleteChat = can(projectRole, "container.delete");
+    // Rename and Delete are offered by the header menu, whose handlers return
+    // in silence while the role is unknown — deliberately, since accusing
+    // somebody before the payload lands is a guess, but a menu item that
+    // quietly does nothing when clicked is indistinguishable from a broken
+    // one. Disable them for that window, the way the upload button already
+    // does with `!canEditContent`.
+    const roleKnown = projectRole !== null;
     const pendingInitialUserMessageRef = useRef<Message | null>(
         initialMessages.length === 1 && initialMessages[0].role === "user"
             ? initialMessages[0]
@@ -414,7 +437,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         getChat(chatId)
             .then(({ chat, messages: loaded }) => {
                 setChatTitle(chat.title);
-                setChatOwnerId(chat.user_id ?? null);
                 setChatModel(chat.model ?? null);
                 setChatReasoningLevel(chat.reasoning_level ?? null);
                 if (loaded.length > 0) setMessages(loaded);
@@ -661,7 +683,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     async function handleNewChat() {
         setCreatingChat(true);
         try {
-            const id = await saveChat(projectId);
+            // A project chat's role comes from the project, so the sidebar's
+            // optimistic row has to carry the caller's project role rather
+            // than assume owner.
+            const id = await saveChat(projectId, projectRole);
             if (id) router.push(`/projects/${projectId}/assistant/chat/${id}`);
         } finally {
             setCreatingChat(false);
@@ -669,24 +694,38 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     async function handleDeleteChat() {
-        if (chatOwnerId && user?.id && chatOwnerId !== user.id) {
-            setOwnerOnlyAction("delete this chat");
+        if (!canDeleteChat) {
+            // Only accuse somebody of lacking a role once we know they do:
+            // `projectRole` is null for the whole load window, and a refusal
+            // popup raised then is a guess.
+            if (projectRole) setOwnerOnlyAction("delete this chat");
             return;
         }
         setDeletingChat(true);
         try {
             await deleteChat(chatId);
             router.push(`/projects/${projectId}/assistant`);
+        } catch (error) {
+            // Without this the refusal was an unhandled rejection and the
+            // page just sat there, indistinguishable from a slow delete.
+            setChatActionError({
+                title: "Chat not deleted",
+                message: userFacingApiError(
+                    error,
+                    "The chat could not be deleted. Please try again.",
+                ),
+            });
         } finally {
             setDeletingChat(false);
         }
     }
 
     async function handleRenameChat() {
-        if (chatOwnerId && user?.id && chatOwnerId !== user.id) {
-            setOwnerOnlyAction("rename this chat");
+        if (!canEditContent) {
+            if (projectRole) setEditorGateAction("rename this chat");
             return;
         }
+        const previousTitle = chatTitle;
         const nextTitle = window.prompt(
             "Rename chat",
             chatTitle ?? "Untitled New Chat",
@@ -694,7 +733,21 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         const trimmed = nextTitle?.trim();
         if (!trimmed || trimmed === chatTitle) return;
         setChatTitle(trimmed);
-        await renameChatInHistory(chatId, trimmed);
+        try {
+            await renameChatInHistory(chatId, trimmed);
+        } catch (error) {
+            // ChatHistoryContext rethrows so the calling surface can speak.
+            // Unhandled, the header title stayed changed while the sidebar
+            // snapped back — the user saw two different titles and no reason.
+            setChatTitle(previousTitle);
+            setChatActionError({
+                title: "Chat not renamed",
+                message: userFacingApiError(
+                    error,
+                    "The chat could not be renamed. Please try again.",
+                ),
+            });
+        }
     }
 
     // ── Upload ────────────────────────────────────────────────────────────────
@@ -1018,6 +1071,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         label: "Rename",
                                         icon: Pencil,
                                         onSelect: () => void handleRenameChat(),
+                                        disabled: !roleKnown,
                                     },
                                     {
                                         label: "Memory",
@@ -1032,7 +1086,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             : "Delete",
                                         icon: Trash2,
                                         onSelect: () => void handleDeleteChat(),
-                                        disabled: deletingChat,
+                                        disabled: deletingChat || !roleKnown,
                                         variant: "danger",
                                     },
                                 ]}
@@ -1510,6 +1564,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 requiredRole="editor"
                 contacts={project?.admin_contacts}
                 onClose={() => setEditorGateAction(null)}
+            />
+            <WarningPopup
+                open={!!chatActionError}
+                title={chatActionError?.title}
+                message={chatActionError?.message}
+                onClose={() => setChatActionError(null)}
             />
             <ConfirmPopup
                 open={!!pendingDeleteFolder}
