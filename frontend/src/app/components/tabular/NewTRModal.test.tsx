@@ -5,6 +5,7 @@ import {
     uploadStandaloneDocuments,
 } from "@/app/lib/mikeApi";
 import { UPLOAD_LIMIT_MESSAGES } from "@/shared/api/uploadSessionClient";
+import { UNSUPPORTED_DOCUMENT_WARNING_MESSAGE } from "@/app/lib/documentUploadValidation";
 import type { Document } from "../shared/types";
 import { NewTRModal } from "./NewTRModal";
 
@@ -250,6 +251,71 @@ describe("NewTRModal", () => {
             },
         });
     }
+
+    it("names file types the converter cannot read instead of uploading them", async () => {
+        await attachFileOnDocumentsStep("notes.xyz");
+
+        await waitFor(() =>
+            expect(screen.getByRole("alert")).toHaveTextContent(
+                UNSUPPORTED_DOCUMENT_WARNING_MESSAGE,
+            ),
+        );
+        expect(uploadProjectDocuments).not.toHaveBeenCalled();
+        expect(uploadStandaloneDocuments).not.toHaveBeenCalled();
+    });
+
+    it("uploads only the supported files and keeps both warnings", async () => {
+        vi.mocked(uploadProjectDocuments).mockResolvedValue([
+            {
+                clientId: "client-1",
+                filename: "Too big.pdf",
+                status: "error",
+                result: null,
+                errorCode: "upload_file_too_large",
+            },
+        ]);
+
+        render(
+            <NewTRModal
+                open
+                onClose={vi.fn()}
+                onAdd={vi.fn()}
+                projectId="project-1"
+                projectDocs={[]}
+                projectFolders={[]}
+                projectName="Acquisition"
+            />,
+        );
+        fireEvent.change(screen.getByLabelText("Review name"), {
+            target: { value: "Project review" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        fireEvent.click(screen.getByRole("button", { name: "Next" }));
+        const supported = new File(["body"], "Too big.pdf", {
+            type: "application/pdf",
+        });
+        const unsupported = new File(["body"], "notes.xyz");
+        const input =
+            document.querySelector<HTMLInputElement>('input[type="file"]');
+        fireEvent.change(input!, {
+            target: { files: [supported, unsupported] },
+        });
+
+        await waitFor(() =>
+            expect(uploadProjectDocuments).toHaveBeenCalledWith("project-1", [
+                { file: supported },
+            ]),
+        );
+        await waitFor(() => {
+            const alert = screen.getByRole("alert");
+            expect(alert).toHaveTextContent(
+                UNSUPPORTED_DOCUMENT_WARNING_MESSAGE,
+            );
+            expect(alert).toHaveTextContent(
+                UPLOAD_LIMIT_MESSAGES.upload_file_too_large!,
+            );
+        });
+    });
 
     it("reports files that came back as failed outcomes", async () => {
         vi.mocked(uploadProjectDocuments).mockResolvedValue([

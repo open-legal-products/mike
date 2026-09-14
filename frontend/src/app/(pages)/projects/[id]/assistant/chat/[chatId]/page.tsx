@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import {
+    AlertCircle,
     Brain,
     ChevronLeft,
     ChevronRight,
@@ -23,8 +24,10 @@ import {
     X,
 } from "lucide-react";
 import {
+    UploadBatchError,
     deleteChat,
     deleteDocument,
+    failedUploadMessage,
     getChat,
     getProject,
     uploadProjectDocuments,
@@ -72,6 +75,13 @@ import {
     removeDeletedDocumentTabs,
 } from "@/app/lib/folderDeleteState";
 import { can, roleFromLoaded } from "@/app/lib/permissions";
+import {
+    SUPPORTED_DOCUMENT_ACCEPT,
+    combineUploadWarnings,
+    formatUnsupportedDocumentWarning,
+    partitionSupportedDocumentFiles,
+} from "@/app/lib/documentUploadValidation";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 
 interface Props {
     params: Promise<{ id: string; chatId: string }>;
@@ -246,6 +256,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // Upload state
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
+    const [uploadWarning, setUploadWarning] = useState<string | null>(null);
     const [explorerDragOver, setExplorerDragOver] = useState(false);
 
     // Tabs
@@ -707,26 +718,64 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             }
             return;
         }
+        // The explorer accepts drops as well as picker selections, and a drop
+        // carries whatever the desktop had under the cursor. Filter to the file
+        // types the converter can actually read before spending an upload
+        // session on them, exactly as the picker's accept list does.
+        const { supported, unsupported } =
+            partitionSupportedDocumentFiles(files);
+        const unsupportedWarning =
+            formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
+        if (supported.length === 0) {
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            return;
+        }
         setUploading(true);
         try {
             const outcomes = await uploadProjectDocuments(
                 projectId,
-                files.map((file) => ({ file })),
+                supported.map((file) => ({ file })),
             );
             const uploaded = outcomes.flatMap((outcome) =>
                 outcome.status === "completed" && outcome.result
                     ? [outcome.result]
                     : [],
             );
-            setProject((prev) => {
-                if (!prev) return prev;
-                return {
-                    ...prev,
-                    documents: [...(prev.documents ?? []), ...uploaded],
-                };
-            });
+            // Per-file outcomes, not an all-or-nothing batch: the files that
+            // landed are attached, and the ones that did not are named. Dropping
+            // the failures silently is what made a partly-failed bulk upload
+            // look like it simply produced nothing (Open-Legal-Products/mike#8).
+            if (uploaded.length < outcomes.length) {
+                setUploadWarning(
+                    combineUploadWarnings(
+                        unsupportedWarning,
+                        failedUploadMessage(outcomes),
+                    ),
+                );
+            }
+            if (uploaded.length > 0) {
+                setProject((prev) => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        documents: [...(prev.documents ?? []), ...uploaded],
+                    };
+                });
+            }
         } catch (err) {
             console.error("Upload failed:", err);
+            setUploadWarning(
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    err instanceof UploadBatchError
+                        ? failedUploadMessage(err.outcomes)
+                        : userFacingApiError(
+                              err,
+                              "Documents could not be uploaded. Please try again.",
+                          ),
+                ),
+            );
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1081,7 +1130,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                     <input
                                         ref={fileInputRef}
                                         type="file"
-                                        accept=".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt"
+                                        accept={SUPPORTED_DOCUMENT_ACCEPT}
                                         multiple
                                         className="hidden"
                                         onChange={(e) =>
@@ -1117,6 +1166,26 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                     </button>
                                 </div>
                             </div>
+
+                            {uploadWarning && (
+                                <div
+                                    role="alert"
+                                    className="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-gray-900"
+                                >
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-600" />
+                                    <span className="min-w-0 flex-1">
+                                        {uploadWarning}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setUploadWarning(null)}
+                                        className="shrink-0 rounded p-0.5 text-black hover:bg-gray-100"
+                                        aria-label="Dismiss warning"
+                                    >
+                                        <X className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
+                            )}
 
                             {/* Drop overlay */}
                             <div
