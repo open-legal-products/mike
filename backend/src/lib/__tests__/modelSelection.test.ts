@@ -18,6 +18,9 @@ describe("titleModelForChat", () => {
         ["claude-fable-5", "claude-haiku-4-5"],
         ["gemini-3.7-flash", "gemini-3.5-flash-lite"],
         ["gpt-5.6-sol", "gpt-5.6-luna"],
+        // SambaNova titles go to Llama 3.3 70B: titles never carry tools, the
+        // one job this endpoint's Llama is reliable for.
+        ["sambanova/MiniMax-M2.7", "sambanova/Meta-Llama-3.3-70B-Instruct"],
     ])(
         "uses the cheapest model from the %s provider",
         (chatModel, expected) => {

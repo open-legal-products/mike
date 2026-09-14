@@ -26,6 +26,34 @@ export const OPENAI_MAIN_MODELS = [
     "gpt-5.5",
     "gpt-5.4",
 ] as const;
+// SambaNova Cloud models. Ids are prefixed "sambanova/" like the router
+// providers, so provider inference stays a prefix check and a bare upstream id
+// can never collide with one of ours. The catalog is populated from the live
+// `GET /v1/models` response for the deployment's SambaNova account — see
+// backend/scripts/sync-sambanova-models.ts — rather than hand-copied from docs.
+export const SAMBANOVA_MAIN_MODELS = [
+    "sambanova/MiniMax-M3",
+    // Verified against the live endpoint: M2.7 is the one model here that
+    // merges its chain-of-thought into `content` on a NON-streaming call
+    // (every other model returns a separate `reasoning` field, or none).
+    // Streaming — the chat path — is correct for it, so it stays selectable,
+    // but it must never be a default that completeText() can reach.
+    "sambanova/MiniMax-M2.7",
+    "sambanova/gpt-oss-120b",
+    "sambanova/DeepSeek-V3.1",
+    "sambanova/DeepSeek-V3.2",
+] as const;
+export const SAMBANOVA_MID_MODELS = [
+    "sambanova/gpt-oss-120b",
+    "sambanova/gemma-4-31B-it",
+] as const;
+// Llama 3.3 70B is title/summary only: tool calling on this endpoint is
+// unreliable for it, and the low tier is the one tier that never sends tools.
+export const SAMBANOVA_LOW_MODELS = [
+    "sambanova/Meta-Llama-3.3-70B-Instruct",
+    "sambanova/gemma-4-31B-it",
+] as const;
+
 // Ollama models are detected dynamically (see GET /models/ollama). Any id of
 // the form "ollama/<tag>" is valid — see providerForModel / resolveModel.
 
@@ -51,9 +79,11 @@ export const GEMINI_LOW_MODELS = [
 ] as const;
 export const OPENAI_LOW_MODELS = ["gpt-5.6-luna", "gpt-5.4-mini"] as const;
 
-export const DEFAULT_MAIN_MODEL = "gemini-3-flash-preview";
-export const DEFAULT_TITLE_MODEL = "gemini-3.5-flash-lite";
-export const DEFAULT_TABULAR_MODEL = "gemini-3-flash-preview";
+// SambaNova is this deployment's primary provider; the Claude/Gemini/OpenAI
+// catalogs above stay available for anyone who brings their own key.
+export const DEFAULT_MAIN_MODEL = "sambanova/MiniMax-M3";
+export const DEFAULT_TITLE_MODEL = "sambanova/Meta-Llama-3.3-70B-Instruct";
+export const DEFAULT_TABULAR_MODEL = "sambanova/gpt-oss-120b";
 
 const STANDARD_REASONING_LEVELS: readonly ReasoningLevel[] =
     REASONING_LEVELS.filter((level) => level !== "max");
@@ -131,6 +161,9 @@ const ALL_MODELS = new Set<string>([
     ...CLAUDE_LOW_MODELS,
     ...GEMINI_LOW_MODELS,
     ...OPENAI_LOW_MODELS,
+    ...SAMBANOVA_MAIN_MODELS,
+    ...SAMBANOVA_MID_MODELS,
+    ...SAMBANOVA_LOW_MODELS,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -142,6 +175,7 @@ export function providerForModel(model: string): Provider {
     if (model.startsWith("openrouter/")) return "openrouter";
     if (model.startsWith("vercel/")) return "vercel";
     if (model.startsWith("opencode-go/")) return "opencode-go";
+    if (model.startsWith("sambanova/")) return "sambanova";
     if (model.startsWith("claude")) return "claude";
     if (model.startsWith("gemini")) return "gemini";
     if (model.startsWith("gpt-")) return "openai";
@@ -165,6 +199,10 @@ export function resolveModel(
         canonical &&
         (ALL_MODELS.has(canonical) ||
             canonical.startsWith("ollama/") ||
+            // Accept any live SambaNova id, not just the synced catalog: the
+            // account's served models change without a redeploy, exactly like
+            // Ollama tags.
+            canonical.startsWith("sambanova/") ||
             /^(?:openrouter|vercel)\/[^\s/]+\/[^\s]+$/.test(canonical) ||
             // OpenCode Go's catalog ids are single-segment ("glm-5"), not the
             // vendor/model pairs OpenRouter and Vercel publish.
@@ -180,6 +218,10 @@ export function openRouterModelId(model: string): string {
 
 export function vercelModelId(model: string): string {
     return model.replace(/^vercel\//, "");
+}
+
+export function sambanovaModelId(model: string): string {
+    return model.replace(/^sambanova\//, "");
 }
 
 export function openCodeGoModelId(model: string): string {

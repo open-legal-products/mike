@@ -6,6 +6,7 @@ import {
 } from "./aiSdk";
 import {
   isOpenCodeGoChatCompletionsModel,
+  sambanovaModelId,
   isOpenCodeGoMessagesModel,
   normalizeReasoningLevelForModel,
   openCodeGoModelId,
@@ -30,6 +31,9 @@ const OPENCODE_GO_BASE_URL =
   "https://opencode.ai/zen/go/v1";
 const VERCEL_GATEWAY_BASE_URL =
   process.env.VERCEL_AI_GATEWAY_BASE_URL?.trim().replace(/\/+$/, "");
+const SAMBANOVA_BASE_URL =
+  process.env.SAMBANOVA_BASE_URL?.trim().replace(/\/+$/, "") ||
+  "https://api.sambanova.ai/v1";
 
 type CompleteProviderParams = {
   model: string;
@@ -263,6 +267,29 @@ async function createProviderAdapter(
       });
     }
     return createRouterAdapter(provider, model, apiKeys);
+  }
+
+  if (provider === "sambanova") {
+    const { createOpenAICompatible } = await import(
+      "@ai-sdk/openai-compatible"
+    );
+    const sambanova = createOpenAICompatible({
+      name: "sambanova",
+      apiKey: requiredKey(
+        "SambaNova",
+        "SAMBANOVA_API_KEY",
+        apiKeys?.sambanova,
+      ),
+      baseURL: SAMBANOVA_BASE_URL,
+      fetch: aiSdkFetch,
+    });
+    return {
+      provider,
+      label: "SambaNova",
+      model: sambanova(sambanovaModelId(model)),
+      modelId: model,
+      supportsReasoning: false,
+    };
   }
 
   const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");

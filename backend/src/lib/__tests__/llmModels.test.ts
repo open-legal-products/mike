@@ -9,6 +9,8 @@ import {
     CLAUDE_LOW_MODELS,
     GEMINI_LOW_MODELS,
     OPENAI_LOW_MODELS,
+    SAMBANOVA_MAIN_MODELS,
+    SAMBANOVA_MID_MODELS,
     DEFAULT_MAIN_MODEL,
     DEFAULT_TITLE_MODEL,
     DEFAULT_TABULAR_MODEL,
@@ -17,6 +19,7 @@ import {
     openRouterModelId,
     vercelModelId,
     openCodeGoModelId,
+    sambanovaModelId,
     isOpenCodeGoChatCompletionsModel,
     isOpenCodeGoMessagesModel,
     isSupportedOpenCodeGoModel,
@@ -259,9 +262,40 @@ describe("default models", () => {
     });
 
     it("every default has a resolvable provider", () => {
-        expect(providerForModel(DEFAULT_MAIN_MODEL)).toBe("gemini");
-        expect(providerForModel(DEFAULT_TITLE_MODEL)).toBe("gemini");
-        expect(providerForModel(DEFAULT_TABULAR_MODEL)).toBe("gemini");
+        // SambaNova is this deployment's primary provider, so every default
+        // must land there — a default pointing at a provider whose key the
+        // deployment does not ship is an immediate runtime failure.
+        expect(providerForModel(DEFAULT_MAIN_MODEL)).toBe("sambanova");
+        expect(providerForModel(DEFAULT_TITLE_MODEL)).toBe("sambanova");
+        expect(providerForModel(DEFAULT_TABULAR_MODEL)).toBe("sambanova");
+    });
+});
+
+describe("sambanova catalog", () => {
+    it("infers the provider from the id prefix", () => {
+        expect(providerForModel("sambanova/MiniMax-M3")).toBe("sambanova");
+    });
+
+    it("strips the prefix to the id the endpoint serves", () => {
+        expect(sambanovaModelId("sambanova/MiniMax-M3")).toBe("MiniMax-M3");
+    });
+
+    it("accepts a live id that is not in the pinned catalog", () => {
+        // The account's served models change without a redeploy, so an
+        // unknown sambanova/* id must resolve rather than fall back.
+        expect(resolveModel("sambanova/Some-New-Model", "x")).toBe(
+            "sambanova/Some-New-Model",
+        );
+    });
+
+    it("keeps Llama 3.3 70B out of the tool-carrying tiers", () => {
+        const toolTiers: readonly string[] = [
+            ...SAMBANOVA_MAIN_MODELS,
+            ...SAMBANOVA_MID_MODELS,
+        ];
+        expect(toolTiers).not.toContain(
+            "sambanova/Meta-Llama-3.3-70B-Instruct",
+        );
     });
 });
 

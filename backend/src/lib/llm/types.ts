@@ -9,6 +9,7 @@ export type Provider =
     | "openrouter"
     | "vercel"
     | "opencode-go"
+    | "sambanova"
     | "ollama";
 
 export const REASONING_LEVELS = [
@@ -61,6 +62,7 @@ export type UserApiKeys = {
     openrouter?: string | null;
     vercel?: string | null;
     "opencode-go"?: string | null;
+    sambanova?: string | null;
     courtlistener?: string | null;
 };
 
