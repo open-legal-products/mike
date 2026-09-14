@@ -11,6 +11,7 @@ const keys: ApiKeyState = {
     openrouter: { configured: true, source: "user" },
     vercel: { configured: false, source: null },
     "opencode-go": { configured: false, source: null },
+    sambanova: { configured: true, source: "user" },
     courtlistener: { configured: false, source: null },
 };
 

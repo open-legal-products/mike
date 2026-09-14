@@ -123,19 +123,18 @@ const API_KEY_PROVIDERS: ApiKeyProvider[] = [
     "openrouter",
     "vercel",
     "opencode-go",
+    "sambanova",
     "courtlistener",
 ];
 
 function emptyApiKeys(): ApiKeyState {
-    return {
-        claude: { configured: false, source: null },
-        gemini: { configured: false, source: null },
-        openai: { configured: false, source: null },
-        openrouter: { configured: false, source: null },
-        vercel: { configured: false, source: null },
-        "opencode-go": { configured: false, source: null },
-        courtlistener: { configured: false, source: null },
-    };
+    // Derived from API_KEY_PROVIDERS so a new provider cannot be half-added.
+    return Object.fromEntries(
+        API_KEY_PROVIDERS.map((provider) => [
+            provider,
+            { configured: false, source: null },
+        ]),
+    ) as ApiKeyState;
 }
 
 function toProfile(data: ApiUserProfile): UserProfile {
