@@ -13,6 +13,7 @@ import {
     ChevronDown,
     FileText,
     Download,
+    Loader2,
     MessageSquarePlus,
     Pencil,
     Trash2,
@@ -243,9 +244,10 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             <span className="min-w-0 flex-1 truncate text-xs">
                                 {upload.filename}
                             </span>
-                            <span className="shrink-0 text-[10px]">
-                                Uploading…
-                            </span>
+                            <Loader2
+                                aria-hidden="true"
+                                className="h-3 w-3 shrink-0 animate-spin"
+                            />
                         </li>
                     ))}
 

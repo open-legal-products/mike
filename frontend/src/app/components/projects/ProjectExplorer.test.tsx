@@ -30,9 +30,9 @@ describe("ProjectExplorer uploads", () => {
             name: "Uploading evidence.pdf",
         });
         expect(uploadRow).toBeVisible();
-        expect(uploadRow.querySelector(".animate-spin")).toBeNull();
+        expect(uploadRow.lastElementChild).toHaveClass("animate-spin");
         expect(uploadRow.querySelector("img")).toHaveClass("grayscale", "opacity-35");
-        expect(uploadRow).toHaveTextContent("Uploading…");
+        expect(uploadRow).not.toHaveTextContent("Uploading…");
         expect(uploadRow).toHaveStyle({ paddingLeft: "8px" });
         expect(screen.getByText("Matter files")).toHaveClass("font-semibold");
         expect(screen.queryByText("No documents in this project.")).toBeNull();
