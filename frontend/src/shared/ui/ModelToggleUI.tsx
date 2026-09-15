@@ -245,7 +245,7 @@ export function ModelToggleUI({
         side={modalInput ? "bottom" : "top"}
         align={modalInput ? "start" : "end"}
         sideOffset={modalInput ? 4 : 8}
-        className={`flex max-h-[min(420px,70vh)] flex-col overflow-hidden rounded-2xl text-gray-700 ${modalInput ? "w-[var(--radix-dropdown-menu-trigger-width)]" : "w-56"}`}
+        className={`flex max-h-[min(320px,60vh)] flex-col overflow-hidden rounded-2xl text-gray-700 ${modalInput ? "w-[var(--radix-dropdown-menu-trigger-width)]" : "w-56"}`}
       >
         <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
           {availableGroups.map(({ group, items }) => {
