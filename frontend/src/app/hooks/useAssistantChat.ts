@@ -16,7 +16,7 @@ interface UseAssistantChatOptions {
   initialMessages?: Message[];
   chatId?: string;
   projectId?: string;
-  /** Lets a persistent workspace adopt the server id without navigation. */
+  /** Adopts the server id as soon as it arrives, without navigation. */
   onChatCreated?: (chatId: string) => void;
 }
 
@@ -109,9 +109,14 @@ export function useAssistantChat({
   // async continuation from the old request can land in the new thread first.
   const threadKey = `${projectId ?? ""}:${initialChatId ?? ""}`;
   const threadKeyRef = useRef(threadKey);
+  const adoptedThreadKeyRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     if (threadKeyRef.current === threadKey) return;
     threadKeyRef.current = threadKey;
+    const isAdoptedThread = adoptedThreadKeyRef.current === threadKey;
+    adoptedThreadKeyRef.current = null;
+    // A new chat receiving its persisted id is still the same live turn.
+    if (isAdoptedThread) return;
     requestGenerationRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
@@ -464,9 +469,15 @@ export function useAssistantChat({
             const data = JSON.parse(dataStr);
 
             if (data.type === "chat_id") {
+              const isNewChatId =
+                data.chatId !== chatId && data.chatId !== streamedChatId;
               streamedChatId = data.chatId;
               setChatId(data.chatId);
               setCurrentChatId(data.chatId);
+              if (isNewChatId && onChatCreated) {
+                adoptedThreadKeyRef.current = `${projectId ?? ""}:${data.chatId}`;
+                onChatCreated(data.chatId);
+              }
               if (typeof data.assistantMessageId === "string") {
                 updateLatestAssistantMessage((message) => ({
                   ...message,
@@ -1371,9 +1382,7 @@ export function useAssistantChat({
           );
         }
         setCurrentChatId(finalChatId);
-        if (onChatCreated) {
-          onChatCreated(finalChatId);
-        } else {
+        if (!onChatCreated) {
           const chatBasePath = projectId
             ? `/projects/${projectId}/assistant/chat`
             : `/assistant/chat`;

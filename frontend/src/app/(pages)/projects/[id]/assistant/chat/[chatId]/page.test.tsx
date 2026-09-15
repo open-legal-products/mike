@@ -201,21 +201,6 @@ async function renderWorkspace(canSend = true, strict = false) {
     });
 }
 
-function response(text: string, chatId: string) {
-    return new Response(
-        new ReadableStream({
-            start(controller) {
-                controller.enqueue(
-                    new TextEncoder().encode(
-                        `data: ${JSON.stringify({ type: "chat_id", chatId })}\n\ndata: ${JSON.stringify({ type: "content_delta", text })}\n\n`,
-                    ),
-                );
-                controller.close();
-            },
-        }),
-    );
-}
-
 describe("closing document tabs", () => {
     it("selects the next tab, then the previous tab, then clears the viewer in StrictMode", async () => {
         await renderWorkspace(true, true);
@@ -422,16 +407,15 @@ describe("document viewer drops", () => {
 });
 
 describe("project chat workspace lifecycle", () => {
-    it("keeps the first response, open document and collapsed explorer while adopting the server chat id", async () => {
-        let finishHistory!: () => void;
-        state.loadChats.mockImplementationOnce(
-            () =>
-                new Promise<void>((resolve) => {
-                    finishHistory = resolve;
-                }),
-        );
+    it("updates the URL before the first response arrives while preserving the workspace and live stream", async () => {
+        let stream!: ReadableStreamDefaultController<Uint8Array>;
+        const encoder = new TextEncoder();
         state.streamProjectChat.mockResolvedValue(
-            response("First answer", "created-chat"),
+            new Response(new ReadableStream<Uint8Array>({
+                start(controller) {
+                    stream = controller;
+                },
+            })),
         );
         await renderWorkspace();
         fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
@@ -439,12 +423,17 @@ describe("project chat workspace lifecycle", () => {
         const viewer = screen.getByText("Draft viewer");
         fireEvent.click(screen.getByTitle("Collapse explorer"));
         fireEvent.click(screen.getByRole("button", { name: "Send question" }));
+        await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
+        act(() => {
+            stream.enqueue(encoder.encode('data: {"type":"chat_id","chatId":"created-chat"}\n\n'));
+        });
         await waitFor(() =>
             expect(
                 screen.getByRole("button", { name: "Send question" }),
             ).toHaveAttribute("data-chat-key", "created-chat"),
         );
-        expect(screen.getByText("First answer")).toBeVisible();
+        expect(screen.queryByText("First answer")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Send question" })).toBeDisabled();
         expect(screen.getByText("First question")).toBeVisible();
         expect(screen.getByRole("tabpanel", { name: "Draft.docx" })).toBe(
             panel,
@@ -456,9 +445,15 @@ describe("project chat workspace lifecycle", () => {
         expect(window.location.pathname).toBe(
             "/projects/p1/assistant/chat/created-chat",
         );
-        await act(async () => {
-            finishHistory();
+        act(() => {
+            stream.enqueue(encoder.encode('data: {"type":"content_delta","text":"First answer"}\n\n'));
         });
+        await waitFor(() => expect(screen.getByText("First answer")).toBeVisible());
+        expect(screen.getByRole("button", { name: "Send question" })).toBeDisabled();
+        act(() => stream.close());
+        await waitFor(() => expect(screen.getByRole("button", { name: "Send question" })).not.toBeDisabled());
+        expect(screen.getByRole("tabpanel", { name: "Draft.docx" })).toBe(panel);
+        expect(state.getChat).not.toHaveBeenCalled();
     });
 
     it("lists project chats newest first after merging both history sources", async () => {

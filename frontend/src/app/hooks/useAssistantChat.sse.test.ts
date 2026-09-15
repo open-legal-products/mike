@@ -169,6 +169,45 @@ describe("useAssistantChat SSE parsing", () => {
         ]);
     });
 
+    it("adopts the id once during streaming and still discards updates after switching chats", async () => {
+        let stream!: ReadableStreamDefaultController<Uint8Array>;
+        const encoder = new TextEncoder();
+        fetchMock.mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+            start(controller) { stream = controller; },
+        })));
+        const onChatCreated = vi.fn();
+        const { result, rerender } = renderHook(
+            ({ chatId }: { chatId?: string }) => useAssistantChat({
+                projectId: "project-1", chatId, onChatCreated,
+            }),
+            { initialProps: { chatId: undefined as string | undefined } },
+        );
+        let pending!: Promise<string | null>;
+        act(() => { pending = result.current.handleChat(userMessage()); });
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+        act(() => stream.enqueue(encoder.encode('data: {"type":"chat_id","chatId":"created-chat"}\n\n')));
+        await waitFor(() => expect(onChatCreated).toHaveBeenCalledWith("created-chat"));
+        rerender({ chatId: "created-chat" });
+        expect(result.current.isResponseLoading).toBe(true);
+        act(() => stream.enqueue(encoder.encode('data: {"type":"chat_id","chatId":"created-chat"}\n\ndata: {"type":"content_delta","text":"First response"}\n\n')));
+        await waitFor(() => expect(result.current.messages.at(-1)?.events).toEqual([
+            expect.objectContaining({ text: "First response" }),
+        ]));
+        expect(onChatCreated).toHaveBeenCalledTimes(1);
+        rerender({ chatId: "other-chat" });
+        await act(async () => {
+            stream.enqueue(encoder.encode('data: {"type":"content_delta","text":"Late response"}\n\n'));
+            stream.close();
+            await pending;
+        });
+        expect(result.current.chatId).toBe("other-chat");
+        expect(result.current.isResponseLoading).toBe(false);
+        expect(result.current.messages.at(-1)?.events).toEqual([
+            expect.objectContaining({ text: "First response" }),
+        ]);
+        expect(routerReplaceMock).not.toHaveBeenCalled();
+    });
+
     it("does not append a cancellation to a newly reset chat when abort rejects later", async () => {
         let rejectRequest!: (error: Error) => void;
         fetchMock.mockImplementation(
