@@ -18,6 +18,7 @@ import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/shared/ui/LiquidGlassUI";
 interface Props {
     doc: { document_id: string; version_id?: string | null } | null;
     displayUrl?: string | null;
+    refetchKey?: number | string;
     /** Preferred: one or more (page, quote) pairs to highlight. */
     quotes?: CitationQuote[];
     /** Changes when the parent wants the current quote re-focused. */
@@ -62,6 +63,7 @@ export function getObservedPanelWidth(entry: ResizeObserverEntry): number {
 export function PdfView({
     doc,
     displayUrl,
+    refetchKey,
     quotes,
     quoteFocusKey,
     quote,
@@ -104,6 +106,7 @@ export function PdfView({
         doc?.document_id ?? null,
         doc?.version_id ?? null,
         displayUrl,
+        refetchKey,
     );
     const documentError =
         error ?? (pdfLoadError?.result === result ? pdfLoadError?.message : null);

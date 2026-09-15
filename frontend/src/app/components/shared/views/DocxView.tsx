@@ -45,7 +45,9 @@ interface Props {
      * the same storage path (no new version row), so the hook has no other
      * signal that the file changed.
      */
-    refetchKey?: number;
+    refetchKey?: number | string;
+    /** Open workspace tabs retain bytes in the viewer instead of the shared cache. */
+    cacheBytes?: boolean;
     /**
      * Citation quotes to highlight in the rendered output. The first match
      * is scrolled into view. Page numbers are ignored — DOCX has no explicit
@@ -197,6 +199,7 @@ export function DocxView({
     onReady,
     highlightEdit,
     refetchKey,
+    cacheBytes = true,
     quotes,
     quoteFocusKey,
     warning,
@@ -236,6 +239,7 @@ export function DocxView({
         versionId,
         refetchKey,
         displayUrl,
+        cacheBytes,
     );
 
     /**

@@ -7,6 +7,10 @@ import type { WorkbookInstance } from "@fortune-sheet/react";
 import type { Cell, Sheet } from "@fortune-sheet/core";
 import "@fortune-sheet/react/dist/index.css";
 import { useFetchSingleDoc } from "@/app/hooks/useFetchSingleDoc";
+import {
+    SpreadsheetWorkbook,
+    type SpreadsheetSession,
+} from "./SpreadsheetWorkbook";
 
 type HighlightRange = { row: [number, number]; column: [number, number] };
 type WorkbookComponent = typeof import("@fortune-sheet/react").Workbook;
@@ -18,9 +22,11 @@ interface Props {
     documentId: string;
     versionId?: string | null;
     displayUrl?: string | null;
+    refetchKey?: number | string;
     /** Cell(s) to select/scroll to (from a spreadsheet citation). */
     highlightCells?: HighlightCell[];
     rounded?: boolean;
+    active?: boolean;
 }
 
 /** "B" -> 1, "AA" -> 26 (0-based column index). */
@@ -240,10 +246,13 @@ export function SpreadsheetView({
     documentId,
     versionId,
     displayUrl,
+    refetchKey,
     highlightCells,
     rounded = true,
+    active = true,
 }: Props) {
     const workbookRef = useRef<WorkbookInstance>(null);
+    const sessionRef = useRef<SpreadsheetSession | null>(null);
     // The frame element, used to reach Fortune-sheet's scrollbars for measuring
     // the current scroll offset and viewport size when deciding whether to scroll.
     const containerRef = useRef<HTMLDivElement>(null);
@@ -251,6 +260,7 @@ export function SpreadsheetView({
     // it never re-mounts the Workbook or changes the settings object.
     const highlightRef = useRef<HighlightRange | null>(null);
     const [sheets, setSheets] = useState<Sheet[] | null>(null);
+    const [workbookGeneration, setWorkbookGeneration] = useState(0);
     const [WorkbookComponent, setWorkbookComponent] =
         useState<WorkbookComponent | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -261,6 +271,7 @@ export function SpreadsheetView({
         documentId,
         versionId,
         displayUrl,
+        refetchKey,
     );
 
     // Fortune-sheet touches browser-only APIs while loading, so keep the import
@@ -305,6 +316,7 @@ export function SpreadsheetView({
                     applyMergeCells(exportJson.sheets);
                     applyExcelTextOverflow(exportJson.sheets);
                     setSheets(exportJson.sheets as unknown as Sheet[]);
+                    setWorkbookGeneration((generation) => generation + 1);
                 } else {
                     setError("This spreadsheet could not be displayed.");
                 }
@@ -413,7 +425,7 @@ export function SpreadsheetView({
     // position changes, and the synthetic "resize" repaints in place via
     // Fortune-sheet's window resize handler.
     useEffect(() => {
-        if (!sheets) return;
+        if (!active || !sheets) return;
         const target = highlightCells?.[0];
 
         const sheetIndex = target?.sheet
@@ -487,7 +499,7 @@ export function SpreadsheetView({
             }
         }, 200);
         return () => window.clearTimeout(timer);
-    }, [sheets, highlightCells, highlightKey]);
+    }, [active, sheets, highlightCells, highlightKey]);
 
     const frameClass = `fortune-sheet-viewer relative flex flex-col flex-1 min-h-0 overflow-hidden ${rounded ? "rounded-lg" : ""}`;
 
@@ -515,15 +527,17 @@ export function SpreadsheetView({
 
     return (
         <div ref={containerRef} className={frameClass}>
-            <div className="relative min-h-0 flex-1">
-                <WorkbookComponent
-                    ref={workbookRef}
-                    data={sheets}
-                    hooks={hooks}
-                    allowEdit={false}
-                    showToolbar={false}
-                    showFormulaBar={false}
-                />
+            <div className="relative min-h-0 flex-1 flex flex-col">
+                {active && (
+                    <SpreadsheetWorkbook
+                        key={workbookGeneration}
+                        Workbook={WorkbookComponent}
+                        workbookRef={workbookRef}
+                        sessionRef={sessionRef}
+                        sheets={sheets}
+                        hooks={hooks}
+                    />
+                )}
                 <style jsx global>{`
                     /* The row/col header strips are transparent overlays over
                        the label canvas — leave them so the labels show. Only the

@@ -67,6 +67,7 @@ const FULL_VERSION = {
     size_bytes: 1024,
     page_count: 12,
     deleted_at: null,
+    content_sha256: "a".repeat(64),
 };
 
 // ---------------------------------------------------------------------------
@@ -189,6 +190,7 @@ describe("attachActiveVersionPaths", () => {
         ]);
         expect(doc).toMatchObject({
             filename: "Untitled document",
+            content_sha256: null,
             storage_path: null,
             pdf_storage_path: null,
             file_type: null,
@@ -220,6 +222,7 @@ describe("attachActiveVersionPaths", () => {
             storage_path: "documents/u/doc-1/source.pdf",
             pdf_storage_path: "documents/u/doc-1/converted.pdf",
             active_version_number: 3,
+            content_sha256: FULL_VERSION.content_sha256,
             filename: "contract.pdf",
             file_type: "application/pdf",
             size_bytes: 1024,
@@ -236,6 +239,20 @@ describe("attachActiveVersionPaths", () => {
             storage_path: null,
             filename: "Untitled document",
         });
+    });
+
+    it("reflects in-place byte updates without changing the version or document timestamp", async () => {
+        const version = { ...FULL_VERSION };
+        const db = makeDb({ document_versions: [version] });
+        const docs: TestDoc[] = [
+            { id: "doc-1", current_version_id: "ver-1", updated_at: "unchanged" },
+        ];
+        await attachActiveVersionPaths(db, docs);
+        expect(docs[0].content_sha256).toBe("a".repeat(64));
+        version.content_sha256 = "b".repeat(64);
+        await attachActiveVersionPaths(db, docs);
+        expect(docs[0].content_sha256).toBe("b".repeat(64));
+        expect(docs[0].updated_at).toBe("unchanged");
     });
 
     it("falls back to 'Untitled document' for blank filenames", async () => {

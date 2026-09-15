@@ -57,18 +57,20 @@ import {
 } from "@/app/components/projects/ProjectExplorer";
 import { ProjectMemoryModal } from "@/app/components/projects/ProjectMemoryModal";
 import { ChatPanelHeader } from "@/app/components/shared/ChatPanelHeader";
-import { ProjectWorkspaceTips } from "@/app/components/projects/ProjectWorkspaceTips";
 import { ProjectDocumentTabs } from "@/app/components/projects/ProjectDocumentTabs";
+import {
+    ProjectDocumentPanels,
+    type ProjectDocumentTab,
+} from "@/app/components/projects/ProjectDocumentPanels";
+import { useProjectDocumentRefresh } from "@/app/hooks/useProjectDocumentRefresh";
+import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { reorderTabs } from "@/app/lib/reorderTabs";
 import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { ProjectPickerModal } from "@/app/components/modals/ProjectPickerModal";
 import { DocumentUploadMenu } from "@/app/components/shared/DocumentUploadMenu";
-import { PdfView } from "@/app/components/shared/views/PdfView";
-import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
-import { DocxView } from "@/app/components/shared/views/DocxView";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -84,7 +86,6 @@ import type {
     Project,
 } from "@/app/components/shared/types";
 import { expandCitationToEntries } from "@/app/components/shared/types";
-import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 import {
     INITIAL_FOLDER_DELETE_DIALOG_STATE,
     clearDeletedDocumentId,
@@ -106,15 +107,6 @@ import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 interface Props {
     params: Promise<{ id: string; chatId?: string }>;
 }
-
-type DocTab = {
-    documentId: string;
-    filename: string;
-    quotes?: CitationQuote[];
-    versionId?: string | null;
-    warning?: string | null;
-    scrollTop?: number;
-};
 
 type EditScrollTarget = {
     key: string;
@@ -338,7 +330,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const [chatDragOver, setChatDragOver] = useState(false);
 
     // Tabs
-    const [tabs, setTabs] = useState<DocTab[]>([]);
+    const [tabs, setTabs] = useState<ProjectDocumentTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [activeQuotes, setActiveQuotes] = useState<CitationQuote[] | null>(
         null,
@@ -348,10 +340,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         useState<EditScrollTarget | null>(null);
 
     const activeTab = tabs.find((t) => t.documentId === activeTabId) ?? null;
-    const activeTabViewType = activeTab
-        ? resolveDocumentViewType({ filename: activeTab.filename })
-        : null;
-
     const chatInputRef = useRef<ChatInputHandle | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
@@ -477,11 +465,34 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         setSidebarOpen(false);
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    useEffect(() => {
-        getProject(projectId)
-            .then(setProject)
-            .catch(() => {});
+    const projectRequestGeneration = useRef(0);
+    const refreshProject = useCallback(async (documentIdToRefresh?: string) => {
+        const generation = ++projectRequestGeneration.current;
+        try {
+            const loaded = await getProject(projectId);
+            if (generation === projectRequestGeneration.current) {
+                setProject(loaded);
+            }
+        } catch {
+            // Keep the current workspace usable when a background check fails.
+        } finally {
+            if (documentIdToRefresh) {
+                setTabs((current) =>
+                    current.map((tab) =>
+                        tab.documentId === documentIdToRefresh
+                            ? { ...tab, refetchKey: (tab.refetchKey ?? 0) + 1 }
+                            : tab,
+                    ),
+                );
+            }
+        }
     }, [projectId]);
+    useEffect(() => {
+        return () => {
+            projectRequestGeneration.current += 1;
+        };
+    }, [projectId]);
+    useProjectDocumentRefresh(refreshProject, activeTabId);
 
     useEffect(() => {
         let cancelled = false;
@@ -505,7 +516,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const projectMutationSignature = useMemo(() => {
         const created: string[] = [];
         const replicated: string[] = [];
-        const editedPerDoc: Record<string, number> = {};
+        const edited = new Set<string>();
         for (const msg of messages) {
             for (const ev of msg.events ?? []) {
                 if ("isStreaming" in ev && ev.isStreaming) continue;
@@ -524,9 +535,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     continue;
                 }
                 if (ev.type === "doc_edited") {
-                    editedPerDoc[ev.document_id] = Math.max(
-                        editedPerDoc[ev.document_id] ?? 0,
-                        (ev.version_number as number | null | undefined) ?? 0,
+                    edited.add(
+                        `${ev.document_id}:${ev.version_id ?? ""}:${ev.version_number ?? ""}`,
                     );
                 }
             }
@@ -534,19 +544,13 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         return [
             `created=${created.sort().join(",")}`,
             `replicated=${replicated.sort().join(",")}`,
-            `edited=${Object.entries(editedPerDoc)
-                .map(([k, v]) => `${k}=${v}`)
-                .sort()
-                .join(",")}`,
+            `edited=${Array.from(edited).sort().join(",")}`,
         ].join("|");
     }, [messages]);
 
     useEffect(() => {
-        if (!projectMutationSignature) return;
-        getProject(projectId)
-            .then(setProject)
-            .catch(() => {});
-    }, [projectMutationSignature, projectId]);
+        void refreshProject();
+    }, [projectMutationSignature, refreshProject]);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- native history navigation updates the route without remounting the workspace
@@ -674,7 +678,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             }
             return [
                 ...prev,
-                { documentId: docId, filename, quotes, versionId },
+                { documentId: docId, filename, versionId },
             ];
         });
         setActiveTabId(docId);
@@ -718,7 +722,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     );
 
     const handleDocClick = (doc: Document) => {
-        openTab(doc.id, doc.filename);
+        openTab(doc.id, doc.filename, undefined, null);
     };
 
     const handleCitationClick = (citation: Citation) => {
@@ -751,24 +755,32 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         });
     };
 
-    const patchTab = (documentId: string, patch: Partial<DocTab>) => {
-        setTabs((prev) =>
-            prev.map((t) =>
-                t.documentId === documentId ? { ...t, ...patch } : t,
-            ),
-        );
-    };
+    const patchTab = useCallback(
+        (documentId: string, patch: Partial<ProjectDocumentTab>) => {
+            setTabs((prev) =>
+                prev.map((t) =>
+                    t.documentId === documentId ? { ...t, ...patch } : t,
+                ),
+            );
+        },
+        [],
+    );
 
     const handleEditError = (args: { documentId: string; message: string }) => {
         patchTab(args.documentId, { warning: args.message });
     };
 
-    const dismissTabWarning = (documentId: string) => {
-        patchTab(documentId, { warning: null });
-    };
+    const dismissTabWarning = useCallback(
+        (documentId: string) => {
+            patchTab(documentId, { warning: null });
+        },
+        [patchTab],
+    );
 
-    const handleTabScrollChange = (documentId: string, scrollTop: number) => {
-        patchTab(documentId, { scrollTop });
+    const handleEditResolved = (args: { documentId: string }) => {
+        invalidateDocxBytes(args.documentId);
+        // Apply metadata and the forced refresh together to avoid downloading twice.
+        void refreshProject(args.documentId);
     };
 
     const handleChatDrop = (event: React.DragEvent) => {
@@ -1614,68 +1626,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         )
                     }
                 />
-                <div
-                    role={activeTab ? "tabpanel" : undefined}
-                    id={
-                        activeTab
-                            ? `project-document-panel-${activeTab.documentId}`
-                            : undefined
-                    }
-                    aria-labelledby={
-                        activeTab
-                            ? `project-document-tab-${activeTab.documentId}`
-                            : undefined
-                    }
-                    className="flex-1 min-h-0 overflow-hidden flex flex-col"
-                >
-                    {activeTab ? (
-                        activeTabViewType === "docx" ? (
-                            <DocxView
-                                key={activeTab.documentId}
-                                documentId={activeTab.documentId}
-                                versionId={activeTab.versionId}
-                                quotes={activeQuotes ?? undefined}
-                                highlightEdit={
-                                    editScrollTarget &&
-                                    editScrollTarget.documentId ===
-                                        activeTab.documentId
-                                        ? editScrollTarget
-                                        : null
-                                }
-                                warning={activeTab.warning ?? null}
-                                onWarningDismiss={() =>
-                                    dismissTabWarning(activeTab.documentId)
-                                }
-                                initialScrollTop={activeTab.scrollTop ?? null}
-                                onScrollChange={(top) =>
-                                    handleTabScrollChange(
-                                        activeTab.documentId,
-                                        top,
-                                    )
-                                }
-                                rounded={false}
-                            />
-                        ) : activeTabViewType === "spreadsheet" ? (
-                            <SpreadsheetView
-                                key={activeTab.documentId}
-                                documentId={activeTab.documentId}
-                                versionId={activeTab.versionId}
-                                rounded={false}
-                            />
-                        ) : (
-                            <PdfView
-                                key={activeTab.documentId}
-                                doc={{ document_id: activeTab.documentId }}
-                                quotes={activeQuotes ?? undefined}
-                                rounded={false}
-                            />
-                        )
-                    ) : (
-                        <div className="flex h-full items-center justify-center px-8">
-                            <ProjectWorkspaceTips />
-                        </div>
-                    )}
-                </div>
+                <ProjectDocumentPanels
+                    tabs={tabs}
+                    documents={project?.documents ?? []}
+                    activeTabId={activeTabId}
+                    quotes={activeQuotes ?? undefined}
+                    highlightEdit={editScrollTarget}
+                    onWarningDismiss={dismissTabWarning}
+                />
             </div>
 
             <Divider onDrag={onChatDividerDrag} />
@@ -1877,6 +1835,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         onEditViewClick={handleEditViewClick}
                                         onOpenDocument={handleOpenDocument}
                                         onEditError={handleEditError}
+                                        onEditResolved={handleEditResolved}
                                     />
                                 ),
                             );
