@@ -571,6 +571,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     useEffect(() => {
         if (activeChatId && createdChatIdRef.current === activeChatId) {
             createdChatIdRef.current = null;
+            const firstUserMessage = messages.find(
+                (message) => message.role === "user",
+            );
+            setChatModel(firstUserMessage?.model ?? null);
+            setChatReasoningLevel(firstUserMessage?.reasoning ?? null);
             return;
         }
         let cancelled = false;

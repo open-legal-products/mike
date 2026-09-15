@@ -102,12 +102,16 @@ vi.mock("@/app/components/assistant/ChatInput", () => ({
         canSend,
         chatKey,
         isLoading,
+        chatModel,
+        chatReasoningLevel,
         onDocumentClick,
     }: {
         onSubmit: (message: Message) => void;
         canSend: boolean;
         chatKey: string;
         isLoading: boolean;
+        chatModel?: string | null;
+        chatReasoningLevel?: Message["reasoning"] | null;
         onDocumentClick: (document: Document) => void;
     }) => (
         <>
@@ -125,9 +129,11 @@ vi.mock("@/app/components/assistant/ChatInput", () => ({
             <button
                 disabled={!canSend || isLoading}
                 onClick={() =>
-                    onSubmit({ role: "user", content: "First question" })
+                    onSubmit({ role: "user", content: "First question", model: "gpt-5.6-sol", reasoning: "xhigh" })
                 }
                 data-chat-key={chatKey}
+                data-chat-model={chatModel}
+                data-chat-reasoning={chatReasoningLevel}
             >
                 Send question
             </button>
@@ -433,6 +439,8 @@ describe("project chat workspace lifecycle", () => {
             ).toHaveAttribute("data-chat-key", "created-chat"),
         );
         expect(screen.queryByText("First answer")).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.getByRole("button", { name: "Send question" })).toHaveAttribute("data-chat-model", "gpt-5.6-sol"));
+        expect(screen.getByRole("button", { name: "Send question" })).toHaveAttribute("data-chat-reasoning", "xhigh");
         expect(screen.getByRole("button", { name: "Send question" })).toBeDisabled();
         expect(screen.getByText("First question")).toBeVisible();
         expect(screen.getByRole("tabpanel", { name: "Draft.docx" })).toBe(
