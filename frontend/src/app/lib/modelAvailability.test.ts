@@ -148,3 +148,74 @@ describe("modelGroupToProvider", () => {
         expect(modelGroupToProvider("Google")).toBe("gemini");
     });
 });
+
+const gatewayKeys = (
+    gateway: {
+        available?: boolean;
+        label?: string;
+        models?: { id: string; available: boolean }[];
+    } | null,
+): ApiKeyState =>
+    ({
+        ...keys({}),
+        ...(gateway
+            ? {
+                  gateway: {
+                      provider: "gateway" as const,
+                      label: gateway.label ?? "Bifrost",
+                      available: gateway.available ?? true,
+                      defaultModel: null,
+                      models: (gateway.models ?? []).map((model) => ({
+                          id: model.id,
+                          label: model.id,
+                          group: "Gateway",
+                          source: "gateway",
+                          provider: "gateway" as const,
+                          available: model.available,
+                      })),
+                  },
+              }
+            : {}),
+    }) as ApiKeyState;
+
+describe("gateway models", () => {
+    it("resolves any gateway/-prefixed id without consulting SETTINGS_MODELS", () => {
+        // Gateway models come from the deployment's catalog at runtime, so
+        // like ollama the prefix alone has to be enough.
+        expect(getModelProvider("gateway/gpt-5.6-sol")).toBe("gateway");
+        expect(getModelProvider("gateway/some-deployment-model")).toBe(
+            "gateway",
+        );
+    });
+
+    it("treats the gateway provider as available only when the deployment says so", () => {
+        expect(
+            isProviderAvailable("gateway", gatewayKeys({ available: true })),
+        ).toBe(true);
+        expect(
+            isProviderAvailable("gateway", gatewayKeys({ available: false })),
+        ).toBe(false);
+        // No gateway configured at all.
+        expect(isProviderAvailable("gateway", gatewayKeys(null))).toBe(false);
+    });
+
+    it("marks an individual gateway model available only when the catalog lists it as available", () => {
+        const apiKeys = gatewayKeys({
+            models: [
+                { id: "gateway/ready", available: true },
+                { id: "gateway/disabled", available: false },
+            ],
+        });
+        expect(isModelAvailable("gateway/ready", apiKeys)).toBe(true);
+        expect(isModelAvailable("gateway/disabled", apiKeys)).toBe(false);
+        expect(isModelAvailable("gateway/unknown", apiKeys)).toBe(false);
+        expect(isModelAvailable("gateway/ready", gatewayKeys(null))).toBe(
+            false,
+        );
+    });
+
+    it("labels the gateway with the deployment's own name, falling back to a generic one", () => {
+        expect(providerLabel("gateway", "Bifrost")).toBe("Bifrost");
+        expect(providerLabel("gateway")).toBe("Gateway");
+    });
+});

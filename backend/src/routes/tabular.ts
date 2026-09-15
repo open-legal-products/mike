@@ -1,3 +1,4 @@
+import { gatewayConfig } from "../lib/llm/gateway";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../middleware/auth";
@@ -485,7 +486,7 @@ tabularRouter.post("/", requireAuth, async (req, res) => {
         model?: string;
     };
 
-    if (typeof model !== "string" || !model.trim()) {
+    if ((typeof model !== "string" || !model.trim()) && !gatewayConfig()) {
         return void res.status(400).json({
             code: "model_required",
             detail: TABULAR_MODEL_REQUIRED_DETAIL,
@@ -1266,12 +1267,19 @@ tabularRouter.post(
     if (allowedSourceIds.length !== sourceIds.length)
       return void res.status(404).json({ detail: "Review row not found" });
 
-    const selectedModel = await validateSelectedModel(review.model, userId, db);
-    if (!selectedModel.ok) {
-      return void res.status(selectedModel.status).json(selectedModel.body);
-    }
-    const tabular_model = selectedModel.model;
-    const api_keys = selectedModel.apiKeys;
+        const selectedModel = await validateSelectedModel(
+            review.model,
+            userId,
+            db,
+            true,
+        );
+        if (!selectedModel.ok) {
+            return void res
+                .status(selectedModel.status)
+                .json(selectedModel.body);
+        }
+        const tabular_model = selectedModel.model;
+        const api_keys = selectedModel.apiKeys;
 
         const generationId = randomUUID();
         const { data: startResult, error: startError } = await db.rpc(
