@@ -32,8 +32,12 @@ it("captures a hovered explorer row in a rounded surface without changing the so
     expect(preview).toHaveClass("liquid-glass-float");
     expect(preview.style.overflow).toBe("hidden");
     expect(preview.style.clipPath).toBe("inset(0 round var(--radius))");
+    expect(preview.style.borderRadius).toBe("var(--radius)");
+    expect(preview.style.borderWidth).toBe("0px");
+    expect(preview.style.boxShadow).toBe("none");
     const clone = preview.firstElementChild as HTMLElement;
     expect(clone.style.backgroundColor).toBe("transparent");
+    expect(clone.style.boxShadow).toBe("none");
     expect(clone.style.transition).toBe("none");
     expect(clone.hasAttribute("draggable")).toBe(false);
     expect(row.style.backgroundColor).toBe("rgb(239, 240, 243)");

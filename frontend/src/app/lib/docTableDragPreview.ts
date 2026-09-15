@@ -1,3 +1,5 @@
+import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+
 type DragPreviewOptions = {
     dataTransfer: Pick<DataTransfer, "setDragImage">;
     tableRoot: HTMLElement | null;
@@ -43,6 +45,7 @@ export function setDocumentRowsDragPreview({
     const previewWidth = Math.max(1, Math.ceil(draggedRect.width));
     const preview = document.createElement("div");
     preview.setAttribute("aria-hidden", "true");
+    preview.className = LIQUID_GLASS_FLOAT_CLASS;
     Object.assign(preview.style, {
         position: "fixed",
         left: "-10000px",
@@ -50,8 +53,9 @@ export function setDocumentRowsDragPreview({
         width: `${previewWidth}px`,
         overflow: "hidden",
         pointerEvents: "none",
-        borderRadius: "10px",
-        boxShadow: "0 12px 30px rgba(15, 23, 42, 0.18)",
+        borderRadius: "0",
+        border: "0",
+        boxShadow: "none",
     });
 
     for (const row of rows) {
@@ -59,7 +63,16 @@ export function setDocumentRowsDragPreview({
         clone.removeAttribute("draggable");
         clone.style.width = `${previewWidth}px`;
         clone.style.minWidth = `${previewWidth}px`;
-        clone.style.backgroundColor = getComputedStyle(row).backgroundColor;
+        // One square surface, without selected/hover fills or backing shadows.
+        clone.style.backgroundColor = "transparent";
+        clone.style.borderRadius = "0";
+        clone.style.boxShadow = "none";
+        clone.style.transition = "none";
+        for (const cell of clone.querySelectorAll<HTMLElement>(
+            ".table-sticky-cell",
+        )) {
+            cell.style.backgroundColor = "transparent";
+        }
         preview.appendChild(clone);
     }
 

@@ -26,6 +26,9 @@ export function setRowDragPreview({
         pointerEvents: "none",
         borderRadius: "var(--radius)",
         clipPath: "inset(0 round var(--radius))",
+        // Native drag capture can include the material's rectangular shadow.
+        border: "0",
+        boxShadow: "none",
     });
 
     const clone = row.cloneNode(true) as HTMLElement;
@@ -33,6 +36,7 @@ export function setRowDragPreview({
     clone.style.width = `${previewWidth}px`;
     clone.style.minWidth = `${previewWidth}px`;
     clone.style.backgroundColor = "transparent";
+    clone.style.boxShadow = "none";
     clone.style.transition = "none";
     preview.appendChild(clone);
 

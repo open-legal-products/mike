@@ -87,7 +87,7 @@ describe("DocTable drag preview", () => {
         expect(preview.textContent).toBe("a");
         expect(preview.contains(scrollbar)).toBe(false);
         expect(preview.parentElement).toBe(document.body);
-        expect((preview.firstElementChild as HTMLElement).style.backgroundColor).toBe("rgb(255, 255, 255)");
+        expect((preview.firstElementChild as HTMLElement).style.backgroundColor).toBe("transparent");
         vi.runAllTimers();
         expect(preview.isConnected).toBe(false);
     });
@@ -110,6 +110,47 @@ describe("DocTable drag preview", () => {
         expect(setDragImage).toHaveBeenCalledOnce();
         const [preview] = setDragImage.mock.calls[0] as [HTMLElement];
         expect(preview.children).toHaveLength(1);
+        vi.runAllTimers();
+    });
+
+    it("uses a square surface without row or sticky-cell backing fills", () => {
+        vi.useFakeTimers();
+        const root = document.createElement("div");
+        const row = documentRow("a", 100);
+        row.className = "liquid-glass-selected rounded-lg";
+        row.style.backgroundColor = "rgb(239, 240, 243)";
+        row.style.boxShadow = "0 4px 12px black";
+        const cell = document.createElement("div");
+        cell.className = "table-sticky-cell liquid-glass-selected";
+        cell.style.backgroundColor = "rgb(239, 240, 243)";
+        row.appendChild(cell);
+        root.appendChild(row);
+        const setDragImage = vi.fn();
+
+        setDocumentRowsDragPreview({
+            dataTransfer: { setDragImage },
+            tableRoot: root,
+            draggedDocumentIds: ["a"],
+            draggedDocumentId: "a",
+            clientX: 30,
+            clientY: 110,
+        });
+
+        const [preview] = setDragImage.mock.calls[0] as [HTMLElement];
+        expect(preview).toHaveClass("liquid-glass-float");
+        expect(preview.style.borderRadius).toBe("0px");
+        expect(preview.style.borderWidth).toBe("0px");
+        expect(preview.style.boxShadow).toBe("none");
+        expect(preview.style.overflow).toBe("hidden");
+        const clone = preview.firstElementChild as HTMLElement;
+        expect(clone.style.borderRadius).toBe("0px");
+        expect(clone.style.boxShadow).toBe("none");
+        expect(clone.style.backgroundColor).toBe("transparent");
+        expect(
+            (clone.firstElementChild as HTMLElement).style.backgroundColor,
+        ).toBe("transparent");
+        expect(row.style.backgroundColor).toBe("rgb(239, 240, 243)");
+        expect(cell.style.backgroundColor).toBe("rgb(239, 240, 243)");
         vi.runAllTimers();
     });
 
