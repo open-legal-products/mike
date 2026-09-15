@@ -72,6 +72,16 @@ vi.mock("@fortune-sheet/react", () => ({
         return (
             <div>
                 <span>Zoom {zoom}</span>
+                {data[0].images?.map((image) => (
+                    <img
+                        key={image.id}
+                        src={image.src}
+                        alt="Embedded spreadsheet image"
+                        width={image.width}
+                        height={image.height}
+                        style={{ left: image.left, top: image.top }}
+                    />
+                ))}
                 <div
                     ref={x}
                     data-testid="x"
@@ -134,4 +144,46 @@ it("retains parsed data and viewport, and removes global workbook input handlers
     expect(screen.getByText("Zoom 1")).toBeVisible();
     expect(screen.getByTestId("y").scrollTop).toBe(0);
     expect(state.parse).toHaveBeenCalledTimes(2);
+});
+
+it("opens LuckyExcel sheets with keyed images and preserves them when reopening the tab", async () => {
+    state.parse.mockImplementation((_file, done) =>
+        done({
+            sheets: [
+                {
+                    id: "s1",
+                    name: "Budget",
+                    data: [],
+                    config: {},
+                    status: 1,
+                    images: {
+                        logo: {
+                            src: "data:image/png;base64,iVBORw0KGgo=",
+                            default: {
+                                left: 40,
+                                top: 25,
+                                width: 160,
+                                height: 80,
+                            },
+                            originWidth: 320,
+                            originHeight: 160,
+                        },
+                    },
+                },
+            ],
+        }),
+    );
+    const { rerender } = render(<SpreadsheetView documentId="sheet" />);
+    const image = await screen.findByRole("img", {
+        name: "Embedded spreadsheet image",
+    });
+    expect(image).toHaveAttribute("width", "160");
+    expect(image).toHaveAttribute("height", "80");
+    expect(image).toHaveStyle({ left: "40px", top: "25px" });
+    rerender(<SpreadsheetView documentId="sheet" active={false} />);
+    rerender(<SpreadsheetView documentId="sheet" />);
+    expect(
+        screen.getByRole("img", { name: "Embedded spreadsheet image" }),
+    ).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
+    expect(state.parse).toHaveBeenCalledTimes(1);
 });

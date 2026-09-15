@@ -7,6 +7,7 @@ import type { WorkbookInstance } from "@fortune-sheet/react";
 import type { Cell, Sheet } from "@fortune-sheet/core";
 import "@fortune-sheet/react/dist/index.css";
 import { useFetchSingleDoc } from "@/app/hooks/useFetchSingleDoc";
+import { normalizeSpreadsheetImages } from "@/app/lib/spreadsheetImages";
 import {
     SpreadsheetWorkbook,
     type SpreadsheetSession,
@@ -315,6 +316,9 @@ export function SpreadsheetView({
                 if (exportJson?.sheets?.length) {
                     applyMergeCells(exportJson.sheets);
                     applyExcelTextOverflow(exportJson.sheets);
+                    for (const sheet of exportJson.sheets) {
+                        sheet.images = normalizeSpreadsheetImages(sheet.images);
+                    }
                     setSheets(exportJson.sheets as unknown as Sheet[]);
                     setWorkbookGeneration((generation) => generation + 1);
                 } else {
