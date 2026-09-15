@@ -372,8 +372,12 @@ export function ProjectWorkspaceProvider({
     }, [accessModalOpen, grants, refreshGrants, canDo]);
 
     const createChat = useCallback(() => {
+        if (!canDo("content.edit")) {
+            denyUnlessLoading({ action: "create a chat", requiredRole: "editor" });
+            return;
+        }
         router.push(`/projects/${projectId}/assistant/chat`);
-    }, [projectId, router]);
+    }, [projectId, router, canDo, denyUnlessLoading]);
 
     const openNewReview = useCallback(() => {
         // Creating a review is member-tier server-side (POST /tabular-review
@@ -538,7 +542,6 @@ export function ProjectWorkspaceProvider({
                     project={project}
                     search={search}
                     activeSection={activeSection}
-                    creatingChat={false}
                     creatingReview={creatingReview}
                     canManageProject={canDo("access.manage")}
                     roleKnown={roleKnown}

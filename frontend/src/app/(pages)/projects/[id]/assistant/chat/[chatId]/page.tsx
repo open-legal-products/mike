@@ -26,7 +26,6 @@ import {
     deleteDocument,
     getChat,
     getProject,
-    listProjects,
     listProjectChats,
     uploadProjectDocuments,
     createProjectFolder,
@@ -39,6 +38,12 @@ import {
 } from "@/app/lib/mikeApi";
 import { useAssistantChat } from "@/app/hooks/useAssistantChat";
 import { useAssistantMessageLayout } from "@/app/hooks/useAssistantMessageLayout";
+import { useProjectPicker } from "@/app/hooks/useProjectPicker";
+import {
+    isChatAttachmentDrag,
+    isExternalFileDrag,
+    isProjectItemDrag,
+} from "@/app/lib/projectDragTypes";
 import { useExplorerDownload } from "@/app/hooks/useExplorerDownload";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
@@ -107,7 +112,6 @@ type DocTab = {
     filename: string;
     quotes?: CitationQuote[];
     versionId?: string | null;
-    refetchKey?: number;
     warning?: string | null;
     scrollTop?: number;
 };
@@ -326,14 +330,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const folderInputRef = useRef<HTMLInputElement>(null);
     const projectExplorerRef = useRef<ProjectExplorerHandle>(null);
     const [addDocumentsOpen, setAddDocumentsOpen] = useState(false);
-    const [projectPickerOpen, setProjectPickerOpen] = useState(false);
-    const [pickerProjects, setPickerProjects] = useState<Project[] | null>(
-        null,
-    );
-    const [pickerProjectsLoading, setPickerProjectsLoading] = useState(false);
-    const [selectedPickerProjectId, setSelectedPickerProjectId] = useState<
-        string | null
-    >(null);
+    const projectPicker = useProjectPicker();
     const [uploadingDocuments, setUploadingDocuments] = useState<
         Array<{ clientId: string; filename: string }>
     >([]);
@@ -349,9 +346,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
     const [editScrollTarget, setEditScrollTarget] =
         useState<EditScrollTarget | null>(null);
-    const [reloadingDocIds, setReloadingDocIds] = useState<Set<string>>(
-        () => new Set(),
-    );
 
     const activeTab = tabs.find((t) => t.documentId === activeTabId) ?? null;
     const activeTabViewType = activeTab
@@ -359,7 +353,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         : null;
 
     const chatInputRef = useRef<ChatInputHandle | null>(null);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
 
@@ -383,19 +376,44 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             ? (initialMessages[0]?.reasoning ?? null)
             : undefined,
     );
-    const { messages, isResponseLoading, handleChat, setMessages, cancel } =
-        useAssistantChat({
-            initialMessages,
-            chatId: activeChatId || undefined,
-            projectId,
-        });
+    const createdChatIdRef = useRef<string | null>(null);
+    const adoptCreatedChat = useCallback(
+        (chatId: string) => {
+            createdChatIdRef.current = chatId;
+            setChatOwnerId(user?.id ?? null);
+            setActiveChatId(chatId);
+            window.history.pushState(
+                null,
+                "",
+                `/projects/${projectId}/assistant/chat/${chatId}`,
+            );
+        },
+        [projectId, user?.id],
+    );
+    const {
+        messages,
+        isResponseLoading,
+        handleChat,
+        setMessages,
+        cancel,
+        resetChat,
+    } = useAssistantChat({
+        initialMessages,
+        onChatCreated: adoptCreatedChat,
+        chatId: activeChatId || undefined,
+        projectId,
+    });
     const availableProjectChats = useMemo(() => {
         const byId = new Map<string, Chat>();
         for (const chat of chats ?? []) {
             if (chat.project_id === projectId) byId.set(chat.id, chat);
         }
         for (const chat of projectChats ?? []) byId.set(chat.id, chat);
-        return Array.from(byId.values());
+        return Array.from(byId.values()).sort(
+            (a, b) =>
+                (Date.parse(b.created_at ?? "") || 0) -
+                (Date.parse(a.created_at ?? "") || 0),
+        );
     }, [chats, projectChats, projectId]);
 
     // Server ladder: writing to a project chat needs content.edit on the
@@ -540,6 +558,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [activeChatId, setCurrentChatId]);
 
     useEffect(() => {
+        if (activeChatId && createdChatIdRef.current === activeChatId) {
+            createdChatIdRef.current = null;
+            return;
+        }
         let cancelled = false;
         // eslint-disable-next-line react-hooks/set-state-in-effect -- only the chat slate resets when selecting another thread
         setChatLoaded(false);
@@ -729,20 +751,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         });
     };
 
-    const handleEditResolved = (_args: {
-        editId: string;
-        documentId: string;
-        status: "accepted" | "rejected";
-        versionId: string | null;
-        downloadUrl: string | null;
-    }) => {
-        // Re-render after accept/reject is disabled while we verify the
-        // client-side optimistic mutation works on its own. Re-enable by
-        // bumping versionId + refetchKey on the matching tab and marking
-        // it reloading like before.
-        void _args;
-    };
-
     const patchTab = (documentId: string, patch: Partial<DocTab>) => {
         setTabs((prev) =>
             prev.map((t) =>
@@ -762,26 +770,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const handleTabScrollChange = (documentId: string, scrollTop: number) => {
         patchTab(documentId, { scrollTop });
     };
-
-    const handleDocxReady = (documentId: string) => {
-        setReloadingDocIds((prev) => {
-            if (!prev.has(documentId)) return prev;
-            const next = new Set(prev);
-            next.delete(documentId);
-            return next;
-        });
-    };
-
-    function isChatAttachmentDrag(dataTransfer: DataTransfer) {
-        const types = Array.from(dataTransfer.types);
-        return (
-            types.includes("Files") || types.includes("application/mike-doc")
-        );
-    }
-
-    function isExternalFileDrag(dataTransfer: DataTransfer) {
-        return Array.from(dataTransfer.types).includes("Files");
-    }
 
     const handleChatDrop = (event: React.DragEvent) => {
         if (!isChatAttachmentDrag(event.dataTransfer)) return;
@@ -811,17 +799,13 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     function handleNewChat() {
-        cancel();
-        setMessages([]);
-        setChatTitle(null);
-        setChatOwnerId(null);
-        setChatModel(undefined);
-        setChatReasoningLevel(undefined);
-        setChatLoaded(true);
+        if (!canEditContent) {
+            if (project) setEditorGateAction("create a chat");
+            return;
+        }
+        resetChat();
         setActiveChatId("");
-        setCurrentChatId(null);
         setComposerResetKey((current) => current + 1);
-        hasInitialScrolled.current = false;
         window.history.pushState(
             null,
             "",
@@ -1046,23 +1030,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         return uploadEntries(documentUploadEntriesFromFiles(files));
     }
 
-    async function openProjectPicker() {
-        setProjectPickerOpen(true);
-        if (pickerProjects !== null || pickerProjectsLoading) return;
-
-        setPickerProjectsLoading(true);
-        try {
-            setPickerProjects(await listProjects());
-        } catch {
-            setPickerProjects([]);
-        } finally {
-            setPickerProjectsLoading(false);
-        }
-    }
-
     function selectProject() {
-        if (!selectedPickerProjectId) return;
-        router.push(`/projects/${selectedPickerProjectId}/assistant/chat`);
+        if (!projectPicker.selectedId) return;
+        router.push(`/projects/${projectPicker.selectedId}/assistant/chat`);
     }
 
     const handleExplorerFileDrop = async (e: React.DragEvent) => {
@@ -1401,12 +1371,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             ref={workspaceRef}
             className="my-2 ml-2 mr-3 flex h-[calc(100dvh-1rem)] min-h-0 md:my-3 md:h-[calc(100dvh-1.5rem)]"
             onDragOver={(event) => {
-                if (Array.from(event.dataTransfer.types).includes("Files")) {
+                if (isExternalFileDrag(event.dataTransfer)) {
                     event.preventDefault();
                 }
             }}
             onDrop={(event) => {
-                if (Array.from(event.dataTransfer.types).includes("Files")) {
+                if (isExternalFileDrag(event.dataTransfer)) {
                     event.preventDefault();
                 }
             }}
@@ -1423,14 +1393,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         onDragOver={(e) => {
                             e.preventDefault();
                             // Only show the upload overlay for external file drags, not internal moves
-                            const isInternal =
-                                Array.from(e.dataTransfer.types).includes(
-                                    "application/mike-doc",
-                                ) ||
-                                Array.from(e.dataTransfer.types).includes(
-                                    "application/mike-folder",
-                                );
-                            if (!isInternal) setExplorerDragOver(true);
+                            if (
+                                isExternalFileDrag(e.dataTransfer) &&
+                                !isProjectItemDrag(e.dataTransfer)
+                            )
+                                setExplorerDragOver(true);
                         }}
                         onDragLeave={(e) => {
                             if (
@@ -1501,7 +1468,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             label: "Select project",
                                             icon: FolderOpen,
                                             onSelect: () =>
-                                                void openProjectPicker(),
+                                                void projectPicker.openPicker(),
                                         },
                                         {
                                             label: "New subfolder",
@@ -1647,14 +1614,26 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         )
                     }
                 />
-                <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                <div
+                    role={activeTab ? "tabpanel" : undefined}
+                    id={
+                        activeTab
+                            ? `project-document-panel-${activeTab.documentId}`
+                            : undefined
+                    }
+                    aria-labelledby={
+                        activeTab
+                            ? `project-document-tab-${activeTab.documentId}`
+                            : undefined
+                    }
+                    className="flex-1 min-h-0 overflow-hidden flex flex-col"
+                >
                     {activeTab ? (
                         activeTabViewType === "docx" ? (
                             <DocxView
                                 key={activeTab.documentId}
                                 documentId={activeTab.documentId}
                                 versionId={activeTab.versionId}
-                                refetchKey={activeTab.refetchKey}
                                 quotes={activeQuotes ?? undefined}
                                 highlightEdit={
                                     editScrollTarget &&
@@ -1662,9 +1641,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         activeTab.documentId
                                         ? editScrollTarget
                                         : null
-                                }
-                                onReady={() =>
-                                    handleDocxReady(activeTab.documentId)
                                 }
                                 warning={activeTab.warning ?? null}
                                 onWarningDismiss={() =>
@@ -1752,7 +1728,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         loading={projectChats === null}
                         newChatDisabled={!canEditContent}
                         onLoad={navigateToChat}
-                        onNewChat={() => void handleNewChat()}
+                        onNewChat={handleNewChat}
                         titleEdit={
                             editingChatTitle
                                 ? {
@@ -1900,16 +1876,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         }
                                         onEditViewClick={handleEditViewClick}
                                         onOpenDocument={handleOpenDocument}
-                                        onEditResolved={handleEditResolved}
                                         onEditError={handleEditError}
-                                        isDocReloading={(docId) =>
-                                            reloadingDocIds.has(docId)
-                                        }
                                     />
                                 ),
                             );
                         })()}
-                        <div ref={messagesEndRef} />
                     </div>
                 )}
 
@@ -1967,19 +1938,25 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     uploadStateId={`project-chat:${projectId}`}
                 />
             )}
+            <WarningPopup
+                open={!!projectPicker.error}
+                onClose={projectPicker.clearError}
+                title="Projects could not be loaded"
+                message={projectPicker.error ?? ""}
+            />
             <ProjectPickerModal
-                open={projectPickerOpen}
-                onClose={() => setProjectPickerOpen(false)}
-                projects={pickerProjects ?? []}
-                loading={pickerProjectsLoading}
-                selectedId={selectedPickerProjectId}
-                onSelect={setSelectedPickerProjectId}
+                open={projectPicker.open}
+                onClose={projectPicker.closePicker}
+                projects={projectPicker.projects ?? []}
+                loading={projectPicker.loading}
+                selectedId={projectPicker.selectedId}
+                onSelect={projectPicker.setSelectedId}
                 breadcrumbs={["IDE", "Select project"]}
                 primaryAction={{
                     label: "Select project",
                     type: "button",
                     onClick: selectProject,
-                    disabled: !selectedPickerProjectId,
+                    disabled: !projectPicker.selectedId,
                 }}
             />
             <ProjectMemoryModal

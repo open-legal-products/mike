@@ -167,6 +167,15 @@ describe("ProjectWorkspace while the project is still loading", () => {
         expect(screen.getByText("Delete project?")).toBeInTheDocument();
     });
 
+    it("refuses a viewer's new chat and explains the editor requirement", async () => {
+        vi.mocked(getProject).mockResolvedValue({ ...OWNER_PROJECT, access_role: "viewer" } as unknown as Project);
+        renderWorkspace();
+        await waitFor(() => expect(screen.getByTestId("role")).toHaveTextContent("viewer"));
+        fireEvent.click(screen.getByText("new chat"));
+        expect(routerPush).not.toHaveBeenCalled();
+        expect(screen.getByText("Only an editor can create a chat.")).toBeInTheDocument();
+    });
+
     it("opens an empty project chat without creating a database row", async () => {
         vi.mocked(getProject).mockResolvedValue(OWNER_PROJECT);
         renderWorkspace();

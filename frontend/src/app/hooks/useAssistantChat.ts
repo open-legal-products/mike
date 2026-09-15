@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, streamProjectChat } from "@/app/lib/mikeApi";
 import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
@@ -16,6 +16,8 @@ interface UseAssistantChatOptions {
   initialMessages?: Message[];
   chatId?: string;
   projectId?: string;
+  /** Lets a persistent workspace adopt the server id without navigation. */
+  onChatCreated?: (chatId: string) => void;
 }
 
 function readableStreamError(value: unknown, safeToDisplay: boolean): string {
@@ -71,6 +73,7 @@ export function useAssistantChat({
   initialMessages = [],
   chatId: initialChatId,
   projectId,
+  onChatCreated,
 }: UseAssistantChatOptions = {}) {
   const router = useRouter();
   const {
@@ -93,18 +96,32 @@ export function useAssistantChat({
   }, [initialChatId]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const requestGenerationRef = useRef(0);
+
+  // Invalidate the previous request before a new thread can receive updates.
+  useLayoutEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset request status when the host selects another thread
+    setIsResponseLoading(false);
+    setIsLoadingCitations(false);
+    return () => {
+      requestGenerationRef.current += 1;
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+  }, [initialChatId, projectId]);
 
   const eventsRef = useRef<AssistantEvent[]>([]);
 
   const updateLatestAssistantMessage = (
     updater: (message: Message) => Message,
   ) => {
+    const generation = requestGenerationRef.current;
     setMessages((prev) => {
-      const assistantIndex = [...prev]
-        .map((message, index) => ({ message, index }))
-        .reverse()
-        .find(({ message }) => message.role === "assistant")?.index;
-      if (assistantIndex === undefined) return prev;
+      if (requestGenerationRef.current !== generation) return prev;
+      let assistantIndex = prev.length - 1;
+      while (assistantIndex >= 0 && prev[assistantIndex].role !== "assistant")
+        assistantIndex -= 1;
+      if (assistantIndex < 0) return prev;
       const updated = [...prev];
       updated[assistantIndex] = updater(updated[assistantIndex]);
       return updated;
@@ -177,17 +194,21 @@ export function useAssistantChat({
   };
 
   const cancel = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      const snapshot = cancelStreamingEvents(eventsRef.current);
-      eventsRef.current = snapshot;
-      updateLatestAssistantMessage((message) => ({
-        ...message,
-        events: cancelStreamingEvents(message.events ?? snapshot),
-      }));
-      setIsResponseLoading(false);
-      setIsLoadingCitations(false);
-    }
+    const controller = abortControllerRef.current;
+    if (!controller) return;
+    requestGenerationRef.current += 1;
+    controller.abort();
+    abortControllerRef.current = null;
+    const snapshot = appendCancellationEvent(eventsRef.current);
+    eventsRef.current = snapshot;
+    // Queue cancellation in this thread synchronously, before its host clears
+    // or replaces messages. The aborted request can no longer write afterward.
+    updateLatestAssistantMessage((message) => ({
+      ...message,
+      events: snapshot,
+    }));
+    setIsResponseLoading(false);
+    setIsLoadingCitations(false);
   };
 
   const clearStreamingPlaceholders = () => {
@@ -329,8 +350,11 @@ export function useAssistantChat({
           .find((item) => item.role === "assistant")?.events ?? [])
       : [];
 
+    const generation = ++requestGenerationRef.current;
+    abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const isCurrentRequest = () => requestGenerationRef.current === generation;
 
     try {
       const apiMessages = apiMessagesForTurn.map((currentMessage) => ({
@@ -387,6 +411,10 @@ export function useAssistantChat({
             signal: controller.signal,
           }));
 
+      if (!isCurrentRequest()) {
+        await response.body?.cancel().catch(() => {});
+        return null;
+      }
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
         throw new Error(`Chat request failed with status ${response.status}`);
@@ -400,6 +428,10 @@ export function useAssistantChat({
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!isCurrentRequest()) {
+          await reader.cancel().catch(() => {});
+          return null;
+        }
         if (done) {
           // Flush any bytes still held by TextDecoder. A response is allowed
           // to close without a final newline, so the remaining buffer must be
@@ -1329,73 +1361,35 @@ export function useAssistantChat({
           );
         }
         setCurrentChatId(finalChatId);
-        const chatBasePath = projectId
-          ? `/projects/${projectId}/assistant/chat`
-          : `/assistant/chat`;
-        router.replace(`${chatBasePath}/${finalChatId}`);
+        if (onChatCreated) {
+          onChatCreated(finalChatId);
+        } else {
+          const chatBasePath = projectId
+            ? `/projects/${projectId}/assistant/chat`
+            : `/assistant/chat`;
+          router.replace(`${chatBasePath}/${finalChatId}`);
+        }
       }
 
       await loadChats();
 
       return streamedChatId || null;
     } catch (error: unknown) {
+      if (!isCurrentRequest()) return null;
+      finalizeStreamingContent();
       if (error instanceof Error && error.name === "AbortError") {
-        finalizeStreamingContent();
         finalizeStreamingReasoning();
-        eventsRef.current = appendCancellationEvent(eventsRef.current);
-        setMessages((prev) => {
-          const assistantIndex = [...prev]
-            .map((message, index) => ({ message, index }))
-            .reverse()
-            .find(({ message }) => message.role === "assistant")?.index;
-          if (assistantIndex !== undefined) {
-            const assistantMessage = prev[assistantIndex];
-            const events = appendCancellationEvent(
-              assistantMessage.events ?? eventsRef.current,
-            );
-            eventsRef.current = events;
-            const updated = [...prev];
-            updated[assistantIndex] = {
-              ...assistantMessage,
-              events,
-            };
-            return updated;
-          }
-          eventsRef.current = [{ type: "content", text: "Cancelled by user." }];
-          return [
-            ...prev,
-            {
-              role: "assistant",
-              content: "",
-              events: [{ type: "content", text: "Cancelled by user." }],
-            },
-          ];
-        });
+        const snapshot = appendCancellationEvent(eventsRef.current);
+        eventsRef.current = snapshot;
+        updateLatestAssistantMessage((message) => ({
+          ...message,
+          events: snapshot,
+        }));
       } else {
-        finalizeStreamingContent();
-        const errorMessage = "Sorry, something went wrong.";
-        setMessages((prev) => {
-          const assistantIndex = [...prev]
-            .map((message, index) => ({ message, index }))
-            .reverse()
-            .find(({ message }) => message.role === "assistant")?.index;
-          if (assistantIndex !== undefined) {
-            const updated = [...prev];
-            updated[assistantIndex] = {
-              ...updated[assistantIndex],
-              error: errorMessage,
-            };
-            return updated;
-          }
-          return [
-            ...prev,
-            {
-              role: "assistant",
-              content: "",
-              error: errorMessage,
-            },
-          ];
-        });
+        updateLatestAssistantMessage((message) => ({
+          ...message,
+          error: "Sorry, something went wrong.",
+        }));
       }
 
       setIsResponseLoading(false);
@@ -1435,6 +1429,12 @@ export function useAssistantChat({
     handleNewChat,
     setMessages,
     cancel,
+    resetChat: () => {
+      cancel();
+      setChatId(undefined);
+      setCurrentChatId(null);
+      setMessages([]);
+    },
     chatId,
   };
 }

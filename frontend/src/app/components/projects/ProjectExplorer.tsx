@@ -1,5 +1,6 @@
 "use client";
 
+import { isProjectItemDrag } from "@/app/lib/projectDragTypes";
 import {
     forwardRef,
     useEffect,
@@ -214,10 +215,7 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
     }
 
     function isInternalDrag(e: React.DragEvent): boolean {
-        return (
-            Array.from(e.dataTransfer.types).includes("application/mike-doc") ||
-            Array.from(e.dataTransfer.types).includes("application/mike-folder")
-        );
+        return isProjectItemDrag(e.dataTransfer);
     }
 
     function renderLevel(parentId: string | null, depth: number): React.ReactNode {
@@ -549,8 +547,7 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             type="button"
                             className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700"
                             onClick={() => {
-                                const f = folders.find((x) => x.id === contextMenu.folderId);
-                                setRenameValue(f?.name ?? "");
+                                setRenameValue(contextFolder?.name ?? "");
                                 setRenamingId(contextMenu.folderId!);
                                 setContextMenu(null);
                             }}
@@ -564,10 +561,7 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             type="button"
                             className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700"
                             onClick={() => {
-                                const document = documents.find(
-                                    (item) => item.id === contextMenu.docId,
-                                );
-                                setRenameValue(document?.filename ?? "");
+                                setRenameValue(contextDocument?.filename ?? "");
                                 setRenamingDocId(contextMenu.docId!);
                                 setContextMenu(null);
                             }}

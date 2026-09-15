@@ -1,12 +1,6 @@
 "use client";
 
-import {
-    useEffect,
-    useRef,
-    useState,
-    type CSSProperties,
-    type DragEvent,
-} from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { X } from "lucide-react";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { VersionChip } from "@/app/components/shared/VersionChip";
@@ -103,10 +97,10 @@ export function ProjectDocumentTabs({
         <div
             role="tablist"
             aria-label="Project documents"
-            className="flex h-10 min-w-0 shrink-0 items-end gap-1 overflow-x-auto bg-white px-1 pt-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+            className="flex h-10 min-w-0 shrink-0 items-end gap-1 overflow-x-auto bg-app-surface px-1 pt-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
         >
             {tabs.length === 0 ? (
-                <span className="self-center px-2 text-xs text-gray-700">
+                <span className="self-center px-2 text-xs text-muted-foreground">
                     Document Viewer
                 </span>
             ) : (
@@ -126,7 +120,17 @@ export function ProjectDocumentTabs({
                                 itemRefs.current[tab.documentId] = element;
                             }}
                             role="tab"
-                            tabIndex={0}
+                            id={`project-document-tab-${tab.documentId}`}
+                            aria-controls={
+                                isActive
+                                    ? `project-document-panel-${tab.documentId}`
+                                    : undefined
+                            }
+                            tabIndex={
+                                isActive || (!activeTabId && index === 0)
+                                    ? 0
+                                    : -1
+                            }
                             aria-selected={isActive}
                             aria-label={tab.filename}
                             draggable={tabs.length > 1}
@@ -156,6 +160,33 @@ export function ProjectDocumentTabs({
                                     onActivate(tab.documentId);
                                 }
                                 if (
+                                    !event.altKey &&
+                                    [
+                                        "ArrowLeft",
+                                        "ArrowRight",
+                                        "Home",
+                                        "End",
+                                    ].includes(event.key)
+                                ) {
+                                    event.preventDefault();
+                                    const nextIndex =
+                                        event.key === "Home"
+                                            ? 0
+                                            : event.key === "End"
+                                              ? tabs.length - 1
+                                              : (index +
+                                                    (event.key === "ArrowLeft"
+                                                        ? -1
+                                                        : 1) +
+                                                    tabs.length) %
+                                                tabs.length;
+                                    const target = tabs[nextIndex];
+                                    onActivate(target.documentId);
+                                    itemRefs.current[
+                                        target.documentId
+                                    ]?.focus();
+                                }
+                                if (
                                     event.altKey &&
                                     (event.key === "ArrowLeft" ||
                                         event.key === "ArrowRight")
@@ -173,18 +204,6 @@ export function ProjectDocumentTabs({
                                 }
                             }}
                             data-active={isActive ? "true" : "false"}
-                            style={
-                                {
-                                    "--document-tab-inactive-background":
-                                        "#fff",
-                                    ...(isActive
-                                        ? {
-                                              "--document-tab-active-background":
-                                                  "#f3f4f6",
-                                          }
-                                        : {}),
-                                } as CSSProperties
-                            }
                             className={cn(
                                 "document-tab group relative flex h-9 min-w-0 max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
                                 isActive ? "z-20" : "z-10",
@@ -242,7 +261,7 @@ export function ProjectDocumentTabs({
             )}
             {tabs.length > 0 && (
                 <div
-                    aria-label="Move tab to end"
+                    aria-hidden="true"
                     className="h-9 min-w-4 flex-1"
                     onDragOver={(event) =>
                         dragOver(

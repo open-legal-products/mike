@@ -23,7 +23,6 @@ interface ChatPanelHeaderProps {
     currentChatId: string;
     currentTitle: string | null;
     loading?: boolean;
-    creating?: boolean;
     newChatDisabled?: boolean;
     actions: ReactNode;
     onLoad: (chatId: string) => void;
@@ -41,7 +40,6 @@ export function ChatPanelHeader({
     currentChatId,
     currentTitle,
     loading = false,
-    creating = false,
     newChatDisabled = false,
     actions,
     onLoad,
@@ -230,20 +228,16 @@ export function ChatPanelHeader({
                             <button
                                 type="button"
                                 onClick={onNewChat}
-                                disabled={newChatDisabled || creating}
-                                aria-label={
-                                    creating ? "Creating new chat" : "New chat"
-                                }
+                                disabled={newChatDisabled}
+                                aria-label="New chat"
                                 className={cn(
                                     HEADER_PILL_BUTTON_CLASS,
                                     "disabled:cursor-not-allowed disabled:opacity-40",
                                 )}
                             >
                                 <Plus
-                                    className={cn(
-                                        "h-3.5 w-3.5",
-                                        creating && "animate-pulse",
-                                    )}
+                                    aria-hidden="true"
+                                    className="h-3.5 w-3.5"
                                 />
                             </button>
                         )}
