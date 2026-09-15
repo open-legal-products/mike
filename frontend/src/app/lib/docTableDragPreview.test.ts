@@ -23,6 +23,26 @@ describe("DocTable drag preview", () => {
         document.body.replaceChildren();
     });
 
+    it.each(["missing table", "empty selection"])(
+        "skips capture for %s",
+        (scenario) => {
+            const root = document.createElement("div");
+            root.appendChild(documentRow("a", 100));
+            const queryRows = vi.spyOn(root, "querySelectorAll");
+            const setDragImage = vi.fn();
+            setDocumentRowsDragPreview({
+                dataTransfer: { setDragImage },
+                tableRoot: scenario === "missing table" ? null : root,
+                draggedDocumentIds: scenario === "empty selection" ? [] : ["a"],
+                draggedDocumentId: "a",
+                clientX: 30,
+                clientY: 110,
+            });
+            expect(setDragImage).not.toHaveBeenCalled();
+            expect(queryRows).not.toHaveBeenCalled();
+        },
+    );
+
     it("uses every selected row in visible order and anchors the grabbed row", () => {
         vi.useFakeTimers();
         const root = document.createElement("div");
