@@ -18,7 +18,7 @@ import { formatElapsedTime } from "@/app/lib/formatElapsedTime";
 const HEADER_PILL_CLASS = `flex shrink-0 items-center gap-1 rounded-full px-1 py-0.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`;
 const HEADER_PILL_BUTTON_CLASS = `flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${LIQUID_GLASS_HOVER_CLASS}`;
 
-interface ProjectChatSwitcherProps {
+interface ChatPanelHeaderProps {
     chats: (Pick<Chat, "id" | "title"> & Partial<Pick<Chat, "created_at">>)[];
     currentChatId: string;
     currentTitle: string | null;
@@ -36,7 +36,7 @@ interface ProjectChatSwitcherProps {
     };
 }
 
-export function ProjectChatSwitcher({
+export function ChatPanelHeader({
     chats,
     currentChatId,
     currentTitle,
@@ -47,7 +47,7 @@ export function ProjectChatSwitcher({
     onLoad,
     onNewChat,
     titleEdit,
-}: ProjectChatSwitcherProps) {
+}: ChatPanelHeaderProps) {
     const [historyOpen, setHistoryOpen] = useState(false);
     const [query, setQuery] = useState("");
     const [now, setNow] = useState(Date.now);
@@ -157,7 +157,7 @@ export function ProjectChatSwitcher({
                             <input
                                 autoFocus
                                 type="search"
-                                aria-label="Search project chats"
+                                aria-label="Search chats"
                                 placeholder="Search chats…"
                                 value={query}
                                 onChange={(event) =>
@@ -219,32 +219,34 @@ export function ProjectChatSwitcher({
                 )}
             </div>
 
-            <div className="pointer-events-auto flex shrink-0 items-center">
-                <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
-                    {currentChatId && (
-                        <button
-                            type="button"
-                            onClick={onNewChat}
-                            disabled={newChatDisabled || creating}
-                            aria-label={
-                                creating ? "Creating new chat" : "New chat"
-                            }
-                            className={cn(
-                                HEADER_PILL_BUTTON_CLASS,
-                                "disabled:cursor-not-allowed disabled:opacity-40",
-                            )}
-                        >
-                            <Plus
+            {(currentChatId || actions) && (
+                <div className="pointer-events-auto flex shrink-0 items-center">
+                    <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
+                        {currentChatId && (
+                            <button
+                                type="button"
+                                onClick={onNewChat}
+                                disabled={newChatDisabled || creating}
+                                aria-label={
+                                    creating ? "Creating new chat" : "New chat"
+                                }
                                 className={cn(
-                                    "h-3.5 w-3.5",
-                                    creating && "animate-pulse",
+                                    HEADER_PILL_BUTTON_CLASS,
+                                    "disabled:cursor-not-allowed disabled:opacity-40",
                                 )}
-                            />
-                        </button>
-                    )}
-                    {actions}
+                            >
+                                <Plus
+                                    className={cn(
+                                        "h-3.5 w-3.5",
+                                        creating && "animate-pulse",
+                                    )}
+                                />
+                            </button>
+                        )}
+                        {actions}
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
     );
 }

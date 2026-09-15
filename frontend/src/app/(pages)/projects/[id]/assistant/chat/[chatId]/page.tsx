@@ -51,7 +51,7 @@ import {
     type ProjectExplorerHandle,
 } from "@/app/components/projects/ProjectExplorer";
 import { ProjectMemoryModal } from "@/app/components/projects/ProjectMemoryModal";
-import { ProjectChatSwitcher } from "@/app/components/projects/ProjectChatSwitcher";
+import { ChatPanelHeader } from "@/app/components/shared/ChatPanelHeader";
 import { ProjectWorkspaceTips } from "@/app/components/projects/ProjectWorkspaceTips";
 import { ProjectDocumentTabs } from "@/app/components/projects/ProjectDocumentTabs";
 import { reorderTabs } from "@/app/lib/reorderTabs";
@@ -1745,7 +1745,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                 )}
                 <div className="absolute inset-x-0 top-0 z-40">
-                    <ProjectChatSwitcher
+                    <ChatPanelHeader
                         chats={availableProjectChats}
                         currentChatId={activeChatId}
                         currentTitle={chatTitle}
@@ -1800,9 +1800,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             deletingChat ||
                                             !chatLoaded ||
                                             !activeChatId,
-                                        variant: "danger",
+                                        variant: "danger" as const,
                                     },
-                                ]}
+                                ].filter((item) =>
+                                    activeChatId ? true : item.label === "Memory",
+                                )}
                             />
                         }
                     />

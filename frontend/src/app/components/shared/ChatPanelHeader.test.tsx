@@ -9,14 +9,14 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ProjectChatSwitcher } from "./ProjectChatSwitcher";
+import { ChatPanelHeader } from "./ChatPanelHeader";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 
 function RenameHarness({ onSave }: { onSave: (title: string) => void }) {
     const [title, setTitle] = useState("Current draft");
     const [draft, setDraft] = useState<string | null>(null);
     return (
-        <ProjectChatSwitcher
+        <ChatPanelHeader
             chats={[
                 { id: "chat-1", title },
                 { id: "chat-2", title: "Earlier advice" },
@@ -54,12 +54,12 @@ function RenameHarness({ onSave }: { onSave: (title: string) => void }) {
     );
 }
 
-describe("ProjectChatSwitcher", () => {
+describe("ChatPanelHeader", () => {
     it("shows compact creation times alongside titles and omits unavailable timestamps", () => {
         const now = Date.parse("2026-09-15T12:00:00Z");
         const clock = vi.spyOn(Date, "now").mockReturnValue(now);
         const { unmount } = render(
-            <ProjectChatSwitcher
+            <ChatPanelHeader
                 chats={[
                     {
                         id: "chat-2",
@@ -128,7 +128,7 @@ describe("ProjectChatSwitcher", () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date("2026-09-15T12:00:00Z"));
         const { unmount } = render(
-            <ProjectChatSwitcher
+            <ChatPanelHeader
                 chats={[
                     {
                         id: "chat-2",
@@ -254,7 +254,7 @@ describe("ProjectChatSwitcher", () => {
 
     it("keeps the chat header row transparent", () => {
         const { container } = render(
-            <ProjectChatSwitcher
+            <ChatPanelHeader
                 chats={[]}
                 currentChatId=""
                 currentTitle={null}
@@ -280,7 +280,7 @@ describe("ProjectChatSwitcher", () => {
         const user = userEvent.setup();
         const onLoad = vi.fn();
         render(
-            <ProjectChatSwitcher
+            <ChatPanelHeader
                 chats={[
                     { id: "chat-1", title: "Current draft" },
                     { id: "chat-2", title: "Earlier advice" },
@@ -309,7 +309,7 @@ describe("ProjectChatSwitcher", () => {
     it("filters chat history without showing the active chat", async () => {
         const user = userEvent.setup();
         render(
-            <ProjectChatSwitcher
+            <ChatPanelHeader
                 chats={[
                     { id: "chat-1", title: "Current draft" },
                     { id: "chat-2", title: "Earlier advice" },
