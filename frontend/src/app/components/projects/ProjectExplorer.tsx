@@ -13,7 +13,6 @@ import {
     ChevronDown,
     FileText,
     Download,
-    Loader2,
     MessageSquarePlus,
     Pencil,
     Trash2,
@@ -236,11 +235,11 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             className="flex items-center gap-2 py-1.5 pr-2 text-gray-400"
                             style={{ paddingLeft: basePadding }}
                         >
-                            <Loader2
-                                aria-hidden="true"
-                                className="h-3 w-3 shrink-0 animate-spin"
+                            <FileTypeIcon
+                                fileType={upload.filename}
+                                className="h-3.5 w-3.5"
+                                muted
                             />
-                            <DocIcon fileType={upload.filename} />
                             <span className="min-w-0 flex-1 truncate text-xs">
                                 {upload.filename}
                             </span>
