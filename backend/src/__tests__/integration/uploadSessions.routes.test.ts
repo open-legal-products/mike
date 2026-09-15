@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
   getSignedUploadUrl: vi.fn(),
   ensureDocAccess: vi.fn(),
+  checkWorkflowAccess: vi.fn(),
   /** The row the `documents` read answers with. */
   documentRow: { data: null as unknown, error: null as unknown },
 }));
@@ -45,6 +46,8 @@ vi.mock("../../lib/supabase", () => ({
 vi.mock("../../lib/access", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/access")>()),
   ensureDocAccess: (...args: unknown[]) => mocks.ensureDocAccess(...args),
+  checkWorkflowAccess: (...args: unknown[]) =>
+    mocks.checkWorkflowAccess(...args),
 }));
 
 vi.mock("../../lib/storage", () => ({
@@ -311,5 +314,84 @@ describe("upload session destination access", () => {
 
     expect(response.status).toBe(201);
     expect(mocks.rpc).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateDestinationAccess — the workflow destination.
+//
+// The workflow branch was the last one to answer "Workflow not found or not
+// editable" to BOTH a stranger and a Viewer. The Viewer can open the workflow
+// (it is on their screen), so the refusal now says why instead.
+// ---------------------------------------------------------------------------
+
+const WORKFLOW_ID = "55555555-5555-4555-8555-555555555555";
+
+function workflowManifest() {
+  return {
+    purpose: "document_create",
+    destination: { scope: "workflow", workflow_id: WORKFLOW_ID },
+    files: [
+      { client_id: "client-0", filename: "contract.pdf", size_bytes: 1234 },
+    ],
+  };
+}
+
+describe("upload session workflow destination", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.rpc.mockResolvedValue({ error: null });
+    mocks.getSignedUploadUrl.mockResolvedValue("https://upload.example/signed");
+    // The one-row read answers the `workflows` lookup here.
+    mocks.documentRow = {
+      data: { id: WORKFLOW_ID, type: "assistant" },
+      error: null,
+    };
+  });
+
+  it("refuses a workflow viewer by name instead of hiding the workflow", async () => {
+    mocks.checkWorkflowAccess.mockResolvedValue({
+      ok: true,
+      isCreator: false,
+      orgRole: null,
+      projectRole: "viewer",
+    });
+
+    const response = await request(app)
+      .post("/upload-sessions")
+      .send(workflowManifest());
+
+    expect(response.status).toBe(403);
+    expect(response.body.detail).toBe(
+      "You do not have permission to add documents to this workflow.",
+    );
+    expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+
+  it("keeps 404 for a caller with no verdict on the workflow", async () => {
+    mocks.checkWorkflowAccess.mockResolvedValue({ ok: false });
+
+    const response = await request(app)
+      .post("/upload-sessions")
+      .send(workflowManifest());
+
+    expect(response.status).toBe(404);
+    expect(response.body.detail).toBe("Workflow not found or not editable");
+    expect(mocks.rpc).not.toHaveBeenCalled();
+  });
+
+  it("lets a workflow editor open a session", async () => {
+    mocks.checkWorkflowAccess.mockResolvedValue({
+      ok: true,
+      isCreator: false,
+      orgRole: null,
+      projectRole: "editor",
+    });
+
+    const response = await request(app)
+      .post("/upload-sessions")
+      .send(workflowManifest());
+
+    expect(response.status).toBe(201);
   });
 });

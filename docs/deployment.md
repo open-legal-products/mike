@@ -37,14 +37,21 @@ baseline converges with the fresh schema after all later migrations run.
 `shared_with` arrays into real access grants. One shape has nowhere to go: a
 tabular review that lives INSIDE a project now inherits access from that
 project, so a share on the review alone cannot be reproduced without handing
-the recipient the whole matter. Rather than widen access silently or discard
-it, the migration copies those `(review, project, email)` triples into
-`public.tabular_review_legacy_shares` and drops nothing else.
+the recipient the whole matter. That migration dropped
+`tabular_reviews.shared_with` without recording those recipients.
 
-It is populated once, by that migration, on an upgraded deployment only —
-fresh installs create it empty and it is never written again at runtime. The
-table carries no foreign keys, so the record survives the review or project
-being deleted. It is `service_role`-only; read it with the service key:
+`20260912_02_organization_access_followup.sql` creates
+`public.tabular_review_legacy_shares` as the place those `(review, project,
+email)` triples belong, and backfills it only if the `shared_with` column
+still exists when it runs. On a deployment that already applied
+`20260904_02` the column is gone, so the table lands EMPTY: the recipients
+are recoverable only from a pre-upgrade backup. To recover them, restore the
+old `shared_with` values into a scratch column named `shared_with` on
+`tabular_reviews`, re-run `20260912_02` (it is safe to re-run), then drop the
+scratch column. Fresh installs create the table empty and nothing writes it
+at runtime. The table carries no foreign keys, so the record survives the
+review or project being deleted. It is `service_role`-only; read it with the
+service key:
 
 ```sql
 select l.email, l.project_id, l.tabular_review_id, l.archived_at

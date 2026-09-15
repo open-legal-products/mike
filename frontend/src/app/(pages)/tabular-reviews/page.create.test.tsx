@@ -237,6 +237,31 @@ describe("Tabular reviews page creation", () => {
         expect(createTabularReview).toHaveBeenCalledTimes(1);
     });
 
+    it("stops taking documents once the review exists", async () => {
+        // The retry reuses the created review and never re-reads
+        // `documentIds`, so a file uploaded or a document ticked after the
+        // refusal was silently dropped. The step says so and stops taking
+        // them.
+        createTabularReview.mockResolvedValue(createdReview);
+        grantTabularReviewAccess.mockRejectedValue(
+            new MikeApiError({
+                message: "That address is not in your organization.",
+                status: 400,
+            }),
+        );
+
+        const create = await openDialogAndReachCreate();
+        expect(screen.getByRole("button", { name: "Upload" })).toBeEnabled();
+
+        fireEvent.click(create);
+        await screen.findByText(/Review created, but access was not granted/);
+
+        expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
+        expect(
+            screen.getByText(/documents can no longer be changed here/),
+        ).toBeInTheDocument();
+    });
+
     it("navigates once the retried grant succeeds", async () => {
         createTabularReview.mockResolvedValue(createdReview);
         grantTabularReviewAccess.mockRejectedValueOnce(

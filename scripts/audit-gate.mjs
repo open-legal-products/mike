@@ -152,8 +152,12 @@ async function loadNpmReport() {
     if (!batchReport || Array.isArray(batchReport) || typeof batchReport !== "object") {
       throw new Error("npm returned an invalid advisory report");
     }
+    // An error envelope carries these keys as strings/objects. A real
+    // package named "error", "message" or "code" (all exist on npm) answers
+    // with an ARRAY of advisories, which is the shape a report entry has —
+    // so only a non-array value under one of these keys is an envelope.
     for (const key of ["error", "message", "code"]) {
-      if (Object.hasOwn(batchReport, key)) {
+      if (Object.hasOwn(batchReport, key) && !Array.isArray(batchReport[key])) {
         throw new Error(
           `npm advisory service returned an error payload (${key}: ${JSON.stringify(batchReport[key])})`,
         );

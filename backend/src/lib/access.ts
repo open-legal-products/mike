@@ -387,7 +387,7 @@ export async function checkWorkflowAccess(
     // An exact match is correct because BOTH sides are canonical:
     // normalizeEmail trims and lowercases the caller's address, and
     // workflow_shares.shared_with_email carries a lowercase CHECK (added by
-    // migration 20260904_02, which also folded the legacy mixed-case rows).
+    // migration 20260912_02, which also folded the legacy mixed-case rows).
     // Before that constraint a mixed-case row listed for its recipient via
     // get_workflows_overview — which lowers both sides — and then missed
     // here, so the workflow 404'd the moment they opened it.
@@ -598,16 +598,47 @@ const ACCESSIBLE_PROJECTS_PAGE_SIZE = 1000;
 /** Guards a runaway loop, not a product limit. */
 const ACCESSIBLE_PROJECTS_MAX_PAGES = 200;
 
+/**
+ * A read that fails is NOT an empty read. Every query in listAccessibleProjectIds
+ * decides what the caller may see, and PostgREST answers a failed query with
+ * `data: null` plus an `error` — which `?? []` used to turn into "no rows".
+ * For the deny-override read that meant an unreadable override table (a
+ * transient DB error, a statement timeout, a revoked grant) silently widened
+ * the scope to every org project, including the walled ones; for a paged
+ * scan it meant a firm silently lost every project past the failing page.
+ * The picker (routes/projects.ts) already refuses on a denial-read error;
+ * this helper now does the same, and its two callers handle the throw: the
+ * audit query turns it into a 500 and the memory-archive job retries.
+ */
+function accessReadFailed(
+    what: string,
+    error: { message?: string | null } | null | undefined,
+): Error {
+    // The PostgREST error rides along as `cause` so a caller that logs it
+    // still sees code/details/hint, not just this sentence.
+    return new Error(
+        `[listAccessibleProjectIds] ${what} failed: ${error?.message ?? "unknown error"}`,
+        { cause: error ?? undefined },
+    );
+}
+
 async function pageProjectRows<T>(
-    fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null }>,
+    fetchPage: (
+        from: number,
+        to: number,
+    ) => PromiseLike<{
+        data: T[] | null;
+        error?: { message?: string | null } | null;
+    }>,
 ): Promise<T[]> {
     const rows: T[] = [];
     for (let page = 0; page < ACCESSIBLE_PROJECTS_MAX_PAGES; page += 1) {
         const from = page * ACCESSIBLE_PROJECTS_PAGE_SIZE;
-        const { data } = await fetchPage(
+        const { data, error } = await fetchPage(
             from,
             from + ACCESSIBLE_PROJECTS_PAGE_SIZE - 1,
         );
+        if (error) throw accessReadFailed("project page read", error);
         const batch = (data ?? []) as T[];
         rows.push(...batch);
         if (batch.length < ACCESSIBLE_PROJECTS_PAGE_SIZE) break;
@@ -640,10 +671,12 @@ export async function listAccessibleProjectIds(
 
     // Roles, not just ids: an org ADMIN cannot be denied a project, which is
     // one of the two exemptions the override filter below has to honour.
-    const { data: membershipRows } = await db
+    const { data: membershipRows, error: membershipError } = await db
         .from("org_members")
         .select("org_id, role")
         .eq("user_id", userId);
+    if (membershipError)
+        throw accessReadFailed("org membership read", membershipError);
     const orgRoleByOrgId = new Map<string, string>();
     for (const row of (membershipRows ?? []) as {
         org_id?: string | null;
@@ -653,12 +686,13 @@ export async function listAccessibleProjectIds(
     }
     const orgIds = [...orgRoleByOrgId.keys()];
 
-    const { data: grants } = normalizedEmail
+    const { data: grants, error: grantsError } = normalizedEmail
         ? await db
               .from("project_access_grants")
               .select("project_id")
               .eq("email", normalizedEmail)
-        : { data: [] as { project_id?: string | null }[] };
+        : { data: [] as { project_id?: string | null }[], error: null };
+    if (grantsError) throw accessReadFailed("access grant read", grantsError);
     const grantIds = [
         ...new Set(
             ((grants ?? []) as { project_id?: string | null }[])
@@ -730,6 +764,11 @@ export async function listAccessibleProjectIds(
                   }),
         ]);
 
+    // Fail CLOSED: with the override table unreadable there is no way to tell
+    // a walled matter from an open one, so the caller gets an error, not a
+    // scope that quietly includes the walled ones.
+    if (denials.error)
+        throw accessReadFailed("deny override read", denials.error);
     const deniedProjectIds = new Set(
         ((denials.data ?? []) as { project_id?: string | null }[])
             .map((row) => row.project_id)

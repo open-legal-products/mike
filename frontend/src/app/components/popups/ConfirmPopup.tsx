@@ -48,15 +48,24 @@ export function ConfirmPopup({
    * a dialog now — a bare `div` gave screen readers a heading and two buttons
    * that appeared from nowhere, with nothing saying they belong together or
    * that an answer is being asked for.
+   *
+   * The key is claimed in the capture phase and stopped there. This popup is
+   * routinely opened over a `ModalUI`, which closes itself on Escape from a
+   * `window` listener in the bubble phase; without stopping propagation one
+   * press answered both, so declining a delete confirmation also threw away
+   * the settings modal underneath it along with any unsaved rename. The
+   * topmost layer consumes the key, and the next press reaches the modal.
    */
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       onCancel();
     };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [open, onCancel]);
 
   if (!open) return null;

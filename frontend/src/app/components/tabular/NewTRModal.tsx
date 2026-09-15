@@ -421,7 +421,14 @@ export function NewTRModal({
                               <Upload className="h-3.5 w-3.5" />
                           ),
                           onClick: () => fileInputRef.current?.click(),
-                          disabled: uploading,
+                          // Once the review exists a retry reuses it and
+                          // never re-reads the document set, so anything
+                          // uploaded or ticked here on the second attempt was
+                          // dropped without a word. Freeze both.
+                          disabled: uploading || reviewExists,
+                          title: reviewExists
+                              ? "The review has been created — add documents from the review itself."
+                              : undefined,
                       }
                     : step === "access"
                       ? {
@@ -611,6 +618,13 @@ export function NewTRModal({
                     />
                 ) : (
                     <div className="flex min-h-0 flex-1 flex-col">
+                        {reviewExists && (
+                            <p className="mb-3 text-sm text-gray-500">
+                                The review has been created, so its documents
+                                can no longer be changed here. Add documents
+                                from the review once access has been granted.
+                            </p>
+                        )}
                         {showDirectory && (
                             <FileDirectory
                                 documents={directoryDocuments}
@@ -618,6 +632,7 @@ export function NewTRModal({
                                 loading={directoryLoading}
                                 selectedDocuments={selectedDocuments}
                                 onChange={setSelectedDocuments}
+                                selectionDisabled={reviewExists}
                                 showTabs={!isProjectMode && !underProject}
                                 tabs={TABULAR_DIRECTORY_TABS}
                             />

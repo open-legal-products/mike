@@ -297,13 +297,22 @@ export function ChatView({
      * file explains nothing and points at nobody. Role decides which of the
      * two the reader is looking at.
      *
+     * Only for a STANDALONE chat, though. In a project chat `activeChatRole`
+     * is the role on the PROJECT, so every editor and viewer there was told
+     * "the person who shared this chat has not shared its documents" about a
+     * project document they can see perfectly well and that had simply been
+     * deleted. Nobody shared that chat with them; they are in the project.
+     * A project chat keeps the generic notice.
+     *
      * Everything else — network, 5xx, a document with no versions at all —
      * is not about access and gets the plain failure notice rather than a
      * permission popup.
      */
     const reportUnresolvedDocument = useCallback(
         (status: "denied" | "unavailable") => {
-            if (status === "denied" && activeChatRole !== "owner") {
+            const sharedStandaloneChat =
+                !activeChat?.project_id && activeChatRole !== "owner";
+            if (status === "denied" && sharedStandaloneChat) {
                 setActionGate({
                     action: "open this document",
                     requiredRole: "editor",
@@ -321,7 +330,7 @@ export function ChatView({
                         : "This document could not be opened. Please try again.",
             });
         },
-        [activeChatRole],
+        [activeChat?.project_id, activeChatRole],
     );
 
     /**

@@ -39,6 +39,13 @@ import {
 } from "../lib/uploadSessions";
 import { requireAuth } from "../middleware/auth";
 
+/**
+ * "Not found" is for workflows the caller cannot see at all. A Viewer who can
+ * open a workflow but not change it gets a refusal that names the reason.
+ */
+const WORKFLOW_EDIT_FORBIDDEN =
+  "You do not have permission to add documents to this workflow.";
+
 export const uploadSessionsRouter = Router();
 
 const uploadRateLimits = uploadSessionRateLimitConfiguration();
@@ -180,13 +187,18 @@ export async function validateDestinationAccess(
         userEmail,
         db,
       );
-      if (
-        workflowAccess.ok &&
-        can(workflowAccess.projectRole, "content.edit")
-      )
-        return true;
-      res.status(404).json({ detail: "Workflow not found or not editable" });
-      return false;
+      // Same split as the project branch below: a workflow the caller cannot
+      // see is "not found"; a workflow they can open but not edit is refused
+      // with the reason, so a Viewer is not told it vanished.
+      if (!workflowAccess.ok) {
+        res.status(404).json({ detail: "Workflow not found or not editable" });
+        return false;
+      }
+      if (!can(workflowAccess.projectRole, "content.edit")) {
+        res.status(403).json({ detail: WORKFLOW_EDIT_FORBIDDEN });
+        return false;
+      }
+      return true;
     }
     if (destination.scope === "project") {
       const projectId = destination.project_id as string;
@@ -353,10 +365,12 @@ export async function validateDestinationAccess(
     userEmail,
     db,
   );
-  const canEdit =
-    workflowAccess.ok && can(workflowAccess.projectRole, "content.edit");
-  if (!canEdit) {
+  if (!workflowAccess.ok) {
     res.status(404).json({ detail: "Workflow not found or not editable" });
+    return false;
+  }
+  if (!can(workflowAccess.projectRole, "content.edit")) {
+    res.status(403).json({ detail: WORKFLOW_EDIT_FORBIDDEN });
     return false;
   }
   if (workflow.type === "tabular") {

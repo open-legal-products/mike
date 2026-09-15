@@ -33,7 +33,9 @@ const CANARY_ADVISORY = {
  * the gate did and did not consult.
  */
 const requests = [];
-let respond = () => ({ status: 200, body: { error: "nope" } });
+// Declared with the (url, body) arity every test's override uses, so the
+// call site below is not a "superfluous argument" to a zero-arity default.
+let respond = (_url, _body) => ({ status: 200, body: { error: "nope" } });
 
 const stub = createServer((req, res) => {
     let raw = "";
@@ -245,4 +247,47 @@ test("fails on an advisory the FALLBACK found after npm went silent", async () =
     strictEqual(result.stdout.includes("audit gate passed"), false);
     // Named, so the failure is actionable rather than just red.
     strictEqual(result.stderr.includes(advisoryId), true);
+});
+
+test("treats a real package named 'error' as a package, not an error envelope", async () => {
+    // npm has packages literally named "error", "message" and "code". When one
+    // of them carries an advisory the bulk report has that key with an ARRAY
+    // under it — the shape of every other entry — and the gate must judge it,
+    // not mistake the report for an error payload and fall through to OSV.
+    requests.length = 0;
+    const advisoryId = "GHSA-9999-8888-7777";
+    respond = (url) => {
+        if (url === NPM_BULK_PATH)
+            return {
+                status: 200,
+                body: {
+                    "adm-zip": [CANARY_ADVISORY],
+                    error: [
+                        {
+                            id: 2,
+                            url: `https://github.com/advisories/${advisoryId}`,
+                            title: "error: prototype pollution",
+                            severity: "high",
+                        },
+                    ],
+                },
+            };
+        return { status: 200, body: {} };
+    };
+
+    const result = await runGate({
+        lockfileVersion: 3,
+        packages: {
+            "": { name: "fixture", version: "1.0.0" },
+            "node_modules/error": { version: "10.4.0" },
+        },
+    });
+
+    // Judged and blocked on the npm answer alone: no fallback was consulted.
+    notStrictEqual(result.status, 0, `expected non-zero exit\n${result.stdout}`);
+    strictEqual(result.stderr.includes(advisoryId), true);
+    strictEqual(
+        requests.some((request) => request.url === "/querybatch"),
+        false,
+    );
 });

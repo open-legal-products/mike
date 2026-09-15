@@ -46,8 +46,16 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
 }));
 vi.mock("../shared/FileDirectory", () => ({ FileDirectory: () => null }));
 vi.mock("./ProjectPracticeField", () => ({
-    ProjectPracticeField: ({ id, value }: { id: string; value: string }) => (
-        <button id={id} type="button">
+    ProjectPracticeField: ({
+        id,
+        value,
+        disabled,
+    }: {
+        id: string;
+        value: string;
+        disabled?: boolean;
+    }) => (
+        <button id={id} type="button" disabled={disabled}>
             {value || "None"}
         </button>
     ),
@@ -861,6 +869,45 @@ describe("NewProjectModal sharing", () => {
         expect(
             screen.getByText(/workspace can no longer be changed here/),
         ).toBeInTheDocument();
+    });
+
+    it("locks the identifying fields once the project exists", async () => {
+        // The retry reuses the created project and never re-reads the name,
+        // CM number or practice, so these stayed editable while every edit
+        // made to them on the second attempt was silently dropped.
+        const user = userEvent.setup({ delay: null });
+        renderModal();
+        vi.mocked(grantProjectAccess).mockRejectedValue(
+            new MikeApiError({ status: 403, message: "Not allowed" }),
+        );
+
+        await fillAndAdd(user, "counsel@firm.test", "editor");
+        await submit(user);
+        await screen.findByText(/Project created, but access was not granted/);
+
+        await user.click(screen.getByRole("button", { name: "Back" }));
+        await user.click(screen.getByRole("button", { name: "Back" }));
+
+        expect(screen.getByLabelText("Project name")).toBeDisabled();
+        expect(screen.getByLabelText("CM number")).toBeDisabled();
+        expect(screen.getByLabelText("Practice")).toBeDisabled();
+        expect(
+            screen.getByText(
+                /name, CM number, practice and workspace can no longer be changed here/,
+            ),
+        ).toBeInTheDocument();
+
+        // The step is still a retry, not a dead end.
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(
+            screen.getByRole("button", { name: "Create project" }),
+        );
+
+        await waitFor(() =>
+            expect(grantProjectAccess).toHaveBeenCalledTimes(2),
+        );
+        expect(createProject).toHaveBeenCalledTimes(1);
     });
 
     it("says so when the organization list cannot be loaded", async () => {

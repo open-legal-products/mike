@@ -212,6 +212,25 @@ describe("ChatView citation on a chat shared without its documents", () => {
         ).not.toBeInTheDocument();
     });
 
+    // A project chat's role IS the project role, so "shared without its
+    // documents" does not describe it: an editor on the project can see the
+    // project's documents, and a 404 there means the cited one was deleted.
+    it("does not blame a sharer for a project chat's deleted document", async () => {
+        listDocumentVersions.mockRejectedValue(
+            new MikeApiError({ message: "Not found", status: 404 }),
+        );
+        renderView({ project_id: "project-1", access_role: "editor" });
+
+        fireEvent.click(screen.getByRole("button", { name: "citation pill" }));
+
+        expect(
+            await screen.findByText("This document is no longer available."),
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByText("Document not shared"),
+        ).not.toBeInTheDocument();
+    });
+
     // The download card asked the same question and threw the answer away:
     // clicking a card for a missing document did nothing whatsoever.
     it("explains a refused document from the download card too", async () => {

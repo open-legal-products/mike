@@ -487,3 +487,35 @@ describe("queryEvents visibility scoping", () => {
         ]);
     });
 });
+
+describe("queryEvents when the access scope cannot be read", () => {
+    it("answers with an error result instead of an unscoped page", async () => {
+        // listAccessibleProjectIds now THROWS when one of its access reads
+        // fails, so that an unreadable deny-override table cannot widen the
+        // audit trail to a walled matter. GET /audit has no try/catch of its
+        // own, so queryEvents must turn that throw into the `{ error }` shape
+        // the route already maps to a generic 500.
+        const failing: any = {};
+        for (const method of ["select", "eq", "in", "is", "order", "range"])
+            failing[method] = () => failing;
+        failing.then = (resolve: (v: unknown) => unknown) =>
+            Promise.resolve({
+                data: null,
+                error: { message: "permission denied for table org_members" },
+            }).then(resolve);
+        const db: any = { from: () => failing };
+
+        const result = await queryEvents(db, "u1", "u1@example.com", {
+            sortBy: "created_at",
+            sortDirection: "desc",
+            page: 1,
+            limit: 50,
+        });
+
+        expect(result.data).toBeNull();
+        // The PostgREST error itself comes back, so the route logs its code.
+        expect(result.error?.message).toBe(
+            "permission denied for table org_members",
+        );
+    });
+});

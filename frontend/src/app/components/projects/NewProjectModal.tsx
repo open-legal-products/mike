@@ -65,7 +65,11 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     // it until the user has read which files are missing.
     const [pendingProject, setPendingProject] = useState<Project | null>(null);
     // Mirrors `createdProjectRef` for rendering: a ref does not re-render, and
-    // the wizard's Back button has to retire the moment the project is real.
+    // the wizard has to change shape the moment the project is real. Back
+    // still works — a failed grant or attachment is retried from the step it
+    // failed on — but the fields that identify the project (name, CM number,
+    // practice, workspace) lock, because a retry reuses the project already
+    // created and would ignore any edit made to them.
     const [projectExists, setProjectExists] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const practiceEditedRef = useRef(false);
@@ -567,6 +571,13 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                                 onChange={(e) => setName(e.target.value)}
                                 placeholder="Add project name"
                                 variant="minimal"
+                                // Once the project EXISTS the retry reuses
+                                // `createdProjectRef` and never reads these
+                                // fields again, so an edit made here on the
+                                // second attempt was silently discarded. The
+                                // fields that identify the project lock with
+                                // the workspace selector below.
+                                disabled={projectExists}
                                 autoFocus
                             />
                         </div>
@@ -583,6 +594,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                                 placeholder="Add a CM number..."
                                 variant="minimal"
                                 className="text-xl text-gray-600"
+                                disabled={projectExists}
                             />
                         </div>
 
@@ -597,6 +609,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                                     practiceEditedRef.current = true;
                                     setPractice(value);
                                 }}
+                                disabled={projectExists}
                             />
                         </div>
 
@@ -638,8 +651,10 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                             )}
                             {projectExists && (
                                 <p className="mt-2 text-sm text-gray-500">
-                                    The project has been created, so its
-                                    workspace can no longer be changed here.
+                                    The project has been created, so its name,
+                                    CM number, practice and workspace can no
+                                    longer be changed here. Edit them from the
+                                    project once this finishes.
                                 </p>
                             )}
                         </div>

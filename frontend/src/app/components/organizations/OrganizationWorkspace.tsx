@@ -538,11 +538,20 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
         message="You will lose admin access to this organization and can no longer manage its people, settings or invitations."
         confirmLabel="Continue"
         confirmStatus={busyMemberId ? "loading" : "idle"}
-        onCancel={() => setPendingSelfRoleChange(null)}
+        onCancel={() => {
+          if (busyMemberId) return;
+          setPendingSelfRoleChange(null);
+        }}
         onConfirm={() => {
           const pending = pendingSelfRoleChange;
-          setPendingSelfRoleChange(null);
-          if (pending) void changeRole(pending.member, pending.role);
+          if (!pending) return;
+          // Closing first meant the request ran behind a popup that was
+          // already gone, so the "Continuing..." state this popup is given
+          // could never appear and the click looked like it did nothing.
+          // Stay up, busy, until the role change settles.
+          void changeRole(pending.member, pending.role).finally(() =>
+            setPendingSelfRoleChange(null),
+          );
         }}
       />
       <ConfirmPopup

@@ -165,10 +165,12 @@ documentsRouter.get("/:documentId", requireAuth, async (req, res) => {
 
 // DELETE /single-documents/:documentId
 // Scoped by the same rule as DELETE .../versions/:versionId, not by
-// `user_id = me`: that older scope meant an org admin could not remove a
-// colleague's document from a matter the firm owns, and — once account
-// deletion started blanking documents.user_id instead of destroying org
-// content — that NOBODY could remove a departed colleague's document.
+// `user_id = me`. Under creatorScopedAllowed a document that still names its
+// uploader can be removed only by that uploader (an org admin who is not the
+// uploader gets 403, where the old scope answered 404); a document whose
+// uploader has left — account deletion blanks documents.user_id instead of
+// destroying org content — can be removed by anyone who may edit the
+// container, where the old `user_id = me` scope meant NOBODY could.
 documentsRouter.delete("/:documentId", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
   const userEmail = res.locals.userEmail as string | undefined;
@@ -650,8 +652,12 @@ documentsRouter.post(
     if (!targetDoc)
       return void res.status(404).json({ detail: "Document not found" });
     const targetAccess = await ensureDocAccess(targetDoc, userId, userEmail, db);
-    if (!targetAccess.ok || !can(targetAccess.projectRole, "content.edit"))
+    if (!targetAccess.ok)
       return void res.status(404).json({ detail: "Document not found" });
+    // Same split as the version routes below: a Viewer who can open the
+    // target is refused with the reason, not told the document vanished.
+    if (!can(targetAccess.projectRole, "content.edit"))
+      return void res.status(403).json({ detail: DOCUMENT_EDIT_FORBIDDEN });
 
     const { data: sourceDoc } = await db
       .from("documents")

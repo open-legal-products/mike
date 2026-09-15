@@ -1017,3 +1017,62 @@ describe("listAccessibleProjectIds", () => {
         ).resolves.toEqual(["walled", "open"]);
     });
 });
+
+describe("listAccessibleProjectIds fails closed", () => {
+    // A failed read used to be indistinguishable from an empty one: PostgREST
+    // answers `{ data: null, error }`, and `?? []` turned that into "no rows".
+    // For the deny-override read that widened the scope to every org project,
+    // walled ones included, whenever the override table was unreadable.
+    const base = () => ({
+        org_members: [{ org_id: "org-1", user_id: "u1", role: "member" }],
+        projects: [
+            { id: "walled", user_id: "founder", org_id: "org-1" },
+            { id: "open", user_id: "founder", org_id: "org-1" },
+        ],
+        project_access_grants: [],
+        project_org_access_overrides: [
+            {
+                project_id: "walled",
+                org_id: "org-1",
+                user_id: "u1",
+                role: "deny",
+            },
+        ],
+    });
+
+    it("hides the walled project when the override table answers", async () => {
+        const ids = await listAccessibleProjectIds(
+            "u1",
+            "u1@example.com",
+            makeDb(base()),
+        );
+        expect(ids).toEqual(["open"]);
+    });
+
+    it("throws instead of listing the walled project when the override read fails", async () => {
+        const db = makeDb(base(), {
+            selectErrors: { project_org_access_overrides: "statement timeout" },
+        });
+        await expect(
+            listAccessibleProjectIds("u1", "u1@example.com", db),
+        ).rejects.toThrow(/deny override read failed: statement timeout/);
+    });
+
+    it("throws instead of truncating when a project page read fails", async () => {
+        const db = makeDb(base(), {
+            selectErrors: { projects: "connection reset" },
+        });
+        await expect(
+            listAccessibleProjectIds("u1", "u1@example.com", db),
+        ).rejects.toThrow(/project page read failed: connection reset/);
+    });
+
+    it("throws when the membership read fails", async () => {
+        const db = makeDb(base(), {
+            selectErrors: { org_members: "permission denied" },
+        });
+        await expect(
+            listAccessibleProjectIds("u1", "u1@example.com", db),
+        ).rejects.toThrow(/org membership read failed: permission denied/);
+    });
+});

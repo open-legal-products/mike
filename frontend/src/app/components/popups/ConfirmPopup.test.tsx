@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ConfirmPopup } from "./ConfirmPopup";
+import { ModalUI } from "@/shared/ui/ModalUI";
 
 describe("ConfirmPopup", () => {
   it("uses the configured danger variant for non-Delete labels", () => {
@@ -96,5 +97,39 @@ describe("ConfirmPopup", () => {
     fireEvent.keyDown(document, { key: "Escape" });
 
     expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("takes Escape from the modal it is asking over", () => {
+    // Both layers listened for Escape, so one press cancelled the
+    // confirmation and closed the modal behind it, discarding whatever was
+    // unsaved there. The topmost layer answers; the modal waits its turn.
+    const onCancel = vi.fn();
+    const onClose = vi.fn();
+    const scene = (popupOpen: boolean) => (
+      <ModalUI open onClose={onClose} ariaLabel="Organization settings">
+        <p>Settings</p>
+        <ConfirmPopup
+          open={popupOpen}
+          title="Delete Elite Law LLP?"
+          confirmLabel="Delete"
+          confirmVariant="danger"
+          onConfirm={vi.fn()}
+          onCancel={onCancel}
+        />
+      </ModalUI>
+    );
+    const { rerender } = render(scene(true));
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Second press, with the confirmation gone, belongs to the modal.
+    rerender(scene(false));
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });

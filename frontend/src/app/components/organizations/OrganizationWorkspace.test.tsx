@@ -298,7 +298,81 @@ describe("OrganizationWorkspace", () => {
     expect(mocks.getOrg).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the delete confirmation from outliving its settings modal", async () => {
+  it("keeps the self-demotion confirmation up while the change is in flight", async () => {
+    // The popup was closed before the request was sent, so the busy state it
+    // is handed could never render and the click read as a no-op.
+    const user = userEvent.setup();
+    let settle: (() => void) | undefined;
+    mocks.updateOrgMember.mockImplementation(
+      () =>
+        new Promise<Record<string, never>>((resolve) => {
+          settle = () => resolve({});
+        }),
+    );
+    render(<OrganizationWorkspace orgId="org-1" />);
+    await screen.findByText("William Chen");
+
+    await user.click(
+      screen.getByRole("button", { name: "Change role for William Chen" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Member" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() =>
+      expect(mocks.updateOrgMember).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getByText("Give up admin access?")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continuing..." })).toBeDisabled();
+
+    settle?.();
+
+    await waitFor(() =>
+      expect(screen.queryByText("Give up admin access?")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("spends Escape on the delete confirmation before the settings modal", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationWorkspace orgId="org-1" />);
+    await screen.findByText("William Chen");
+
+    await user.click(
+      screen.getByRole("button", { name: "Organization settings" }),
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Organization settings" }),
+    );
+    const nameInput = screen.getByLabelText("Organization name");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Elite Law Group");
+    await user.click(
+      screen.getByRole("button", { name: "Delete organization" }),
+    );
+    expect(screen.getByText("Delete Elite Law LLP?")).toBeInTheDocument();
+
+    // Both layers answered Escape, so declining the delete also closed the
+    // settings modal and threw away the rename typed above it. The
+    // confirmation is on top, so it alone takes the first press.
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByText("Delete Elite Law LLP?")).not.toBeInTheDocument();
+    expect(mocks.deleteOrg).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Organization name")).toHaveValue(
+      "Elite Law Group",
+    );
+
+    // With the confirmation gone the next press belongs to the modal.
+    await user.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Organization name")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("retires the delete confirmation when its settings modal closes", async () => {
+    // The confirmation renders in its own portal, so closing the modal by
+    // other means must take it down too: otherwise it keeps floating over
+    // the page with a live Delete button still wired to this org.
     const user = userEvent.setup();
     render(<OrganizationWorkspace orgId="org-1" />);
     await screen.findByText("William Chen");
@@ -314,11 +388,13 @@ describe("OrganizationWorkspace", () => {
     );
     expect(screen.getByText("Delete Elite Law LLP?")).toBeInTheDocument();
 
-    // Escape dismisses the modal; the confirmation lives in its own portal
-    // and would otherwise stay behind with a live Delete button.
-    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Close" }));
 
-    expect(screen.queryByText("Delete Elite Law LLP?")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Delete Elite Law LLP?"),
+      ).not.toBeInTheDocument(),
+    );
     expect(mocks.deleteOrg).not.toHaveBeenCalled();
   });
 

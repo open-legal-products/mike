@@ -276,6 +276,36 @@ describe("FileDirectory", () => {
         expect(onChange).not.toHaveBeenCalled();
     });
 
+    it("freezes the whole selection when the target stops taking documents", () => {
+        // For a caller whose target — a review already created behind a
+        // refused grant — never reads the document set back.
+        const onChange = vi.fn();
+        const document = {
+            id: "document-1",
+            filename: "Existing agreement.pdf",
+            file_type: "pdf",
+            project_id: "project-1",
+        } as Document;
+
+        render(
+            <FileDirectory
+                documents={[document]}
+                selectedDocuments={[document]}
+                onChange={onChange}
+                showTabs={false}
+                selectionDisabled
+            />,
+        );
+
+        const checkbox = screen.getByRole("checkbox", {
+            name: "Select Existing agreement.pdf",
+        });
+        expect(checkbox).toBeChecked();
+        expect(checkbox).toBeDisabled();
+        fireEvent.click(screen.getByText("Existing agreement.pdf"));
+        expect(onChange).not.toHaveBeenCalled();
+    });
+
     it("shows upload activity with a checkbox spinner and muted file icon", () => {
         render(
             <FileDirectory

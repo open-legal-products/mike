@@ -388,3 +388,58 @@ describe("DELETE /single-documents/:documentId/versions/:versionId", () => {
         ).toBe(true);
     });
 });
+
+// ---------------------------------------------------------------------------
+// POST /single-documents/:documentId/versions/from-document
+//
+// The one write route in this file that still collapsed "cannot see" and
+// "cannot edit" into 404: a Viewer replacing a document with another was
+// told the document did not exist while it sat open on their screen.
+// ---------------------------------------------------------------------------
+describe("POST /single-documents/:documentId/versions/from-document", () => {
+    const SOURCE = "22222222-2222-4222-8222-222222222222";
+
+    beforeEach(() => {
+        deletes.length = 0;
+        updates.length = 0;
+        errors = {};
+        rows = {
+            documents: [
+                {
+                    id: DOC,
+                    user_id: "u2",
+                    project_id: "p1",
+                    org_id: "o1",
+                    workflow_id: null,
+                },
+            ],
+            document_versions: [],
+        };
+    });
+
+    it("refuses a viewer who can open the document with 403 and a reason", async () => {
+        ensureDocAccess.mockResolvedValue(access("viewer", false));
+
+        const res = await request(app)
+            .post(`/single-documents/${DOC}/versions/from-document`)
+            .set(...AUTH)
+            .send({ source_document_id: SOURCE });
+
+        expect(res.status).toBe(403);
+        expect(res.body.detail).toBe(
+            "You do not have permission to edit content in this project.",
+        );
+    });
+
+    it("keeps 404 for a caller with no verdict at all", async () => {
+        ensureDocAccess.mockResolvedValue({ ok: false });
+
+        const res = await request(app)
+            .post(`/single-documents/${DOC}/versions/from-document`)
+            .set(...AUTH)
+            .send({ source_document_id: SOURCE });
+
+        expect(res.status).toBe(404);
+        expect(res.body.detail).toBe("Document not found");
+    });
+});
