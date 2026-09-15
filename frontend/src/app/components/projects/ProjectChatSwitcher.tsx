@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, Plus, Search } from "lucide-react";
 import type { Chat } from "@/app/components/shared/types";
+import { FormTextInput } from "@/app/components/ui/form-field";
 import {
     LiquidDropdownButton,
     LiquidDropdownSurface,
@@ -26,6 +27,12 @@ interface ProjectChatSwitcherProps {
     actions: ReactNode;
     onLoad: (chatId: string) => void;
     onNewChat: () => void;
+    titleEdit?: {
+        value: string;
+        onChange: (title: string) => void;
+        onSave: () => void;
+        onCancel: () => void;
+    };
 }
 
 export function ProjectChatSwitcher({
@@ -38,10 +45,13 @@ export function ProjectChatSwitcher({
     actions,
     onLoad,
     onNewChat,
+    titleEdit,
 }: ProjectChatSwitcherProps) {
     const [historyOpen, setHistoryOpen] = useState(false);
     const [query, setQuery] = useState("");
     const historyRef = useRef<HTMLDivElement>(null);
+    const titleInputRef = useRef<HTMLInputElement>(null);
+    const editingTitle = !!titleEdit;
     const filteredChats = chats
         .filter((chat) => chat.id !== currentChatId)
         .filter((chat) =>
@@ -49,6 +59,14 @@ export function ProjectChatSwitcher({
                 .toLowerCase()
                 .includes(query.trim().toLowerCase()),
         );
+
+    useEffect(() => {
+        if (!editingTitle) return;
+        setHistoryOpen(false);
+        // Wait for the actions menu to release its focus trap before focusing.
+        const timer = window.setTimeout(() => titleInputRef.current?.focus(), 0);
+        return () => window.clearTimeout(timer);
+    }, [editingTitle]);
 
     useEffect(() => {
         if (!historyOpen) return;
@@ -77,28 +95,53 @@ export function ProjectChatSwitcher({
                 ref={historyRef}
                 className="pointer-events-auto relative min-w-0 shrink"
             >
-                <button
-                    type="button"
-                    onClick={() => setHistoryOpen((open) => !open)}
-                    aria-expanded={historyOpen}
-                    aria-haspopup="menu"
-                    className={cn(
-                        "flex h-7 min-w-0 items-center gap-1 rounded-lg px-2 text-gray-700 transition-colors",
-                        LIQUID_GLASS_HOVER_CLASS,
-                    )}
-                >
-                    <span className="min-w-0 truncate text-xs font-medium">
-                        {currentTitle ?? "New Chat"}
-                    </span>
-                    <ChevronDown
-                        className={cn(
-                            "h-3 w-3 shrink-0 text-gray-600 transition-transform duration-200",
-                            historyOpen && "rotate-180",
-                        )}
+                {titleEdit ? (
+                    <FormTextInput
+                        ref={titleInputRef}
+                        variant="minimal"
+                        aria-label="Chat title"
+                        value={titleEdit.value}
+                        onFocus={(event) => event.currentTarget.select()}
+                        onChange={(event) =>
+                            titleEdit.onChange(event.target.value)
+                        }
+                        onBlur={titleEdit.onSave}
+                        onKeyDown={(event) => {
+                            if (event.nativeEvent.isComposing) return;
+                            if (event.key === "Enter") {
+                                event.preventDefault();
+                                titleEdit.onSave();
+                            } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                titleEdit.onCancel();
+                            }
+                        }}
+                        className="h-7 w-48 max-w-full rounded-lg px-2 font-sans text-xs font-medium text-gray-700"
                     />
-                </button>
+                ) : (
+                    <button
+                        type="button"
+                        onClick={() => setHistoryOpen((open) => !open)}
+                        aria-expanded={historyOpen}
+                        aria-haspopup="menu"
+                        className={cn(
+                            "flex h-7 min-w-0 items-center gap-1 rounded-lg px-2 text-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
+                            LIQUID_GLASS_HOVER_CLASS,
+                        )}
+                    >
+                        <span className="min-w-0 truncate text-xs font-medium">
+                            {currentTitle ?? "New Chat"}
+                        </span>
+                        <ChevronDown
+                            className={cn(
+                                "h-3 w-3 shrink-0 text-gray-600 transition-transform duration-200",
+                                historyOpen && "rotate-180",
+                            )}
+                        />
+                    </button>
+                )}
 
-                {historyOpen && (
+                {historyOpen && !titleEdit && (
                     <LiquidDropdownSurface className="absolute left-0 top-full z-50 mt-2 w-64 overflow-hidden">
                         <div className="flex items-center gap-1.5 border-b border-white/40 px-3 py-2">
                             <Search className="h-3 w-3 shrink-0 text-gray-400" />

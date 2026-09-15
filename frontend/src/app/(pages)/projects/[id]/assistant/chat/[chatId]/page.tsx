@@ -282,8 +282,18 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     const [project, setProject] = useState<Project | null>(null);
     const [activeChatId, setActiveChatId] = useState(routeChatId);
+    const activeChatIdRef = useRef(activeChatId);
+    useLayoutEffect(() => {
+        activeChatIdRef.current = activeChatId;
+    }, [activeChatId]);
     const [projectChats, setProjectChats] = useState<Chat[] | null>(null);
     const [chatTitle, setChatTitle] = useState<string | null>(null);
+    const [chatTitleEdit, setChatTitleEdit] = useState<{
+        chatId: string;
+        title: string;
+    } | null>(null);
+    const editingChatTitle =
+        chatTitleEdit?.chatId === activeChatId ? chatTitleEdit : null;
     const [chatOwnerId, setChatOwnerId] = useState<string | null>(null);
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
     const [editorGateAction, setEditorGateAction] = useState<string | null>(
@@ -434,6 +444,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     useEffect(() => {
         return () => clearFolderDeleteDismissTimer();
     }, [clearFolderDeleteDismissTimer]);
+
+    useEffect(() => {
+        setChatTitleEdit(null);
+    }, [activeChatId]);
 
     useEffect(() => {
         if (activeTabId) return;
@@ -830,14 +844,21 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         }
     }
 
-    async function handleRenameChat() {
+    async function handleRenameChat(nextTitle?: string) {
         if (!activeChatId) return;
         if (chatOwnerId && user?.id && chatOwnerId !== user.id) {
             setOwnerOnlyAction("rename this chat");
             return;
         }
-        const nextTitle = window.prompt("Rename chat", chatTitle ?? "New Chat");
-        const trimmed = nextTitle?.trim();
+        if (nextTitle === undefined) {
+            setChatTitleEdit({
+                chatId: activeChatId,
+                title: chatTitle ?? "New Chat",
+            });
+            return;
+        }
+        setChatTitleEdit(null);
+        const trimmed = nextTitle.trim();
         if (!trimmed || trimmed === chatTitle) return;
         const previousTitle = chatTitle;
         setChatTitle(trimmed);
@@ -849,10 +870,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         try {
             await renameChatInHistory(activeChatId, trimmed);
         } catch {
-            setChatTitle(previousTitle);
+            if (activeChatIdRef.current === activeChatId) {
+                setChatTitle((current) =>
+                    current === trimmed ? previousTitle : current,
+                );
+            }
             setProjectChats((current) =>
                 (current ?? []).map((chat) =>
-                    chat.id === activeChatId
+                    chat.id === activeChatId && chat.title === trimmed
                         ? { ...chat, title: previousTitle }
                         : chat,
                 ),
@@ -1728,9 +1753,29 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         newChatDisabled={!canEditContent}
                         onLoad={navigateToChat}
                         onNewChat={() => void handleNewChat()}
+                        titleEdit={
+                            editingChatTitle
+                                ? {
+                                      value: editingChatTitle.title,
+                                      onChange: (title) =>
+                                          setChatTitleEdit({
+                                              ...editingChatTitle,
+                                              title,
+                                          }),
+                                      onSave: () =>
+                                          void handleRenameChat(
+                                              editingChatTitle.title,
+                                          ),
+                                      onCancel: () => setChatTitleEdit(null),
+                                  }
+                                : undefined
+                        }
                         actions={
                             <HeaderActionsMenu
                                 triggerClassName="h-6 w-6"
+                                onCloseAutoFocus={(event) => {
+                                    if (editingChatTitle) event.preventDefault();
+                                }}
                                 items={[
                                     {
                                         label: "Rename",

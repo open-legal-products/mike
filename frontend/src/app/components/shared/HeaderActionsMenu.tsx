@@ -24,10 +24,12 @@ export function HeaderActionsMenu({
     items,
     title = "Actions",
     triggerClassName,
+    onCloseAutoFocus,
 }: {
     items: HeaderActionsMenuItem[];
     title?: string;
     triggerClassName?: string;
+    onCloseAutoFocus?: (event: Event) => void;
 }) {
     return (
         <DropdownMenu>
@@ -46,7 +48,11 @@ export function HeaderActionsMenu({
                     <MoreHorizontal className="h-4 w-4" />
                 </button>
             </DropdownMenuTrigger>
-            <LiquidDropdownContent align="end" className="z-[160] w-48">
+            <LiquidDropdownContent
+                align="end"
+                className="z-[160] w-48"
+                onCloseAutoFocus={onCloseAutoFocus}
+            >
                 {items.map((item) => {
                     const Icon = item.icon;
                     return (
