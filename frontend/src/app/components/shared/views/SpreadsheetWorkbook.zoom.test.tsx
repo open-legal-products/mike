@@ -9,6 +9,13 @@ import {
 } from "./SpreadsheetWorkbook";
 
 beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+        function (this: HTMLElement) {
+            return this.classList.contains("fortune-sheet-canvas-placeholder")
+                ? 600
+                : 0;
+        },
+    );
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
         function (this: HTMLElement) {
             return this.classList.contains("fortune-sheet-canvas-placeholder")
@@ -41,7 +48,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it.each([0.7, 1, 1.5])(
-    "ends the vertical scroll range at the last row above the scrollbar at %s zoom",
+    "ends scroll ranges at the last cell without scrollbar allowance at %s zoom",
     async (zoomRatio) => {
         const sheets: Sheet[] = [
             {
@@ -50,7 +57,7 @@ it.each([0.7, 1, 1.5])(
                 status: 1,
                 images: [],
                 row: 100,
-                column: 5,
+                column: 50,
                 zoomRatio,
                 defaultRowHeight: 19,
                 data: [[{ v: "Budget" }]],
@@ -69,14 +76,20 @@ it.each([0.7, 1, 1.5])(
         const spacer = container.querySelector<HTMLElement>(
             ".luckysheet-scrollbar-y > div",
         )!;
-        // The canvas includes the column header. Leave only the 8px horizontal scrollbar
-        // after the last row so that the final cell remains fully visible at the bottom.
+        const horizontalSpacer = container.querySelector<HTMLElement>(
+            ".luckysheet-scrollbar-x > div",
+        )!;
+        // The vertical viewport includes the column header; the horizontal viewport
+        // already excludes the row header. Neither range reserves space for a thumb.
         const rowCount = sheets[0].row!;
-        await waitFor(() =>
+        await waitFor(() => {
             expect(Number.parseFloat(spacer.style.height)).toBe(
-                rowCount * Math.round(20 * zoomRatio) + 20 * zoomRatio + 8,
-            ),
-        );
+                rowCount * Math.round(20 * zoomRatio) + 20 * zoomRatio,
+            );
+            expect(Number.parseFloat(horizontalSpacer.style.width)).toBe(
+                sheets[0].column! * Math.round(74 * zoomRatio),
+            );
+        });
     },
 );
 
@@ -112,10 +125,13 @@ it("scales row-number and column-letter headers with zoom buttons and keyboard z
     const spacer = container.querySelector<HTMLElement>(
         ".luckysheet-scrollbar-y > div",
     )!;
+    const horizontalSpacer = container.querySelector<HTMLElement>(
+        ".luckysheet-scrollbar-x > div",
+    )!;
     expect(rowWidth).toBeGreaterThan(0);
     expect(columnHeight).toBeGreaterThan(0);
     await waitFor(() =>
-        expect(Number.parseFloat(spacer.style.height)).toBe(228),
+        expect(Number.parseFloat(spacer.style.height)).toBe(220),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /zoom in/i }));
@@ -127,7 +143,8 @@ it("scales row-number and column-letter headers with zoom buttons and keyboard z
         expect(Number.parseFloat(corner.style.height) + 1.5).toBeCloseTo(
             columnHeight * 1.1,
         );
-        expect(Number.parseFloat(spacer.style.height)).toBe(250);
+        expect(Number.parseFloat(spacer.style.height)).toBe(242);
+        expect(Number.parseFloat(horizontalSpacer.style.width)).toBe(405);
     });
     fireEvent.click(screen.getByRole("button", { name: /zoom out/i }));
     await screen.findByText("100%");
@@ -138,7 +155,8 @@ it("scales row-number and column-letter headers with zoom buttons and keyboard z
         expect(Number.parseFloat(corner.style.height) + 1.5).toBeCloseTo(
             columnHeight,
         );
-        expect(Number.parseFloat(spacer.style.height)).toBe(228);
+        expect(Number.parseFloat(spacer.style.height)).toBe(220);
+        expect(Number.parseFloat(horizontalSpacer.style.width)).toBe(370);
     });
     fireEvent.keyDown(document, { key: "-", ctrlKey: true });
     await screen.findByText("90%");
@@ -149,7 +167,8 @@ it("scales row-number and column-letter headers with zoom buttons and keyboard z
         expect(Number.parseFloat(corner.style.height) + 1.5).toBeCloseTo(
             columnHeight * 0.9,
         );
-        expect(Number.parseFloat(spacer.style.height)).toBe(206);
+        expect(Number.parseFloat(spacer.style.height)).toBe(198);
+        expect(Number.parseFloat(horizontalSpacer.style.width)).toBe(335);
     });
     expect(container.querySelector(".fortune-left-top")).toBe(corner);
 });
