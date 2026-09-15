@@ -113,6 +113,8 @@ afterEach(() => vi.restoreAllMocks());
 it("retains parsed data and viewport, and removes global workbook input handlers while inactive", async () => {
     const { rerender } = render(<SpreadsheetView documentId="sheet" />);
     await screen.findByText("Zoom 1");
+    // The lazy workbook can be visible before its keyboard effect runs.
+    await waitFor(() => expect(state.mounts).toHaveBeenCalledTimes(1));
     fireEvent.keyDown(document, { key: "+", ctrlKey: true });
     expect(screen.getByText("Zoom 1.1")).toBeVisible();
     screen.getByTestId("x").scrollLeft = 180;
