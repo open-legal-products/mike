@@ -1,13 +1,13 @@
 <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="back" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5B6472"/>
-      <stop offset="1" stop-color="#2F3947"/>
+      <stop offset="0" stop-color="#47A9FF"/>
+      <stop offset="1" stop-color="#207ACE"/>
     </linearGradient>
     <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#B6BCC6" stop-opacity="0.96"/>
-      <stop offset="0.48" stop-color="#596272" stop-opacity="0.96"/>
-      <stop offset="1" stop-color="#424C5A" stop-opacity="0.98"/>
+      <stop offset="0" stop-color="#86C5FF" stop-opacity="0.96"/>
+      <stop offset="0.48" stop-color="#339FFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#298EEC" stop-opacity="0.98"/>
     </linearGradient>
     <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF"/>
@@ -16,12 +16,12 @@
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.75"/>
       <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="#1F2937" stop-opacity="0.46"/>
+      <stop offset="1" stop-color="#004A94" stop-opacity="0.46"/>
     </linearGradient>
     <linearGradient id="rimBack" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.65"/>
       <stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0.1"/>
-      <stop offset="1" stop-color="#1F2937" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#004A94" stop-opacity="0.5"/>
     </linearGradient>
     <radialGradient id="sheen">
       <stop offset="0" stop-color="#FFFFFF"/>

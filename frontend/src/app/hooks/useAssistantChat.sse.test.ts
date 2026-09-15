@@ -19,11 +19,12 @@ import {
 } from "vitest";
 import type { Message } from "@/app/components/shared/types";
 
-const { updateChatTitleMock } = vi.hoisted(() => ({
+const { routerReplaceMock, updateChatTitleMock } = vi.hoisted(() => ({
+    routerReplaceMock: vi.fn(),
     updateChatTitleMock: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({
-    useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+    useRouter: () => ({ replace: routerReplaceMock, push: vi.fn() }),
 }));
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({
@@ -84,6 +85,50 @@ afterEach(() => {
 });
 
 describe("useAssistantChat SSE parsing", () => {
+    it("creates a project chat only when the first message is submitted", async () => {
+        fetchMock.mockResolvedValue(
+            sseResponse([
+                'data: {"type":"chat_id","chatId":"project-chat-1"}\n\n',
+                "data: [DONE]\n\n",
+            ]),
+        );
+        const { result } = renderHook(() =>
+            useAssistantChat({ projectId: "project-1" }),
+        );
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        await act(async () => {
+            await result.current.handleChat(userMessage("First message"));
+        });
+
+        const request = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+        expect(JSON.parse(request.body as string)).not.toHaveProperty(
+            "chat_id",
+        );
+        expect(routerReplaceMock).toHaveBeenCalledWith(
+            "/projects/project-1/assistant/chat/project-chat-1",
+        );
+    });
+
+    it("uses a newly selected chat id without remounting the workspace", async () => {
+        fetchMock.mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+        const { result, rerender } = renderHook(
+            ({ chatId }) =>
+                useAssistantChat({ chatId, projectId: "project-1" }),
+            { initialProps: { chatId: "chat-1" } },
+        );
+
+        rerender({ chatId: "chat-2" });
+        await act(async () => {
+            await result.current.handleChat(userMessage());
+        });
+
+        const request = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+        expect(JSON.parse(request.body as string)).toMatchObject({
+            chat_id: "chat-2",
+        });
+    });
+
     it("reassembles an event split across chunk boundaries", async () => {
         const { assistant, result } = await sendAndGetAssistant([
             'data: {"type":"content_delta","te',

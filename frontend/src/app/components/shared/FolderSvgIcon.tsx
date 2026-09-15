@@ -15,7 +15,7 @@ type FolderStateIconProps = FolderSvgIconProps & {
     open?: boolean;
 };
 
-const FOLDER_ICON_VERSION = "20";
+const FOLDER_ICON_VERSION = "23";
 const FOLDER_ICON_BASE_PATH = "/icons/file-system";
 
 function FolderSvgIcon({

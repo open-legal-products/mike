@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, streamProjectChat } from "@/app/lib/mikeApi";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
@@ -85,6 +85,11 @@ export function useAssistantChat({
   const [isResponseLoading, setIsResponseLoading] = useState(false);
   const [isLoadingCitations, setIsLoadingCitations] = useState(false);
   const [chatId, setChatId] = useState<string | undefined>(initialChatId);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the hook stays mounted while its host switches between existing threads
+    setChatId(initialChatId);
+  }, [initialChatId]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 

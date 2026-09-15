@@ -1,13 +1,20 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { createRef } from "react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
-import { uploadProjectDocument } from "@/app/lib/mikeApi";
-import { ChatInput } from "./ChatInput";
+import {
+    uploadProjectDocument,
+    uploadProjectDocuments,
+    uploadStandaloneDocuments,
+} from "@/app/lib/mikeApi";
+import { ChatInput, type ChatInputHandle } from "./ChatInput";
 
 vi.mock("@/app/lib/mikeApi", () => ({
     listWorkflows: vi.fn(async () => []),
     uploadProjectDocument: vi.fn(),
     uploadStandaloneDocument: vi.fn(),
+    uploadProjectDocuments: vi.fn(),
+    uploadStandaloneDocuments: vi.fn(),
 }));
 
 vi.mock("@/app/contexts/UserProfileContext", () => ({
@@ -135,5 +142,36 @@ describe("ChatInput canSend gating", () => {
         expect(
             screen.getByRole("button", { name: "Add documents" }),
         ).toBeInTheDocument();
+    });
+
+    it("can attach a local drop without adding it to the project", async () => {
+        vi.mocked(uploadStandaloneDocuments).mockResolvedValue([]);
+        const ref = createRef<ChatInputHandle>();
+        render(
+            <ChatInput
+                ref={ref}
+                onSubmit={vi.fn()}
+                onCancel={vi.fn()}
+                isLoading={false}
+                projectId="p1"
+                enableGlobalFileDrop={false}
+                dropUploadsToProject={false}
+            />,
+        );
+        const file = new File(["x"], "attachment.pdf", {
+            type: "application/pdf",
+        });
+
+        fireEvent.drop(window, {
+            dataTransfer: { types: ["Files"], files: [file] },
+        });
+        expect(uploadStandaloneDocuments).not.toHaveBeenCalled();
+
+        ref.current?.addFiles([file]);
+
+        await waitFor(() =>
+            expect(uploadStandaloneDocuments).toHaveBeenCalledOnce(),
+        );
+        expect(uploadProjectDocuments).not.toHaveBeenCalled();
     });
 });

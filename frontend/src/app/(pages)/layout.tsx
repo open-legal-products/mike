@@ -20,7 +20,9 @@ export default function MikeLayout({
     const { isAuthenticated, authLoading } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
-    const isChatPage = /^\/assistant\/chat\/[^/]+\/?$/.test(pathname);
+    const isChatPage =
+        /^\/assistant\/chat\/[^/]+\/?$/.test(pathname) ||
+        /^\/projects\/[^/]+\/assistant\/chat\/[^/]+\/?$/.test(pathname);
     const [mobileActionsContainer, setMobileActionsContainer] =
         useState<HTMLDivElement | null>(null);
 
