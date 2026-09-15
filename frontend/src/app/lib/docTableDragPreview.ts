@@ -8,8 +8,8 @@ type DragPreviewOptions = {
 };
 
 /**
- * Replace the browser's single-row drag image with the complete visible
- * selection. The preview is removed after the drag image has been captured.
+ * Capture only the selected rows, including single-row drags: native capture
+ * can include the table's scrollbar. Remove the preview after capture.
  */
 export function setDocumentRowsDragPreview({
     dataTransfer,
@@ -19,7 +19,7 @@ export function setDocumentRowsDragPreview({
     clientX,
     clientY,
 }: DragPreviewOptions): void {
-    if (!tableRoot || draggedDocumentIds.length < 2) return;
+    if (!tableRoot || draggedDocumentIds.length === 0) return;
 
     const draggedIdSet = new Set(draggedDocumentIds);
     const rows = Array.from(
@@ -30,7 +30,7 @@ export function setDocumentRowsDragPreview({
         const id = row.dataset.documentId;
         return !!id && draggedIdSet.has(id);
     });
-    if (rows.length < 2) return;
+    if (rows.length === 0) return;
 
     const draggedRowIndex = Math.max(
         0,
