@@ -6,12 +6,17 @@ import {
     screen,
     waitFor,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
     Document,
     Folder as ProjectFolder,
 } from "@/app/components/shared/types";
 import { ProjectExplorer, type ProjectExplorerHandle } from "./ProjectExplorer";
+
+afterEach(() => {
+    if (vi.isFakeTimers()) vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+});
 
 describe("ProjectExplorer uploads", () => {
     it("shows pending uploads as rows inside the rounded explorer outline", () => {
@@ -68,6 +73,7 @@ describe("ProjectExplorer actions", () => {
     });
 
     it("allows documents to be copied to chat or moved within the explorer", () => {
+        vi.useFakeTimers();
         render(
             <ProjectExplorer
                 documents={[
@@ -85,6 +91,7 @@ describe("ProjectExplorer actions", () => {
         const dataTransfer = {
             effectAllowed: "none",
             setData: vi.fn(),
+            setDragImage: vi.fn(),
         };
         fireEvent.dragStart(screen.getByText("Draft.docx").closest("li")!, {
             dataTransfer,
@@ -95,6 +102,27 @@ describe("ProjectExplorer actions", () => {
             "doc-1",
         );
         expect(dataTransfer.effectAllowed).toBe("copyMove");
+        expect(dataTransfer.setDragImage).toHaveBeenCalledOnce();
+        const [preview] = dataTransfer.setDragImage.mock.calls[0] as [HTMLElement];
+        expect(preview).toHaveClass("liquid-glass-float");
+        expect(preview.style.clipPath).toBe("inset(0 round var(--radius))");
+        expect((preview.firstElementChild as HTMLElement).style.backgroundColor).toBe("transparent");
+        expect(preview).toHaveTextContent("Draft.docx");
+    });
+
+    it("uses a rounded folder drag preview without including expanded children", () => {
+        vi.useFakeTimers();
+        render(<ProjectExplorer documents={[{ id: "doc", filename: "Child.pdf", folder_id: "folder" } as Document]}
+            folders={[{ id: "folder", name: "Drafts", parent_folder_id: null } as ProjectFolder]} onDocClick={vi.fn()} />);
+        fireEvent.click(screen.getByText("Drafts"));
+        const dataTransfer = { effectAllowed: "none", setData: vi.fn(), setDragImage: vi.fn() };
+        fireEvent.dragStart(screen.getByText("Drafts").closest("div[draggable]")!, { dataTransfer });
+        const [preview] = dataTransfer.setDragImage.mock.calls[0] as [HTMLElement];
+        expect(preview).toHaveClass("liquid-glass-float");
+        expect(preview.style.borderRadius).toBe("var(--radius)");
+        expect(preview).toHaveTextContent("Drafts");
+        expect(preview).not.toHaveTextContent("Child.pdf");
+        expect(dataTransfer.effectAllowed).toBe("move");
     });
 
     it("starts a root subfolder from the explorer header action", () => {

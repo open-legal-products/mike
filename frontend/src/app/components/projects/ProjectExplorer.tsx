@@ -1,6 +1,7 @@
 "use client";
 
 import { isProjectItemDrag } from "@/app/lib/projectDragTypes";
+import { setRowDragPreview } from "@/app/lib/rowDragPreview";
 import {
     forwardRef,
     useEffect,
@@ -287,6 +288,12 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                                 onDragStart={(e) => {
                                     e.dataTransfer.setData("application/mike-folder", folder.id);
                                     e.dataTransfer.effectAllowed = "move";
+                                    setRowDragPreview({
+                                        dataTransfer: e.dataTransfer,
+                                        row: e.currentTarget,
+                                        clientX: e.clientX,
+                                        clientY: e.clientY,
+                                    });
                                     e.stopPropagation();
                                 }}
                                 onDragOver={(e) => {
@@ -364,6 +371,12 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             onDragStart={(e) => {
                                 e.dataTransfer.setData("application/mike-doc", doc.id);
                                 e.dataTransfer.effectAllowed = "copyMove";
+                                setRowDragPreview({
+                                    dataTransfer: e.dataTransfer,
+                                    row: e.currentTarget,
+                                    clientX: e.clientX,
+                                    clientY: e.clientY,
+                                });
                             }}
                             onDragOver={(e) => {
                                 // Internal moves do not target document rows;
