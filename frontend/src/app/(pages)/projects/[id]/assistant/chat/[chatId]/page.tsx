@@ -37,6 +37,7 @@ import {
     resolveProjectFolderPath,
 } from "@/app/lib/mikeApi";
 import { useAssistantChat } from "@/app/hooks/useAssistantChat";
+import { useAssistantMessageLayout } from "@/app/hooks/useAssistantMessageLayout";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
@@ -346,7 +347,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
-    const [minHeight, setMinHeight] = useState("0px");
 
     const {
         setCurrentChatId,
@@ -410,6 +410,15 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     const hasAutoSent = useRef(false);
     const hasInitialScrolled = useRef(false);
+    const { minHeight, scrollLatestUserToTop } = useAssistantMessageLayout({
+        containerRef: messagesContainerRef,
+        userMessageRef: latestUserMessageRef,
+        ready: chatLoaded,
+        messageCount: messages.length,
+        chatKey: activeChatId,
+        bottomPadding: DEFAULT_ASSISTANT_BOTTOM_PADDING,
+        headerHeight: ASSISTANT_HEADER_HEIGHT,
+    });
 
     const clearFolderDeleteDismissTimer = useCallback(() => {
         if (folderDeleteDismissTimerRef.current === null) return;
@@ -582,23 +591,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         }
     }, [messages.length, isResponseLoading, handleChat, setNewChatMessages]);
 
-    const scrollLatestUserToTop = useCallback(() => {
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                const container = messagesContainerRef.current;
-                const element = latestUserMessageRef.current;
-                if (!container || !element) return;
-                container.scrollTo({
-                    top: element.offsetTop - 24,
-                    behavior: "smooth",
-                });
-            });
-        });
-    }, []);
-
     useEffect(() => {
         const last = messages[messages.length - 1];
-        if (last?.role === "user") scrollLatestUserToTop();
+        if (last?.role === "user") return scrollLatestUserToTop();
     }, [messages, scrollLatestUserToTop]);
 
     useEffect(() => {
@@ -607,35 +602,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         const container = messagesContainerRef.current;
         const el = latestUserMessageRef.current;
         if (!container || !el) return;
-        hasInitialScrolled.current = true;
-        setTimeout(() => {
-            container.scrollTo({
-                top: el.offsetTop - 16,
-                behavior: "auto",
-            });
-        }, 100);
-    }, [chatLoaded, messages.length]);
+        return scrollLatestUserToTop("auto", () => {
+            hasInitialScrolled.current = true;
+        });
+    }, [chatLoaded, messages.length, scrollLatestUserToTop]);
 
     useEffect(() => {
-        if (isResponseLoading) scrollLatestUserToTop();
+        if (isResponseLoading) return scrollLatestUserToTop();
     }, [isResponseLoading, scrollLatestUserToTop]);
-
-    useEffect(() => {
-        const userEl = latestUserMessageRef.current;
-        const containerEl = messagesContainerRef.current;
-        if (!userEl || !containerEl) return;
-        const messageGap = window.innerWidth < 768 ? 24 : 32;
-        setMinHeight(
-            `${Math.max(
-                0,
-                containerEl.clientHeight -
-                    messageGap * 3 -
-                    userEl.offsetHeight -
-                    DEFAULT_ASSISTANT_BOTTOM_PADDING -
-                    ASSISTANT_HEADER_HEIGHT,
-            )}px`,
-        );
-    }, [messages.length]);
 
     // ── Tabs ──────────────────────────────────────────────────────────────────
     function openTab(
