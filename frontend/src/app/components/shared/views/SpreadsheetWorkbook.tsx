@@ -39,7 +39,9 @@ export function SpreadsheetWorkbook({
         sessionRef.current?.sourceSheets === sheets ? sessionRef.current : null,
     );
     // Fortune-sheet recalculates header dimensions when data changes, including zoomRatio.
-    const [workbookSheets, setWorkbookSheets] = useState(saved?.sheets ?? sheets);
+    const [workbookSheets, setWorkbookSheets] = useState(
+        saved?.sheets ?? sheets,
+    );
     const currentSheetRef = useRef(
         workbookSheets.find((sheet) => sheet.status === 1)?.id ??
             workbookSheets[0]?.id,
@@ -54,6 +56,63 @@ export function SpreadsheetWorkbook({
         }),
         [hooks],
     );
+
+    useLayoutEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        const updateScrollExtent = () => {
+            const rowExtent = container.querySelector<HTMLElement>(
+                ".fortune-row-header > .luckysheetsheetchange",
+            );
+            const overlay = container.querySelector<HTMLElement>(
+                ".fortune-sheet-overlay",
+            );
+            const cells =
+                container.querySelector<HTMLElement>(".fortune-cell-area");
+            const spacer = container.querySelector<HTMLElement>(
+                ".luckysheet-scrollbar-y > div",
+            );
+            const scrollbar = container.querySelector<HTMLElement>(
+                ".luckysheet-scrollbar-x",
+            );
+            if (!rowExtent || !overlay || !cells || !spacer || !scrollbar)
+                return;
+            const headerHeight =
+                Number.parseFloat(overlay.style.height) -
+                Number.parseFloat(cells.style.height);
+            const rowsHeight = Number.parseFloat(rowExtent.style.height) - 80;
+            if (!Number.isFinite(headerHeight) || !Number.isFinite(rowsHeight))
+                return;
+            // Fortune-sheet adds 80px after the final row. Its vertical scrollbar spans
+            // the column header too; reserve only that header and the horizontal thumb.
+            const scrollbarHeight =
+                scrollbar.offsetHeight - scrollbar.clientHeight || 8;
+            const height = `${Math.max(0, rowsHeight + headerHeight + scrollbarHeight)}px`;
+            if (spacer.style.height !== height) spacer.style.height = height;
+        };
+        // Sheet initialization, zoom, and resize update Fortune-sheet's inline geometry.
+        const observer = new MutationObserver((records) => {
+            if (
+                records.some(
+                    (record) =>
+                        record.type === "childList" ||
+                        (record.target instanceof HTMLElement &&
+                            record.target.matches(
+                                ".luckysheetsheetchange, .fortune-sheet-overlay, .fortune-cell-area, .luckysheet-scrollbar-y > div",
+                            )),
+                )
+            )
+                updateScrollExtent();
+        });
+        observer.observe(container, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ["style"],
+        });
+        updateScrollExtent();
+        return () => observer.disconnect();
+    }, []);
 
     useLayoutEffect(() => {
         let frame = 0;
