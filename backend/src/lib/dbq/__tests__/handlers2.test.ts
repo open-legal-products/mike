@@ -30,9 +30,9 @@ vi.mock("../../mcp/oauth", async (importOriginal) => {
 const extractLegacyOfficeText = vi.fn(
     async (..._a: unknown[]) => "[Page 1]\nhello from libreoffice",
 );
-vi.mock("../../chat/tools/documentOps", async (importOriginal) => {
+vi.mock("../../pdfText", async (importOriginal) => {
     const actual =
-        await importOriginal<typeof import("../../chat/tools/documentOps")>();
+        await importOriginal<typeof import("../../pdfText")>();
     return {
         ...actual,
         extractLegacyOfficeText: (...a: unknown[]) =>
@@ -62,7 +62,7 @@ import {
     handleDocumentPrecomputeText,
     MCP_TOKEN_REFRESH_WINDOW_MS,
     DB_JOB_HANDLERS,
-} from "../handlers";
+} from "../../../jobs/registry";
 import type { DbJob } from "../types";
 
 const JOB = (kind: string, payload: Record<string, unknown>): DbJob => ({
@@ -81,7 +81,11 @@ const JOB = (kind: string, payload: Record<string, unknown>): DbJob => ({
     created_at: "",
 });
 
-const DB = {} as never;
+const DB = { from: () => {
+    const query = { select: () => query, eq: () => query, is: () => query,
+        maybeSingle: async () => ({ data: { id: "v-123" }, error: null }) };
+    return query;
+} } as never;
 
 const tokenRow = (overrides: Partial<TokenRow> = {}): TokenRow => ({
     connector_id: "c1",

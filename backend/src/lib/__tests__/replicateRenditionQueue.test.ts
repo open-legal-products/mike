@@ -47,14 +47,19 @@ vi.mock("../downloadTokens", async (importOriginal) => {
     };
 });
 
-import { runToolCalls } from "../chat/tools/toolDispatcher";
-import type { DocIndex, DocStore } from "../chat/types";
+import { runToolCalls } from "../../modules/chat/engine/tools/toolDispatcher";
+import type { DocIndex, DocStore } from "../../modules/chat/engine/types";
 
 // Same double as workflowAssetReplication.test.ts: documents echo their
 // client-generated ids; versions get deterministic new-version-N ids.
 function replicationDb() {
     const versionRows: Record<string, unknown>[][] = [];
     const db = {
+        rpc: vi.fn(async (name: string, args: { p_versions: Record<string, unknown>[] }) => {
+            expect(name).toBe("create_document_versions");
+            versionRows.push(args.p_versions);
+            return { data: args.p_versions.map((row, index) => ({ ...row, id: `new-version-${index + 1}` })), error: null };
+        }),
         from(table: string) {
             if (table === "documents") {
                 return {

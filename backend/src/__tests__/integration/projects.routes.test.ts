@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
+import {
+    supabaseState,
+    resetSupabaseState,
+    mockSupabase,
+} from "../helpers/supabaseMock";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock fns we want to reconfigure per-test.
@@ -10,97 +15,27 @@ const { checkProjectAccess, deleteProjectsByIds } = vi.hoisted(() => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Configurable Supabase stub. Each test seeds `supabaseState` in beforeEach;
-// terminal query operations (.single()/.maybeSingle()/thenable) resolve to the
-// per-table result, and rpc() resolves to a per-call result. Insert payloads
-// are recorded so tests can assert on normalisation (lowercasing / dedupe).
+// Supabase + auth stubs, shared with the other route suites via ../helpers/.
+// Every suite here mounts `app`, which loads every router, so they all need the
+// same fakes; see helpers/supabaseMock.ts for how `supabaseState` (seeded in
+// beforeEach below) drives the responses.
+//
+// `vi.mock` factories are hoisted above the imports, so they cannot close over
+// a top-level import binding — they pull the helper in dynamically instead. The
+// explicit ".js" is what TypeScript's node16 module resolution requires of a
+// dynamic (ECMAScript) import; Vite resolves it back to the .ts source, and
+// both specifiers resolve to the same module instance as the static import
+// above, so the state object the tests mutate is the one the stub reads.
 // ---------------------------------------------------------------------------
-type QueryResult = { data: unknown; error: unknown };
+vi.mock("../../lib/supabase", async () => {
+    const { mockSupabase } = await import("../helpers/supabaseMock.js");
+    return { createServerSupabase: vi.fn(() => mockSupabase()) };
+});
 
-let supabaseState: {
-    rpc: QueryResult;
-    tables: Record<string, QueryResult>;
-    inserts: { table: string; payload: unknown }[];
-};
-
-function resetSupabaseState() {
-    supabaseState = {
-        rpc: { data: [], error: null },
-        tables: {},
-        inserts: [],
-    };
-}
-resetSupabaseState();
-
-function resultForTable(table: string): QueryResult {
-    return supabaseState.tables[table] ?? { data: null, error: null };
-}
-
-function makeQuery(table: string) {
-    const q: Record<string, unknown> = {};
-    const chain = [
-    "select",
-    "update",
-    "delete",
-    "upsert",
-    "eq",
-    "neq",
-    "in",
-    "is",
-    "or",
-    "not",
-    "lt",
-    "gt",
-    "gte",
-    "lte",
-    "filter",
-    "order",
-    "limit",
-    "range",
-    "contains",
-    ];
-    for (const m of chain) q[m] = vi.fn(() => q);
-    q.insert = vi.fn((payload: unknown) => {
-        supabaseState.inserts.push({ table, payload });
-        return q;
-    });
-    q.single = vi.fn(() => Promise.resolve(resultForTable(table)));
-    q.maybeSingle = vi.fn(() => Promise.resolve(resultForTable(table)));
-  q.then = (
-    resolve: (v: unknown) => unknown,
-    reject?: (e: unknown) => unknown,
-  ) => Promise.resolve(resultForTable(table)).then(resolve, reject);
-    return q;
-}
-
-function mockSupabase() {
-    return {
-        from: vi.fn((table: string) => makeQuery(table)),
-        rpc: vi.fn(() => Promise.resolve(supabaseState.rpc)),
-        auth: {
-            getUser: () =>
-                Promise.resolve({ data: { user: { id: "u1" } }, error: null }),
-        },
-    };
-}
-
-vi.mock("../../lib/supabase", () => ({
-    createServerSupabase: vi.fn(() => mockSupabase()),
-}));
-
-vi.mock("../../middleware/auth", () => ({
-    requireAuth: (
-        _req: unknown,
-        res: { locals: Record<string, unknown> },
-        next: () => void,
-    ) => {
-        res.locals.userId = "u1";
-        res.locals.userEmail = "u1@test.local";
-        next();
-    },
-    requireMfaIfEnrolled: (_req: unknown, _res: unknown, next: () => void) =>
-        next(),
-}));
+vi.mock("../../middleware/auth", async () => {
+    const { authMock } = await import("../helpers/authMock.js");
+    return authMock();
+});
 
 // Every export of lib/access must be present — other routers (chat, documents,
 // downloads, tabular) import from it at app load.
@@ -116,7 +51,7 @@ vi.mock("../../lib/access", async (importOriginal) => ({
 }));
 
 // user router imports all four cleanup helpers at module load.
-vi.mock("../../lib/userDataCleanup", () => ({
+vi.mock("../../modules/user/user.dataCleanup", () => ({
     deleteProjectsByIds: (...args: unknown[]) => deleteProjectsByIds(...args),
     deleteAllUserChats: vi.fn(async () => {}),
     deleteAllUserTabularReviews: vi.fn(async () => {}),
@@ -135,7 +70,7 @@ vi.mock("../../lib/documentVersions", () => ({
 import { app } from "../../app";
 import crypto from "crypto";
 import { manifestPublicKey } from "../../lib/manifestSigning";
-import { createServerSupabase } from "../../lib/supabase";
+import { createServerSupabase, type Db } from "../../lib/supabase";
 
 const SIGNING_KEY = "3b".repeat(32);
 
@@ -157,7 +92,7 @@ function captureRpcArgs(): { args: unknown; name: string | undefined } {
             captured.args = args;
             return originalRpc(name, args as never);
         });
-        return db as unknown as ReturnType<typeof createServerSupabase>;
+        return db as unknown as Db;
     });
     return captured;
 }
@@ -390,7 +325,7 @@ describe("projects.routes", () => {
             vi.mocked(createServerSupabase).mockImplementationOnce(() => {
                 const db = mockSupabase();
                 db.rpc = rpcMock;
-                return db as unknown as ReturnType<typeof createServerSupabase>;
+                return db as unknown as Db;
             });
 
       const res = await request(app)

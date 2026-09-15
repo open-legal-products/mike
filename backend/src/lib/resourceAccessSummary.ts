@@ -1,6 +1,5 @@
-import { createServerSupabase } from "./supabase";
+import type { Db } from "./supabase";
 
-type Db = ReturnType<typeof createServerSupabase>;
 type ResourceKind = "project" | "workflow";
 
 export type AccessSummaryRow = {

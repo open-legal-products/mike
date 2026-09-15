@@ -6,6 +6,7 @@ import {
     type CSSProperties,
     type HTMLAttributes,
     type ComponentType,
+    type KeyboardEvent as ReactKeyboardEvent,
     type MouseEvent as ReactMouseEvent,
     type ReactNode,
     type RefObject,
@@ -311,6 +312,10 @@ export function TableRow({
     interactive = true,
     selected = false,
     onContextMenu,
+    onClick,
+    onKeyDown,
+    role,
+    tabIndex,
     rightClickDropdown,
     ...props
 }: DivProps & {
@@ -364,6 +369,18 @@ export function TableRow({
         });
     }
 
+    // Keyboard equivalent of the row's click target. Only keys landing on the
+    // row itself count — a button or checkbox inside the row handles its own
+    // Enter/Space, and we don't want that bubbling up as a row activation.
+    function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+        onKeyDown?.(e);
+        if (!onClick || e.defaultPrevented) return;
+        if (e.target !== e.currentTarget) return;
+        if (e.key !== "Enter" && e.key !== " ") return;
+        if (e.key === " ") e.preventDefault();
+        onClick(e as unknown as ReactMouseEvent<HTMLDivElement>);
+    }
+
     return (
         <>
             <div
@@ -375,6 +392,10 @@ export function TableRow({
                     className,
                 )}
                 onContextMenu={handleContextMenu}
+                onClick={onClick}
+                onKeyDown={onClick || onKeyDown ? handleKeyDown : undefined}
+                role={role ?? (onClick ? "button" : undefined)}
+                tabIndex={tabIndex ?? (onClick ? 0 : undefined)}
                 {...props}
             >
                 {children}

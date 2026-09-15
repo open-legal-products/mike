@@ -1,3 +1,5 @@
+import type { Db } from "./supabase";
+
 /**
  * Project / document access helpers.
  *
@@ -18,7 +20,6 @@
  * only.
  */
 
-import type { createServerSupabase } from "./supabase";
 import {
     getContentGrantRole,
     type ContentGrantKind,
@@ -40,8 +41,6 @@ export {
     type Capability,
     type ProjectRole,
 } from "./permissions";
-
-type Db = ReturnType<typeof createServerSupabase>;
 
 /**
  * Organizations have exactly two roles. Admins administer the organization

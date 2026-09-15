@@ -78,7 +78,6 @@ import {
     getWorkflowPeople,
     getWorkflowAddon,
     getWorkflowFilterOptions,
-    hideWorkflow,
     isMfaRequiredError,
     acceptOrgInvitation,
     cancelOrgInvitation,
@@ -105,7 +104,6 @@ import {
     updateOrgMember,
     updateOrg,
     listDocumentVersions,
-    listHiddenWorkflows,
     listLibraryDocumentIds,
     listMcpConnectors,
     listProjectChats,
@@ -161,7 +159,6 @@ import {
     syncUserPasswordSet,
     tabularChatSelectionKey,
     parseTabularChatSelectionKey,
-    unhideWorkflow,
     updateMcpConnector,
     updateProject,
     updateProjectMemory,
@@ -176,7 +173,6 @@ import {
     updateWorkflow,
     updateQuickAction,
     updateUserMemory,
-    deleteQuickAction,
     importWorkflowAddon,
     listQuickActions,
 } from "./mikeApi";
@@ -1858,24 +1854,6 @@ describe("workflow endpoints", () => {
         expect(lastFetchCall().url).toBe("/api/workflows?type=assistant");
     });
 
-    it("hide/unhide/list use the hidden-workflows routes with matching methods", async () => {
-        fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-
-        await hideWorkflow("w1");
-        let { url, init } = lastFetchCall();
-        expect(url).toBe("/api/workflows/hidden");
-        expect(init.method).toBe("POST");
-        expect(JSON.parse(init.body as string)).toEqual({ workflow_id: "w1" });
-
-        await unhideWorkflow("w1");
-        ({ url, init } = lastFetchCall());
-        expect(url).toBe("/api/workflows/hidden/w1");
-        expect(init.method).toBe("DELETE");
-
-        fetchMock.mockResolvedValue(jsonResponse(["w2"]));
-        await expect(listHiddenWorkflows()).resolves.toEqual(["w2"]);
-        expect(lastFetchCall().url).toBe("/api/workflows/hidden");
-    });
 });
 
 // ---------------------------------------------------------------------------
@@ -2556,12 +2534,6 @@ describe("thin endpoint wrappers", () => {
                 enabled: false,
                 sort_order: 3,
             },
-        },
-        {
-            name: "deleteQuickAction",
-            call: () => deleteQuickAction("qa1"),
-            url: "/quick-actions/qa1",
-            method: "DELETE",
         },
         {
             name: "listWorkflowAddons",

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     buildProjectExportManifest,
     buildUserAccountExport,
-} from "../userDataExport";
+} from "../../modules/user/user.dataExport";
 
 type Row = Record<string, unknown>;
 

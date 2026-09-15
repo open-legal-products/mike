@@ -1,7 +1,5 @@
-import type { createServerSupabase } from "./supabase";
+import type { Db } from "./supabase";
 import type { ProjectRole } from "./permissions";
-
-type Db = ReturnType<typeof createServerSupabase>;
 
 export type OrgResourceKind =
     | "project"
@@ -110,6 +108,48 @@ export async function findOrgMemberByEmail(
             detail: "Organization membership has an invalid role",
         };
     return { ok: true, member: { userId, email, orgRole } };
+}
+
+/** A resource creator and an organization admin retain owner access. Keep the
+ * target lookup and this rule identical for project and workflow assignments.
+ * Callers still authorize the actor's access.manage permission first.
+ */
+export async function findAssignableOrgMember(
+    db: Db,
+    orgId: string,
+    email: string,
+    creatorId: string | null,
+): Promise<
+    | {
+          ok: true;
+          member: {
+              userId: string;
+              email: string;
+              orgRole: "admin" | "member";
+          };
+      }
+    | { ok: false; kind: "validation"; detail: string }
+    | { ok: false; kind: "db_error"; error: unknown }
+> {
+    const target = await findOrgMemberByEmail(db, orgId, email);
+    if (!target.ok) {
+        if (target.kind === "not_found")
+            return { ok: false, kind: "validation", detail: target.detail };
+        return { ok: false, kind: "db_error", error: target.detail };
+    }
+    if (target.member.userId === creatorId)
+        return {
+            ok: false,
+            kind: "validation",
+            detail: "The creator is always an owner",
+        };
+    if (target.member.orgRole === "admin")
+        return {
+            ok: false,
+            kind: "validation",
+            detail: "Organization admins always have owner access",
+        };
+    return target;
 }
 
 export async function listOrgAccessPeople(

@@ -342,3 +342,41 @@ test("stays View-only when the bookmark's revisions no longer identify the edit"
   expect((await addin.wordCalls()).searches).toBe(0);
   expect((await addin.wordDocument()).bookmarks).toHaveLength(1);
 });
+
+test("View never deletes the bookmark of an edit resolved outside Mike", async ({
+  addin,
+  page,
+}) => {
+  await mockPersistedChat(addin);
+  const bookmark = await applyPersistedEdit(addin, page);
+
+  // A user revision inside the passage keeps the card View-only, which is the
+  // one path that reveals through the bookmark instead of a retained proxy.
+  expect(
+    await addin.injectRevisionIntoBookmark(
+      bookmark.name,
+      "Added",
+      "Unrelated user revision",
+    ),
+  ).toBe(true);
+  await reloadAndOpenPersistedChat(addin, page);
+
+  const view = page.getByRole("button", { name: "View", exact: true });
+  await expect(view).toBeVisible();
+
+  // Accepting everything from Word's own Review tab empties the bookmark.
+  expect(await addin.resolveBookmarkExternally(bookmark.name, "accepted")).toBe(
+    true,
+  );
+  await view.click();
+
+  // The card correctly reports that nothing is pending — but View only reads,
+  // so the anchor survives for the next reload to prune.
+  await expect(
+    page.getByText("Word no longer reports a pending revision for this change."),
+  ).toBeVisible();
+  expect((await addin.wordDocument()).bookmarks.map(({ name }) => name)).toEqual(
+    [bookmark.name],
+  );
+  expect((await addin.wordCalls()).deletedBookmarks).toEqual([]);
+});

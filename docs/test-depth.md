@@ -18,7 +18,7 @@ dangerous (scope in `backend/stryker.config.json`):
 
 - `src/lib/access.ts` — project/document sharing access checks
 - `src/lib/downloadTokens.ts` — HMAC-signed download tokens
-- `src/lib/chat/citations.ts` — citation extraction (what the model may
+- `src/modules/chat/engine/citations.ts` — citation extraction (what the model may
   cite from which document)
 
 ### Running it
@@ -52,6 +52,14 @@ no-coverage mutants in
 `thresholds.break` is set to **69**, ~5 points under the lowest measured
 score, so a run fails only on a genuine regression.
 When you kill survivors, raise `break` in the same PR — floors only go up.
+
+### Current tooling limitation
+
+With the backend's TypeScript 7 dependency, Stryker 10 currently aborts during
+sandbox setup because it calls the removed `parseConfigFileTextToJson` API.
+Its corrected mutation targets are discovered, but no mutation score is
+produced. The regular unit, coverage, typecheck, database, and browser checks
+remain separate; a green CI run does not imply this optional harness passed.
 
 ## SSE load harness (k6)
 

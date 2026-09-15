@@ -64,7 +64,7 @@ vi.mock("../../lib/storage", async (importOriginal) => ({
   headFile: mocks.headFile,
 }));
 
-import { documentsRouter } from "../../routes/documents";
+import { documentsRouter } from "../../modules/documents/documents.routes";
 
 const app = express();
 app.use("/single-documents", documentsRouter);

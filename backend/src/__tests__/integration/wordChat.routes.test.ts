@@ -128,8 +128,8 @@ vi.mock("../../lib/memory/schedule", () => ({
     scheduleMemoryConsolidation(...args),
 }));
 
-vi.mock("../../lib/chat", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../lib/chat")>();
+vi.mock("../../modules/chat/engine/index", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../modules/chat/engine/index")>();
   return {
     ...actual,
     buildDocContext: vi.fn(async () => ({
@@ -143,7 +143,7 @@ vi.mock("../../lib/chat", async (importOriginal) => {
   };
 });
 
-vi.mock("../../lib/userSettings", () => ({
+vi.mock("../../modules/user/user.settings", () => ({
   getUserModelSettings: vi.fn(async () => ({
     legal_research_us: false,
     title_model: "test-model",
@@ -457,7 +457,7 @@ describe("POST /word-chat/tool-result", () => {
 
   it("delivers a pending call's result to the awaiting stream", async () => {
     const { waitForClientToolResult } =
-      await import("../../lib/chat/tools/wordClientTools");
+      await import("../../modules/chat/engine/tools/wordClientTools.js");
     const pending = waitForClientToolResult({
       callId: TOOL_CALL_ID,
       userId: "u1",
@@ -479,7 +479,7 @@ describe("POST /word-chat/tool-result", () => {
 
   it("does not deliver results across users", async () => {
     const { waitForClientToolResult, submitClientToolResult } =
-      await import("../../lib/chat/tools/wordClientTools");
+      await import("../../modules/chat/engine/tools/wordClientTools.js");
     const pending = waitForClientToolResult({
       callId: TOOL_CALL_ID,
       userId: "someone-else",
@@ -529,7 +529,7 @@ describe("POST /word-chat — local storage", () => {
   });
 
   it("schedules memory after a durable cloud turn", async () => {
-    const chatLib = await import("../../lib/chat");
+    const chatLib = await import("../../modules/chat/engine/index.js");
     dbState.chatDetail = {
       data: { id: CHAT_ID, title: null, user_id: "u1" },
       error: null,

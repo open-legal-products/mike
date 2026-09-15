@@ -3,11 +3,9 @@
 // Both resources use the same access ladder as projects. Their creator has
 // implicit Owner standing; these rows represent only additional recipients.
 
-import type { createServerSupabase } from "./supabase";
+import type { Db } from "./supabase";
 import { isProjectRole, type ProjectRole } from "./permissions";
 import { findProfileUserByEmail } from "./userLookup";
-
-type Db = ReturnType<typeof createServerSupabase>;
 
 const normalizeEmail = (email: string | null | undefined) => {
     const normalized = (email ?? "").trim().toLowerCase();

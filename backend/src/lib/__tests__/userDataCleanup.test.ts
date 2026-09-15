@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../storage", () => ({
+    assertStorageConfigured: vi.fn(),
     deleteFile: vi.fn(async () => {}),
     listFiles: vi.fn(async () => [] as string[]),
     // Kept real: cleanup must delete the exact key the
@@ -15,7 +16,7 @@ import {
     deleteAllUserTabularReviews,
     deleteUserProjects,
     deleteUserAccountData,
-} from "../userDataCleanup";
+} from "../../modules/user/user.dataCleanup";
 
 const deleteFileMock = vi.mocked(deleteFile);
 const listFilesMock = vi.mocked(listFiles);
@@ -176,6 +177,11 @@ function makeDb(
                     narrow((row) => row[column] === value);
                     return query;
                 },
+                is: (column: string, value: unknown) => {
+                    narrow((row) => value === null ? row[column] == null : row[column] === value);
+                    return query;
+                },
+                limit: () => query,
                 order: () => query,
                 in: (column: string, values: unknown[]) => {
                     narrow((row) => values.includes(row[column]));
@@ -248,6 +254,7 @@ function makeDb(
 const ids = (rows: Row[] | undefined) => (rows ?? []).map((row) => row.id);
 
 beforeEach(() => {
+    vi.stubEnv("DB_JOBS_ENABLED", "false");
     deleteFileMock.mockClear();
     deleteFileMock.mockResolvedValue(undefined as never);
     listFilesMock.mockClear();

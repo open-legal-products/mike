@@ -1,11 +1,9 @@
-import type { createServerSupabase } from "./supabase";
+import type { Db } from "./supabase";
 import {
     listContentGrants,
     type ContentGrantKind,
 } from "./contentAccess";
 import { listProjectPeople } from "./projectAccess";
-
-type Db = ReturnType<typeof createServerSupabase>;
 
 export type ResourcePeopleResult =
     | {

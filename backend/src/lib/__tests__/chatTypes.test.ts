@@ -4,7 +4,7 @@ import {
     resolveDocLabel,
     type DocIndex,
     type DocStore,
-} from "../chat/types";
+} from "../../modules/chat/engine/types";
 
 // ---------------------------------------------------------------------------
 // resolveDoc

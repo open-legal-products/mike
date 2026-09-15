@@ -9,9 +9,7 @@
  * Test user: e2e@mike.local / E2eTestPass1! (storageState inherited from playwright.config.ts)
  */
 import { test, expect } from "@playwright/test";
-import path from "path";
-
-const PDF_FIXTURE = path.join(__dirname, "fixtures/test.pdf");
+import { PDF_FIXTURE } from "./helpers";
 
 // Run these tests sequentially in a single worker: they share the one test
 // user's review list, so concurrent create/detail runs would race each other.

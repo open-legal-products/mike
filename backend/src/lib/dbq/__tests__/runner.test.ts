@@ -381,6 +381,36 @@ describe("runDbJobRetentionSweep", () => {
         const failedPurge = db.deletes.find(
             (d) => d.status === "failed" && "lt:finished_at" in d,
         );
-        expect(failedPurge?.["neq:kind"]).toBe("storage.cleanup");
+        expect(failedPurge?.["neq:kind"]).toEqual(["storage.cleanup", "document.cleanup"]);
+    });
+});
+
+describe("explicit failure hooks", () => {
+    it("forwards failure hooks through batch dispatch only after recording terminal failure", async () => {
+        const job = JOB({ attempts: 3 });
+        const db = makeDb({ rpc: async () => ({ data: [job], error: null }) });
+        const hook = vi.fn(async (seenDb, seenJob) => {
+            expect(seenDb).toBe(db);
+            expect(seenJob).toBe(job);
+            expect(db.updates[0].payload.status).toBe("failed");
+        });
+        await runDbJobTick(db as never, { "test.kind": async () => { throw new Error("terminal"); } }, { "test.kind": hook });
+        expect(hook).toHaveBeenCalledOnce();
+    });
+    it("does not call terminal hooks for retryable or deferred work", async () => {
+        const db = makeDb();
+        const hook = vi.fn();
+        for (const error of [new Error("transient"), new DbJobDeferredError(new Date(Date.now() + 5000).toISOString(), "wait")]) {
+            await processClaimedJob(db as never, { "test.kind": async () => { throw error; } }, JOB(), { "test.kind": hook });
+        }
+        expect(hook).not.toHaveBeenCalled();
+        expect(db.updates.every(row => row.payload.status === "pending")).toBe(true);
+    });
+    it("contains a hook failure without abandoning later batch jobs", async () => {
+        const db = makeDb({ rpc: async () => ({ data: [JOB({ attempts: 3 }), JOB({ id: "next", kind: "success" })], error: null }) });
+        const hook = vi.fn(async () => { throw new Error("hook unavailable"); });
+        await runDbJobTick(db as never, { "test.kind": async () => { throw new Error("terminal"); }, success: async () => {} }, { "test.kind": hook });
+        expect(hook).toHaveBeenCalledOnce();
+        expect(db.updates.find(row => row.id === "next")?.payload.status).toBe("done");
     });
 });

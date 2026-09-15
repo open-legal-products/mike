@@ -31,8 +31,6 @@ function renderTable(selectedChatIds: string[]) {
             chats={chats}
             filteredChats={chats}
             selectedChatIds={selectedChatIds}
-            allChatsSelected={selectedChatIds.length === chats.length}
-            someChatsSelected={selectedChatIds.length > 0}
             renamingChatId={null}
             renameChatValue=""
             currentUserId="user-1"

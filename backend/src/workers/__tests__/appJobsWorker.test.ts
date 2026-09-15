@@ -9,13 +9,19 @@ afterAll(() => {
     delete process.env.QUEUE_DRIVER;
 });
 
-const enqueueAppJobDelivery = vi.fn(async () => ({}));
+// Typed with the real enqueueAppJobDelivery's argument list so the recorded
+// calls are a proper tuple rather than an untyped rest array.
+type DeliveryOpts = { delayMs?: number; attempt?: number };
+const enqueueAppJobDelivery = vi.fn<
+    (dbJobId: string, opts?: DeliveryOpts) => Promise<unknown>
+>(async () => ({}));
 vi.mock("../../lib/queue/appJobsQueue", async (importOriginal) => {
     const actual =
         await importOriginal<typeof import("../../lib/queue/appJobsQueue")>();
     return {
         ...actual,
-        enqueueAppJobDelivery: (...a: unknown[]) => enqueueAppJobDelivery(...a),
+        enqueueAppJobDelivery: (dbJobId: string, opts?: DeliveryOpts) =>
+            enqueueAppJobDelivery(dbJobId, opts),
     };
 });
 vi.mock("../../lib/supabase", () => ({ createServerSupabase: vi.fn() }));

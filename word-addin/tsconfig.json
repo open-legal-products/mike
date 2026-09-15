@@ -6,6 +6,7 @@
     "moduleResolution": "bundler",
     "types": ["node", "office-js", "office-runtime", "react", "react-dom"],
     "paths": {
+      "@mike/contracts": ["../packages/contracts/index.d.ts"],
       "react": [
         "./node_modules/@types/react/index.d.ts"
       ],

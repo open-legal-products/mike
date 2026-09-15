@@ -38,11 +38,11 @@ function FolderSvgIcon({
     );
 }
 
-export function ClosedSubfolderSvgIcon(props: FolderSvgIconProps) {
+function ClosedSubfolderSvgIcon(props: FolderSvgIconProps) {
     return <FolderSvgIcon name="folder-closed" {...props} />;
 }
 
-export function OpenSubfolderSvgIcon(props: FolderSvgIconProps) {
+function OpenSubfolderSvgIcon(props: FolderSvgIconProps) {
     return <FolderSvgIcon name="folder-open" {...props} />;
 }
 
@@ -78,8 +78,4 @@ export function ProjectSvgIcon({
 
 export function ClosedFolderSvgIcon(props: FolderSvgIconProps) {
     return <ClosedSubfolderSvgIcon {...props} />;
-}
-
-export function OpenFolderSvgIcon(props: FolderSvgIconProps) {
-    return <OpenSubfolderSvgIcon {...props} />;
 }

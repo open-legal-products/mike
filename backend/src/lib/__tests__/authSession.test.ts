@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// The stub's parameters are declared rather than left off: with `vi.fn(() =>
+// …)` the recorded call tuple is empty, so the `mock.calls[0][2]` lookups
+// below would type-check against nothing at all.
 const { createServerClient } = vi.hoisted(() => ({
-  createServerClient: vi.fn(() => ({ auth: {} })),
+  createServerClient: vi.fn(
+    (_url: string, _key: string, _options: Record<string, unknown>) => ({
+      auth: {},
+    }),
+  ),
 }));
 
 vi.mock("@supabase/ssr", async (importOriginal) => ({
@@ -65,7 +72,7 @@ describe("backend-managed auth cookies", () => {
       }),
     );
 
-    const options = createServerClient.mock.calls[0][2] as {
+    const options = createServerClient.mock.calls[0]![2] as unknown as {
       cookies: {
         setAll(
           cookies: Array<{
@@ -111,7 +118,7 @@ describe("backend-managed auth cookies", () => {
     const res = { append, setHeader: vi.fn() } as never;
 
     createRequestSupabase(req, res);
-    const options = createServerClient.mock.calls[0][2] as {
+    const options = createServerClient.mock.calls[0]![2] as unknown as {
       cookies: {
         setAll(
           cookies: Array<{

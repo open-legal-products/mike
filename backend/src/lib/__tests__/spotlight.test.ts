@@ -5,9 +5,9 @@ import {
     spotlight,
     spotlightWorkflow,
     generateSpotlightNonce,
-} from "../chat/contextBuilders";
-import { buildSystemPrompt } from "../chat/prompts";
-import type { ChatMessage } from "../chat/types";
+} from "../../modules/chat/engine/contextBuilders";
+import { buildSystemPrompt } from "../../modules/chat/engine/prompts";
+import type { ChatMessage } from "../../modules/chat/engine/types";
 
 describe("spotlight (prompt-injection fence)", () => {
     it("puts the nonce on BOTH the opening and closing tags", () => {

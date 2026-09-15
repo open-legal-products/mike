@@ -6,43 +6,9 @@
  *
  * Prerequisite: auth.setup.ts has already saved the session to e2e/.auth/user.json
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { hasLlmKey, LLM_SKIP_REASON } from "./llm";
-import path from "path";
-
-const PDF_FIXTURE = path.join(__dirname, "fixtures/test.pdf");
-
-/**
- * Select a Claude model in the chat input's ModelToggle.
- *
- * This spec runs only when ANTHROPIC_API_KEY is set in the Playwright
- * environment (test.skip(!hasLlmKey, ...) — e2e/llm.ts). The CI stack exports
- * the same secret to the backend, whose key resolution (userApiKeys.ts
- * envApiKey()) falls back to the ANTHROPIC_API_KEY env var, so the "claude"
- * provider reports as configured and ModelToggle shows the Anthropic models as
- * available. The default model (Gemini) has no key configured in CI, so a
- * submit with it would be blocked by the ApiKeyMissingModal. We pick
- * "Claude Sonnet 4.6" (the cheapest Anthropic entry in ModelToggle.MODELS) so
- * the request streams a real response. The Radix DropdownMenu trigger's title
- * is "Choose model" (current model available) or "API key missing for selected
- * model" (default-Gemini case).
- */
-const CLAUDE_MODEL_LABEL = "Claude Sonnet 4.6";
-
-async function selectClaudeModel(page: Page) {
-    const trigger = page
-        .locator(
-            'button[title="Choose model"], button[title="API key missing for selected model"]',
-        )
-        .first();
-    await expect(trigger).toBeVisible({ timeout: 10_000 });
-    await trigger.click();
-    await page.getByRole("menuitem", { name: CLAUDE_MODEL_LABEL }).click();
-    // After selection the trigger label reflects the chosen model.
-    await expect(
-        page.getByRole("button", { name: CLAUDE_MODEL_LABEL }),
-    ).toBeVisible({ timeout: 5_000 });
-}
+import { PDF_FIXTURE, selectClaudeModel } from "./helpers";
 
 /* ─── Test 1: authenticated landing ─────────────────────────────────────── */
 
@@ -126,11 +92,16 @@ test("create project, upload PDF, ask a question and receive a response", async 
     await createNew.click();
     /* Navigates to /projects/{id}/assistant (new chat UI) */
     await page.waitForURL(/\/projects\/.+\/assistant/, { timeout: 10_000 });
-    await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {});
 
     /* ── Step 7: select a Claude model, type a question, submit ───────────── */
+    /* Wait on the chat input itself, not on "networkidle". A swallowed
+       `waitForLoadState("networkidle", …).catch(() => {})` used to stand here:
+       it proved nothing (its failure was discarded) and networkidle is an
+       unreliable signal on a page that holds a streaming connection open. The
+       input is what the next lines type into, so waiting for it is both the
+       real precondition and an honest failure. */
     const chatInput = page.getByPlaceholder("How can I help?");
-    await expect(chatInput).toBeVisible({ timeout: 10_000 });
+    await expect(chatInput).toBeVisible({ timeout: 20_000 });
 
     /* The default Gemini model has no key configured, so submitting it would be
        blocked by the ApiKeyMissingModal. Select a Claude model (backed by the

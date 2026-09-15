@@ -311,7 +311,7 @@ export async function listProjectSummaries(pagination?: {
     });
 }
 
-export interface ProjectDirectoryLevel {
+interface ProjectDirectoryLevel {
     documents: Document[];
     folders: Folder[];
     documentsHasMore: boolean;
@@ -797,7 +797,7 @@ export type ApiKeyProvider =
     | "vercel"
     | "opencode-go"
     | "courtlistener";
-export type ApiKeySource = "user" | "env" | null;
+type ApiKeySource = "user" | "env" | null;
 export type ApiKeyState = Record<
     ApiKeyProvider,
     {
@@ -870,7 +870,7 @@ export async function saveApiKey(
     });
 }
 
-export interface McpToolSummary {
+interface McpToolSummary {
     id: string;
     toolName: string;
     openaiToolName: string;
@@ -1478,12 +1478,12 @@ export interface LibraryCollection {
     documentsHasMore: boolean;
 }
 
-export interface LibraryPagination {
+interface LibraryPagination {
     limit?: number;
     offset?: number;
 }
 
-export interface LibrarySearchParams extends LibraryPagination {
+interface LibrarySearchParams extends LibraryPagination {
     search?: string;
     fileType?: string;
     sortKey?: "name" | "type" | "size" | "version" | "created" | "updated";
@@ -1491,7 +1491,7 @@ export interface LibrarySearchParams extends LibraryPagination {
     signal?: AbortSignal;
 }
 
-export interface LibrarySearchResults {
+interface LibrarySearchResults {
     documents: Document[];
     documentsHasMore: boolean;
 }
@@ -1902,7 +1902,7 @@ export async function deleteDocument(documentId: string): Promise<void> {
     await apiRequest(`/single-documents/${documentId}`, { method: "DELETE" });
 }
 
-export interface DocumentEditResolution {
+interface DocumentEditResolution {
     ok: boolean;
     already_resolved?: boolean;
     status?: "accepted" | "rejected";
@@ -2464,7 +2464,7 @@ interface RawTRMessage {
     created_at: string;
 }
 
-export interface TRDisplayMessage {
+interface TRDisplayMessage {
     role: "user" | "assistant";
     content: string;
     events?: AssistantEvent[];
@@ -2800,22 +2800,6 @@ export async function openSourceWorkflow(
     );
 }
 
-export async function listHiddenWorkflows(): Promise<string[]> {
-    return apiRequest<string[]>("/workflows/hidden");
-}
-
-export async function hideWorkflow(workflowId: string): Promise<void> {
-    await apiRequest("/workflows/hidden", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workflow_id: workflowId }),
-    });
-}
-
-export async function unhideWorkflow(workflowId: string): Promise<void> {
-    await apiRequest(`/workflows/hidden/${workflowId}`, { method: "DELETE" });
-}
-
 export async function shareWorkflow(
     workflowId: string,
     payload: { emails: string[]; role: AccessAssignmentRole },
@@ -2897,10 +2881,6 @@ export async function updateQuickAction(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
     });
-}
-
-export async function deleteQuickAction(quickActionId: string): Promise<void> {
-    await apiRequest(`/quick-actions/${quickActionId}`, { method: "DELETE" });
 }
 
 export async function listWorkflowAddons(): Promise<WorkflowAddon[]> {

@@ -5,7 +5,7 @@
   "mutate": [
     "src/lib/access.ts",
     "src/lib/downloadTokens.ts",
-    "src/lib/chat/citations.ts"
+    "src/modules/chat/engine/citations.ts"
   ],
   "coverageAnalysis": "perTest",
   "reporters": ["html", "clear-text", "progress"],

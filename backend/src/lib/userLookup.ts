@@ -1,6 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-
-type Db = SupabaseClient<any, "public", any>;
+import type { Db } from "./supabase";
 
 export type ProfileUserInfo = {
     id: string;

@@ -15,7 +15,7 @@ beforeAll(async () => {
   process.env.R2_SECRET_ACCESS_KEY = "test-secret-key";
   process.env.R2_BUCKET_NAME = "mike";
   vi.resetModules();
-  ({ getSignedUploadUrl } = await import("../storage"));
+  ({ getSignedUploadUrl } = await import("../storage.js"));
 });
 
 describe("signed direct-upload URLs", () => {

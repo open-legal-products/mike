@@ -44,7 +44,7 @@ vi.mock("../../lib/memory/files", async (importOriginal) => {
   };
 });
 
-import { projectMemoryRouter, userMemoryRouter } from "../../routes/memory";
+import { projectMemoryRouter, userMemoryRouter } from "../../modules/memory/memory.routes";
 import { MemoryRevisionConflictError } from "../../lib/memory/files";
 
 const file = {

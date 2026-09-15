@@ -72,8 +72,6 @@ export function ProjectAssistantTable({
     chats: Chat[];
     filteredChats: Chat[];
     selectedChatIds: string[];
-    allChatsSelected: boolean;
-    someChatsSelected: boolean;
     renamingChatId: string | null;
     renameChatValue: string;
     currentUserId?: string | null;

@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import type { Db } from "../../supabase";
+import type {
+    EnqueueDbJobInput,
+    EnqueueDbJobResult,
+} from "../../dbq/enqueue";
 
 // These suites pin the REDIS driver's BullMQ semantics; the Postgres-driver
 // routing (same identities, DB queue transport) is pinned separately below.
@@ -7,17 +12,29 @@ afterAll(() => {
     delete process.env.QUEUE_DRIVER;
 });
 
-const enqueueDbJob = vi.fn(async () => ({ id: "dbjob-1", deduped: false }));
+// Both stubs carry the signature of what they replace, so the recorded calls
+// below are real argument tuples instead of untyped rest arrays.
+const enqueueDbJob = vi.fn<
+    (db: Db, input: EnqueueDbJobInput) => Promise<EnqueueDbJobResult>
+>(async () => ({ id: "dbjob-1", deduped: false }));
 vi.mock("../../dbq/enqueue", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../dbq/enqueue")>();
     return {
         ...actual,
-        enqueueDbJob: (...a: unknown[]) => enqueueDbJob(...a),
+        enqueueDbJob: (db: Db, input: EnqueueDbJobInput) =>
+            enqueueDbJob(db, input),
     };
 });
-const rpc = vi.fn(async () => ({ data: 0, error: null }));
+const rpc = vi.fn<
+    (
+        fn: string,
+        params: Record<string, unknown>,
+    ) => Promise<{ data: unknown; error: { message: string } | null }>
+>(async () => ({ data: 0, error: null }));
 vi.mock("../../supabase", () => ({
-    createServerSupabase: () => ({ rpc: (...a: unknown[]) => rpc(...a) }),
+    createServerSupabase: () => ({
+        rpc: (fn: string, params: Record<string, unknown>) => rpc(fn, params),
+    }),
 }));
 
 // One stable object per mock: the real getter returns the SAME instance
@@ -195,10 +212,7 @@ describe("postgres driver routing", () => {
         try {
             enqueueDbJob.mockClear();
             await enqueueExtraction({ ...DATA, columnIndex: 2 });
-            const [, input] = enqueueDbJob.mock.calls[0] as [
-                unknown,
-                Record<string, unknown>,
-            ];
+            const [, input] = enqueueDbJob.mock.calls[0];
             expect(input.kind).toBe("extraction.extract");
             expect(input.dedupeKey).toBe("extract_rev-1_row-1_2");
         } finally {

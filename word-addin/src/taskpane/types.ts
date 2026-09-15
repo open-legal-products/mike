@@ -1,3 +1,4 @@
+import type { AssistantEvent as WireAssistantEvent } from "@mike/contracts";
 /** API contracts used by the Word task pane. */
 
 export interface LibraryFolder {
@@ -51,19 +52,15 @@ export type WordThinkingEvent = {
   key?: string;
 };
 
-export type WordReasoningEvent = {
-  type: "reasoning";
-  text: string;
-  isStreaming?: boolean;
-  key?: string;
-};
+export type WordReasoningEvent = Extract<
+  WireAssistantEvent,
+  { type: "reasoning" }
+> & { isStreaming?: boolean; key?: string };
 
-export type WordContentEvent = {
-  type: "content";
-  text: string;
-  isStreaming?: boolean;
-  key?: string;
-};
+export type WordContentEvent = Extract<
+  WireAssistantEvent,
+  { type: "content" }
+> & { isStreaming?: boolean; key?: string };
 
 export type WordDocumentReadEvent = {
   type: "doc_read";
@@ -73,7 +70,9 @@ export type WordDocumentReadEvent = {
   key?: string;
 };
 
-export type WordErrorEvent = { type: "error"; message: string; key?: string };
+export type WordErrorEvent = Extract<WireAssistantEvent, { type: "error" }> & {
+  key?: string;
+};
 
 /** Exact placement of a normalized edit card within assistant event history. */
 export type WordEditReferenceEvent = {
@@ -98,23 +97,8 @@ export type WordEditBlockEvent = {
   key?: string;
 };
 
-export interface WordDocumentEdit {
-  id: string;
-  messageId: string;
-  blockIndex: number;
-  originalText: string;
-  replacementText: string;
-  formats: string[];
-  occurrence?: "all";
-  reason?: string;
-  applyMode: "direct" | "approval";
-  applyStatus: "proposed" | "applied" | "unmanaged" | "failed";
-  resolutionStatus?: WordEditResolutionStatus;
-  matchedOccurrences?: number;
-  appliedOccurrences?: number;
-  errorCode?: string;
-  errorMessage?: string;
-}
+export type { WordDocumentEdit } from "@mike/contracts";
+import type { WordDocumentEdit } from "@mike/contracts";
 
 /**
  * A backend-persisted assistant activity the Word surface does not render yet.
@@ -153,7 +137,7 @@ export interface WordCitation {
   quotes?: { quote?: string | null; text?: string | null }[] | null;
 }
 
-export type WordEditResolutionStatus = "accepted" | "rejected";
+export type { WordEditResolutionStatus } from "@mike/contracts";
 
 export interface Message {
   id?: string;

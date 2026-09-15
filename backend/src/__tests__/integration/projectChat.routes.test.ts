@@ -111,8 +111,8 @@ vi.mock("../../middleware/auth", () => ({
         next(),
 }));
 
-vi.mock("../../lib/chat", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../lib/chat")>();
+vi.mock("../../modules/chat/engine/index", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../modules/chat/engine/index")>();
     return {
         ...actual,
         buildProjectDocContext: (...args: unknown[]) =>
@@ -124,7 +124,7 @@ vi.mock("../../lib/chat", async (importOriginal) => {
     };
 });
 
-vi.mock("../../lib/userSettings", () => ({
+vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
         title_model: "test-model",
@@ -156,7 +156,7 @@ vi.mock("../../lib/access", () => ({
 }));
 
 import { app } from "../../app";
-import { spotlight } from "../../lib/chat";
+import { spotlight } from "../../modules/chat/engine/index";
 import { createServerSupabase } from "../../lib/supabase";
 
 const VALID_BODY = {
@@ -272,10 +272,12 @@ describe("POST /projects/:projectId/chat", () => {
     });
 
     it("uses the shared last-selected model when a new project chat omits model", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
             title_model: null,
+            memory_curator_model: null,
+            last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-5.6-luna",
             api_keys: { openai: "test-key" },
@@ -492,7 +494,7 @@ describe("POST /projects/:projectId/chat", () => {
         const db = mockSupabase();
         (db.from as ReturnType<typeof vi.fn>).mockImplementation(
             (table: string) => {
-                const q = makeQuery();
+                const q = makeQuery(table);
                 // The existing chat belongs to another user in the project.
         (q.maybeSingle as ReturnType<typeof vi.fn>).mockImplementation(() =>
                         Promise.resolve({

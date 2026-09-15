@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { createServerSupabase } from "./supabase";
+import type { Db } from "./supabase";
 
-type Supa = ReturnType<typeof createServerSupabase>;
+type Supa = Db;
 
 /**
  * SHA-256 hex digest of a version's file bytes. Stored on

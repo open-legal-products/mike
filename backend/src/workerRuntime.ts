@@ -17,11 +17,12 @@ import { anyWorkerEnabled, startWorkers, stopWorkers } from "./workers";
 import { startDbJobRunner, stopDbJobRunner } from "./lib/dbq/runner";
 import {
     DB_JOB_HANDLERS,
+    DB_JOB_FAILURE_HOOKS,
     MCP_TOKEN_REFRESH_WINDOW_MS,
-} from "./lib/dbq/handlers";
+} from "./jobs/registry";
 import { enqueueDbJob } from "./lib/dbq/enqueue";
-import { runStaleWorkSweep } from "./lib/maintenance/staleWork";
-import { startUploadProcessingWorkers } from "./lib/uploadProcessing";
+import { runStaleWorkSweep } from "./jobs/staleWork";
+import { startUploadProcessingWorkers } from "./modules/uploads/uploads.service";
 import { uploadProcessingConfiguration } from "./lib/runtimeConfig";
 import { createServerSupabase } from "./lib/supabase";
 
@@ -92,7 +93,7 @@ export function startAllWorkers(): void {
 
     // The DB queue runs in every deployment (fast delivery when Redis is
     // up, poll-driven otherwise) — see lib/dbq/runner.ts.
-    startDbJobRunner(DB_JOB_HANDLERS);
+    startDbJobRunner(DB_JOB_HANDLERS, DB_JOB_FAILURE_HOOKS);
 
     // Upload-session processing: lease-based claims over Postgres, so any
     // number of runtimes can poll concurrently without double-processing.

@@ -86,7 +86,9 @@ export function NewTRModal({
     const { user } = useAuth();
     const apiKeys = apiKeysDegraded ? undefined : profile?.apiKeys;
 
-    // Project-scoped docs (when underProject is true and no fixedProjectDocs)
+    // Project-scoped docs fetched for the "under project" toggle. In project
+    // mode the list comes from the fixedProjectDocs prop instead, so this only
+    // holds documents uploaded from inside the modal.
     const [projectDocs, setProjectDocs] = useState<Document[]>([]);
     const [projectFolders, setProjectFolders] = useState<Folder[]>([]);
     const [loadingDocs, setLoadingDocs] = useState(false);
@@ -109,6 +111,21 @@ export function NewTRModal({
         null,
     );
     const formId = "new-tabular-review-modal-form";
+    const preselectedProjectDocsRef = useRef(false);
+
+    // Derived, not copied into state: the parent passes `[]` until the project
+    // has loaded, so a snapshot taken when the modal opened left the picker
+    // permanently empty for anyone who opened it early.
+    const projectModeDocs: Document[] = [];
+    if (isProjectMode) {
+        const seen = new Set<string>();
+        for (const doc of [...projectDocs, ...(fixedProjectDocs ?? [])]) {
+            if (seen.has(doc.id)) continue;
+            seen.add(doc.id);
+            projectModeDocs.push(doc);
+        }
+    }
+    const projectModeDocsKey = projectModeDocs.map((doc) => doc.id).join(",");
 
     useEffect(() => {
         if (!open) return;
@@ -138,11 +155,7 @@ export function NewTRModal({
             })
             .finally(() => setLoadingWorkflows(false));
 
-        if (isProjectMode) {
-            const readyProjectDocuments = fixedProjectDocs ?? [];
-            setProjectDocs(readyProjectDocuments);
-            setSelectedDocuments(readyProjectDocuments);
-        }
+        if (isProjectMode) preselectedProjectDocsRef.current = false;
     }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
@@ -167,6 +180,18 @@ export function NewTRModal({
             setSelectedModel((current) => current || defaultModel);
         }
     }, [apiKeys, open, profile]);
+
+    // Preselect every project document once, as soon as they're available —
+    // which may be after the modal opened, since the parent's list is empty
+    // while the project is still loading. Only the first non-empty list wins,
+    // so later renders don't stomp on the user's own selection.
+    useEffect(() => {
+        if (!open || !isProjectMode) return;
+        if (preselectedProjectDocsRef.current || !projectModeDocs.length)
+            return;
+        preselectedProjectDocsRef.current = true;
+        setSelectedDocuments(projectModeDocs);
+    }, [open, isProjectMode, projectModeDocsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
     if (!open) return null;
 
@@ -343,7 +368,7 @@ export function NewTRModal({
 
     // What to show in the directory depends on mode and toggle state
     const directoryDocuments = isProjectMode
-        ? projectDocs
+        ? projectModeDocs
         : underProject
           ? projectDocs
           : extraStandaloneDocs;

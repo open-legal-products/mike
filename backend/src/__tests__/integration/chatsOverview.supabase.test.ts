@@ -38,7 +38,9 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         sharedDirectly: crypto.randomUUID(), // branch 2: chat grant
         strangers: crypto.randomUUID(), // no branch: never visible
     };
-    const allChatIds = Object.values(chats);
+    // Widened to string: crypto.randomUUID() is typed as a UUID template
+    // literal, which .includes() would then refuse a plain row id against.
+    const allChatIds: string[] = Object.values(chats);
 
     const titlesFrom = (rows: unknown) =>
         (rows as { id: string; title: string }[])

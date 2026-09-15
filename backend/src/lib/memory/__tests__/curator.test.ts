@@ -9,7 +9,7 @@ import {
   runMemoryCuratorScope,
   type CuratorScopeServices,
   type MemoryCuratorStoredMessage,
-} from "../curator";
+} from "../../../modules/memory/memory.curator";
 import {
   MemoryRevisionConflictError,
   type MemoryFileRow,
@@ -305,8 +305,9 @@ describe("memory curator transcript isolation", () => {
               if (column !== "content" || !Array.isArray(candidate.content)) {
                 return false;
               }
+              const events = candidate.content as unknown[];
               return values.every((expected) =>
-                candidate.content.some(
+                events.some(
                   (event) =>
                     !!event &&
                     typeof event === "object" &&
@@ -362,7 +363,13 @@ function file(scope: "user" | "project" = "user"): MemoryFileRow {
     enabled: true,
     epoch: 7,
     revision: 1,
-    current_version_id: "version-1",
+    // The row's own body is not what the curator reads — `args()` hands it the
+    // current content separately — but MemoryFileRow carries it, so the
+    // fixture has to be a complete row rather than the subset the tests touch.
+    content: "",
+    content_sha256: null,
+    size_bytes: 0,
+    last_source_job_id: null,
     status: "processing",
     last_error_code: null,
     learning_cutoff_at: "2026-09-05T00:00:00.000Z",
@@ -395,7 +402,17 @@ function args(scope: "user" | "project" = "user") {
   };
 }
 
-function services(overrides: Partial<CuratorScopeServices> = {}) {
+// The return type keeps the vi.fn() identities visible alongside the service
+// contract: casting straight to CuratorScopeServices (as this used to) erased
+// them, so `svc.write.mock` did not type-check.
+type CuratorScopeServiceMocks = CuratorScopeServices & {
+  stream: ReturnType<typeof vi.fn>;
+  write: ReturnType<typeof vi.fn>;
+};
+
+function services(
+  overrides: Partial<CuratorScopeServices> = {},
+): CuratorScopeServiceMocks {
   return {
     stream: vi.fn(async () => ({ fullText: "" })),
     write: vi.fn(async () => ({
@@ -417,7 +434,7 @@ function services(overrides: Partial<CuratorScopeServices> = {}) {
       project: { id: "project" },
     })) as unknown as CuratorScopeServices["checkProject"],
     ...overrides,
-  } as CuratorScopeServices;
+  } as unknown as CuratorScopeServiceMocks;
 }
 
 describe("scope-bound memory curator tool", () => {

@@ -1,6 +1,4 @@
-import { createServerSupabase } from "../supabase";
-
-export type Db = ReturnType<typeof createServerSupabase>;
+export type { Db } from "../supabase";
 
 export type McpTransport = "streamable_http";
 export type McpAuthType = "none" | "bearer" | "oauth";
@@ -39,16 +37,8 @@ export type McpToolSummary = {
     lastSeenAt: string;
 };
 
-export type McpToolEvent =
-    | {
-          type: "mcp_tool_call";
-          connector_id: string;
-          connector_name: string;
-          tool_name: string;
-          openai_tool_name: string;
-          status: "ok" | "error";
-          error?: string;
-      };
+export type { McpToolEvent } from "@mike/contracts";
+import type { McpToolEvent } from "@mike/contracts";
 
 export type ConnectorRow = {
     id: string;

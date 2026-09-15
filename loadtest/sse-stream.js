@@ -9,7 +9,7 @@
 // every iteration creates a real chat row and burns real LLM tokens on the
 // target stack.
 //
-// Endpoint shape (from backend/src/routes/chat.ts):
+// Endpoint shape (from backend/src/modules/chat/chat.routes.ts):
 //   POST {BASE_URL}/chat
 //   Authorization: Bearer <supabase access token>
 //   Body: { "messages": [{ "role": "user", "content": "..." }] }

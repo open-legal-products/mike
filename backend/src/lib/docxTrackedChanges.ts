@@ -16,7 +16,6 @@
 
 import JSZip from "jszip";
 import { XMLParser, XMLBuilder } from "fast-xml-parser";
-import fastDiff from "fast-diff";
 
 // ---------------------------------------------------------------------------
 // JSZip path helpers
@@ -292,11 +291,11 @@ interface PlannedChange {
 }
 
 /**
- * Collapse a `fast-diff` result into a minimal `{deletedText, insertedText}`
- * tuple anchored at a single start position. `fast-diff` produces
- * sequences like EQ-DEL-EQ-INS. For tracked-change UI we want one
- * "replace this substring with that substring" card per edit, so we
- * merge everything into the outer span.
+ * Collapse a find/replace pair into a minimal `{deletedText, insertedText}`
+ * tuple anchored at a single start position. A character-level diff would
+ * produce sequences like EQ-DEL-EQ-INS; for the tracked-change UI we want one
+ * "replace this substring with that substring" card per edit, so only the
+ * common prefix and suffix are trimmed and the rest is one span.
  */
 function collapseDiff(find: string, replace: string): { deleted: string; inserted: string; leadingEq: number; trailingEq: number } {
     // Find leading/trailing common substrings so the tracked range is minimal
@@ -504,19 +503,6 @@ interface ParagraphRef {
     globalStart: number; // where this paragraph starts in the full doc text
 }
 
-function indexAll(hay: string, needle: string): number[] {
-    if (!needle) return [];
-    const out: number[] = [];
-    let i = 0;
-    while (i <= hay.length - needle.length) {
-        const j = hay.indexOf(needle, i);
-        if (j < 0) break;
-        out.push(j);
-        i = j + 1;
-    }
-    return out;
-}
-
 // --- Whitespace / punctuation normalization for anchor matching -------------
 // The text LLMs see (via mammoth's extractRawText) does not line up 1:1 with
 // the raw w:t concatenation: smart quotes, non-breaking spaces, tabs, and
@@ -638,11 +624,6 @@ function mapNormRangeToOriginal(
 // ---------------------------------------------------------------------------
 // Main: applyTrackedEdits
 // ---------------------------------------------------------------------------
-
-const W_NS_ATTRS: Record<string, string> = {
-    "xmlns:w":
-        "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
-};
 
 function createParser() {
     return new XMLParser({
@@ -1162,18 +1143,3 @@ function truncate(s: string, n: number): string {
     if (!s) return "";
     return s.length > n ? s.slice(0, n) + "…" : s;
 }
-
-// Lightweight guards used elsewhere; exported for tests.
-export const _internal = {
-    flattenParagraph,
-    collapseDiff,
-    indexAll,
-};
-
-// Silence unused import if fastDiff is ever reintroduced for ranged matching.
-// kept available in the file because the plan references it for future work.
-export const _fastDiff = fastDiff;
-
-// Suppress unused warning for W_NS_ATTRS (kept for potential future use when
-// emitting standalone w:ins/w:del into parts without a namespace inheritance).
-export const _nsAttrs = W_NS_ATTRS;

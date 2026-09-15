@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SYSTEM_PROMPT, buildSystemPrompt } from "../chat/prompts";
-import { COURTLISTENER_SYSTEM_PROMPT } from "../chat/tools/courtlistenerTools";
+import { buildSystemPrompt } from "../../modules/chat/engine/prompts";
+import { COURTLISTENER_SYSTEM_PROMPT } from "../../modules/chat/engine/tools/courtlistenerTools";
 
 describe("buildSystemPrompt", () => {
     it("always contains the core identity and rules", () => {
@@ -103,11 +103,5 @@ describe("buildSystemPrompt", () => {
 
     it("defaults to including research tools", () => {
         expect(buildSystemPrompt()).toBe(buildSystemPrompt(true));
-    });
-});
-
-describe("SYSTEM_PROMPT", () => {
-    it("is the research-enabled prompt", () => {
-        expect(SYSTEM_PROMPT).toBe(buildSystemPrompt(true));
     });
 });

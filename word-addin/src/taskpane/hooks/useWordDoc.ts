@@ -1828,9 +1828,10 @@ export function revealPersistedTrackedEdit(
         const changes = range.getTrackedChanges();
         changes.load("items");
         await context.sync();
+        // "View" only reads. Deleting the bookmark here would destroy the
+        // anchor of an edit the user merely looked at; pruning a bookmark
+        // whose revisions are gone belongs to resolve and to the restore pass.
         if (changes.items.length === 0) {
-          context.document.deleteBookmark(bookmarkName);
-          await context.sync();
           return "resolved" as const;
         }
 
@@ -1839,13 +1840,6 @@ export function revealPersistedTrackedEdit(
         return "revealed" as const;
       });
 
-      if (status === "not-found" || status === "resolved") {
-        try {
-          await removeWordEditAnchor(stableEditId);
-        } catch {
-          // Best-effort stale metadata cleanup.
-        }
-      }
       return { stableEditId, status };
     } catch (error) {
       console.error(
@@ -2584,8 +2578,10 @@ export function useWordDoc() {
                   collection.load("items");
                   return collection;
                 });
-                await context.sync();
+                // The replacement is queued from here on, so any failure at or
+                // after this sync may still leave the edit in the document.
                 mutationApplied = true;
+                await context.sync();
 
                 result.appliedMatches = targetItems.length;
 

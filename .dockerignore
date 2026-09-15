@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/.next
+**/.open-next
+**/out
+**/build
+**/.env
+**/.env.*
+**/*.log
+**/coverage
+**/test-results
+**/playwright-report
+.git
+.codex
+.claude

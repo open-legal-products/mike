@@ -15,6 +15,12 @@ export default defineConfig({
     workers: 1,
     /* Fail the build on CI if you accidentally left test.only in the source */
     forbidOnly: !!process.env.CI,
+    /* Playwright's assertion default is 5s, which is tight for this app's first
+       paint after a cold Next.js dev compile — so nearly every expect() in the
+       suite hand-rolled its own `{ timeout: 10_000 }`. Make that the project
+       default: new assertions inherit it, and only genuinely slower waits need
+       to spell out an override. */
+    expect: { timeout: 10_000 },
     /* Retry on CI only */
     retries: process.env.CI ? 2 : 0,
     /* Reporter. On CI, "github" alone would REPLACE Playwright's default html

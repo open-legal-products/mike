@@ -20,10 +20,7 @@ import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { RowActions } from "@/app/components/shared/RowActions";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import { DocumentUploadMenu } from "@/app/components/shared/DocumentUploadMenu";
-import {
-    TABLE_PRIMARY_CELL_WIDTH_CLASS,
-    tableTreeCellStyle,
-} from "@/app/components/shared/TablePrimitive";
+import { tableTreeCellStyle } from "@/app/components/shared/TablePrimitive";
 
 export type ProjectWorkspaceSection =
     | "documents"
@@ -38,7 +35,6 @@ export type ProjectContextMenu = {
     showFolderActions: boolean;
 };
 
-export const NAME_COL_W = TABLE_PRIMARY_CELL_WIDTH_CLASS;
 export const DOC_NAME_COL_W =
     "w-[292px] sm:w-[332px] md:w-[392px] lg:w-[452px] xl:w-[532px] 2xl:w-[592px] shrink-0";
 

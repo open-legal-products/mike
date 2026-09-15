@@ -10,7 +10,7 @@ vi.mock("../runtimeConfig", async (importOriginal) => {
 });
 
 let directory: string;
-let officeFileToPdf: typeof import("../convert").officeFileToPdf;
+let officeFileToPdf: typeof import("../convert.js").officeFileToPdf;
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "mike-convert-test-"));
@@ -23,7 +23,7 @@ beforeEach(async () => {
   await chmod(binary, 0o755);
   process.env.SOFFICE_BINARY_PATH = binary;
   vi.resetModules();
-  ({ officeFileToPdf } = await import("../convert"));
+  ({ officeFileToPdf } = await import("../convert.js"));
 });
 
 afterEach(async () => {

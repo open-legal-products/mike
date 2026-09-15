@@ -23,9 +23,9 @@ vi.mock("../downloadTokens", async (importOriginal) => {
     };
 });
 
-import { runToolCalls } from "../chat/tools/toolDispatcher";
-import { PROJECT_EXTRA_TOOLS, TOOLS } from "../chat/tools/toolSchemas";
-import type { DocIndex, DocStore, WorkflowStore } from "../chat/types";
+import { runToolCalls } from "../../modules/chat/engine/tools/toolDispatcher";
+import { PROJECT_EXTRA_TOOLS, TOOLS } from "../../modules/chat/engine/tools/toolSchemas";
+import type { DocIndex, DocStore, WorkflowStore } from "../../modules/chat/engine/types";
 
 function toolNames(tools: readonly { function: { name: string } }[]) {
     return tools.map((tool) => tool.function.name);
@@ -35,6 +35,12 @@ function replicationDb(callOrder: string[] = []) {
     const documentRows: Record<string, unknown>[][] = [];
     const versionRows: Record<string, unknown>[][] = [];
     const db = {
+        rpc: vi.fn(async (name: string, args: { p_versions: Record<string, unknown>[] }) => {
+            expect(name).toBe("create_document_versions");
+            callOrder.push("insert:document_versions");
+            versionRows.push(args.p_versions);
+            return { data: args.p_versions.map((row, index) => ({ ...row, id: `new-version-${index + 1}` })), error: null };
+        }),
         from(table: string) {
             if (table === "documents") {
                 return {

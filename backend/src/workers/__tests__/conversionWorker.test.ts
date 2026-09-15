@@ -5,6 +5,10 @@ vi.mock("../../lib/supabase", () => ({
     createServerSupabase: vi.fn(),
 }));
 
+const enqueueDbJob = vi.fn();
+vi.mock("../../lib/dbq/enqueue", () => ({
+    enqueueDbJob: (...a: unknown[]) => enqueueDbJob(...a),
+}));
 const downloadFile = vi.fn();
 const uploadFile = vi.fn();
 vi.mock("../../lib/storage", () => ({
@@ -36,7 +40,10 @@ type Call = {
 // Chainable Supabase double. `errors` lets a test make one table's update
 // fail the way PostgREST does — by RESOLVING with an `error` field, not by
 // throwing — which is precisely the failure mode the worker used to ignore.
-function makeDb(errors: Record<string, { message: string }> = {}) {
+function makeDb(
+    errors: Record<string, { message: string }> = {},
+    matched = true,
+) {
     const calls: Call[] = [];
     return {
         calls,
@@ -51,10 +58,20 @@ function makeDb(errors: Record<string, { message: string }> = {}) {
                     call.filters[col] = val;
                     return b;
                 },
+                is(col: string, val: unknown) {
+                    call.filters[col] = val;
+                    return b;
+                },
+                select() {
+                    return b;
+                },
+                maybeSingle() {
+                    return b;
+                },
                 then(onF: (v: unknown) => unknown) {
                     calls.push(call);
                     return Promise.resolve({
-                        data: null,
+                        data: matched ? { id: "ver-1" } : null,
                         error: errors[table] ?? null,
                     }).then(onF);
                 },
@@ -73,6 +90,7 @@ const JOB = {
 };
 
 beforeEach(() => {
+    enqueueDbJob.mockReset();
     downloadFile.mockReset();
     uploadFile.mockReset();
     docxToPdf.mockReset();
@@ -95,10 +113,32 @@ describe("runConversionJob", () => {
         expect(db.calls).toContainEqual({
             table: "document_versions",
             update: { pdf_storage_path: "converted-pdfs/user-1/doc-1.pdf" },
-            filters: { id: "ver-1", storage_path: JOB.storagePath },
+            filters: {
+                id: "ver-1",
+                storage_path: JOB.storagePath,
+                document_id: "doc-1",
+                deleted_at: null,
+            },
         });
         const docUpdate = db.calls.find((c) => c.table === "documents");
         expect(docUpdate?.update.status).toBe("ready");
+    });
+
+    it("queues late output for cleanup when its version was deleted or replaced", async () => {
+        downloadFile.mockResolvedValue(new ArrayBuffer(8));
+        docxToPdf.mockResolvedValue(Buffer.from("pdf"));
+        const db = makeDb({}, false);
+        await runConversionJob(
+            { ...JOB, finalizeDocumentStatus: false },
+            db as never,
+        );
+        expect(enqueueDbJob).toHaveBeenCalledWith(db, {
+            kind: "document.cleanup",
+            payload: {
+                versionId: "ver-1",
+                keys: ["converted-pdfs/user-1/doc-1.pdf"],
+            },
+        });
     });
 
     it("treats a conversion failure as non-fatal: still marks ready, no PDF stored", async () => {
@@ -109,7 +149,9 @@ describe("runConversionJob", () => {
         await runConversionJob(JOB, db as never);
 
         expect(uploadFile).not.toHaveBeenCalled();
-        expect(db.calls.some((c) => c.table === "document_versions")).toBe(false);
+        expect(db.calls.some((c) => c.table === "document_versions")).toBe(
+            false,
+        );
         const docUpdate = db.calls.find((c) => c.table === "documents");
         expect(docUpdate?.update.status).toBe("ready");
     });
@@ -135,7 +177,12 @@ describe("runConversionJob", () => {
             update: {
                 pdf_storage_path: "converted-pdfs/user-1/doc-1/slug.pdf",
             },
-            filters: { id: "ver-1", storage_path: JOB.storagePath },
+            filters: {
+                id: "ver-1",
+                storage_path: JOB.storagePath,
+                document_id: "doc-1",
+                deleted_at: null,
+            },
         });
     });
 
@@ -150,13 +197,11 @@ describe("runConversionJob", () => {
             db as never,
         );
 
-        expect(
-            db.calls.some((c) => c.table === "documents"),
-        ).toBe(false);
+        expect(db.calls.some((c) => c.table === "documents")).toBe(false);
         // The version row still gets its rendition.
-        expect(
-            db.calls.some((c) => c.table === "document_versions"),
-        ).toBe(true);
+        expect(db.calls.some((c) => c.table === "document_versions")).toBe(
+            true,
+        );
     });
 
     it("leaves the document alone on conversion failure when finalizeDocumentStatus is false", async () => {
@@ -244,6 +289,8 @@ describe("runConversionJob", () => {
         expect(versionCall?.filters).toEqual({
             id: "ver-1",
             storage_path: "uploads/user-1/superseded.docx",
+            document_id: "doc-1",
+            deleted_at: null,
         });
     });
 });

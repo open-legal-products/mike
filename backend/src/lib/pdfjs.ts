@@ -46,3 +46,19 @@ export async function loadPdfjs(): Promise<PdfjsLib> {
   const mod = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
   return mod as PdfjsLib;
 }
+
+/**
+ * Count the pages of a PDF, or null when the bytes cannot be parsed as one.
+ * Failures are swallowed by design: the page count is advisory metadata and
+ * must never fail an upload.
+ */
+export async function countPdfPages(buf: ArrayBuffer): Promise<number | null> {
+  try {
+    const pdfjsLib = await loadPdfjs();
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) })
+      .promise;
+    return pdf.numPages;
+  } catch {
+    return null;
+  }
+}

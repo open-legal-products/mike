@@ -95,8 +95,4 @@ jobs:
       - name: Run stack integration tests
         working-directory: backend
         run: |
-          npx vitest run \
-            src/__tests__/integration/stack.supabase.test.ts \
-            src/__tests__/integration/access.supabase.test.ts \
-            src/__tests__/integration/tabularPagination.supabase.test.ts \
-            src/__tests__/integration/chatsOverview.supabase.test.ts
+          npx vitest run src/__tests__/integration/*.supabase.test.ts

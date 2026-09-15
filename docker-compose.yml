@@ -149,6 +149,7 @@ services:
       - ./backend/migrations/20260905_01_scoped_memory_files.sql:/scoped-memory-migration.sql:ro
       - ./backend/migrations/20260908_01_remove_transparent_tables.sql:/remove-transparent-tables-migration.sql:ro
       - ./backend/migrations/20260909_01_memory_safety_boundaries.sql:/memory-safety-migration.sql:ro
+      - ./backend/migrations/20260914_01_document_lifecycle.sql:/document-lifecycle-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -182,6 +183,7 @@ services:
         fi
         psql "$$DB" -v ON_ERROR_STOP=1 -f /remove-transparent-tables-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /memory-safety-migration.sql;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /document-lifecycle-migration.sql;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;
@@ -259,7 +261,9 @@ services:
 
   # --- One-shot: download, validate, and transactionally import mike-workflows.
   workflow-sync:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     image: mike-backend:local
     env_file:
       - path: ./backend/.env
@@ -283,7 +287,9 @@ services:
         condition: service_healthy
     restart: "no"
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     image: mike-backend:local
     ports:
       - "${BACKEND_PORT:-3001}:3001"
@@ -348,7 +354,9 @@ services:
   # BullMQ partitions per connection and the DB queue claims with
   # FOR UPDATE SKIP LOCKED, so replicas divide jobs, never duplicate them.
   # worker:
-  #   build: ./backend
+  #   build:
+  #     context: .
+  #     dockerfile: backend/Dockerfile
   #   command: ["node", "dist/worker.js"]
   #   env_file:
   #     - path: ./backend/.env

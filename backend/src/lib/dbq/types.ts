@@ -1,6 +1,5 @@
-import type { createServerSupabase } from "../supabase";
-
-export type Db = ReturnType<typeof createServerSupabase>;
+import type { Db } from "../supabase";
+export type { Db };
 
 /** One row of public.db_jobs (see the 20260829_01_db_jobs migration). */
 export interface DbJob {

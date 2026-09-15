@@ -6,8 +6,8 @@ import {
     createCitation,
     CITATIONS_OPEN_TAG,
     CITATIONS_CLOSE_TAG,
-} from "../chat/citations";
-import type { DocIndex, DocStore } from "../chat/types";
+} from "../../modules/chat/engine/citations";
+import type { DocIndex, DocStore } from "../../modules/chat/engine/types";
 
 function citationsBlock(json: string) {
     return `Answer text.\n${CITATIONS_OPEN_TAG}\n${json}\n${CITATIONS_CLOSE_TAG}`;

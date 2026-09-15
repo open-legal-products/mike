@@ -156,22 +156,17 @@ vi.mock("../../lib/supabase", () => ({
     createServerSupabase: vi.fn(() => mockSupabase()),
 }));
 
-vi.mock("../../middleware/auth", () => ({
-    requireAuth: (
-        _req: unknown,
-        res: { locals: Record<string, unknown> },
-        next: () => void,
-    ) => {
-        res.locals.userId = "u1";
-        res.locals.userEmail = "u1@test.local";
-        next();
-    },
-    requireMfaIfEnrolled: (_req: unknown, _res: unknown, next: () => void) =>
-        next(),
-}));
+// The auth stub is the one in ../helpers/authMock, shared with the other route
+// suites. The Supabase stub below is NOT: this suite needs per-table result
+// QUEUES, an update recorder, and the tabular_reviews model default, none of
+// which the shared one carries.
+vi.mock("../../middleware/auth", async () => {
+    const { authMock } = await import("../helpers/authMock.js");
+    return authMock();
+});
 
-vi.mock("../../lib/chat", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../../lib/chat")>()),
+vi.mock("../../modules/chat/engine/index", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../modules/chat/engine/index")>()),
     runLLMStream: (...args: unknown[]) => runLLMStream(...args),
 }));
 
@@ -196,7 +191,7 @@ vi.mock("../../lib/access", async (importOriginal) => ({
     resolveContentOrgId: (...args: unknown[]) => resolveContentOrgId(...args),
 }));
 
-vi.mock("../../lib/userSettings", () => ({
+vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: (...args: unknown[]) => getUserModelSettings(...args),
     getUserApiKeys: vi.fn(async () => ({})),
     persistLastSelectedChatModel: vi.fn(async () => null),

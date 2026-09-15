@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     deleteUserOrganizations,
     deleteUserProjects,
-} from "../userDataCleanup";
+} from "../../modules/user/user.dataCleanup";
 
 type Row = Record<string, unknown>;
 

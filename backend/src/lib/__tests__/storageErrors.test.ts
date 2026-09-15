@@ -51,7 +51,7 @@ beforeAll(async () => {
     getSignedUploadUrl,
     getSignedUrl,
     uploadFileFromPath,
-  } = await import("../storage"));
+  } = await import("../storage.js"));
 });
 
 beforeEach(() => {

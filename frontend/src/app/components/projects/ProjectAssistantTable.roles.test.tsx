@@ -32,8 +32,6 @@ function renderTable(row: Chat) {
             chats={chats}
             filteredChats={chats}
             selectedChatIds={[]}
-            allChatsSelected={false}
-            someChatsSelected={false}
             renamingChatId={null}
             renameChatValue=""
             currentUserId="u1"

@@ -101,7 +101,10 @@ function githubFetch(zipBytes: Buffer) {
         headers: { "content-type": "application/json" },
       });
     }
-    return new Response(zipBytes, {
+    // BodyInit wants an ArrayBuffer-backed view; Node's Buffer is typed over
+    // ArrayBufferLike (it may sit on a SharedArrayBuffer), so hand Response a
+    // plain Uint8Array over the same bytes.
+    return new Response(new Uint8Array(zipBytes), {
       status: 200,
       headers: { "content-length": String(zipBytes.byteLength) },
     });

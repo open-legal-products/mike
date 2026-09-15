@@ -5,10 +5,9 @@
 // (lib/dbq/handlers.ts), which runs in a worker where importing an Express
 // router would drag in the whole HTTP surface.
 
-import type { createServerSupabase } from "./supabase";
+import { listAccessibleProjectIds } from "./access";
 import { normalizeDisplayName } from "./userLookup";
-
-type Db = ReturnType<typeof createServerSupabase>;
+import type { Db } from "./supabase";
 
 /** One CSV export is a single flat page; this caps the artifact size. */
 export const AUDIT_EXPORT_LIMIT = 2000;
@@ -17,36 +16,6 @@ export const AUDIT_EXPORT_LIMIT = 2000;
 // page keeps the offset well inside Postgres' integer range.
 const MAX_PAGE = 100_000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/**
- * Which projects' audit rows this user may read.
- *
- * Direct project sharing is resolved from project_access_grants, the same
- * source used by the project access checks.
- */
-export async function accessibleProjectIds(
-    db: Db,
-    userId: string,
-    email: string | undefined,
-): Promise<string[]> {
-    const ids = new Set<string>();
-    const own = await db.from("projects").select("id").eq("user_id", userId);
-    for (const row of (own.data ?? []) as { id: string }[]) ids.add(row.id);
-    if (email) {
-        // Direct sharing is `project_access_grants`: one row per recipient,
-        // keyed on normalized email. This query gates access to an audit trail.
-        const shared = await db
-            .from("project_access_grants")
-            .select("project_id")
-            .eq("email", email.trim().toLowerCase());
-        for (const row of (shared.data ?? []) as {
-            project_id: string | null;
-        }[]) {
-            if (row.project_id) ids.add(row.project_id);
-        }
-    }
-    return [...ids];
-}
 
 export type AuditQuery = {
     q?: string;
@@ -140,7 +109,13 @@ export async function queryEvents(
     q: AuditQuery,
     resolveDisplayNames = true,
 ) {
-    const projectIds = await accessibleProjectIds(db, userId, email);
+    // Shared with the chat/document listings: one definition of "projects this
+    // user can see" for everything that scopes a collection query. The private
+    // copy that used to live here had drifted from it — it counted every
+    // project the caller owns including organization ones without running the
+    // organization access check, and it never admitted an organization project
+    // the caller can reach through their membership.
+    const projectIds = await listAccessibleProjectIds(userId, email, db);
     let query = db
         .from("audit_events")
         .select(

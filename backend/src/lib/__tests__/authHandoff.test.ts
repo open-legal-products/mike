@@ -51,7 +51,9 @@ describe("Word OAuth handoff tickets", () => {
     expect(stored).not.toBeNull();
     expect(JSON.stringify(stored)).not.toContain(session.access_token);
     expect(JSON.stringify(stored)).not.toContain(session.refresh_token);
-    expect(stored?.ticket_hash).not.toBe(ticket);
+    expect((stored as Record<string, unknown> | null)?.ticket_hash).not.toBe(
+      ticket,
+    );
 
     await expect(
       consumeAuthHandoff({

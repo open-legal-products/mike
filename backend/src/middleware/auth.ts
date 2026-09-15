@@ -1,15 +1,11 @@
 import { Request, Response, NextFunction } from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
-import { createServerSupabase } from "../lib/supabase";
+import { createServerSupabase, type Db } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
 import { sendInternalError } from "../lib/httpError";
 import { createRequestSupabase } from "../lib/authSession";
 import { requestOriginIsTrusted } from "../lib/origins";
-
-const isDev = process.env.NODE_ENV !== "production";
-const devLog = (...args: Parameters<typeof console.log>) => {
-  if (isDev) console.log(...args);
-};
+import { devLog, isDev } from "../lib/log";
 
 function summarizeMfaFactors(
   factors: Array<{
@@ -37,7 +33,7 @@ function isLoginMfaBootstrapRoute(req: Request) {
 async function enforceLoginMfaIfEnabled(
   req: Request,
   res: Response,
-  admin: ReturnType<typeof createServerSupabase>,
+  admin: Db,
   token: string,
 ) {
   if (isLoginMfaBootstrapRoute(req)) return true;

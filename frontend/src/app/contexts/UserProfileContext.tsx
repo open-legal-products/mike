@@ -4,6 +4,7 @@ import React, {
     createContext,
     useContext,
     useEffect,
+    useMemo,
     useState,
     ReactNode,
     useCallback,
@@ -627,33 +628,61 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         return false;
     }, [user, profile]);
 
+    // A fresh object here re-renders every consumer of this context on every
+    // provider render, profile change or not.
+    const value = useMemo<UserProfileContextType>(
+        () => ({
+            profile,
+            loading,
+            apiKeysDegraded,
+            updateDisplayName,
+            updateOrganisation,
+            completeOnboarding,
+            updatePersonalisation,
+            syncPasswordSet,
+            updateModelPreference,
+            persistChatModelSelection,
+            persistChatReasoningSelection,
+            updateMfaOnLogin,
+            updateLegalResearchUs,
+            updateQuickActionsVisible,
+            updateOpenRouterModels,
+            updateVercelModels,
+            updateOpenCodeGoModels,
+            updateDarkMode,
+            updateProjectMemoryDefault,
+            updateApiKey,
+            reloadProfile,
+            incrementMessageCredits,
+        }),
+        [
+            profile,
+            loading,
+            apiKeysDegraded,
+            updateDisplayName,
+            updateOrganisation,
+            completeOnboarding,
+            updatePersonalisation,
+            syncPasswordSet,
+            updateModelPreference,
+            persistChatModelSelection,
+            persistChatReasoningSelection,
+            updateMfaOnLogin,
+            updateLegalResearchUs,
+            updateQuickActionsVisible,
+            updateOpenRouterModels,
+            updateVercelModels,
+            updateOpenCodeGoModels,
+            updateDarkMode,
+            updateProjectMemoryDefault,
+            updateApiKey,
+            reloadProfile,
+            incrementMessageCredits,
+        ],
+    );
+
     return (
-        <UserProfileContext.Provider
-            value={{
-                profile,
-                loading,
-                apiKeysDegraded,
-                updateDisplayName,
-                updateOrganisation,
-                completeOnboarding,
-                updatePersonalisation,
-                syncPasswordSet,
-                updateModelPreference,
-                persistChatModelSelection,
-                persistChatReasoningSelection,
-                updateMfaOnLogin,
-                updateLegalResearchUs,
-                updateQuickActionsVisible,
-                updateOpenRouterModels,
-                updateVercelModels,
-                updateOpenCodeGoModels,
-                updateDarkMode,
-                updateProjectMemoryDefault,
-                updateApiKey,
-                reloadProfile,
-                incrementMessageCredits,
-            }}
-        >
+        <UserProfileContext.Provider value={value}>
             {children}
         </UserProfileContext.Provider>
     );

@@ -4,28 +4,28 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
-import { chatRouter } from "./routes/chat";
-import { wordChatRouter } from "./routes/wordChat";
-import { projectsRouter } from "./routes/projects";
-import { orgsRouter } from "./routes/orgs";
-import { projectChatRouter } from "./routes/projectChat";
-import { documentsRouter } from "./routes/documents";
-import { libraryRouter } from "./routes/library";
-import { tabularRouter } from "./routes/tabular";
-import { workflowsRouter } from "./routes/workflows";
-import { quickActionsRouter } from "./routes/quickActions";
-import { workflowAddonsRouter } from "./routes/workflowAddons";
-import { userRouter } from "./routes/user";
-import { modelsRouter } from "./routes/models";
-import { downloadsRouter } from "./routes/downloads";
-import { sourceDocumentsRouter } from "./routes/sourceDocuments";
-import { auditRouter } from "./routes/audit";
-import { authRouter } from "./routes/auth";
-import { uploadSessionsRouter } from "./routes/uploadSessions";
+import { chatRouter } from "./modules/chat/chat.routes";
+import { wordChatRouter } from "./modules/word-chat/wordChat.routes";
+import { projectsRouter } from "./modules/projects/projects.routes";
+import { orgsRouter } from "./modules/orgs/orgs.routes";
+import { projectChatRouter } from "./modules/project-chat/projectChat.routes";
+import { documentsRouter } from "./modules/documents/documents.routes";
+import { libraryRouter } from "./modules/library/library.routes";
+import { tabularRouter } from "./modules/tabular/tabular.routes";
+import { workflowsRouter } from "./modules/workflows/workflows.routes";
+import { quickActionsRouter } from "./modules/quick-actions/quickActions.routes";
+import { workflowAddonsRouter } from "./modules/workflows/workflowAddons.routes";
+import { userRouter } from "./modules/user/user.routes";
+import { modelsRouter } from "./modules/models/models.routes";
+import { downloadsRouter } from "./modules/downloads/downloads.routes";
+import { sourceDocumentsRouter } from "./modules/source-documents/sourceDocuments.routes";
+import { auditRouter } from "./modules/audit/audit.routes";
+import { authRouter } from "./modules/auth/auth.routes";
+import { uploadSessionsRouter } from "./modules/uploads/uploads.routes";
 import {
   projectMemoryRouter,
   userMemoryRouter,
-} from "./routes/memory";
+} from "./modules/memory/memory.routes";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import {
   handleUnhandledError,
@@ -324,4 +324,10 @@ app.get("/manifest-signing-key", (_req, res) => {
   }
 });
 
+// Terminal error handler. Routers mount routerErrorHandler("[tag]") so a
+// failure is attributed to its router in the log; the response is delegated
+// back here, so every router answers with the same body. Anything that escapes
+// a router lands here too, instead of Express's default handler, which would
+// leak the stack trace in a non-production environment. Must stay last: Express
+// only reaches an error handler registered after the middleware that failed.
 app.use(handleUnhandledError);

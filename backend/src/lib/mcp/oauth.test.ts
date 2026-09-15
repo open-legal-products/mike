@@ -10,7 +10,10 @@ const { authMock, loadConnectorMock, guardedFetchMock } = vi.hoisted(() => ({
     // Default: every discovery probe misses (404), so
     // seedResourceMetadataUrl resolves to undefined without touching the
     // network. Individual tests override this to simulate specific servers.
-    guardedFetchMock: vi.fn(async () => new Response("{}", { status: 404 })),
+    guardedFetchMock: vi.fn(
+        async (_input?: unknown, _init?: unknown) =>
+            new Response("{}", { status: 404 }),
+    ),
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
@@ -22,7 +25,8 @@ vi.mock("./client", async (importOriginal) => {
     return {
         ...actual,
         loadConnector: (...args: unknown[]) => loadConnectorMock(...args),
-        guardedFetch: (...args: unknown[]) => guardedFetchMock(...args),
+        guardedFetch: (input?: unknown, init?: unknown) =>
+            guardedFetchMock(input, init),
     };
 });
 

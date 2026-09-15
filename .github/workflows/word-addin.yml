@@ -11,9 +11,13 @@
 # under webkit — a chromium-only run would silently pass with the scroll fix
 # reverted.
 #
-# Unlike ci.yml/e2e.yml this workflow is path-filtered: the add-in is fully
-# self-contained under word-addin/ (own lockfile, own tsconfigs, mocked
-# backend), so nothing outside that directory can change what this job proves.
+# Unlike ci.yml/e2e.yml this workflow is path-filtered. The add-in has its own
+# lockfile, tsconfigs and mocked backend, but it is NOT self-contained: its
+# webpack build aliases the shared design-system components out of
+# frontend/src/shared/ui and the canonical icon set out of frontend/public/icons
+# (word-addin/webpack.config.js). Edits there land inside the add-in bundle, so
+# both paths are in the filter below — without them a shared-UI change could
+# break the add-in with this job never running.
 name: Word add-in
 
 on:
@@ -22,6 +26,8 @@ on:
     branches: [main]
     paths:
       - "word-addin/**"
+      - "frontend/src/shared/**"
+      - "frontend/public/icons/**"
       - ".github/workflows/word-addin.yml"
   pull_request:
     # `main` is the destination upstream; `upstream-main` is the fork's mirror
@@ -29,6 +35,8 @@ on:
     branches: [main, upstream-main]
     paths:
       - "word-addin/**"
+      - "frontend/src/shared/**"
+      - "frontend/public/icons/**"
       - ".github/workflows/word-addin.yml"
 
 # Don't pile up runs on rapid pushes to the same PR; pushes to main each get

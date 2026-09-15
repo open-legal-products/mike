@@ -17,13 +17,16 @@ import path from "node:path";
 // behaviour under test — and asserts it is still alive a second later.
 const backendRoot = path.resolve(__dirname, "../..");
 const ALIVE_AFTER_MS = 1_500;
+// Load TypeScript in this process. The tsx CLI spawns a grandchild, so killing
+// the CLI alone leaves a real polling worker orphaned after every test run.
 
 describe("standalone worker entrypoint", () => {
     it("stays alive in Postgres mode instead of exiting immediately", async () => {
         const child = spawn(
             process.execPath,
             [
-                path.join(backendRoot, "node_modules/tsx/dist/cli.mjs"),
+                "--import",
+                path.join(backendRoot, "node_modules/tsx/dist/loader.mjs"),
                 path.join(backendRoot, "src/worker.ts"),
             ],
             {
@@ -51,6 +54,7 @@ describe("standalone worker entrypoint", () => {
         ]);
 
         child.kill("SIGKILL");
+        await exited;
         expect(
             outcome,
             "the worker process exited instead of staying up to poll",
@@ -86,7 +90,8 @@ describe("standalone worker entrypoint", () => {
         const child = spawn(
             process.execPath,
             [
-                path.join(backendRoot, "node_modules/tsx/dist/cli.mjs"),
+                "--import",
+                path.join(backendRoot, "node_modules/tsx/dist/loader.mjs"),
                 path.join(backendRoot, "src/worker.ts"),
             ],
             { cwd: workDir, stdio: "ignore", env },
@@ -104,6 +109,7 @@ describe("standalone worker entrypoint", () => {
         ]);
 
         child.kill("SIGKILL");
+        await exited;
         rmSync(workDir, { recursive: true, force: true });
         expect(
             outcome,

@@ -274,8 +274,8 @@ vi.mock("../../middleware/auth", () => ({
 // Keep the real error helpers (the failure-path test relies on genuine
 // isAbortError + AssistantStreamError behavior) but stub the functions that
 // would otherwise hit the DB or the LLM.
-vi.mock("../../lib/chat", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../lib/chat")>();
+vi.mock("../../modules/chat/engine/index", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../modules/chat/engine/index")>();
     return {
         ...actual,
         buildDocContext: vi.fn(async () => ({
@@ -289,7 +289,7 @@ vi.mock("../../lib/chat", async (importOriginal) => {
     };
 });
 
-vi.mock("../../lib/userSettings", () => ({
+vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: vi.fn(async () => ({
         legal_research_us: false,
         title_model: "test-model",
@@ -362,7 +362,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("streams SSE with a chat_id event on the happy path", async () => {
-        const chatLib = await import("../../lib/chat");
+        const chatLib = await import("../../modules/chat/engine/index.js");
         let reservationExistedBeforeStreaming = false;
         runLLMStream.mockImplementation(async () => {
             reservationExistedBeforeStreaming = !!findAssistantReservation();
@@ -514,10 +514,12 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("uses the profile last-selected model when a new chat omits model", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
             title_model: null,
+            memory_curator_model: null,
+            last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-5.6-luna",
             api_keys: { openai: "test-key" },
@@ -601,7 +603,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("stores cloud Word chats only in the document-scoped Word tables", async () => {
-        const chatLib = await import("../../lib/chat");
+        const chatLib = await import("../../modules/chat/engine/index.js");
         const res = await request(app)
             .post("/word-chat")
             .set("Authorization", "Bearer test")
@@ -741,10 +743,12 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("uses the shared last-selected model for a local Word chat", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             legal_research_us: false,
             title_model: null,
+            memory_curator_model: null,
+            last_selected_reasoning_level: null,
             tabular_model: null,
             last_selected_chat_model: "gpt-5.6-luna",
             api_keys: { openai: "test-key" },
@@ -953,7 +957,7 @@ describe("POST /chat — streaming endpoint", () => {
                 .split("\n")
                 .find((line) => line.includes('"type":"chat_id"'))!
                 .replace(/^data:\s*/, ""),
-        ) as { assistantMessageId: string };
+        ) as { chatId: string; assistantMessageId: string };
         const assistantInsert = findAssistantReservation();
         const assistantUpdate = findAssistantUpdate();
         expect(assistantInsert?.value).toMatchObject({
@@ -982,7 +986,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("uses the streamed assistant message id when persisting a cancelled partial response", async () => {
-        const { AssistantStreamAbortError } = await import("../../lib/chat");
+        const { AssistantStreamAbortError } = await import("../../modules/chat/engine/index.js");
         runLLMStream.mockRejectedValue(
             new AssistantStreamAbortError("partial", [
                 { type: "content", text: "partial" },
@@ -1000,7 +1004,7 @@ describe("POST /chat — streaming endpoint", () => {
                 .split("\n")
                 .find((line) => line.includes('"type":"chat_id"'))!
                 .replace(/^data:\s*/, ""),
-        ) as { assistantMessageId: string };
+        ) as { chatId: string; assistantMessageId: string };
         const assistantInsert = findAssistantReservation();
         const assistantUpdate = findAssistantUpdate();
         expect(assistantInsert?.value).toMatchObject({
@@ -1248,7 +1252,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("makes document_context tool-readable without adding it to the system prompt", async () => {
-        const chatLib = await import("../../lib/chat");
+        const chatLib = await import("../../modules/chat/engine/index.js");
         const res = await request(app)
             .post("/word-chat")
             .set("Authorization", "Bearer test")
@@ -1283,10 +1287,12 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("keeps CourtListener disabled for Word chats even when legal research is enabled", async () => {
-        const chatLib = await import("../../lib/chat");
-        const userSettings = await import("../../lib/userSettings");
+        const chatLib = await import("../../modules/chat/engine/index.js");
+        const userSettings = await import("../../modules/user/user.settings.js");
         vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
             title_model: "test-model",
+            memory_curator_model: null,
+            last_selected_reasoning_level: null,
             tabular_model: "test-model",
             last_selected_chat_model: null,
             legal_research_us: true,
@@ -1336,7 +1342,7 @@ describe("PATCH /chat/:chatId", () => {
     });
 
     it("updates the chat and profile when a model is selected", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings.js");
         const res = await request(app)
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
@@ -1356,7 +1362,7 @@ describe("PATCH /chat/:chatId", () => {
     });
 
     it("updates the chat and profile when reasoning is selected", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings.js");
         const res = await request(app)
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
@@ -1384,7 +1390,7 @@ describe("PATCH /word-chat/:chatId/model", () => {
     });
 
     it("updates a cloud Word chat and the profile on selection", async () => {
-        const userSettings = await import("../../lib/userSettings");
+        const userSettings = await import("../../modules/user/user.settings.js");
         const chatId = "6f783e59-35c4-4ddc-896a-94aa4d05a768";
         const documentId = "6f783e59-35c4-4ddc-896a-94aa4d05a767";
         const res = await request(app)
@@ -1653,10 +1659,12 @@ function makeRbacDb(
 // one, which would fail these permission tests with a 429 that has
 // nothing to do with permissions. Seed a resolvable selection per test.
 async function seedResolvableModel() {
-    const userSettings = await import("../../lib/userSettings");
+    const userSettings = await import("../../modules/user/user.settings.js");
     vi.mocked(userSettings.getUserModelSettings).mockResolvedValueOnce({
         legal_research_us: false,
         title_model: null,
+        memory_curator_model: null,
+        last_selected_reasoning_level: null,
         tabular_model: null,
         last_selected_chat_model: "gpt-5.6-luna",
         api_keys: { openai: "test-key" },

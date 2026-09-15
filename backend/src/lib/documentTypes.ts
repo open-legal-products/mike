@@ -12,6 +12,14 @@ export const ALLOWED_DOCUMENT_TYPES = new Set([
 export const ALLOWED_DOCUMENT_TYPES_LABEL =
   "pdf, docx, doc, xlsx, xlsm, xls, pptx, ppt";
 
+// The lowercased extension of a filename, or "" when it has none. Three call
+// sites spelled this out with the same semantics; the other extension readers
+// in the tree differ deliberately (they keep the dot, or fall back to the whole
+// name when there is none) and are left alone.
+export function documentSuffix(filename: string): string {
+  return filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
+}
+
 const WORD_TYPES = new Set(["docx", "doc"]);
 const SPREADSHEET_TYPES = new Set(["xlsx", "xlsm", "xls"]);
 const PRESENTATION_TYPES = new Set(["pptx", "ppt"]);

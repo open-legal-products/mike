@@ -7,9 +7,10 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm ci
-COPY . .
+COPY backend/ ./
+COPY packages/contracts /packages/contracts
 RUN npm run build
 
 ENV NODE_ENV=production

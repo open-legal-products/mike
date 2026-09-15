@@ -23,14 +23,14 @@ vi.mock("../../queue/extractionQueue", () => ({
 import {
     sweepStaleProcessingDocuments,
     sweepStaleGeneratingCells,
-} from "../staleWork";
+} from "../../../jobs/staleWork";
 
 type Call = {
     table: string;
     op: "select" | "update";
     payload?: Record<string, unknown>;
     filters: Record<string, unknown>;
-    /** Set when the query narrowed with .limit() — used to spot the idleness probe. */
+    /** Set when the query narrowed with .limit() (the bound is in `filters`). */
     limited?: boolean;
     /** Set when the query asked for a single row (.maybeSingle()). */
     single?: boolean;
@@ -82,8 +82,9 @@ function makeDb(responses: Record<string, Responder>) {
                 state.filters[`lt:${col}`] = val;
                 return b;
             },
-            limit() {
+            limit(n: number) {
                 state.limited = true;
+                state.filters["limit"] = n;
                 return b;
             },
             maybeSingle() {
@@ -224,10 +225,12 @@ describe("sweepStaleGeneratingCells", () => {
         );
         const db = makeDb({
             tabular_reviews: NO_LEASE,
-            // The sweep's own scan; the idleness probe (.limit) sees nothing
-            // left carrying the generation id.
+            // The sweep's own scan; the idleness probe (the query filtered by
+            // generation_id) sees nothing left carrying the generation id.
+            // Both queries bound themselves with .limit now, so the filter is
+            // what tells them apart.
             tabular_cells: (call) =>
-                call.limited
+                call.filters.generation_id !== undefined
                     ? []
                     : [
                           {
@@ -326,7 +329,7 @@ describe("sweepStaleGeneratingCells", () => {
         const db = makeDb({
             tabular_reviews: NO_LEASE,
             tabular_cells: (call) =>
-                call.limited
+                call.filters.generation_id !== undefined
                     ? [{ id: "still-stamped" }]
                     : [
                           {

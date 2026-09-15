@@ -743,12 +743,7 @@ test("a Save As copy of the document mints a fresh chat identity", async ({
   const firstId = (await firstRequest).postDataJSON().document_id as string;
 
   // Simulate "Save As": document settings travel inside the .docx (the mock
-  // persists them in sessionStorage), but the copy opens from a new URL. Seed
-  // a stale anchor registry to prove the copy does not inherit it either.
-  await addin.setWordDocumentSetting("mike.wordEditAnchors.v1", {
-    version: 1,
-    anchors: {},
-  });
+  // persists them in sessionStorage), but the copy opens from a new URL.
   await addin.gotoTaskpane({
     documentUrl: "C:/Users/e2e/Demo Contract (Copy).docx",
   });
@@ -768,7 +763,6 @@ test("a Save As copy of the document mints a fresh chat identity", async ({
   expect(settings["mike.word.documentUrl.v1"]).toBe(
     "c:/users/e2e/demo contract (copy).docx",
   );
-  expect(settings["mike.wordEditAnchors.v1"]).toBeUndefined();
 });
 
 test("keeps the existing identity when either document URL is unknown", async ({

@@ -128,6 +128,12 @@ jobs:
           fingerprint /tmp/fresh.txt
           echo "::endgroup::"
 
+      - name: Document lifecycle transactions
+        run: psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f backend/scripts/test-document-lifecycle.sql
+
+      - name: Concurrent document lifecycle operations
+        run: node backend/scripts/test-document-lifecycle-concurrency.mjs
+
       - name: Compare fingerprints
         run: |
           if diff -u /tmp/upgraded.txt /tmp/fresh.txt; then

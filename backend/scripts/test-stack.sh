@@ -57,10 +57,4 @@ fi
 
 echo "Running stack integration tests against $SUPABASE_TEST_URL"
 cd "$BACKEND_DIR"
-exec npx vitest run \
-    src/__tests__/integration/stack.supabase.test.ts \
-    src/__tests__/integration/access.supabase.test.ts \
-    src/__tests__/integration/tabularPagination.supabase.test.ts \
-    src/__tests__/integration/chatsOverview.supabase.test.ts \
-    src/__tests__/integration/dbJobs.supabase.test.ts \
-    "$@"
+exec npx vitest run src/__tests__/integration/*.supabase.test.ts "$@"

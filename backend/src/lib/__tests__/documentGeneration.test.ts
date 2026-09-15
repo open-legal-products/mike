@@ -16,10 +16,11 @@ vi.mock("../downloadTokens", () => ({
   buildDownloadUrl: () => "/download/test-token",
 }));
 
-import { generateDocx } from "../chat/tools/documentOps";
+import { generateDocx } from "../../modules/chat/engine/tools/documentOps";
 
 function fakeDb() {
   return {
+    rpc: vi.fn(async () => ({ data: { id: "version-1", version_number: 1 }, error: null })),
     from(table: string) {
       const result = { data: null, error: null };
       const query: Record<string, unknown> = {};
