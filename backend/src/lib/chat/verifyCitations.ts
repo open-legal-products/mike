@@ -87,12 +87,33 @@ export function verifyQuoteAgainstSource(
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
     if (!segments.length) return { verified: false, needs_correction: false };
+
+    // Verify each segment independently (segments may contain ellipsis,
+    // handled recursively by the ellipsis branch below).
     const verified = segments.map((seg) =>
       verifyQuoteAgainstSource(source, seg),
     );
     if (verified.some((result) => !result.verified)) {
       return { verified: false, needs_correction: false };
     }
+
+    // Enforce document order using the first plain-text fragment of each
+    // segment as a positional anchor.
+    const anchors = segments.map((seg) => {
+      const first = seg.split(ELLIPSIS_PATTERN)[0].trim();
+      return locateQuote(source, first.length > 0 ? first : seg);
+    });
+    if (anchors.some((loc) => !loc)) {
+      return { verified: false, needs_correction: false };
+    }
+    for (let i = 1; i < anchors.length; i++) {
+      const prev = anchors[i - 1]!;
+      const curr = anchors[i]!;
+      if (curr.start < prev.end) {
+        return { verified: false, needs_correction: false };
+      }
+    }
+
     return {
       verified: true,
       needs_correction: verified.some((result) => result.needs_correction),
