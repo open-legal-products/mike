@@ -841,8 +841,9 @@ export async function buildDocContext(
 
 export async function buildProjectDocContext(
   projectId: string,
-  _userId: string,
+  userId: string,
   db: ReturnType<typeof createServerSupabase>,
+  messages: ChatMessage[] = [],
 ): Promise<{
   docIndex: DocIndex;
   docStore: DocStore;
@@ -918,6 +919,27 @@ export async function buildProjectDocContext(
     });
     const path = resolvePath(doc.folder_id ?? null);
     if (path) folderPaths.set(docLabel, path);
+  }
+
+  // Direct attachments keep their existing project membership. Reuse the
+  // standalone context's ownership checks and version resolution, and keep
+  // project labels stable when adding attachment labels.
+  const projectDocumentIds = new Set(
+    Object.values(docIndex).map((document) => document.document_id),
+  );
+  const attachmentMessages = messages.map((message) => ({
+    ...message,
+    files: message.files?.filter(
+      (file) => file.document_id && !projectDocumentIds.has(file.document_id),
+    ),
+  }));
+  if (attachmentMessages.some((message) => message.files?.length)) {
+    const attachments = await buildDocContext(attachmentMessages, userId, db);
+    for (const [label, document] of Object.entries(attachments.docIndex)) {
+      const attachmentLabel = `attachment-${label}`;
+      docIndex[attachmentLabel] = document;
+      docStore.set(attachmentLabel, attachments.docStore.get(label)!);
+    }
   }
 
   devLog(

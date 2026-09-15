@@ -8,6 +8,7 @@ import {
     uploadStandaloneDocuments,
 } from "@/app/lib/mikeApi";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 
 vi.mock("@/app/lib/mikeApi", () => ({
     listWorkflows: vi.fn(async () => []),
@@ -37,7 +38,7 @@ vi.mock("./AddDocButton", () => ({
 vi.mock("./UploadOverlay", () => ({ UploadOverlay: () => null }));
 vi.mock("../shared/FileTypeIcon", () => ({ FileTypeIcon: () => null }));
 vi.mock("../modals/AddDocumentsModal", () => ({
-    AddDocumentsModal: () => null,
+    AddDocumentsModal: vi.fn(() => null),
 }));
 vi.mock("./AssistantWorkflowModal", () => ({
     AssistantWorkflowModal: () => null,
@@ -173,5 +174,20 @@ describe("ChatInput canSend gating", () => {
             expect(uploadStandaloneDocuments).toHaveBeenCalledOnce(),
         );
         expect(uploadProjectDocuments).not.toHaveBeenCalled();
+    });
+
+    it("keeps picker attachments separate from the project just like dropped files", () => {
+        render(
+            <ChatInput
+                onSubmit={vi.fn()}
+                onCancel={vi.fn()}
+                isLoading={false}
+                projectId="p1"
+                dropUploadsToProject={false}
+            />,
+        );
+
+        const pickerProps = vi.mocked(AddDocumentsModal).mock.calls.at(-1)?.[0];
+        expect(pickerProps?.projectId).toBeUndefined();
     });
 });

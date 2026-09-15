@@ -841,7 +841,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 initialSelectedDocuments={attachedDocs}
                 externalUploadedDocuments={droppedDocuments}
                 initialTab={docSelectorInitialTab}
-                projectId={projectId}
+                projectId={dropUploadsToProject ? projectId : undefined}
                 uploadStateId={`assistant-chat:${projectId ?? "standalone"}`}
                 breadcrumb={
                     selectedWorkflow

@@ -219,6 +219,9 @@ describe("POST /projects/:projectId/chat", () => {
         expect(res.text).toContain('"type":"chat_id"');
         expect(res.text).toContain('"type":"chat_title"');
         expect(runLLMStream).toHaveBeenCalledTimes(1);
+        expect(buildProjectDocContext).toHaveBeenCalledWith(
+            "p1", "u1", expect.anything(), VALID_BODY.messages,
+        );
     expect(runLLMStream).toHaveBeenCalledWith(
       expect.objectContaining({
         emitDone: false,

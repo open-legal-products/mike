@@ -126,6 +126,7 @@ const CHAT_DEFAULT = 420;
 const PANEL_DIVIDERS_WIDTH = 12;
 const COLLAPSED_EXPLORER_FOOTPRINT = 42;
 const DEFAULT_ASSISTANT_BOTTOM_PADDING = 116;
+const ASSISTANT_HEADER_HEIGHT = 48;
 
 type WorkspacePanelWidths = {
     explorer: number;
@@ -630,7 +631,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 containerEl.clientHeight -
                     messageGap * 3 -
                     userEl.offsetHeight -
-                    DEFAULT_ASSISTANT_BOTTOM_PADDING,
+                    DEFAULT_ASSISTANT_BOTTOM_PADDING -
+                    ASSISTANT_HEADER_HEIGHT,
             )}px`,
         );
     }, [messages.length]);
@@ -1735,7 +1737,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         onNewChat={() => void handleNewChat()}
                         actions={
                             <HeaderActionsMenu
-                                triggerClassName="h-7 w-7"
+                                triggerClassName="h-6 w-7"
                                 items={[
                                     {
                                         label: "Rename",
@@ -1889,19 +1891,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                             dropUploadsToProject={false}
                             projectId={projectId}
                             onDocumentClick={handleDocClick}
-                            onDocumentsUploaded={(documents) =>
-                                setProject((prev) =>
-                                    prev
-                                        ? {
-                                              ...prev,
-                                              documents: [
-                                                  ...(prev.documents ?? []),
-                                                  ...documents,
-                                              ],
-                                          }
-                                        : prev,
-                                )
-                            }
                             projectName={project?.name}
                             projectCmNumber={project?.cm_number}
                         />
