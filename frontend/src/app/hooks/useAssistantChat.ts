@@ -99,16 +99,26 @@ export function useAssistantChat({
   const requestGenerationRef = useRef(0);
 
   // Invalidate the previous request before a new thread can receive updates.
+  //
+  // Keyed on the thread itself, never on effect lifecycle. StrictMode replays
+  // create/destroy/create on mount without the thread changing, and doing this
+  // in a cleanup aborted a request the host had just started: a first message
+  // auto-sent from a mount effect was killed mid-flight, and because the catch
+  // ignores a superseded request the turn stalled on its empty placeholder with
+  // no error. A layout effect still runs inside the switching commit, so no
+  // async continuation from the old request can land in the new thread first.
+  const threadKey = `${projectId ?? ""}:${initialChatId ?? ""}`;
+  const threadKeyRef = useRef(threadKey);
   useLayoutEffect(() => {
+    if (threadKeyRef.current === threadKey) return;
+    threadKeyRef.current = threadKey;
+    requestGenerationRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset request status when the host selects another thread
     setIsResponseLoading(false);
     setIsLoadingCitations(false);
-    return () => {
-      requestGenerationRef.current += 1;
-      abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
-    };
-  }, [initialChatId, projectId]);
+  }, [threadKey]);
 
   const eventsRef = useRef<AssistantEvent[]>([]);
 
