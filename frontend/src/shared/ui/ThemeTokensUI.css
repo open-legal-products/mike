@@ -207,16 +207,16 @@
 .tr-chat-message-fades {
     mask-image: linear-gradient(
         to bottom,
-        transparent 0,
-        transparent 3rem,
+        rgba(0, 0, 0, 0.15) 0,
+        rgba(0, 0, 0, 0.4) 2rem,
         black 4rem,
         black calc(100% - 8rem),
         transparent 100%
     );
     -webkit-mask-image: linear-gradient(
         to bottom,
-        transparent 0,
-        transparent 3rem,
+        rgba(0, 0, 0, 0.15) 0,
+        rgba(0, 0, 0, 0.4) 2rem,
         black 4rem,
         black calc(100% - 8rem),
         transparent 100%
