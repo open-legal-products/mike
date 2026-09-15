@@ -136,6 +136,7 @@ import { app } from "../../app";
 import crypto from "crypto";
 import { manifestPublicKey } from "../../lib/manifestSigning";
 import { createServerSupabase } from "../../lib/supabase";
+import { attachActiveVersionPaths } from "../../lib/documentVersions";
 
 const SIGNING_KEY = "3b".repeat(32);
 
@@ -174,6 +175,101 @@ describe("projects.routes", () => {
             project: { id: "p1", user_id: "u1", org_id: null },
         });
         deleteProjectsByIds.mockResolvedValue(1);
+    });
+
+    describe("PATCH /projects/:projectId/documents/:documentId", () => {
+        it.each(["pdf", "docx", "xlsx", "pptx"])(
+            "preserves active %s version metadata after renaming",
+            async (fileType) => {
+                const version = {
+                    id: "v1",
+                    filename: `Original.${fileType}`,
+                    file_type: fileType,
+                    storage_path: `u1/doc-1/original.${fileType}`,
+                    pdf_storage_path: "u1/doc-1/preview.pdf",
+                    version_number: 3,
+                    size_bytes: 1024,
+                    page_count: 2,
+                    source: "upload",
+                };
+                supabaseState.tables.documents = {
+                    data: {
+                        id: "doc-1",
+                        project_id: "p1",
+                        current_version_id: "v1",
+                    },
+                    error: null,
+                };
+                supabaseState.tables.document_versions = {
+                    data: version,
+                    error: null,
+                };
+                vi.mocked(createServerSupabase).mockImplementationOnce(() => {
+                    const db = mockSupabase();
+                    db.from = vi.fn((table: string) => {
+                        const query = makeQuery(table);
+                        if (table === "document_versions") {
+                            query.update = vi.fn(
+                                (payload: Partial<typeof version>) => {
+                                    Object.assign(version, payload);
+                                    return query;
+                                },
+                            );
+                            query.then = (resolve: (value: unknown) => unknown) =>
+                                Promise.resolve({ data: [version], error: null }).then(
+                                    resolve,
+                                );
+                        }
+                        return query;
+                    });
+                    return db as unknown as ReturnType<typeof createServerSupabase>;
+                });
+                const actual = await vi.importActual<
+                    typeof import("../../lib/documentVersions")
+                >("../../lib/documentVersions");
+                vi.mocked(attachActiveVersionPaths).mockImplementationOnce(
+                    actual.attachActiveVersionPaths,
+                );
+
+                const res = await request(app)
+                    .patch("/projects/p1/documents/doc-1")
+                    .set(...AUTH)
+                    .send({ filename: "Renamed document" });
+
+                expect(res.status).toBe(200);
+                expect(res.body).toMatchObject({
+                    id: "doc-1",
+                    filename: `Renamed document.${fileType}`,
+                    file_type: fileType,
+                    storage_path: version.storage_path,
+                    pdf_storage_path: version.pdf_storage_path,
+                    active_version_number: 3,
+                    size_bytes: 1024,
+                    page_count: 2,
+                });
+                expect(version.filename).toBe(`Renamed document.${fileType}`);
+            },
+        );
+
+        it("does not report a successful rename when the version update fails", async () => {
+            supabaseState.tables.documents = {
+                data: { id: "doc-1", project_id: "p1", current_version_id: "v1" },
+                error: null,
+            };
+            supabaseState.tables.document_versions = {
+                data: { filename: "Original.pdf" },
+                error: { message: "private database failure" },
+            };
+
+            const res = await request(app)
+                .patch("/projects/p1/documents/doc-1")
+                .set(...AUTH)
+                .send({ filename: "Renamed.pdf" });
+
+            expect(res.status).toBe(500);
+            expect(JSON.stringify(res.body)).not.toContain("private database failure");
+            expect(attachActiveVersionPaths).not.toHaveBeenCalled();
+        });
     });
 
     // ── GET /projects (overview) ──────────────────────────────────────────

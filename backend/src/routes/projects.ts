@@ -1478,13 +1478,17 @@ projectsRouter.patch(
     return void res.status(404).json({ detail: "Document not found" });
 
   if (doc.current_version_id) {
-    await db
+    const { error: versionError } = await db
       .from("document_versions")
       .update({ filename })
       .eq("id", doc.current_version_id)
       .eq("document_id", documentId);
+    if (versionError) return void sendInternalError(res, versionError);
   }
 
+  await attachActiveVersionPaths(db, [
+    updated as { id: string; current_version_id?: string | null },
+  ]);
   res.json({
     ...updated,
     filename,

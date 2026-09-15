@@ -1087,7 +1087,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 ? {
                       ...current,
                       documents: (current.documents ?? []).map((document) =>
-                          document.id === docId ? updated : document,
+                          document.id === docId
+                              ? { ...document, ...updated }
+                              : document,
                       ),
                   }
                 : current,
