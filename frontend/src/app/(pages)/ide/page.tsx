@@ -49,7 +49,7 @@ export default function IdePage() {
                     title="Integrated Drafting Environment"
                     description={
                         projectPicker.error ??
-                        "Open a project to start drafting and reviewing with the help of the Project Assistant."
+                        "Open a Project to start drafting and reviewing with the help of the Project Assistant."
                     }
                     tone={projectPicker.error ? "error" : "default"}
                     action={
