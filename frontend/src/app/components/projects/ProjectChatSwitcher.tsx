@@ -13,12 +13,13 @@ import {
     LIQUID_GLASS_SUBTLE_CLASS,
 } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
+import { formatElapsedTime } from "@/app/lib/formatElapsedTime";
 
 const HEADER_PILL_CLASS = `flex shrink-0 items-center gap-1 rounded-full px-1 py-0.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`;
 const HEADER_PILL_BUTTON_CLASS = `flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${LIQUID_GLASS_HOVER_CLASS}`;
 
 interface ProjectChatSwitcherProps {
-    chats: Pick<Chat, "id" | "title">[];
+    chats: (Pick<Chat, "id" | "title"> & Partial<Pick<Chat, "created_at">>)[];
     currentChatId: string;
     currentTitle: string | null;
     loading?: boolean;
@@ -49,6 +50,7 @@ export function ProjectChatSwitcher({
 }: ProjectChatSwitcherProps) {
     const [historyOpen, setHistoryOpen] = useState(false);
     const [query, setQuery] = useState("");
+    const [now, setNow] = useState(Date.now);
     const historyRef = useRef<HTMLDivElement>(null);
     const titleInputRef = useRef<HTMLInputElement>(null);
     const editingTitle = !!titleEdit;
@@ -67,6 +69,13 @@ export function ProjectChatSwitcher({
         const timer = window.setTimeout(() => titleInputRef.current?.focus(), 0);
         return () => window.clearTimeout(timer);
     }, [editingTitle]);
+
+    useEffect(() => {
+        if (!historyOpen) return;
+        setNow(Date.now());
+        const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+        return () => window.clearInterval(interval);
+    }, [historyOpen]);
 
     useEffect(() => {
         if (!historyOpen) return;
@@ -172,16 +181,38 @@ export function ProjectChatSwitcher({
                                         : "No matches."}
                                 </p>
                             ) : (
-                                filteredChats.map((chat) => (
-                                    <LiquidDropdownButton
-                                        key={chat.id}
-                                        role="menuitem"
-                                        onClick={() => loadChat(chat.id)}
-                                        className="w-full min-w-0 truncate rounded-lg px-2 py-1.5 text-left"
-                                    >
-                                        {chat.title ?? "New Chat"}
-                                    </LiquidDropdownButton>
-                                ))
+                                filteredChats.map((chat) => {
+                                    const elapsed = formatElapsedTime(
+                                        chat.created_at,
+                                        now,
+                                    );
+                                    const createdLabel =
+                                        elapsed && chat.created_at
+                                            ? `Created ${new Date(chat.created_at).toLocaleString()}`
+                                            : undefined;
+                                    return (
+                                        <LiquidDropdownButton
+                                            key={chat.id}
+                                            role="menuitem"
+                                            onClick={() => loadChat(chat.id)}
+                                            className="flex w-full min-w-0 items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left"
+                                        >
+                                            <span className="min-w-0 flex-1 truncate">
+                                                {chat.title ?? "New Chat"}
+                                            </span>
+                                            {elapsed && (
+                                                <time
+                                                    dateTime={chat.created_at}
+                                                    title={createdLabel}
+                                                    aria-label={createdLabel}
+                                                    className="shrink-0 text-xs tabular-nums text-muted-foreground"
+                                                >
+                                                    {elapsed}
+                                                </time>
+                                            )}
+                                        </LiquidDropdownButton>
+                                    );
+                                })
                             )}
                         </div>
                     </LiquidDropdownSurface>
