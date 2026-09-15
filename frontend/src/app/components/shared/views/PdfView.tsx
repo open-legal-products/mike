@@ -575,7 +575,7 @@ export function PdfView({
 
     return (
         <div
-            className={`relative flex flex-col bg-gray-100 flex-1 overflow-hidden ${rounded ? "rounded-lg" : ""}`}
+            className={`document-canvas relative flex flex-col flex-1 overflow-hidden ${rounded ? "rounded-lg" : ""}`}
         >
             <div
                 ref={scrollContainerRef}
