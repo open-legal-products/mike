@@ -2,8 +2,6 @@
 
 import { useCallback, useLayoutEffect, useState, type RefObject } from "react";
 
-const USER_MESSAGE_TOP_OFFSET = 24;
-
 interface Options {
   containerRef: RefObject<HTMLDivElement | null>;
   userMessageRef: RefObject<HTMLDivElement | null>;
@@ -56,8 +54,16 @@ export function useAssistantMessageLayout({
           const container = containerRef.current;
           const userMessage = userMessageRef.current;
           if (!container || !userMessage) return;
+          const messageGap = window.innerWidth < 768 ? 24 : 32;
+          const topOffset = headerHeight + messageGap;
+          // offsetTop may be relative to the entire panel rather than its
+          // scrolling viewport. Measure both elements in the same coordinates.
+          const messageTop =
+            userMessage.getBoundingClientRect().top -
+            container.getBoundingClientRect().top +
+            container.scrollTop;
           container.scrollTo({
-            top: userMessage.offsetTop - USER_MESSAGE_TOP_OFFSET,
+            top: Math.max(0, messageTop - topOffset),
             behavior,
           });
           onPositioned?.();
@@ -65,7 +71,7 @@ export function useAssistantMessageLayout({
       });
       return () => cancelAnimationFrame(frame);
     },
-    [containerRef, userMessageRef],
+    [containerRef, userMessageRef, headerHeight],
   );
 
   return { minHeight, scrollLatestUserToTop };

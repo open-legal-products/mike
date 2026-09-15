@@ -10,7 +10,16 @@ function geometry() {
     value: 60,
     configurable: true,
   });
-  Object.defineProperty(userMessage, "offsetTop", { value: 1000 });
+  // The message's offsetParent is outside the scrolling container, so
+  // offsetTop cannot be used to calculate its position in the viewport.
+  Object.defineProperty(userMessage, "offsetTop", { value: 1200 });
+  container.scrollTop = 200;
+  vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
+    top: 200,
+  } as DOMRect);
+  vi.spyOn(userMessage, "getBoundingClientRect").mockReturnValue({
+    top: 1000,
+  } as DOMRect);
   container.scrollTo = vi.fn();
   return { container, userMessage };
 }
@@ -93,7 +102,7 @@ describe("project assistant message layout", () => {
       vi.advanceTimersByTime(32);
     });
     expect(container.scrollTo).toHaveBeenLastCalledWith({
-      top: 976,
+      top: 920,
       behavior: "auto",
     });
     expect(positioned).toHaveBeenCalledOnce();
@@ -102,8 +111,29 @@ describe("project assistant message layout", () => {
       vi.advanceTimersByTime(32);
     });
     expect(container.scrollTo).toHaveBeenLastCalledWith({
-      top: 976,
+      top: 920,
       behavior: "smooth",
+    });
+  });
+
+  it("leaves the header and a message gap above the user message on mobile", () => {
+    vi.stubGlobal("innerWidth", 640);
+    const { container, userMessage } = geometry();
+    const { result } = renderHook(() =>
+      useAssistantMessageLayout({
+        ...options,
+        containerRef: { current: container },
+        userMessageRef: { current: userMessage },
+        ready: true,
+      }),
+    );
+    act(() => {
+      result.current.scrollLatestUserToTop("auto");
+      vi.advanceTimersByTime(32);
+    });
+    expect(container.scrollTo).toHaveBeenCalledWith({
+      top: 928,
+      behavior: "auto",
     });
   });
 
