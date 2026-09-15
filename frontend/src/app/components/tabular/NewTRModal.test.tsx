@@ -59,6 +59,10 @@ vi.mock("@/app/hooks/useOllamaModels", () => ({
     useOllamaModels: () => [],
 }));
 
+vi.mock("@/app/hooks/useClaudeCodeModels", () => ({
+    useClaudeCodeModels: () => [],
+}));
+
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: vi.fn() }),
 }));

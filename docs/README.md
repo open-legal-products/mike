@@ -12,6 +12,8 @@
 
 ## Features and clients
 
+- [Claude subscription models](claude-subscription.md): run Claude on a
+  Claude Pro/Max subscription through Claude Code instead of an API key
 - [Scoped memory](memory.md) — app and project Markdown memory, permissions,
   asynchronous learning, deletion, and operations
 - [CourtListener integration](courtlistener.md) — live US case-law tools and

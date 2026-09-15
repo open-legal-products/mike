@@ -10,6 +10,10 @@ vi.mock("@/app/hooks/useOllamaModels", () => ({
     useOllamaModels: () => [],
 }));
 
+vi.mock("@/app/hooks/useClaudeCodeModels", () => ({
+    useClaudeCodeModels: () => [],
+}));
+
 vi.mock("@/app/contexts/UserProfileContext", () => ({
     useUserProfile: () => ({
         profile: {

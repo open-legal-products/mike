@@ -1,11 +1,19 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelToggle, underlyingProviderGroup } from "./ModelToggle";
 import type { ApiKeyState } from "@/app/lib/mikeApi";
 
+const { claudeCodeModels } = vi.hoisted(() => ({
+    claudeCodeModels: [] as { id: string; label: string; group: string }[],
+}));
+
 vi.mock("@/app/hooks/useOllamaModels", () => ({
     useOllamaModels: () => [],
+}));
+
+vi.mock("@/app/hooks/useClaudeCodeModels", () => ({
+    useClaudeCodeModels: () => claudeCodeModels,
 }));
 
 function keys(configured: Partial<Record<keyof ApiKeyState, boolean>>) {
@@ -269,6 +277,57 @@ describe("ModelToggle availability states", () => {
         expect(
             screen.getByRole("button", { name: "Choose model" }),
         ).toHaveTextContent("Select model");
+    });
+});
+
+describe("ModelToggle Claude Code models", () => {
+    afterEach(() => {
+        claudeCodeModels.length = 0;
+    });
+
+    it("offers Claude Code subscription models with no API keys configured", async () => {
+        claudeCodeModels.push(
+            {
+                id: "claude-code/opus",
+                label: "Claude Opus (subscription)",
+                group: "Claude Code",
+            },
+            {
+                id: "claude-code/sonnet",
+                label: "Claude Sonnet (subscription)",
+                group: "Claude Code",
+            },
+        );
+        const user = userEvent.setup();
+        render(
+            <ModelToggle
+                value="claude-code/sonnet"
+                onChange={vi.fn()}
+                apiKeys={keys({})}
+            />,
+        );
+
+        const trigger = screen.getByRole("button", { name: "Choose model" });
+        // Keyless, and not gated on the Anthropic key like claude-* ids.
+        expect(trigger).toHaveTextContent("Claude Sonnet (subscription)");
+        await user.click(trigger);
+        expect(
+            await screen.findByText("Claude Opus (subscription)"),
+        ).toBeInTheDocument();
+    });
+
+    it("offers no Claude Code models when the server returns none", () => {
+        render(
+            <ModelToggle
+                value="claude-code/sonnet"
+                onChange={vi.fn()}
+                apiKeys={keys({})}
+            />,
+        );
+
+        expect(
+            screen.getByRole("button", { name: "No models available" }),
+        ).toHaveTextContent("No Models");
     });
 });
 

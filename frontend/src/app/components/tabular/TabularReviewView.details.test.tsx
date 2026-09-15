@@ -20,6 +20,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     getTabularReviewPeople: vi.fn(async () => ({ owner: null, members: [] })),
     // #383's review-model toggle loads the local-model catalog on render.
     getOllamaModels: vi.fn(async () => []),
+    getClaudeCodeModels: vi.fn(async () => []),
     listProjects: vi.fn(async () => []),
     regenerateTabularCell: vi.fn(),
     streamTabularGeneration: vi.fn(),

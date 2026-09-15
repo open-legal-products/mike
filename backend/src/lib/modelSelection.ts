@@ -1,6 +1,8 @@
 import {
+    CLAUDE_CODE_LOW_MODELS,
     CLAUDE_LOW_MODELS,
     GEMINI_LOW_MODELS,
+    isClaudeCodeEnabled,
     OPENAI_LOW_MODELS,
     providerForModel,
     normalizeReasoningLevelForModel,
@@ -76,6 +78,7 @@ export function hasApiKeyForModel(
     apiKeys: UserApiKeys,
 ): boolean {
     const provider = providerForModel(model);
+    if (provider === "claude-code") return isClaudeCodeEnabled();
     return provider === "ollama" || !!apiKeys[provider]?.trim();
 }
 
@@ -200,6 +203,8 @@ export function titleModelForChat(
             return GEMINI_LOW_MODELS[0];
         case "openai":
             return OPENAI_LOW_MODELS[0];
+        case "claude-code":
+            return CLAUDE_CODE_LOW_MODELS[0];
         case "openrouter":
         case "vercel":
         case "opencode-go":

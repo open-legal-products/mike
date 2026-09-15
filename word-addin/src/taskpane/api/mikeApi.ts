@@ -126,6 +126,24 @@ export async function getOllamaModels(): Promise<OllamaModelOption[]> {
   return body.models ?? [];
 }
 
+interface ClaudeCodeModelOption {
+  id: string;
+  label: string;
+  group: "Claude Code";
+}
+
+/** Claude subscription models served by the backend's local Claude Code CLI;
+ *  empty when the server has the feature disabled. */
+export async function getClaudeCodeModels(): Promise<ClaudeCodeModelOption[]> {
+  const res = await fetchWithRefresh(`${BASE_URL}/models/claude-code`, {
+    cache: "no-store",
+    headers: { Accept: "application/json", ...(await getAuthHeaders()) },
+  });
+  if (!res.ok) return [];
+  const body = (await res.json()) as { models?: ClaudeCodeModelOption[] };
+  return body.models ?? [];
+}
+
 interface WordChatServerMessage {
   id: string;
   role: "user" | "assistant";

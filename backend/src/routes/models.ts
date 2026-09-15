@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { ollamaAuthHeaders as authHeaders } from "../lib/llm/providers";
-import { isSupportedOpenCodeGoModel } from "../lib/llm/models";
+import {
+    CLAUDE_CODE_MODELS,
+    isClaudeCodeEnabled,
+    isSupportedOpenCodeGoModel,
+} from "../lib/llm/models";
 import { createServerSupabase } from "../lib/supabase";
 import { getUserApiKeys } from "../lib/userApiKeys";
 import { sendInternalError } from "../lib/httpError";
@@ -54,6 +58,25 @@ modelsRouter.get("/ollama", requireAuth, async (_req, res) => {
     } catch {
         res.json({ models: [] });
     }
+});
+
+// Claude subscription models served by the backend's local Claude Code. Empty
+// unless CLAUDE_CODE_ENABLED is set, so the picker only offers them when the
+// server can actually run them.
+modelsRouter.get("/claude-code", requireAuth, (_req, res) => {
+    if (!isClaudeCodeEnabled()) return void res.json({ models: [] });
+    const labels: Record<string, string> = {
+        "claude-code/opus": "Claude Opus (subscription)",
+        "claude-code/sonnet": "Claude Sonnet (subscription)",
+        "claude-code/haiku": "Claude Haiku (subscription)",
+    };
+    res.json({
+        models: CLAUDE_CODE_MODELS.map((id) => ({
+            id,
+            label: labels[id] ?? id,
+            group: "Claude Code",
+        })),
+    });
 });
 
 // OpenRouter's authenticated catalog, limited to text models that support

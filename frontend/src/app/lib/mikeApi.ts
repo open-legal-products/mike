@@ -820,6 +820,12 @@ export interface OllamaModelOption {
     group: "Local";
 }
 
+export interface ClaudeCodeModelOption {
+    id: string;
+    label: string;
+    group: "Claude Code";
+}
+
 export interface RouterCatalogModel {
     id: string;
     label: string;
@@ -834,6 +840,15 @@ export interface RouterCatalogModel {
 export async function getOllamaModels(): Promise<OllamaModelOption[]> {
     const { models } = await apiRequest<{ models: OllamaModelOption[] }>(
         "/models/ollama",
+    );
+    return models;
+}
+
+// Claude subscription models run by the backend's local Claude Code CLI.
+// Empty when the server has the feature disabled.
+export async function getClaudeCodeModels(): Promise<ClaudeCodeModelOption[]> {
+    const { models } = await apiRequest<{ models: ClaudeCodeModelOption[] }>(
+        "/models/claude-code",
     );
     return models;
 }

@@ -11,6 +11,7 @@ import {
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import type { ApiKeyState } from "@/app/lib/mikeApi";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
+import { useClaudeCodeModels } from "@/app/hooks/useClaudeCodeModels";
 
 export type ModelOption = ModelToggleOption;
 export type { ReasoningLevel };
@@ -32,7 +33,8 @@ export const MODELS: ModelOption[] = [
   { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", group: "OpenAI" },
   { id: "gpt-5.5", label: "GPT-5.5", group: "OpenAI" },
   { id: "gpt-5.4", label: "GPT-5.4", group: "OpenAI" },
-  // Local (Ollama) models are appended dynamically — see useOllamaModels.
+  // Local (Ollama) and Claude Code subscription models are appended
+  // dynamically; see useOllamaModels and useClaudeCodeModels.
 ];
 
 export const SETTINGS_MODELS: ModelOption[] = [
@@ -104,6 +106,18 @@ export function modelDisplayName(modelId: string): string {
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
   return `${label} (${variantLabel})`;
+}
+
+/** Keyless model groups discovered at runtime (Ollama, Claude Code). */
+export function isKeylessModelGroup(group: ModelOption["group"]): boolean {
+  return group === "Local" || group === "Claude Code";
+}
+
+/** Claude Code models keep the backend's labels ("Claude Opus (subscription)"). */
+export function claudeCodeModelOptions(
+  models: readonly ModelOption[],
+): ModelOption[] {
+  return models.map((model) => ({ ...model, source: "Claude Code" }));
 }
 
 /**
@@ -244,6 +258,7 @@ export function ModelToggle({
   onReasoningChange,
 }: Props) {
   const ollamaModels = useOllamaModels();
+  const claudeCodeModels = useClaudeCodeModels();
   const models = [
     ...MODELS,
     ...openRouterModelOptions(openRouterModels),
@@ -254,9 +269,10 @@ export function ModelToggle({
       label: modelDisplayName(model.id),
       source: "Local",
     })),
+    ...claudeCodeModelOptions(claudeCodeModels),
   ];
   const availableModels = models.filter((model) => {
-    if (model.group === "Local") return true;
+    if (isKeylessModelGroup(model.group)) return true;
     if (apiKeysLoading) return false; // nothing offered until known
     if (!apiKeys) return true; // unknown after a failed load → fail open
     return isModelAvailable(model.id, apiKeys);

@@ -6,6 +6,7 @@
 
 import { createServerSupabase } from "../supabase";
 import {
+    isClaudeCodeEnabled,
     providerForModel,
     resolveModel,
     type Provider,
@@ -32,6 +33,7 @@ function providerLabel(provider: Provider): string {
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
     if (provider === "ollama") return "Local (Ollama)";
+    if (provider === "claude-code") return "Claude Code";
     return "Gemini";
 }
 
@@ -47,6 +49,14 @@ export function missingModelApiKey(
 ): MissingApiKey | null {
     const provider = providerForModel(model);
     if (provider === "ollama") return null; // local, no key
+    if (provider === "claude-code") {
+        if (isClaudeCodeEnabled()) return null; // subscription, no key
+        return {
+            provider,
+            model,
+            detail: `Claude Code models are disabled on this server. Select a different tabular review model.`,
+        };
+    }
     if (apiKeys[provider]?.trim()) return null;
     return {
         provider,

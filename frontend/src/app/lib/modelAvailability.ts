@@ -11,10 +11,13 @@ export type ModelProvider =
     | "openrouter"
     | "vercel"
     | "opencode-go"
-    | "ollama";
+    | "ollama"
+    | "claude-code";
 
 export function getModelProvider(modelId: string): ModelProvider | null {
     if (modelId.startsWith("ollama/")) return "ollama"; // dynamic, not in the static list
+    // Before any "claude" matching: claude-code/ ids are keyless subscription models.
+    if (modelId.startsWith("claude-code/")) return "claude-code";
     if (modelId.startsWith("openrouter/")) return "openrouter";
     if (modelId.startsWith("vercel/")) return "vercel";
     if (modelId.startsWith("opencode-go/")) return "opencode-go";
@@ -37,6 +40,7 @@ export function isProviderAvailable(
     apiKeys: ApiKeyState,
 ): boolean {
     if (provider === "ollama") return true; // local, no key needed
+    if (provider === "claude-code") return true; // subscription, no key needed
     return !!apiKeys[provider]?.configured;
 }
 
@@ -47,6 +51,7 @@ export function providerLabel(provider: ModelProvider): string {
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
     if (provider === "ollama") return "Local (Ollama)";
+    if (provider === "claude-code") return "Claude Code (subscription)";
     return "Google (Gemini)";
 }
 
@@ -59,5 +64,6 @@ export function modelGroupToProvider(
     if (group === "Vercel AI Gateway") return "vercel";
     if (group === "OpenCode Go") return "opencode-go";
     if (group === "Local") return "ollama";
+    if (group === "Claude Code") return "claude-code";
     return "gemini";
 }

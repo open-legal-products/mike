@@ -34,6 +34,8 @@ describe("isModelAvailable fail-open", () => {
             false,
         );
         expect(isModelAvailable("opencode-go/glm-5", NO_KEYS)).toBe(false);
+        // Claude Code subscription models are keyless, even with no Anthropic key.
+        expect(isModelAvailable("claude-code/opus", NO_KEYS)).toBe(true);
         expect(
             isModelAvailable("gemini-3-flash-preview", {
                 ...NO_KEYS,

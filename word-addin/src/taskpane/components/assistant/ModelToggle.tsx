@@ -5,8 +5,14 @@ import {
   reasoningLevelsForModel,
   type ReasoningLevel,
 } from "@mike/model-toggle-ui";
-import { getOllamaModels, type ApiKeyStatus } from "../../api/mikeApi";
 import {
+  getClaudeCodeModels,
+  getOllamaModels,
+  type ApiKeyStatus,
+} from "../../api/mikeApi";
+import {
+  claudeCodeModelOptions,
+  isKeylessModelGroup,
   isModelAvailable,
   modelDisplayName,
   openCodeGoModelOptions,
@@ -44,12 +50,18 @@ export function ModelToggle({
   onReasoningChange?: (level: ReasoningLevel) => void;
 }): React.ReactElement {
   const [ollamaModels, setOllamaModels] = useState<ModelOption[]>([]);
+  const [claudeCodeModels, setClaudeCodeModels] = useState<ModelOption[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     void getOllamaModels()
       .then((models) => {
         if (!cancelled) setOllamaModels(models);
+      })
+      .catch(() => {});
+    void getClaudeCodeModels()
+      .then((models) => {
+        if (!cancelled) setClaudeCodeModels(models);
       })
       .catch(() => {});
     return () => {
@@ -72,13 +84,16 @@ export function ModelToggle({
       ...vercelOptions,
       ...openCodeGoOptions,
       ...localOptions,
+      ...claudeCodeModelOptions(claudeCodeModels),
     ].filter(
       (model) =>
-        model.group === "Local" || isModelAvailable(model.id, keyStatus),
+        isKeylessModelGroup(model.group) ||
+        isModelAvailable(model.id, keyStatus),
     );
   }, [
     keyStatus,
     ollamaModels,
+    claudeCodeModels,
     openRouterModels,
     vercelModels,
     openCodeGoModels,

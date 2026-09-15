@@ -149,7 +149,7 @@ type PendingToolExecution = {
  * same-tick executions so the existing provider-neutral runTools contract
  * still receives one batch per model step.
  */
-class ToolExecutionBatcher {
+export class ToolExecutionBatcher {
   private pending: PendingToolExecution[] = [];
   private scheduled = false;
 
