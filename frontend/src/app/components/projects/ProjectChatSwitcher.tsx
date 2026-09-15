@@ -116,7 +116,7 @@ export function ProjectChatSwitcher({
                                 titleEdit.onCancel();
                             }
                         }}
-                        className="h-7 w-48 max-w-full rounded-lg px-2 font-sans text-xs font-medium text-gray-700"
+                        className="h-7 w-48 max-w-full rounded-none border-0 border-b border-muted-foreground bg-transparent px-2 font-sans text-xs font-medium text-gray-700 shadow-none focus-visible:border-b-2 focus-visible:border-blue-600 focus-visible:ring-0 focus-visible:ring-offset-0"
                     />
                 ) : (
                     <button
