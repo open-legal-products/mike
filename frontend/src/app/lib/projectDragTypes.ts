@@ -1,5 +1,13 @@
 type DragTypes = Pick<DataTransfer, "types">;
 
+export function isDocumentViewerDrag(dataTransfer: DragTypes): boolean {
+    return (
+        isExternalFileDrag(dataTransfer) ||
+        dataTransfer.types.includes("application/mike-doc") ||
+        dataTransfer.types.includes("application/mike-docs")
+    );
+}
+
 export function isProjectItemDrag({ types }: DragTypes): boolean {
     return (
         types.includes("application/mike-doc") ||

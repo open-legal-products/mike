@@ -13,12 +13,15 @@ import type {
     Message,
 } from "@/app/components/shared/types";
 import ProjectAssistantChatPage from "./page";
+import { getProject } from "@/app/lib/mikeApi";
 
 const state = vi.hoisted(() => ({
     attachmentFilename: "Budget.xlsx",
     replace: vi.fn(),
     push: vi.fn(),
     getChat: vi.fn(),
+    getDocument: vi.fn(),
+    uploadProjectDocuments: vi.fn(),
     loadChats: vi.fn().mockResolvedValue(undefined),
     setCurrentChatId: vi.fn(),
     setNewChatMessages: vi.fn(),
@@ -49,6 +52,8 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
         folders: [],
     }),
     getChat: state.getChat,
+    getDocument: state.getDocument,
+    uploadProjectDocuments: state.uploadProjectDocuments,
     listProjectChats: vi
         .fn()
         .mockImplementation(async () => state.projectChats),
@@ -170,6 +175,8 @@ vi.mock("@/app/components/projects/ProjectWorkspaceTips", () => ({
 
 beforeEach(() => {
     vi.clearAllMocks();
+    state.getDocument.mockReset();
+    state.uploadProjectDocuments.mockReset();
     state.chats = [];
     state.attachmentFilename = "Budget.xlsx";
     state.projectChats = [];
@@ -177,7 +184,7 @@ beforeEach(() => {
     window.history.replaceState(null, "", "/projects/p1/assistant/chat");
 });
 
-async function renderWorkspace() {
+async function renderWorkspace(canSend = true) {
     const params = Promise.resolve({ id: "p1" });
     await act(async () => {
         render(
@@ -186,11 +193,11 @@ async function renderWorkspace() {
             </Suspense>,
         );
     });
-    await waitFor(() =>
-        expect(
-            screen.getByRole("button", { name: "Send question" }),
-        ).toBeEnabled(),
-    );
+    await waitFor(() => {
+        const button = screen.getByRole("button", { name: "Send question" });
+        if (canSend) expect(button).toBeEnabled();
+        else expect(button).toBeDisabled();
+    });
 }
 
 function response(text: string, chatId: string) {
@@ -207,6 +214,164 @@ function response(text: string, chatId: string) {
         }),
     );
 }
+
+describe("document viewer drops", () => {
+    it("opens project documents from a drop and reuses their tabs", async () => {
+        await renderWorkspace();
+        const viewer = screen.getByRole("region", { name: "Document viewer" });
+        const dataTransfer = {
+            types: ["application/mike-doc"],
+            getData: vi.fn((type) =>
+                type === "application/mike-doc" ? "doc1" : "",
+            ),
+        };
+        fireEvent.dragOver(viewer, { dataTransfer });
+        expect(screen.getByText("Drop files here to open")).toBeVisible();
+        fireEvent.drop(viewer, { dataTransfer });
+        const original = await screen.findByText("Draft viewer");
+        fireEvent.drop(viewer, { dataTransfer });
+        await waitFor(() =>
+            expect(screen.getAllByText("Draft viewer")).toHaveLength(1),
+        );
+        expect(screen.getByText("Draft viewer")).toBe(original);
+        expect(screen.queryByText("Drop files here to open")).toBeNull();
+        expect(state.getDocument).not.toHaveBeenCalled();
+        expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
+    });
+
+    it("opens all documents from a multi-row drop without adding existing files to the project", async () => {
+        state.getDocument.mockResolvedValueOnce({
+            id: "excel",
+            filename: "Budget.xlsx",
+            file_type: "xlsx",
+        });
+        await renderWorkspace();
+        fireEvent.drop(
+            screen.getByRole("region", { name: "Document viewer" }),
+            {
+                dataTransfer: {
+                    types: ["application/mike-docs"],
+                    getData: (type: string) =>
+                        type === "application/mike-docs"
+                            ? JSON.stringify(["doc1", "excel"])
+                            : "",
+                },
+            },
+        );
+        expect(await screen.findByTestId("excel-viewer")).toHaveAttribute(
+            "data-document-id",
+            "excel",
+        );
+        expect(screen.getByText("Draft viewer")).toBeInTheDocument();
+        expect(state.getDocument).toHaveBeenCalledWith("excel");
+        expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
+    });
+
+    it("uploads external files through the project flow and opens the result", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            {
+                status: "completed",
+                result: {
+                    id: "uploaded-excel",
+                    filename: "Budget.xlsx",
+                    file_type: "xlsx",
+                    status: "ready",
+                },
+            },
+        ]);
+        await renderWorkspace();
+        const file = new File(["data"], "Budget.xlsx");
+        fireEvent.drop(
+            screen.getByRole("region", { name: "Document viewer" }),
+            {
+                dataTransfer: {
+                    types: ["Files"],
+                    files: [file],
+                    items: [],
+                    getData: () => "",
+                },
+            },
+        );
+        expect(await screen.findByTestId("excel-viewer")).toHaveAttribute(
+            "data-document-id",
+            "uploaded-excel",
+        );
+        expect(state.uploadProjectDocuments).toHaveBeenCalledWith(
+            "p1",
+            [expect.objectContaining({ file, folderId: null })],
+            expect.any(Object),
+        );
+    });
+
+    it("keeps the upload permission boundary for read-only projects", async () => {
+        vi.mocked(getProject).mockResolvedValueOnce({
+            id: "p1",
+            name: "Matter",
+            access_role: "viewer",
+            user_id: "owner",
+            cm_number: null,
+            practice: null,
+            memory_enabled: false,
+            created_at: "2026-09-15T00:00:00Z",
+            updated_at: "2026-09-15T00:00:00Z",
+            documents: [],
+            folders: [],
+        });
+        await renderWorkspace(false);
+        fireEvent.drop(
+            screen.getByRole("region", { name: "Document viewer" }),
+            {
+                dataTransfer: {
+                    types: ["Files"],
+                    files: [new File(["data"], "Budget.xlsx")],
+                    items: [],
+                    getData: () => "",
+                },
+            },
+        );
+        await screen.findByText(/upload documents to this project/);
+        expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
+    });
+
+    it("maps failed document loads to a user-facing error", async () => {
+        state.getDocument.mockRejectedValueOnce(
+            new Error("internal database stack"),
+        );
+        await renderWorkspace();
+        fireEvent.drop(
+            screen.getByRole("region", { name: "Document viewer" }),
+            {
+                dataTransfer: {
+                    types: ["application/mike-doc"],
+                    getData: (type: string) =>
+                        type === "application/mike-doc" ? "missing" : "",
+                },
+            },
+        );
+        expect(
+            await screen.findByText(
+                "These files could not be opened. Please try again.",
+            ),
+        ).toBeVisible();
+        expect(screen.queryByText("internal database stack")).toBeNull();
+    });
+
+    it("ignores folder and tab-reorder drags", async () => {
+        await renderWorkspace();
+        const viewer = screen.getByRole("region", { name: "Document viewer" });
+        for (const type of [
+            "application/mike-folder",
+            "application/mike-project-tab",
+        ]) {
+            const dataTransfer = { types: [type], getData: vi.fn() };
+            expect(fireEvent.dragOver(viewer, { dataTransfer })).toBe(true);
+            fireEvent.drop(viewer, { dataTransfer });
+            expect(dataTransfer.getData).not.toHaveBeenCalled();
+        }
+        expect(screen.queryByText("Drop files here to open")).toBeNull();
+        expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
+    });
+});
 
 describe("project chat workspace lifecycle", () => {
     it("keeps the first response, open document and collapsed explorer while adopting the server chat id", async () => {

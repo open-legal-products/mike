@@ -25,6 +25,7 @@ import {
     deleteChat,
     deleteDocument,
     getChat,
+    getDocument,
     getProject,
     listProjectChats,
     uploadProjectDocuments,
@@ -42,6 +43,7 @@ import { useProjectPicker } from "@/app/hooks/useProjectPicker";
 import {
     isChatAttachmentDrag,
     isExternalFileDrag,
+    isDocumentViewerDrag,
     isProjectItemDrag,
 } from "@/app/lib/projectDragTypes";
 import { useExplorerDownload } from "@/app/hooks/useExplorerDownload";
@@ -96,6 +98,8 @@ import {
 import { can, roleFromLoaded } from "@/app/lib/permissions";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
+import { readDocumentDragPayload } from "@/app/lib/docTableSelection";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 import {
     collectDroppedDocumentUploadEntries,
     documentUploadEntriesFromFiles,
@@ -328,6 +332,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     >([]);
     const [explorerDragOver, setExplorerDragOver] = useState(false);
     const [chatDragOver, setChatDragOver] = useState(false);
+    const [documentDragOver, setDocumentDragOver] = useState(false);
+    const [documentDropError, setDocumentDropError] = useState<string | null>(
+        null,
+    );
 
     // Tabs
     const [tabs, setTabs] = useState<ProjectDocumentTab[]>([]);
@@ -925,7 +933,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         });
     }
 
-    async function uploadEntries(entries: DocumentUploadEntry[]) {
+    async function uploadEntries(
+        entries: DocumentUploadEntry[],
+        openInViewer = false,
+    ) {
         if (!entries.length) return;
         if (!canEditContent) {
             // Only accuse somebody of lacking a role once we know they do.
@@ -1040,8 +1051,24 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     : [],
             );
             addUploadedDocuments(uploaded);
+            if (openInViewer) {
+                uploaded.forEach(handleDocClick);
+                if (outcomes.some((outcome) => outcome.status === "error")) {
+                    setDocumentDropError(
+                        "Some files could not be uploaded. Please try again.",
+                    );
+                }
+            }
         } catch (err) {
             console.error("Upload failed:", err);
+            if (openInViewer) {
+                setDocumentDropError(
+                    userFacingApiError(
+                        err,
+                        "Files could not be uploaded. Please try again.",
+                    ),
+                );
+            }
         } finally {
             setUploadingDocuments((current) =>
                 current.filter((upload) => !pendingIds.has(upload.clientId)),
@@ -1066,6 +1093,40 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         );
         await uploadEntries(entries);
         // Internal doc/folder moves are handled inside ProjectExplorer (stopPropagation)
+    };
+
+    const handleDocumentDrop = async (event: React.DragEvent) => {
+        if (!isDocumentViewerDrag(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setDocumentDragOver(false);
+        setDocumentDropError(null);
+        try {
+            const ids = readDocumentDragPayload(event.dataTransfer);
+            if (ids.length > 0) {
+                const documents = await Promise.all(
+                    ids.map(
+                        (id) =>
+                            project?.documents?.find(
+                                (document) => document.id === id,
+                            ) ?? getDocument(id),
+                    ),
+                );
+                documents.forEach(handleDocClick);
+            } else if (isExternalFileDrag(event.dataTransfer)) {
+                const entries = await collectDroppedDocumentUploadEntries(
+                    event.dataTransfer,
+                );
+                await uploadEntries(entries, true);
+            }
+        } catch (error) {
+            setDocumentDropError(
+                userFacingApiError(
+                    error,
+                    "These files could not be opened. Please try again.",
+                ),
+            );
+        }
     };
 
     // ── Folder handlers ───────────────────────────────────────────────────────
@@ -1613,12 +1674,38 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
             {/* CENTER: Document Panel */}
             <div
+                role="region"
+                aria-label="Document viewer"
                 style={{ minWidth: DOCUMENT_MIN }}
                 className={cn(
-                    "flex flex-1 flex-col overflow-hidden rounded-lg",
+                    "relative flex flex-1 flex-col overflow-hidden rounded-lg",
                     LIQUID_GLASS_FLAT_CLASS,
                 )}
+                onDragOverCapture={(event) => {
+                    if (!isDocumentViewerDrag(event.dataTransfer)) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.dataTransfer.dropEffect = "copy";
+                    setDocumentDragOver(true);
+                }}
+                onDragLeave={(event) => {
+                    if (
+                        !event.currentTarget.contains(
+                            event.relatedTarget as Node,
+                        )
+                    ) {
+                        setDocumentDragOver(false);
+                    }
+                }}
+                onDropCapture={handleDocumentDrop}
             >
+                {documentDragOver && (
+                    <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-lg bg-white/50 backdrop-blur-md">
+                        <p className="font-serif text-xl text-gray-900">
+                            Drop files here to open
+                        </p>
+                    </div>
+                )}
                 <ProjectDocumentTabs
                     tabs={tabs}
                     documents={project?.documents ?? []}
@@ -1913,6 +2000,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 onClose={projectPicker.clearError}
                 title="Projects could not be loaded"
                 message={projectPicker.error ?? ""}
+            />
+            <WarningPopup
+                open={!!documentDropError}
+                onClose={() => setDocumentDropError(null)}
+                title="Files could not be opened"
+                message={documentDropError ?? ""}
             />
             <ProjectPickerModal
                 open={projectPicker.open}
