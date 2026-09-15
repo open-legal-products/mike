@@ -48,6 +48,7 @@ import {
     LiquidDropdownSurface,
 } from "@/app/components/ui/liquid-dropdown";
 import { cn } from "@/app/lib/utils";
+import { buildTabularChatHistory } from "@/app/lib/tabularChatHistory";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { subscribeToTabularChatSettingsUpdates } from "@/app/lib/tabularChatSettingsEvents";
 
@@ -1084,12 +1085,7 @@ export function TRChatPanel({
         setCurrentChatReasoningLevel(message.reasoning);
 
         // Build messages array for backend (plain text history)
-        const history: { role: string; content: string }[] = messages.map(
-            (m) => ({
-                role: m.role,
-                content: m.content,
-            }),
-        );
+        const history = buildTabularChatHistory(messages);
         const allMessages = [...history, { role: "user", content: trimmed }];
 
         const userMsg: TRMessage = { role: "user", content: trimmed };

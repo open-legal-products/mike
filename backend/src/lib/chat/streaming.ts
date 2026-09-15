@@ -365,10 +365,16 @@ export async function runLLMStream(params: {
   const systemPrompt = memory.systemPrompt;
   const chatMessages: LlmMessage[] = rawMsgs
     .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role === "assistant" ? "assistant" : "user",
-      content: m.content ?? "",
-    }));
+    .map(
+      (m): LlmMessage => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: m.content ?? "",
+      }),
+    )
+    // An assistant turn with no text (an error, a cancellation, or a client
+    // that keeps prose in events) carries nothing for the model, and Anthropic
+    // rejects the entire request over one empty text block.
+    .filter((m) => m.role === "user" || m.content.trim().length > 0);
   // Before every real turn: see MemoryTurn for why it goes there.
   if (memory.message) chatMessages.unshift(memory.message);
 

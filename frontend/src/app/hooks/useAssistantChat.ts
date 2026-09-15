@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, streamProjectChat } from "@/app/lib/mikeApi";
+import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type {
@@ -334,7 +335,10 @@ export function useAssistantChat({
     try {
       const apiMessages = apiMessagesForTurn.map((currentMessage) => ({
         role: currentMessage.role,
-        content: currentMessage.content,
+        content:
+          currentMessage.role === "assistant"
+            ? assistantHistoryContent(currentMessage)
+            : currentMessage.content,
         files: currentMessage.files,
         workflow: currentMessage.workflow,
       }));
