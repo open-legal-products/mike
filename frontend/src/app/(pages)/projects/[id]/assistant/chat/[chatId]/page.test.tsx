@@ -1,4 +1,4 @@
-import { Suspense, type ReactNode } from "react";
+import { StrictMode, Suspense, type ReactNode } from "react";
 import {
     act,
     fireEvent,
@@ -184,14 +184,15 @@ beforeEach(() => {
     window.history.replaceState(null, "", "/projects/p1/assistant/chat");
 });
 
-async function renderWorkspace(canSend = true) {
+async function renderWorkspace(canSend = true, strict = false) {
     const params = Promise.resolve({ id: "p1" });
     await act(async () => {
-        render(
+        const workspace = (
             <Suspense fallback="Loading">
                 <ProjectAssistantChatPage params={params} />
-            </Suspense>,
+            </Suspense>
         );
+        render(strict ? <StrictMode>{workspace}</StrictMode> : workspace);
     });
     await waitFor(() => {
         const button = screen.getByRole("button", { name: "Send question" });
@@ -214,6 +215,53 @@ function response(text: string, chatId: string) {
         }),
     );
 }
+
+describe("closing document tabs", () => {
+    it("selects the next tab, then the previous tab, then clears the viewer in StrictMode", async () => {
+        await renderWorkspace(true, true);
+        fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
+        fireEvent.click(
+            screen.getByRole("button", { name: "Open attached Excel" }),
+        );
+        state.getDocument.mockResolvedValueOnce({
+            id: "notes",
+            filename: "Notes.docx",
+            file_type: "docx",
+        });
+        fireEvent.drop(screen.getByRole("region", { name: "Document viewer" }), {
+            dataTransfer: {
+                types: ["application/mike-doc"],
+                getData: () => "notes",
+            },
+        });
+        await screen.findByRole("tab", { name: /Notes.docx/ });
+        fireEvent.click(screen.getByRole("tab", { name: /Budget.xlsx/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Close Budget.xlsx" }));
+        expect(screen.getByRole("tab", { name: /Notes.docx/ })).toHaveAttribute(
+            "aria-selected", "true",
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Close Notes.docx" }));
+        expect(screen.getByRole("tab", { name: /Draft.docx/ })).toHaveAttribute(
+            "aria-selected", "true",
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Close Draft.docx" }));
+        expect(screen.queryAllByRole("tab")).toHaveLength(0);
+        expect(screen.queryByText("Draft viewer")).toBeNull();
+    });
+
+    it("keeps the active document selected when an inactive tab closes", async () => {
+        await renderWorkspace(true, true);
+        fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
+        fireEvent.click(
+            screen.getByRole("button", { name: "Open attached Excel" }),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Close Draft.docx" }));
+        expect(screen.getByRole("tab", { name: /Budget.xlsx/ })).toHaveAttribute(
+            "aria-selected", "true",
+        );
+        expect(screen.getByTestId("excel-viewer")).toBeVisible();
+    });
+});
 
 describe("document viewer drops", () => {
     it("opens project documents from a drop and reuses their tabs", async () => {

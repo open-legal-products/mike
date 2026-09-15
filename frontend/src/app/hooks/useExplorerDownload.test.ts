@@ -14,6 +14,7 @@ const folder = { id: "folder-1", name: "Drafts" } as Folder;
 let downloads: Array<{ href: string; filename: string }>;
 
 beforeEach(() => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
     downloads = [];
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
@@ -30,6 +31,8 @@ beforeEach(() => {
     );
 });
 afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
 });
@@ -67,6 +70,8 @@ describe("explorer downloads", () => {
         expect(downloads).toEqual([
             { href: "blob:archive", filename: "Drafts.zip" },
         ]);
+        expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+        act(() => vi.advanceTimersByTime(1000));
         expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:archive");
     });
 

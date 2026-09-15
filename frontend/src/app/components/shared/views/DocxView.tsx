@@ -169,17 +169,13 @@ async function tagWIdsOnRenderedDom(
             container.querySelectorAll("ins, del"),
         ) as HTMLElement[];
         const ids = data.ids ?? [];
-        let tagged = 0;
-        let mismatched = 0;
         for (let i = 0; i < Math.min(domEls.length, ids.length); i++) {
             const el = domEls[i];
             const info = ids[i];
             if (el.tagName.toLowerCase() !== info.kind) {
-                mismatched++;
                 continue;
             }
             el.setAttribute("data-w-id", info.w_id);
-            tagged++;
         }
     } catch (e) {
         console.warn("[DocxView] tagWIdsOnRenderedDom failed", e);
@@ -442,7 +438,7 @@ export function DocxView({
             scrollRef.current,
             quotesRef.current,
         );
-    }, [quoteKey, quoteFocusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [quoteKey, quoteFocusKey]);
 
     // Fire onScrollChange (rAF-throttled) so parents can persist scroll
     // per-tab. We still maintain lastScrollTopRef locally for same-mount
@@ -497,7 +493,11 @@ export function DocxView({
                         <p className="text-sm text-red-500">{error}</p>
                     </div>
                 )}
-                <div ref={containerRef} className="docx-view-container" />
+                <div
+                    ref={containerRef}
+                    className="docx-view-container"
+                    hidden={!!error}
+                />
             </div>
         </div>
     );

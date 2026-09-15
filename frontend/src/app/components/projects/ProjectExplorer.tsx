@@ -59,10 +59,6 @@ export interface ProjectExplorerHandle {
     createRootFolder: () => void;
 }
 
-function DocIcon({ fileType }: { fileType: string | null }) {
-    return <FileTypeIcon fileType={fileType} className="h-3.5 w-3.5" />;
-}
-
 type ContextMenuState = {
     x: number;
     y: number;
@@ -397,7 +393,7 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             }`}
                             style={{ paddingLeft: basePadding }}
                         >
-                            <DocIcon fileType={doc.file_type} />
+                            <FileTypeIcon fileType={doc.file_type} />
                             {isRenaming ? (
                                 <input
                                     autoFocus

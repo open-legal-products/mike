@@ -561,7 +561,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [projectMutationSignature, refreshProject]);
 
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- native history navigation updates the route without remounting the workspace
         setActiveChatId(routeChatId);
     }, [routeChatId]);
 
@@ -575,7 +574,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             return;
         }
         let cancelled = false;
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- only the chat slate resets when selecting another thread
         setChatLoaded(false);
         setChatTitle(null);
         setChatOwnerId(null);
@@ -706,17 +704,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     function closeTab(docId: string) {
-        setTabs((prev) => {
-            const next = prev.filter((t) => t.documentId !== docId);
-            if (activeTabId === docId) {
-                const idx = prev.findIndex((t) => t.documentId === docId);
-                const fallback = next[idx] ?? next[idx - 1] ?? null;
-                setActiveTabId(fallback?.documentId ?? null);
-                setActiveQuotes(null);
-                setSelectedDocId(fallback?.documentId ?? null);
-            }
-            return next;
-        });
+        if (activeTabId === docId) {
+            const idx = tabs.findIndex((tab) => tab.documentId === docId);
+            const fallback = idx < 0 ? null : tabs[idx + 1] ?? tabs[idx - 1] ?? null;
+            setActiveTabId(fallback?.documentId ?? null);
+            setActiveQuotes(null);
+            setSelectedDocId(fallback?.documentId ?? null);
+        }
+        setTabs((prev) => prev.filter((tab) => tab.documentId !== docId));
     }
 
     function switchTab(docId: string) {

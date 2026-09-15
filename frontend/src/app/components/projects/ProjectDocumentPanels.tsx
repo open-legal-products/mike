@@ -48,7 +48,8 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                 const document = documentsById.get(tab.documentId);
                 const versionId = tab.versionId ?? document?.current_version_id;
                 // Explicit historical versions stay pinned when the current version changes.
-                // Content hashes catch in-place writes without treating renames as byte changes.
+                // Hashes detect in-place writes without refetching on rename. Legacy
+                // rows without hashes use updated_at, so metadata changes can refetch.
                 const refetchKey = tab.versionId
                     ? JSON.stringify([
                           tab.refetchKey ?? 0,

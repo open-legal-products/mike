@@ -44,7 +44,10 @@ export function useExplorerDownload() {
                 ),
             );
         } finally {
-            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            if (objectUrl) {
+                const completedUrl = objectUrl;
+                window.setTimeout(() => URL.revokeObjectURL(completedUrl), 1000);
+            }
             busyRef.current = false;
             setDownloading(false);
         }
