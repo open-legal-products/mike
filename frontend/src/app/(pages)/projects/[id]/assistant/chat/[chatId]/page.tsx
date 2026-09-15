@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import {
+    ArrowUpRight,
     Brain,
     ChevronLeft,
     ChevronRight,
@@ -1483,6 +1484,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             onSelect: () =>
                                                 projectExplorerRef.current?.createRootFolder(),
                                             disabled: !canEditContent,
+                                        },
+                                        {
+                                            label: "Go to project page",
+                                            icon: ArrowUpRight,
+                                            onSelect: () =>
+                                                router.push(
+                                                    `/projects/${projectId}`,
+                                                ),
                                         },
                                     ]}
                                 />
