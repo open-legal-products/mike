@@ -124,7 +124,7 @@ export function ChatPanelHeader({
                                     titleEdit.onCancel();
                                 }
                             }}
-                            className="h-6 w-48 max-w-full rounded-full border-0 bg-transparent px-1.5 font-sans text-xs font-medium text-gray-700 shadow-none focus-visible:ring-2 focus-visible:ring-muted-foreground/40 focus-visible:ring-offset-0"
+                            className="h-6 w-48 max-w-full rounded-full border-0 bg-transparent px-1.5 font-sans text-xs font-medium text-gray-700 shadow-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-0"
                         />
                     </div>
                 ) : (
