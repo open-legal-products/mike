@@ -38,6 +38,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { useAssistantChat } from "@/app/hooks/useAssistantChat";
 import { useAssistantMessageLayout } from "@/app/hooks/useAssistantMessageLayout";
+import { useExplorerDownload } from "@/app/hooks/useExplorerDownload";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
@@ -59,6 +60,7 @@ import { DocumentUploadMenu } from "@/app/components/shared/DocumentUploadMenu";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
@@ -275,6 +277,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const { profile } = useUserProfile();
     const username =
         profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
+    const explorerDownload = useExplorerDownload();
 
     const [project, setProject] = useState<Project | null>(null);
     const [activeChatId, setActiveChatId] = useState(routeChatId);
@@ -1533,6 +1536,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 folders={project?.folders ?? []}
                                 selectedDocId={selectedDocId}
                                 onDocClick={handleDocClick}
+                                onDownloadDoc={explorerDownload.downloadDocument}
+                                onDownloadFolder={explorerDownload.downloadFolder}
+                                downloading={explorerDownload.downloading}
                                 onAddToChat={(document) =>
                                     chatInputRef.current?.addDoc(document)
                                 }
@@ -1934,6 +1940,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                             : current,
                     )
                 }
+            />
+            <WarningPopup
+                open={!!explorerDownload.error}
+                title="Download failed"
+                message={explorerDownload.error}
+                onClose={explorerDownload.clearError}
             />
             <PermissionDeniedPopup
                 open={!!ownerOnlyAction}

@@ -11,6 +11,7 @@ import {
     ChevronRight,
     ChevronDown,
     FileText,
+    Download,
     Loader2,
     MessageSquarePlus,
     Pencil,
@@ -35,6 +36,9 @@ interface Props {
     selectedDocId?: string | null;
     onDocClick: (doc: Document) => void;
     onAddToChat?: (doc: Document) => void;
+    onDownloadDoc?: (doc: Document) => Promise<void>;
+    onDownloadFolder?: (folder: ProjectFolder) => Promise<void>;
+    downloading?: boolean;
     addToChatDisabled?: boolean;
     onCreateFolder?: (parentFolderId: string | null, name: string) => Promise<void>;
     onRenameFolder?: (folderId: string, name: string) => Promise<void>;
@@ -72,6 +76,9 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
     selectedDocId,
     onDocClick,
     onAddToChat,
+    onDownloadDoc,
+    onDownloadFolder,
+    downloading = false,
     addToChatDisabled = false,
     onCreateFolder,
     onRenameFolder,
@@ -95,6 +102,9 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
     const contextMenuRef = useRef<HTMLDivElement>(null);
     const contextDocument = contextMenu?.docId
         ? documents.find((document) => document.id === contextMenu.docId)
+        : undefined;
+    const contextFolder = contextMenu?.folderId
+        ? folders.find((folder) => folder.id === contextMenu.folderId)
         : undefined;
 
     useImperativeHandle(ref, () => ({
@@ -498,6 +508,21 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                         >
                             <MessageSquarePlus aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
                             Add to chat
+                        </button>
+                    )}
+                    {((contextDocument && onDownloadDoc) || (contextFolder && onDownloadFolder)) && (
+                        <button
+                            type="button"
+                            disabled={downloading}
+                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40"
+                            onClick={() => {
+                                if (contextDocument) void onDownloadDoc?.(contextDocument);
+                                else if (contextFolder) void onDownloadFolder?.(contextFolder);
+                                setContextMenu(null);
+                            }}
+                        >
+                            <Download aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                            Download
                         </button>
                     )}
                     {onCreateFolder && !contextMenu.docId && (

@@ -41,6 +41,29 @@ describe("ProjectExplorer uploads", () => {
 });
 
 describe("ProjectExplorer actions", () => {
+    it("downloads a document from its context menu without opening it", () => {
+        const document = { id: "doc-1", filename: "Draft.docx", file_type: "docx", folder_id: null } as Document;
+        const onDownloadDoc = vi.fn().mockResolvedValue(undefined);
+        const onDocClick = vi.fn();
+        render(<ProjectExplorer documents={[document]} onDocClick={onDocClick} onDownloadDoc={onDownloadDoc} />);
+        fireEvent.contextMenu(screen.getByText("Draft.docx"));
+        fireEvent.click(screen.getByRole("button", { name: "Download" }));
+        expect(onDownloadDoc).toHaveBeenCalledWith(document);
+        expect(onDocClick).not.toHaveBeenCalled();
+        expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+    });
+
+    it("offers a folder download and disables it while another download starts", () => {
+        const folder = { id: "folder-1", name: "Drafts", parent_folder_id: null } as ProjectFolder;
+        const onDownloadFolder = vi.fn().mockResolvedValue(undefined);
+        const { rerender } = render(<ProjectExplorer documents={[]} folders={[folder]} onDocClick={vi.fn()} onDownloadFolder={onDownloadFolder} downloading />);
+        fireEvent.contextMenu(screen.getByText("Drafts"));
+        expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+        rerender(<ProjectExplorer documents={[]} folders={[folder]} onDocClick={vi.fn()} onDownloadFolder={onDownloadFolder} />);
+        fireEvent.click(screen.getByRole("button", { name: "Download" }));
+        expect(onDownloadFolder).toHaveBeenCalledWith(folder);
+    });
+
     it("allows documents to be copied to chat or moved within the explorer", () => {
         render(
             <ProjectExplorer
