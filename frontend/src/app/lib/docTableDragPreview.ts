@@ -1,3 +1,5 @@
+import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+
 type DragPreviewOptions = {
     dataTransfer: Pick<DataTransfer, "setDragImage">;
     tableRoot: HTMLElement | null;
@@ -19,7 +21,7 @@ export function setDocumentRowsDragPreview({
     clientX,
     clientY,
 }: DragPreviewOptions): void {
-    if (!tableRoot || draggedDocumentIds.length < 2) return;
+    if (!tableRoot || draggedDocumentIds.length === 0) return;
 
     const draggedIdSet = new Set(draggedDocumentIds);
     const rows = Array.from(
@@ -30,19 +32,18 @@ export function setDocumentRowsDragPreview({
         const id = row.dataset.documentId;
         return !!id && draggedIdSet.has(id);
     });
-    if (rows.length < 2) return;
+    if (rows.length === 0) return;
 
     const draggedRowIndex = Math.max(
         0,
-        rows.findIndex(
-            (row) => row.dataset.documentId === draggedDocumentId,
-        ),
+        rows.findIndex((row) => row.dataset.documentId === draggedDocumentId),
     );
     const draggedRow = rows[draggedRowIndex];
     const draggedRect = draggedRow.getBoundingClientRect();
     const previewWidth = Math.max(1, Math.ceil(draggedRect.width));
     const preview = document.createElement("div");
     preview.setAttribute("aria-hidden", "true");
+    preview.className = LIQUID_GLASS_FLOAT_CLASS;
     Object.assign(preview.style, {
         position: "fixed",
         left: "-10000px",
@@ -50,8 +51,8 @@ export function setDocumentRowsDragPreview({
         width: `${previewWidth}px`,
         overflow: "hidden",
         pointerEvents: "none",
-        borderRadius: "10px",
-        boxShadow: "0 12px 30px rgba(15, 23, 42, 0.18)",
+        borderRadius: "var(--radius)",
+        clipPath: "inset(0 round var(--radius))",
     });
 
     for (const row of rows) {
@@ -59,7 +60,18 @@ export function setDocumentRowsDragPreview({
         clone.removeAttribute("draggable");
         clone.style.width = `${previewWidth}px`;
         clone.style.minWidth = `${previewWidth}px`;
-        clone.style.backgroundColor = getComputedStyle(row).backgroundColor;
+        clone.style.backgroundColor = "transparent";
+        clone.style.transition = "none";
+        // Sticky name cells also carry the selected/hover fill. Keep all row
+        // surfaces transparent so the rounded preview supplies one background.
+        clone
+            .querySelectorAll<HTMLElement>(
+                ".table-sticky-cell, .liquid-glass-selected, .liquid-glass-group-hover",
+            )
+            .forEach((cell) => {
+                cell.style.backgroundColor = "transparent";
+                cell.style.transition = "none";
+            });
         preview.appendChild(clone);
     }
 
@@ -71,10 +83,7 @@ export function setDocumentRowsDragPreview({
     );
     const offsetY = Math.min(
         rows.length * rowHeight,
-        Math.max(
-            0,
-            draggedRowIndex * rowHeight + clientY - draggedRect.top,
-        ),
+        Math.max(0, draggedRowIndex * rowHeight + clientY - draggedRect.top),
     );
     dataTransfer.setDragImage(preview, offsetX, offsetY);
     window.setTimeout(() => preview.remove(), 0);

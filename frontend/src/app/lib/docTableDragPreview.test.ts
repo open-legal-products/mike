@@ -61,9 +61,15 @@ describe("DocTable drag preview", () => {
         expect(preview.isConnected).toBe(false);
     });
 
-    it("keeps the native preview for a single dragged row", () => {
+    it("uses a rounded preview without the inner hover fill for a single dragged row", () => {
+        vi.useFakeTimers();
         const root = document.createElement("div");
-        root.appendChild(documentRow("a", 100));
+        const row = documentRow("a", 100);
+        const cell = document.createElement("div");
+        cell.className = "table-sticky-cell liquid-glass-group-hover";
+        cell.style.backgroundColor = "rgb(245, 246, 248)";
+        row.appendChild(cell);
+        root.appendChild(row);
         const setDragImage = vi.fn();
 
         setDocumentRowsDragPreview({
@@ -75,10 +81,24 @@ describe("DocTable drag preview", () => {
             clientY: 110,
         });
 
-        expect(setDragImage).not.toHaveBeenCalled();
+        const [preview] = setDragImage.mock.calls[0] as [HTMLElement];
+        expect(preview).toHaveClass("liquid-glass-float");
+        expect(preview.style.borderRadius).toBe("var(--radius)");
+        expect(preview.style.clipPath).toBe("inset(0 round var(--radius))");
+        expect(
+            (preview.firstElementChild as HTMLElement).style.backgroundColor,
+        ).toBe("transparent");
+        expect(
+            preview.querySelector<HTMLElement>(".table-sticky-cell")?.style
+                .backgroundColor,
+        ).toBe("transparent");
+        expect(cell.style.backgroundColor).toBe("rgb(245, 246, 248)");
+        vi.runAllTimers();
+        expect(preview.isConnected).toBe(false);
     });
 
-    it("keeps the native preview when fewer than two selected rows are visible", () => {
+    it("previews only visible rows when part of the selection is offscreen", () => {
+        vi.useFakeTimers();
         const root = document.createElement("div");
         root.appendChild(documentRow("a", 100));
         const setDragImage = vi.fn();
@@ -92,6 +112,9 @@ describe("DocTable drag preview", () => {
             clientY: 110,
         });
 
-        expect(setDragImage).not.toHaveBeenCalled();
+        expect(setDragImage).toHaveBeenCalledOnce();
+        const [preview] = setDragImage.mock.calls[0] as [HTMLElement];
+        expect(preview.children).toHaveLength(1);
+        vi.runAllTimers();
     });
 });
