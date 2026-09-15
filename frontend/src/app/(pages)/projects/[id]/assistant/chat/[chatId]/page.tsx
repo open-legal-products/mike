@@ -1737,7 +1737,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         onNewChat={() => void handleNewChat()}
                         actions={
                             <HeaderActionsMenu
-                                triggerClassName="h-6 w-7"
+                                triggerClassName="h-6 w-6"
                                 items={[
                                     {
                                         label: "Rename",
