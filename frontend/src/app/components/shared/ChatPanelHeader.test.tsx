@@ -273,7 +273,11 @@ describe("ChatPanelHeader", () => {
         expect(screen.queryByRole("button", { name: "New chat" })).toBeNull();
         expect(
             screen.getByRole("button", { name: "New Chat" }).parentElement,
-        ).not.toHaveClass("backdrop-blur-xl", "rounded-full");
+        ).toHaveClass(
+            "liquid-glass-subtle",
+            "backdrop-blur-xl",
+            "rounded-full",
+        );
     });
 
     it("loads another project chat from the history menu", async () => {

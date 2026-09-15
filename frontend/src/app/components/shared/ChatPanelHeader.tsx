@@ -128,26 +128,28 @@ export function ChatPanelHeader({
                         className="h-7 w-48 max-w-full rounded-none border-0 border-b border-muted-foreground bg-transparent px-2 font-sans text-xs font-medium text-gray-700 shadow-none focus-visible:border-b-2 focus-visible:border-blue-600 focus-visible:ring-0 focus-visible:ring-offset-0"
                     />
                 ) : (
-                    <button
-                        type="button"
-                        onClick={() => setHistoryOpen((open) => !open)}
-                        aria-expanded={historyOpen}
-                        aria-haspopup="menu"
-                        className={cn(
-                            "flex h-7 min-w-0 items-center gap-1 rounded-lg px-2 text-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
-                            LIQUID_GLASS_HOVER_CLASS,
-                        )}
-                    >
-                        <span className="min-w-0 truncate text-xs font-medium">
-                            {currentTitle ?? "New Chat"}
-                        </span>
-                        <ChevronDown
+                    <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
+                        <button
+                            type="button"
+                            onClick={() => setHistoryOpen((open) => !open)}
+                            aria-expanded={historyOpen}
+                            aria-haspopup="menu"
                             className={cn(
-                                "h-3 w-3 shrink-0 text-gray-600 transition-transform duration-200",
-                                historyOpen && "rotate-180",
+                                "flex h-6 min-w-0 items-center gap-1 rounded-full px-1.5 text-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
+                                LIQUID_GLASS_HOVER_CLASS,
                             )}
-                        />
-                    </button>
+                        >
+                            <span className="min-w-0 truncate text-xs font-medium">
+                                {currentTitle ?? "New Chat"}
+                            </span>
+                            <ChevronDown
+                                className={cn(
+                                    "h-3 w-3 shrink-0 text-gray-600 transition-transform duration-200",
+                                    historyOpen && "rotate-180",
+                                )}
+                            />
+                        </button>
+                    </div>
                 )}
 
                 {historyOpen && !titleEdit && (
