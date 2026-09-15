@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type CSSProperties,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Pencil, Trash2 } from "lucide-react";
@@ -422,7 +429,7 @@ function findLastContentIndex(events: AssistantEvent[]): number {
     return -1;
 }
 
-const MESSAGE_TOP_INSET = 48;
+const MESSAGE_TOP_INSET = 80;
 const MESSAGE_GAP = 16;
 const COMPOSER_GAP = 16;
 
@@ -514,6 +521,19 @@ export function TRChatPanel({
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
     const abortRef = useRef<AbortController | null>(null);
     const hasScrolledRef = useRef(false);
+    const scrollLatestUserToTop = useCallback((behavior: ScrollBehavior) => {
+        const container = messagesContainerRef.current;
+        const message = latestUserMessageRef.current;
+        if (!container || !message) return;
+        const messageTop =
+            message.getBoundingClientRect().top -
+            container.getBoundingClientRect().top +
+            container.scrollTop;
+        container.scrollTo({
+            top: Math.max(0, messageTop - MESSAGE_TOP_INSET),
+            behavior,
+        });
+    }, []);
 
     // Drip animation refs
     const dripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -609,6 +629,15 @@ export function TRChatPanel({
     }, [currentChatId]);
 
     useEffect(() => {
+        hasScrolledRef.current = false;
+    }, [currentChatId]);
+
+    useEffect(() => {
+        if (isLoadingMessages) {
+            hasScrolledRef.current = false;
+            setMessagesVisible(false);
+            return;
+        }
         if (messages.length === 0) {
             hasScrolledRef.current = false;
             setMessagesVisible(false);
@@ -621,26 +650,21 @@ export function TRChatPanel({
                 latestUserMessageRef.current &&
                 messagesContainerRef.current
             ) {
-                setTimeout(() => {
-                    const container = messagesContainerRef.current;
-                    const element = latestUserMessageRef.current;
-                    if (container && element) {
-                        container.scrollTo({
-                            top: element.offsetTop - MESSAGE_TOP_INSET,
-                            behavior: "instant",
-                        });
-                    }
+                const timer = setTimeout(() => {
+                    scrollLatestUserToTop("auto");
                     hasScrolledRef.current = true;
                     setMessagesVisible(true);
                 }, 100);
+                return () => clearTimeout(timer);
             } else {
                 hasScrolledRef.current = true;
                 setMessagesVisible(true);
             }
         }
-    }, [messages]);
+    }, [messages, isLoadingMessages, currentChatId, scrollLatestUserToTop]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        if (isLoadingMessages) return;
         const userEl = latestUserMessageRef.current;
         const containerEl = messagesContainerRef.current;
         if (!userEl || !containerEl) return;
@@ -655,8 +679,7 @@ export function TRChatPanel({
                     composerSpace,
             )}px`,
         );
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [inputHeight, messages.length, latestUserMessageRef.current]);
+    }, [inputHeight, messages.length, isLoadingMessages, currentChatId]);
 
     useEffect(() => {
         setTitleDraft(null);
@@ -899,14 +922,7 @@ export function TRChatPanel({
         setIsLoading(true);
 
         setTimeout(() => {
-            const container = messagesContainerRef.current;
-            const element = latestUserMessageRef.current;
-            if (container && element) {
-                container.scrollTo({
-                    top: element.offsetTop - MESSAGE_TOP_INSET,
-                    behavior: "smooth",
-                });
-            }
+            scrollLatestUserToTop("smooth");
         }, 50);
 
         stopDrip();
@@ -1617,11 +1633,14 @@ export function TRChatPanel({
                 />
             </div>
 
-            {/* Messages */}
+            {/* Messages and loading skeleton share the spacer's top inset. */}
             <div
                 ref={messagesContainerRef}
-                className="tr-chat-message-fades flex-1 overflow-y-auto px-4 pt-12 flex flex-col"
-                style={{ paddingBottom: Math.ceil(inputHeight + 16) }}
+                className="tr-chat-message-fades flex-1 overflow-y-auto px-4 flex flex-col"
+                style={{
+                    paddingTop: MESSAGE_TOP_INSET,
+                    paddingBottom: Math.ceil(inputHeight + COMPOSER_GAP),
+                }}
             >
                 {isLoadingMessages && (
                     <div className="flex flex-col gap-4">

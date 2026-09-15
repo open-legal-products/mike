@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
     deleteTabularChat,
@@ -48,7 +48,117 @@ describe("TRChatPanel header", () => {
         vi.mocked(renameTabularChat).mockResolvedValue(undefined);
         vi.mocked(deleteTabularChat).mockResolvedValue(undefined);
     });
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it("positions loaded history below the header and remeasures equal-length threads", async () => {
+        let resolveMessages!: (
+            messages: Awaited<ReturnType<typeof getTabularChatMessages>>,
+        ) => void;
+        vi.mocked(getTabularChatMessages).mockReturnValueOnce(
+            new Promise((resolve) => {
+                resolveMessages = resolve;
+            }),
+        );
+        let userHeight = 60;
+        vi.spyOn(
+            HTMLElement.prototype,
+            "offsetHeight",
+            "get",
+        ).mockImplementation(() => userHeight);
+        vi.spyOn(
+            HTMLElement.prototype,
+            "getBoundingClientRect",
+        ).mockImplementation(function (this: HTMLElement) {
+            return {
+                top: this.classList.contains("tr-chat-message-fades")
+                    ? 200
+                    : 1000,
+                height: 96,
+            } as DOMRect;
+        });
+        // offsetTop has a different origin from the scrolling viewport.
+        vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockReturnValue(
+            1200,
+        );
+        const { container } = render(
+            <TRChatPanel
+                reviewId="review-1"
+                initialChatId="chat-1"
+                onCitationClick={vi.fn()}
+            />,
+        );
+        const viewport = container.querySelector<HTMLDivElement>(
+            ".tr-chat-message-fades",
+        )!;
+        viewport.scrollTop = 200;
+        viewport.scrollTo = vi.fn();
+        Object.defineProperty(viewport, "clientHeight", { value: 700 });
+        expect(viewport).toHaveStyle({ paddingTop: "80px" });
+        const history: Awaited<ReturnType<typeof getTabularChatMessages>> = [
+            {
+                id: "m1",
+                chat_id: "chat-1",
+                role: "user",
+                content: "First question",
+                created_at: "2026-09-15T00:00:00Z",
+            },
+            {
+                id: "m2",
+                chat_id: "chat-1",
+                role: "assistant",
+                content: [{ type: "content", text: "First answer" }],
+                created_at: "2026-09-15T00:00:01Z",
+            },
+            {
+                id: "m3",
+                chat_id: "chat-1",
+                role: "user",
+                content: "Latest question",
+                created_at: "2026-09-15T00:00:02Z",
+            },
+            {
+                id: "m4",
+                chat_id: "chat-1",
+                role: "assistant",
+                content: [{ type: "content", text: "Latest answer" }],
+                created_at: "2026-09-15T00:00:03Z",
+            },
+        ];
+        await act(async () => resolveMessages(history));
+        await waitFor(() =>
+            expect(viewport.scrollTo).toHaveBeenCalledWith({
+                top: 920,
+                behavior: "auto",
+            }),
+        );
+        expect(viewport.querySelector('[style*="min-height"]')).toHaveStyle({
+            minHeight: "432px",
+        });
+        expect(screen.getByText("Latest question")).toBeVisible();
+
+        userHeight = 120;
+        vi.mocked(getTabularChatMessages).mockResolvedValueOnce(
+            history.map((message) => ({ ...message, chat_id: "chat-2" })),
+        );
+        vi.mocked(viewport.scrollTo).mockClear();
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("button", { name: "Current draft" }));
+        await user.click(
+            screen.getByRole("menuitem", { name: /Earlier advice/ }),
+        );
+        await waitFor(() =>
+            expect(viewport.scrollTo).toHaveBeenCalledWith({
+                top: 920,
+                behavior: "auto",
+            }),
+        );
+        expect(viewport.querySelector('[style*="min-height"]')).toHaveStyle({
+            minHeight: "372px",
+        });
+    });
 
     it("hides actions and the close button until a chat is active, with times instead of history row menus", async () => {
         const user = userEvent.setup();
