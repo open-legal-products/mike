@@ -105,28 +105,30 @@ export function ChatPanelHeader({
                 className="pointer-events-auto relative min-w-0 shrink"
             >
                 {titleEdit ? (
-                    <FormTextInput
-                        ref={titleInputRef}
-                        variant="minimal"
-                        aria-label="Chat title"
-                        value={titleEdit.value}
-                        onFocus={(event) => event.currentTarget.select()}
-                        onChange={(event) =>
-                            titleEdit.onChange(event.target.value)
-                        }
-                        onBlur={titleEdit.onSave}
-                        onKeyDown={(event) => {
-                            if (event.nativeEvent.isComposing) return;
-                            if (event.key === "Enter") {
-                                event.preventDefault();
-                                titleEdit.onSave();
-                            } else if (event.key === "Escape") {
-                                event.preventDefault();
-                                titleEdit.onCancel();
+                    <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
+                        <FormTextInput
+                            ref={titleInputRef}
+                            variant="minimal"
+                            aria-label="Chat title"
+                            value={titleEdit.value}
+                            onFocus={(event) => event.currentTarget.select()}
+                            onChange={(event) =>
+                                titleEdit.onChange(event.target.value)
                             }
-                        }}
-                        className="h-7 w-48 max-w-full rounded-none border-0 border-b border-muted-foreground bg-transparent px-2 font-sans text-xs font-medium text-gray-700 shadow-none focus-visible:border-b-2 focus-visible:border-blue-600 focus-visible:ring-0 focus-visible:ring-offset-0"
-                    />
+                            onBlur={titleEdit.onSave}
+                            onKeyDown={(event) => {
+                                if (event.nativeEvent.isComposing) return;
+                                if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    titleEdit.onSave();
+                                } else if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    titleEdit.onCancel();
+                                }
+                            }}
+                            className="h-6 w-48 max-w-full rounded-none border-0 border-b border-muted-foreground bg-transparent px-1.5 font-sans text-xs font-medium text-gray-700 shadow-none focus-visible:border-b-2 focus-visible:border-blue-600 focus-visible:ring-0 focus-visible:ring-offset-0"
+                        />
+                    </div>
                 ) : (
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
                         <button

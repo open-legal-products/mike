@@ -175,7 +175,11 @@ describe("ChatPanelHeader", () => {
         const input = screen.getByRole("textbox", { name: "Chat title" });
         await waitFor(() => expect(input).toHaveFocus());
         expect(input).toHaveValue("Current draft");
-        expect(input).toHaveClass("h-7");
+        expect(input).toHaveClass("h-6");
+        expect(input.parentElement).toHaveClass(
+            "liquid-glass-subtle",
+            "rounded-full",
+        );
         expect((input as HTMLInputElement).selectionStart).toBe(0);
         expect((input as HTMLInputElement).selectionEnd).toBe(
             "Current draft".length,
