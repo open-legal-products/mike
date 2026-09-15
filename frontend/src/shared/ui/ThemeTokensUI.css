@@ -82,6 +82,11 @@
     background-color: var(--document-tab-strip-background);
 }
 
+.project-document-tabs {
+    --document-tab-active-background: var(--app-surface-active);
+    --document-tab-inactive-background: var(--app-surface);
+}
+
 .document-tab {
     color: var(--document-tab-inactive-text);
     background-color: var(--document-tab-inactive-background);
