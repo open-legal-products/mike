@@ -85,6 +85,35 @@ afterEach(() => {
 });
 
 describe("useAssistantChat SSE parsing", () => {
+    it("continues a project input request with its parent id, attachments and displayed document", async () => {
+        fetchMock.mockResolvedValue(sseResponse(["data: [DONE]\n\n"]));
+        const response = {
+            type: "ask_inputs_response" as const,
+            assistant_message_id: "assistant-1",
+            ask_event_id: "ask-docs",
+            responses: [{ id: "draft", kind: "documents" as const, filenames: ["Draft.pdf"] }],
+        };
+        const files = [{ filename: "Draft.pdf", document_id: "attachment-1" }];
+        const { result } = renderHook(() => useAssistantChat({
+            projectId: "project-1", chatId: "chat-1",
+            initialMessages: [{ id: "assistant-1", role: "assistant", content: "", events: [] }],
+        }));
+        await act(async () => {
+            await result.current.handleChat({ role: "user", content: "Draft attached", files }, {
+                askInputsResponse: response,
+                displayedDoc: { filename: "Comparison.docx", documentId: "project-doc-1" },
+            });
+        });
+        const request = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
+        expect(JSON.parse(request.body as string)).toMatchObject({
+            chat_id: "chat-1",
+            ask_inputs_response: response,
+            attached_documents: files,
+            displayed_doc: { filename: "Comparison.docx", document_id: "project-doc-1" },
+            messages: [expect.anything(), expect.objectContaining({ role: "user", files })],
+        });
+    });
+
     it("creates a project chat only when the first message is submitted", async () => {
         fetchMock.mockResolvedValue(
             sseResponse([

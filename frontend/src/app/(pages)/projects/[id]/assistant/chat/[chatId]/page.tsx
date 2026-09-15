@@ -42,6 +42,7 @@ import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
 import { ChatInput } from "@/app/components/assistant/ChatInput";
+import { ChatInputPrompt } from "@/app/components/assistant/ChatInputPrompt";
 import type { ChatInputHandle } from "@/app/components/assistant/ChatInput";
 import {
     ProjectExplorer,
@@ -663,9 +664,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     // ── Handlers ──────────────────────────────────────────────────────────────
     const handleSubmit = useCallback(
-        (message: Message) => {
-            if (!activeTab) return handleChat(message);
+        (message: Message, options?: Parameters<typeof handleChat>[1]) => {
+            if (!activeTab) return handleChat(message, options);
             return handleChat(message, {
+                ...options,
                 displayedDoc: {
                     filename: activeTab.filename,
                     documentId: activeTab.documentId,
@@ -1851,23 +1853,36 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 <div className="absolute bottom-3 left-3 right-3 z-30">
                     <div className="pointer-events-none absolute -bottom-3 inset-x-0 z-0 h-7 bg-app-surface" />
                     <div className="relative z-20 w-full">
-                        <ChatInput
-                            key={`${activeChatId || "new"}:${composerResetKey}`}
-                            ref={chatInputRef}
-                            onSubmit={handleSubmit}
-                            onCancel={cancel}
-                            isLoading={isResponseLoading}
+                        <ChatInputPrompt
+                            messages={messages}
                             chatKey={activeChatId}
-                            chatModel={chatModel}
-                            chatReasoningLevel={chatReasoningLevel}
-                            canSend={canSendChat}
-                            enableGlobalFileDrop={false}
-                            dropUploadsToProject={false}
-                            projectId={projectId}
-                            onDocumentClick={handleDocClick}
-                            projectName={project?.name}
-                            projectCmNumber={project?.cm_number}
-                        />
+                            canSend={canSendChat && chatLoaded}
+                            onSubmit={(response, content, files) => {
+                                void handleSubmit(
+                                    { role: "user", content, files },
+                                    { askInputsResponse: response },
+                                );
+                            }}
+                            onCancel={cancel}
+                        >
+                            <ChatInput
+                                key={`${activeChatId || "new"}:${composerResetKey}`}
+                                ref={chatInputRef}
+                                onSubmit={handleSubmit}
+                                onCancel={cancel}
+                                isLoading={isResponseLoading}
+                                chatKey={activeChatId}
+                                chatModel={chatModel}
+                                chatReasoningLevel={chatReasoningLevel}
+                                canSend={canSendChat}
+                                enableGlobalFileDrop={false}
+                                dropUploadsToProject={false}
+                                projectId={projectId}
+                                onDocumentClick={handleDocClick}
+                                projectName={project?.name}
+                                projectCmNumber={project?.cm_number}
+                            />
+                        </ChatInputPrompt>
                     </div>
                 </div>
             </div>

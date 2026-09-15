@@ -8,7 +8,7 @@ import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
-import { AskInputPopup } from "./AskInputPopup";
+import { ChatInputPrompt } from "./ChatInputPrompt";
 import {
     AssistantSidePanel,
     assistantSidePanelTabId,
@@ -115,9 +115,6 @@ export function ChatView({
     const [workflowModalInitialId, setWorkflowModalInitialId] = useState<
         string | undefined
     >();
-    const [hiddenAskInputKeys, setHiddenAskInputKeys] = useState<Set<string>>(
-        () => new Set(),
-    );
     const [reloadingDocIds, setReloadingDocIds] = useState<Set<string>>(
         () => new Set(),
     );
@@ -145,11 +142,6 @@ export function ChatView({
     const activeTab = tabs.find((tab) => tab.id === activeTabId);
     const activeCitation =
         activeTab?.kind === "citation" ? activeTab.citation : null;
-
-    useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- reset per-chat UI state when switching chats
-        setHiddenAskInputKeys(new Set());
-    }, [chatId]);
 
     const showPanel = useCallback(() => {
         if (panelCloseTimerRef.current !== null) {
@@ -754,41 +746,6 @@ export function ChatView({
         </HeaderButtonsUI>
     );
 
-    const rawActiveInput = (() => {
-        for (
-            let messageIndex = messages.length - 1;
-            messageIndex >= 0;
-            messageIndex--
-        ) {
-            const message = messages[messageIndex];
-            if (message.role === "user") return null;
-            if (message.role !== "assistant" || !message.events) continue;
-            for (
-                let eventIndex = message.events.length - 1;
-                eventIndex >= 0;
-                eventIndex--
-            ) {
-                const event = message.events[eventIndex];
-                if (event.type === "ask_inputs_response") {
-                    return null;
-                }
-                if (event.type === "ask_inputs") {
-                    if (!message.id) return null;
-                    return {
-                        key: `${message.id}:${event.event_id}`,
-                        assistantMessageId: message.id,
-                        event,
-                    };
-                }
-            }
-        }
-        return null;
-    })();
-    const activeInput =
-        rawActiveInput && !hiddenAskInputKeys.has(rawActiveInput.key)
-            ? rawActiveInput
-            : null;
-
     const messagesBottomPadding = DEFAULT_ASSISTANT_BOTTOM_PADDING;
 
     return (
@@ -1004,36 +961,18 @@ export function ChatView({
                         className="relative z-20 w-full max-w-4xl mx-auto px-4 md:px-6"
                     >
                         <div className="w-full rounded-t-[20px] bg-transparent">
-                            {activeInput ? (
-                                <AskInputPopup
-                                    key={activeInput.key}
-                                    event={activeInput.event}
-                                    assistantMessageId={
-                                        activeInput.assistantMessageId
-                                    }
-                                    onSubmit={(response, content, files) => {
-                                        setHiddenAskInputKeys((prev) => {
-                                            const next = new Set(prev);
-                                            next.add(activeInput.key);
-                                            return next;
-                                        });
-                                        void handleChat(
-                                            { role: "user", content, files },
-                                            {
-                                                askInputsResponse: response,
-                                            },
-                                        );
-                                    }}
-                                    onDismiss={() => {
-                                        setHiddenAskInputKeys((prev) => {
-                                            const next = new Set(prev);
-                                            next.add(activeInput.key);
-                                            return next;
-                                        });
-                                        cancel();
-                                    }}
-                                />
-                            ) : (
+                            <ChatInputPrompt
+                                messages={messages}
+                                chatKey={chatId}
+                                canSend={canSend}
+                                onSubmit={(response, content, files) => {
+                                    void handleChat(
+                                        { role: "user", content, files },
+                                        { askInputsResponse: response },
+                                    );
+                                }}
+                                onCancel={cancel}
+                            >
                                 <ChatInput
                                     ref={chatInputRef}
                                     canSend={canSend}
@@ -1056,7 +995,7 @@ export function ChatView({
                                         })
                                     }
                                 />
-                            )}
+                            </ChatInputPrompt>
                         </div>
                     </div>
                 </div>
