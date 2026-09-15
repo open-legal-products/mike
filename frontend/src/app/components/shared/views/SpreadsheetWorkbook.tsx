@@ -38,10 +38,11 @@ export function SpreadsheetWorkbook({
     const [saved] = useState(() =>
         sessionRef.current?.sourceSheets === sheets ? sessionRef.current : null,
     );
-    const initialSheets = saved?.sheets ?? sheets;
+    // Fortune-sheet recalculates header dimensions when data changes, including zoomRatio.
+    const [workbookSheets, setWorkbookSheets] = useState(saved?.sheets ?? sheets);
     const currentSheetRef = useRef(
-        initialSheets.find((sheet) => sheet.status === 1)?.id ??
-            initialSheets[0]?.id,
+        workbookSheets.find((sheet) => sheet.status === 1)?.id ??
+            workbookSheets[0]?.id,
     );
     const workbookHooks = useMemo<Hooks>(
         () => ({
@@ -97,7 +98,8 @@ export function SpreadsheetWorkbook({
         <div ref={containerRef} className="relative min-h-0 flex-1">
             <Workbook
                 ref={workbookRef}
-                data={initialSheets}
+                data={workbookSheets}
+                onChange={setWorkbookSheets}
                 hooks={workbookHooks}
                 allowEdit={false}
                 showToolbar={false}
