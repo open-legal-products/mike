@@ -10,7 +10,7 @@ COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
 COPY backend/src /backend/src
-COPY word-addin/src /word-addin/src
+COPY word-addin/ ./word-addin/
 
 RUN npm run build
 
