@@ -1811,7 +1811,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 </div>
                 <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute left-0 right-3 top-0 z-30 h-16 bg-gradient-to-b from-app-surface to-transparent"
+                    className="pointer-events-none absolute left-0 right-3 top-0 z-30 h-16 bg-gradient-to-b from-app-surface via-app-surface via-75% to-transparent"
                 />
                 <div
                     aria-hidden="true"

@@ -208,14 +208,16 @@
     mask-image: linear-gradient(
         to bottom,
         transparent 0,
-        black 2.5rem,
+        transparent 3rem,
+        black 4rem,
         black calc(100% - 8rem),
         transparent 100%
     );
     -webkit-mask-image: linear-gradient(
         to bottom,
         transparent 0,
-        black 2.5rem,
+        transparent 3rem,
+        black 4rem,
         black calc(100% - 8rem),
         transparent 100%
     );
