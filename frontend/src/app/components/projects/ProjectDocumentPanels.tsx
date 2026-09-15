@@ -12,6 +12,7 @@ import { cn } from "@/app/lib/utils";
 export type ProjectDocumentTab = {
     documentId: string;
     filename: string;
+    fileType?: string | null;
     versionId?: string | null;
     warning?: string | null;
     refetchKey?: number;
@@ -63,6 +64,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                       ]);
                 const viewType = resolveDocumentViewType({
                     filename: tab.filename,
+                    fileType: tab.fileType ?? document?.file_type,
                 });
                 return (
                     <div

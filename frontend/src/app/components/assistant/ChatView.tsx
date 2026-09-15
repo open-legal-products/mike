@@ -7,6 +7,8 @@ import { ArrowDown, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
 import { ChatInput } from "./ChatInput";
+import { InitialView } from "./InitialView";
+import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatInputPrompt } from "./ChatInputPrompt";
 import {
@@ -24,6 +26,7 @@ import type {
     Chat,
     Citation,
     EditAnnotation,
+    Document,
     Message,
 } from "../shared/types";
 import {
@@ -68,6 +71,8 @@ interface Props {
      * read-only caller gets the disabled composer instead of a 403 on send.
      */
     canSend?: boolean;
+    /** Shares document previews with the initial composer before a chat exists. */
+    onInitialSubmit?: (message: Message) => void;
 }
 
 const ASSISTANT_PANEL_TRANSITION_MS = 500;
@@ -96,6 +101,7 @@ export function ChatView({
     handleChat,
     cancel,
     canSend,
+    onInitialSubmit,
 }: Props) {
     const router = useRouter();
     const [tabs, setTabs] = useState<AssistantSidePanelTab[]>([]);
@@ -346,11 +352,17 @@ export function ChatView({
             filename: string;
             versionId: string | null;
             versionNumber: number | null;
+            fileType?: string | null;
         }) => {
             const document = await resolvePanelDocumentVersion({
                 document_id: args.documentId,
                 title: args.filename,
-                type: panelDocumentType(args.filename),
+                type: args.fileType
+                    ? resolveDocumentViewType({
+                          filename: args.filename,
+                          fileType: args.fileType,
+                      })
+                    : panelDocumentType(args.filename),
                 metadata: [],
                 quotes: [],
                 version_id: args.versionId,
@@ -364,6 +376,19 @@ export function ChatView({
             });
         },
         [upsertTab],
+    );
+
+    const handleAttachedDocumentClick = useCallback(
+        (document: Document) => {
+            void openDocument({
+                documentId: document.id,
+                filename: document.filename,
+                versionId: document.current_version_id ?? null,
+                versionNumber: document.active_version_number ?? null,
+                fileType: document.file_type,
+            });
+        },
+        [openDocument],
     );
 
     const [resolvedEditStatuses, setResolvedEditStatuses] = useState<
@@ -752,253 +777,253 @@ export function ChatView({
         <div className="h-full w-full flex relative">
             {/* Chat column */}
             <div className="flex min-w-0 flex-col h-full flex-1 relative">
-                <div
-                    data-slot="chat-header-actions"
-                    className="pointer-events-none absolute right-4 top-4.5 z-30 hidden md:block md:right-8"
-                >
-                    {renderChatHeaderActions()}
-                </div>
+                {onInitialSubmit ? (
+                    <InitialView
+                        onSubmit={onInitialSubmit}
+                        onDocumentClick={handleAttachedDocumentClick}
+                    />
+                ) : (
+                    <>
+                        <div
+                            data-slot="chat-header-actions"
+                            className="pointer-events-none absolute right-4 top-4.5 z-30 hidden md:block md:right-8"
+                        >
+                            {renderChatHeaderActions()}
+                        </div>
 
-                {mobileActionsContainer
-                    ? createPortal(
-                          <div className="flex min-w-0 items-center justify-end overflow-visible py-2 -my-2">
-                              {renderChatHeaderActions()}
-                          </div>,
-                          mobileActionsContainer,
-                      )
-                    : null}
+                        {mobileActionsContainer
+                            ? createPortal(
+                                  <div className="flex min-w-0 items-center justify-end overflow-visible py-2 -my-2">
+                                      {renderChatHeaderActions()}
+                                  </div>,
+                                  mobileActionsContainer,
+                              )
+                            : null}
 
-                {/* Scrollable messages */}
-                <div
-                    ref={messagesContainerRef}
-                    className="flex-1 w-full overflow-y-auto"
-                    style={{ scrollbarGutter: "stable both-edges" }}
-                >
-                    <div
-                        data-slot="chat-messages-content"
-                        className="w-full max-w-4xl mx-auto px-6 md:px-8 min-h-full flex flex-col relative"
-                        style={{
-                            paddingTop: CHAT_MESSAGE_TOP_PADDING,
-                            paddingBottom: messagesBottomPadding,
-                        }}
-                    >
-                        {!messagesVisible && (
-                            <div className="space-y-6 md:space-y-8 w-full">
-                                <div className="flex justify-end">
-                                    <div className="bg-gray-100 rounded-2xl p-4 w-2/5">
-                                        <div className="theme-shimmer h-4 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded w-full" />
+                        {/* Scrollable messages */}
+                        <div
+                            ref={messagesContainerRef}
+                            className="flex-1 w-full overflow-y-auto"
+                            style={{ scrollbarGutter: "stable both-edges" }}
+                        >
+                            <div
+                                data-slot="chat-messages-content"
+                                className="w-full max-w-4xl mx-auto px-6 md:px-8 min-h-full flex flex-col relative"
+                                style={{
+                                    paddingTop: CHAT_MESSAGE_TOP_PADDING,
+                                    paddingBottom: messagesBottomPadding,
+                                }}
+                            >
+                                {!messagesVisible && (
+                                    <div className="space-y-6 md:space-y-8 w-full">
+                                        <div className="flex justify-end">
+                                            <div className="bg-gray-100 rounded-2xl p-4 w-2/5">
+                                                <div className="theme-shimmer h-4 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded w-full" />
+                                            </div>
+                                        </div>
+                                        <div className="space-y-3">
+                                            {[1, 2, 3, 4].map((i) => (
+                                                <div
+                                                    key={i}
+                                                    className={`theme-shimmer h-4 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded ${i === 3 ? "w-5/6" : i === 4 ? "w-4/6" : "w-full"}`}
+                                                />
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="space-y-3">
-                                    {[1, 2, 3, 4].map((i) => (
-                                        <div
-                                            key={i}
-                                            className={`theme-shimmer h-4 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded ${i === 3 ? "w-5/6" : i === 4 ? "w-4/6" : "w-full"}`}
-                                        />
-                                    ))}
+                                )}
+                                <div
+                                    className="space-y-6 md:space-y-8 transition-opacity duration-150"
+                                    style={{ opacity: messagesVisible ? 1 : 0 }}
+                                >
+                                    {(() => {
+                                        const lastUserIndex = messages
+                                            .map((m) => m.role)
+                                            .lastIndexOf("user");
+                                        const lastAssistantIndex = messages
+                                            .map((m) => m.role)
+                                            .lastIndexOf("assistant");
+                                        return messages.map((msg, i) => (
+                                            <div
+                                                key={msg.id ?? i}
+                                                ref={
+                                                    i === lastUserIndex
+                                                        ? latestUserMessageRef
+                                                        : null
+                                                }
+                                            >
+                                                {msg.role === "user" ? (
+                                                    <UserMessage
+                                                        content={msg.content ?? ""}
+                                                        files={msg.files}
+                                                        workflow={msg.workflow}
+                                                        onWorkflowClick={(wf) => {
+                                                            setWorkflowModalInitialId(
+                                                                wf.id,
+                                                            );
+                                                            setWorkflowModalOpen(true);
+                                                        }}
+                                                        onFileClick={(file) => {
+                                                            if (!file.document_id)
+                                                                return;
+                                                            openDocument({
+                                                                documentId:
+                                                                    file.document_id,
+                                                                filename:
+                                                                    file.filename,
+                                                                versionId:
+                                                                    file.version_id ??
+                                                                    null,
+                                                                versionNumber:
+                                                                    file.version_number ??
+                                                                    null,
+                                                            });
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <AssistantMessage
+                                                        events={msg.events}
+                                                        isStreaming={
+                                                            i === messages.length - 1 &&
+                                                            isResponseLoading
+                                                        }
+                                                        isError={!!msg.error}
+                                                        errorMessage={
+                                                            typeof msg.error ===
+                                                            "string"
+                                                                ? msg.error
+                                                                : undefined
+                                                        }
+                                                        citations={msg.citations}
+                                                        citationStatus={
+                                                            msg.citationStatus
+                                                        }
+                                                        activeCitation={
+                                                            activeCitation
+                                                        }
+                                                        onCitationClick={(citation) =>
+                                                            void openCitation(citation)
+                                                        }
+                                                        onOpenCitationSource={(
+                                                            citation,
+                                                        ) =>
+                                                            void openCitation(
+                                                                citation,
+                                                                {
+                                                                    showQuotes: false,
+                                                                },
+                                                            )
+                                                        }
+                                                        onCaseClick={(citation) =>
+                                                            openCase(citation)
+                                                        }
+                                                        minHeight={
+                                                            i === lastAssistantIndex
+                                                                ? minHeight
+                                                                : "0px"
+                                                        }
+                                                        onWorkflowClick={(id) => {
+                                                            setWorkflowModalInitialId(
+                                                                id,
+                                                            );
+                                                            setWorkflowModalOpen(true);
+                                                        }}
+                                                        onEditViewClick={openEditor}
+                                                        onOpenDocument={openDocument}
+                                                        onEditResolveStart={
+                                                            handleEditResolveStart
+                                                        }
+                                                        onEditResolved={
+                                                            handleEditResolved
+                                                        }
+                                                        onEditError={handleEditError}
+                                                        isDocReloading={(docId) =>
+                                                            reloadingDocIds.has(docId)
+                                                        }
+                                                        isEditReloading={(editId) =>
+                                                            reloadingEditIds.has(editId)
+                                                        }
+                                                        resolvedEditStatuses={
+                                                            resolvedEditStatuses
+                                                        }
+                                                    />
+                                                )}
+                                            </div>
+                                        ));
+                                    })()}
+                                    <div ref={messagesEndRef} />
                                 </div>
                             </div>
-                        )}
-                        <div
-                            className="space-y-6 md:space-y-8 transition-opacity duration-150"
-                            style={{ opacity: messagesVisible ? 1 : 0 }}
-                        >
-                            {(() => {
-                                const lastUserIndex = messages
-                                    .map((m) => m.role)
-                                    .lastIndexOf("user");
-                                const lastAssistantIndex = messages
-                                    .map((m) => m.role)
-                                    .lastIndexOf("assistant");
-                                return messages.map((msg, i) => (
-                                    <div
-                                        key={msg.id ?? i}
-                                        ref={
-                                            i === lastUserIndex
-                                                ? latestUserMessageRef
-                                                : null
-                                        }
-                                    >
-                                        {msg.role === "user" ? (
-                                            <UserMessage
-                                                content={msg.content ?? ""}
-                                                files={msg.files}
-                                                workflow={msg.workflow}
-                                                onWorkflowClick={(wf) => {
-                                                    setWorkflowModalInitialId(
-                                                        wf.id,
-                                                    );
-                                                    setWorkflowModalOpen(true);
-                                                }}
-                                                onFileClick={(file) => {
-                                                    if (!file.document_id)
-                                                        return;
-                                                    openDocument({
-                                                        documentId:
-                                                            file.document_id,
-                                                        filename:
-                                                            file.filename,
-                                                        versionId:
-                                                            file.version_id ??
-                                                            null,
-                                                        versionNumber:
-                                                            file.version_number ??
-                                                            null,
-                                                    });
-                                                }}
-                                            />
-                                        ) : (
-                                            <AssistantMessage
-                                                events={msg.events}
-                                                isStreaming={
-                                                    i === messages.length - 1 &&
-                                                    isResponseLoading
-                                                }
-                                                isError={!!msg.error}
-                                                errorMessage={
-                                                    typeof msg.error ===
-                                                    "string"
-                                                        ? msg.error
-                                                        : undefined
-                                                }
-                                                citations={msg.citations}
-                                                citationStatus={
-                                                    msg.citationStatus
-                                                }
-                                                activeCitation={
-                                                    activeCitation
-                                                }
-                                                onCitationClick={(citation) =>
-                                                    void openCitation(citation)
-                                                }
-                                                onOpenCitationSource={(
-                                                    citation,
-                                                ) =>
-                                                    void openCitation(
-                                                        citation,
-                                                        {
-                                                            showQuotes: false,
-                                                        },
-                                                    )
-                                                }
-                                                onCaseClick={(citation) =>
-                                                    openCase(citation)
-                                                }
-                                                minHeight={
-                                                    i === lastAssistantIndex
-                                                        ? minHeight
-                                                        : "0px"
-                                                }
-                                                onWorkflowClick={(id) => {
-                                                    setWorkflowModalInitialId(
-                                                        id,
-                                                    );
-                                                    setWorkflowModalOpen(true);
-                                                }}
-                                                onEditViewClick={openEditor}
-                                                onOpenDocument={openDocument}
-                                                onEditResolveStart={
-                                                    handleEditResolveStart
-                                                }
-                                                onEditResolved={
-                                                    handleEditResolved
-                                                }
-                                                onEditError={handleEditError}
-                                                isDocReloading={(docId) =>
-                                                    reloadingDocIds.has(docId)
-                                                }
-                                                isEditReloading={(editId) =>
-                                                    reloadingEditIds.has(editId)
-                                                }
-                                                resolvedEditStatuses={
-                                                    resolvedEditStatuses
-                                                }
-                                            />
-                                        )}
-                                    </div>
-                                ));
-                            })()}
-                            <div ref={messagesEndRef} />
                         </div>
-                    </div>
-                </div>
 
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
-                    <div className="mx-auto h-28 w-full max-w-4xl px-4 md:px-6">
-                        <div className="assistant-chat-input-fade h-full w-full" />
-                    </div>
-                </div>
-
-                {/* Scroll to bottom button */}
-                {showScrollButton && (
-                    <div
-                        className="absolute left-1/2 -translate-x-1/2 z-19"
-                        style={{
-                            bottom:
-                                inputHeight +
-                                CHAT_INPUT_BOTTOM_OFFSET +
-                                SCROLL_BUTTON_INPUT_GAP,
-                        }}
-                    >
-                        <button
-                            onClick={scrollToBottom}
-                            className={`cursor-pointer rounded-full p-2 transition-all ${LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS}`}
-                        >
-                            <ArrowDown className="h-6 w-6 text-gray-500" />
-                        </button>
-                    </div>
-                )}
-
-                {/* Chat input */}
-                <div className="absolute bottom-3 left-0 right-0 w-full z-30">
-                    <div className="pointer-events-none absolute -bottom-3 left-0 right-0 z-0">
-                        <div className="mx-auto h-7 w-full max-w-4xl px-4 md:px-6">
-                            <div className="h-full rounded-t-[20px] bg-app-background" />
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+                            <div className="mx-auto h-28 w-full max-w-4xl px-4 md:px-6">
+                                <div className="assistant-chat-input-fade h-full w-full" />
+                            </div>
                         </div>
-                    </div>
-                    <div
-                        ref={measuredInputRef}
-                        className="relative z-20 w-full max-w-4xl mx-auto px-4 md:px-6"
-                    >
-                        <div className="w-full rounded-t-[20px] bg-transparent">
-                            <ChatInputPrompt
-                                messages={messages}
-                                chatKey={chatId}
-                                canSend={canSend}
-                                onSubmit={(response, content, files) => {
-                                    void handleChat(
-                                        { role: "user", content, files },
-                                        { askInputsResponse: response },
-                                    );
+
+                        {/* Scroll to bottom button */}
+                        {showScrollButton && (
+                            <div
+                                className="absolute left-1/2 -translate-x-1/2 z-19"
+                                style={{
+                                    bottom:
+                                        inputHeight +
+                                        CHAT_INPUT_BOTTOM_OFFSET +
+                                        SCROLL_BUTTON_INPUT_GAP,
                                 }}
-                                onCancel={cancel}
                             >
-                                <ChatInput
-                                    ref={chatInputRef}
-                                    canSend={canSend}
-                                    onSubmit={handleChat}
-                                    onCancel={cancel}
-                                    isLoading={isResponseLoading}
-                                    chatKey={chatId}
-                                    chatModel={chatModel}
-                                    chatReasoningLevel={chatReasoningLevel}
-                                    onDocumentClick={(document) =>
-                                        openDocument({
-                                            documentId: document.id,
-                                            filename: document.filename,
-                                            versionId:
-                                                document.current_version_id ??
-                                                null,
-                                            versionNumber:
-                                                document.active_version_number ??
-                                                null,
-                                        })
-                                    }
-                                />
-                            </ChatInputPrompt>
+                                <button
+                                    onClick={scrollToBottom}
+                                    className={`cursor-pointer rounded-full p-2 transition-all ${LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS}`}
+                                >
+                                    <ArrowDown className="h-6 w-6 text-gray-500" />
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Chat input */}
+                        <div className="absolute bottom-3 left-0 right-0 w-full z-30">
+                            <div className="pointer-events-none absolute -bottom-3 left-0 right-0 z-0">
+                                <div className="mx-auto h-7 w-full max-w-4xl px-4 md:px-6">
+                                    <div className="h-full rounded-t-[20px] bg-app-background" />
+                                </div>
+                            </div>
+                            <div
+                                ref={measuredInputRef}
+                                className="relative z-20 w-full max-w-4xl mx-auto px-4 md:px-6"
+                            >
+                                <div className="w-full rounded-t-[20px] bg-transparent">
+                                    <ChatInputPrompt
+                                        messages={messages}
+                                        chatKey={chatId}
+                                        canSend={canSend}
+                                        onSubmit={(response, content, files) => {
+                                            void handleChat(
+                                                { role: "user", content, files },
+                                                { askInputsResponse: response },
+                                            );
+                                        }}
+                                        onCancel={cancel}
+                                    >
+                                        <ChatInput
+                                            ref={chatInputRef}
+                                            canSend={canSend}
+                                            onSubmit={handleChat}
+                                            onCancel={cancel}
+                                            isLoading={isResponseLoading}
+                                            chatKey={chatId}
+                                            chatModel={chatModel}
+                                            chatReasoningLevel={chatReasoningLevel}
+                                            onDocumentClick={
+                                                handleAttachedDocumentClick
+                                            }
+                                        />
+                                    </ChatInputPrompt>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </div>
+                    </>
+                )}
             </div>
 
             <AssistantWorkflowModal

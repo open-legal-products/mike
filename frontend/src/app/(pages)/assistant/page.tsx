@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { useAssistantChat } from "@/app/hooks/useAssistantChat";
-import { InitialView } from "@/app/components/assistant/InitialView";
 import { ChatView } from "@/app/components/assistant/ChatView";
 import type { Message } from "@/app/components/shared/types";
 
@@ -22,17 +21,14 @@ export default function AssistantPage() {
         if (chatId) router.push(`/assistant/chat/${chatId}`);
     }
 
-    if (messages.length === 0) {
-        return (
-            <InitialView
-                onSubmit={(message) => void handleInitialSubmit(message)}
-            />
-        );
-    }
-
     return (
         <ChatView
             chatId={chatId}
+            onInitialSubmit={
+                messages.length === 0
+                    ? (message) => void handleInitialSubmit(message)
+                    : undefined
+            }
             chatModel={messages[0]?.model ?? null}
             chatReasoningLevel={messages[0]?.reasoning ?? null}
             messages={messages}

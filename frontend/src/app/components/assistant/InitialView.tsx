@@ -13,7 +13,7 @@ import {
     listQuickActions,
     updateQuickAction,
 } from "@/app/lib/mikeApi";
-import type { Message, QuickAction } from "../shared/types";
+import type { Document, Message, QuickAction } from "../shared/types";
 import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
@@ -21,11 +21,12 @@ import {
 
 interface InitialViewProps {
     onSubmit: (message: Message) => void;
+    onDocumentClick?: (document: Document) => void;
 }
 
 const ICON_SIZE = 30;
 const GAP = 12; // gap-4 = 1rem = 16px
-export function InitialView({ onSubmit }: InitialViewProps) {
+export function InitialView({ onSubmit, onDocumentClick }: InitialViewProps) {
     const { user } = useAuth();
     const { profile } = useUserProfile();
     const [loaded, setLoaded] = useState(false);
@@ -216,6 +217,7 @@ export function InitialView({ onSubmit }: InitialViewProps) {
                 <ChatInput
                     ref={chatInputRef}
                     onSubmit={onSubmit}
+                    onDocumentClick={onDocumentClick}
                     onCancel={() => {}}
                     isLoading={false}
                 />

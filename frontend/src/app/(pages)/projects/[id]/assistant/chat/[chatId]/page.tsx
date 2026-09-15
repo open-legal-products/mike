@@ -662,23 +662,34 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         filename: string,
         quotes?: CitationQuote[],
         versionId?: string | null,
+        fileType?: string | null,
     ) {
         setTabs((prev) => {
             const existing = prev.find((t) => t.documentId === docId);
             if (existing) {
                 if (
-                    versionId !== undefined &&
-                    existing.versionId !== versionId
+                    (versionId !== undefined &&
+                        existing.versionId !== versionId) ||
+                    (fileType !== undefined && existing.fileType !== fileType)
                 ) {
                     return prev.map((t) =>
-                        t.documentId === docId ? { ...t, versionId } : t,
+                        t.documentId === docId
+                            ? {
+                                  ...t,
+                                  versionId:
+                                      versionId === undefined
+                                          ? t.versionId
+                                          : versionId,
+                                  fileType: fileType ?? t.fileType,
+                              }
+                            : t,
                     );
                 }
                 return prev;
             }
             return [
                 ...prev,
-                { documentId: docId, filename, versionId },
+                { documentId: docId, filename, versionId, fileType },
             ];
         });
         setActiveTabId(docId);
@@ -722,7 +733,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     );
 
     const handleDocClick = (doc: Document) => {
-        openTab(doc.id, doc.filename, undefined, null);
+        openTab(doc.id, doc.filename, undefined, null, doc.file_type);
     };
 
     const handleCitationClick = (citation: Citation) => {

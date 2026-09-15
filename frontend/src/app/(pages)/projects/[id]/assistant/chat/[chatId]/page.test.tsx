@@ -15,6 +15,7 @@ import type {
 import ProjectAssistantChatPage from "./page";
 
 const state = vi.hoisted(() => ({
+    attachmentFilename: "Budget.xlsx",
     replace: vi.fn(),
     push: vi.fn(),
     getChat: vi.fn(),
@@ -96,21 +97,36 @@ vi.mock("@/app/components/assistant/ChatInput", () => ({
         canSend,
         chatKey,
         isLoading,
+        onDocumentClick,
     }: {
         onSubmit: (message: Message) => void;
         canSend: boolean;
         chatKey: string;
         isLoading: boolean;
+        onDocumentClick: (document: Document) => void;
     }) => (
-        <button
-            disabled={!canSend || isLoading}
-            onClick={() =>
-                onSubmit({ role: "user", content: "First question" })
-            }
-            data-chat-key={chatKey}
-        >
-            Send question
-        </button>
+        <>
+            <button
+                onClick={() =>
+                    onDocumentClick({
+                        id: "excel-attachment",
+                        filename: state.attachmentFilename,
+                        file_type: "xlsx",
+                    } as Document)
+                }
+            >
+                Open attached Excel
+            </button>
+            <button
+                disabled={!canSend || isLoading}
+                onClick={() =>
+                    onSubmit({ role: "user", content: "First question" })
+                }
+                data-chat-key={chatKey}
+            >
+                Send question
+            </button>
+        </>
     ),
 }));
 vi.mock("@/app/components/assistant/ChatInputPrompt", () => ({
@@ -135,7 +151,9 @@ vi.mock("@/app/components/shared/views/PdfView", () => ({
     PdfView: () => null,
 }));
 vi.mock("@/app/components/shared/views/SpreadsheetView", () => ({
-    SpreadsheetView: () => null,
+    SpreadsheetView: ({ documentId }: { documentId: string }) => (
+        <div data-testid="excel-viewer" data-document-id={documentId} />
+    ),
 }));
 vi.mock("@/app/components/modals/AddDocumentsModal", () => ({
     AddDocumentsModal: () => null,
@@ -153,6 +171,7 @@ vi.mock("@/app/components/projects/ProjectWorkspaceTips", () => ({
 beforeEach(() => {
     vi.clearAllMocks();
     state.chats = [];
+    state.attachmentFilename = "Budget.xlsx";
     state.projectChats = [];
     state.loadChats.mockResolvedValue(undefined);
     window.history.replaceState(null, "", "/projects/p1/assistant/chat");
@@ -262,3 +281,28 @@ describe("project chat workspace lifecycle", () => {
         ]);
     });
 });
+
+it.each(["Budget.xlsx", "Budget"])(
+    "opens direct Excel attachment %s in the IDE document viewer",
+    async (filename) => {
+        state.attachmentFilename = filename;
+        await renderWorkspace();
+        fireEvent.click(
+            screen.getByRole("button", { name: "Open attached Excel" }),
+        );
+        const panel = screen.getByRole("tabpanel", { name: filename });
+        expect(panel).toContainElement(screen.getByTestId("excel-viewer"));
+        expect(screen.getByTestId("excel-viewer")).toHaveAttribute(
+            "data-document-id",
+            "excel-attachment",
+        );
+        expect(screen.getByRole("tab", { name: filename })).toHaveAttribute(
+            "aria-selected",
+            "true",
+        );
+        fireEvent.click(
+            screen.getByRole("button", { name: "Open attached Excel" }),
+        );
+        expect(screen.getAllByTestId("excel-viewer")).toHaveLength(1);
+    },
+);

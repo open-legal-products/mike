@@ -6,23 +6,19 @@ import {
     within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Chat, Message } from "@/app/components/shared/types";
+import type { Chat, Document, Message } from "@/app/components/shared/types";
 import { ChatView } from "./ChatView";
+import { listDocumentVersions } from "@/app/lib/mikeApi";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 
-const {
-    push,
-    renameChat,
-    deleteChat,
-    setCurrentChatId,
-    setNewChatMessages,
-} = vi.hoisted(() => ({
-    push: vi.fn(),
-    renameChat: vi.fn(),
-    deleteChat: vi.fn(),
-    setCurrentChatId: vi.fn(),
-    setNewChatMessages: vi.fn(),
-}));
+const { push, renameChat, deleteChat, setCurrentChatId, setNewChatMessages } =
+    vi.hoisted(() => ({
+        push: vi.fn(),
+        renameChat: vi.fn(),
+        deleteChat: vi.fn(),
+        setCurrentChatId: vi.fn(),
+        setNewChatMessages: vi.fn(),
+    }));
 
 const activeChat: Chat = {
     id: "chat-1",
@@ -59,8 +55,55 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
         setNewChatMessages,
     }),
 }));
+const spreadsheet = {
+    id: "excel-1",
+    filename: "Budget.xlsx",
+    file_type: "xlsx",
+    current_version_id: "excel-v4",
+    active_version_number: 4,
+} as Document;
 vi.mock("./ChatInput", () => ({
-    ChatInput: () => <div>Chat input</div>,
+    ChatInput: ({
+        onDocumentClick,
+    }: {
+        onDocumentClick?: (document: Document) => void;
+    }) => (
+        <button onClick={() => onDocumentClick?.(spreadsheet)}>
+            Open Budget.xlsx
+        </button>
+    ),
+}));
+vi.mock("@/app/contexts/AuthContext", () => ({
+    useAuth: () => ({ user: { id: "user-1", email: "user@example.com" } }),
+}));
+vi.mock("@/app/contexts/UserProfileContext", () => ({
+    useUserProfile: () => ({ profile: null }),
+}));
+vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
+    listDocumentVersions: vi.fn(),
+    listQuickActions: vi.fn().mockResolvedValue([]),
+}));
+vi.mock("../shared/views/SpreadsheetView", () => ({
+    SpreadsheetView: ({
+        documentId,
+        versionId,
+        active,
+    }: {
+        documentId: string;
+        versionId: string;
+        active: boolean;
+    }) => (
+        <div
+            data-testid="spreadsheet-viewer"
+            data-document-id={documentId}
+            data-version-id={versionId}
+            data-active={String(active)}
+        />
+    ),
+}));
+vi.mock("../shared/views/PdfView", () => ({
+    PdfView: () => <div data-testid="pdf-viewer" />,
 }));
 vi.mock("./UserMessage", () => ({ UserMessage: () => null }));
 vi.mock("./AssistantMessage", () => ({
@@ -86,11 +129,13 @@ function renderView(
     cancel = vi.fn(),
     messages: Message[] = [],
     mobileActionsContainer: HTMLElement | null = null,
+    onInitialSubmit?: (message: Message) => void,
 ) {
     render(
         <PageChromeContext.Provider value={{ mobileActionsContainer }}>
             <ChatView
                 chatId="chat-1"
+                onInitialSubmit={onInitialSubmit}
                 chat={activeChat}
                 messages={messages}
                 isResponseLoading={false}
@@ -113,6 +158,8 @@ function openActions() {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    spreadsheet.id = "excel-1";
+    spreadsheet.filename = "Budget.xlsx";
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
         configurable: true,
@@ -160,7 +207,9 @@ describe("ChatView header actions", () => {
         openActions();
         fireEvent.click(await screen.findByText("Share"));
 
-        expect(await screen.findByText("Chat access modal")).toBeInTheDocument();
+        expect(
+            await screen.findByText("Chat access modal"),
+        ).toBeInTheDocument();
     });
 
     it("moves the chat actions into the mobile header container", () => {
@@ -195,4 +244,68 @@ describe("ChatView header actions", () => {
         await waitFor(() => expect(deleteChat).toHaveBeenCalledWith("chat-1"));
         expect(push).toHaveBeenCalledWith("/assistant");
     });
+});
+
+describe("Excel attachment previews", () => {
+    it.each([false, true])(
+        "opens an Excel input pill in the side panel (initial composer: %s)",
+        async (initial) => {
+            renderView(vi.fn(), [], null, initial ? vi.fn() : undefined);
+            fireEvent.click(
+                screen.getByRole("button", { name: "Open Budget.xlsx" }),
+            );
+            const viewer = await screen.findByTestId("spreadsheet-viewer");
+            expect(viewer).toHaveAttribute("data-document-id", "excel-1");
+            expect(viewer).toHaveAttribute("data-version-id", "excel-v4");
+            expect(screen.queryByTestId("pdf-viewer")).not.toBeInTheDocument();
+            expect(listDocumentVersions).not.toHaveBeenCalled();
+            // Repeated pill clicks activate the existing tab.
+            fireEvent.click(
+                screen.getByRole("button", { name: "Open Budget.xlsx" }),
+            );
+            await waitFor(() =>
+                expect(
+                    screen.getAllByTestId("spreadsheet-viewer"),
+                ).toHaveLength(1),
+            );
+        },
+    );
+});
+
+it("keeps an initial attachment preview open when the first message arrives", async () => {
+    const initialSubmit = vi.fn();
+    const view = (messages: Message[], initial: boolean) => (
+        <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+            <ChatView
+                messages={messages}
+                isResponseLoading={false}
+                handleChat={vi.fn().mockResolvedValue("chat-1")}
+                cancel={vi.fn()}
+                onInitialSubmit={initial ? initialSubmit : undefined}
+            />
+        </PageChromeContext.Provider>
+    );
+    const { rerender } = render(view([], true));
+    fireEvent.click(screen.getByRole("button", { name: "Open Budget.xlsx" }));
+    const viewer = await screen.findByTestId("spreadsheet-viewer");
+    rerender(view([{ role: "user", content: "Review this workbook" }], false));
+    expect(screen.getByTestId("spreadsheet-viewer")).toBe(viewer);
+    expect(
+        screen.getByRole("button", { name: "Open Budget.xlsx" }),
+    ).toBeInTheDocument();
+});
+
+it("suspends inactive spreadsheet tabs in the assistant side panel", async () => {
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "Open Budget.xlsx" }));
+    const first = await screen.findByTestId("spreadsheet-viewer");
+    expect(first).toHaveAttribute("data-active", "true");
+    spreadsheet.id = "excel-2";
+    spreadsheet.filename = "Other.xlsx";
+    fireEvent.click(screen.getByRole("button", { name: "Open Budget.xlsx" }));
+    await waitFor(() =>
+        expect(screen.getAllByTestId("spreadsheet-viewer")).toHaveLength(2),
+    );
+    expect(first).toHaveAttribute("data-active", "false");
+    expect(first.closest('[aria-hidden="true"]')).toHaveAttribute("inert");
 });

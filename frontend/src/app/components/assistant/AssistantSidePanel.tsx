@@ -520,8 +520,10 @@ export function AssistantSidePanel({
                             key={tab.id}
                             className={`absolute inset-0 flex flex-col ${isActive ? "" : "invisible pointer-events-none"}`}
                             aria-hidden={!isActive}
+                            inert={!isActive}
                         >
                             <DocPanel
+                                active={isActive}
                                 document={tab.document}
                                 mode={mode}
                                 isReloading={
