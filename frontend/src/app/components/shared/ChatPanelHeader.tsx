@@ -52,6 +52,11 @@ export function ChatPanelHeader({
     const historyRef = useRef<HTMLDivElement>(null);
     const titleInputRef = useRef<HTMLInputElement>(null);
     const editingTitle = !!titleEdit;
+    const [previousEditingTitle, setPreviousEditingTitle] = useState(editingTitle);
+    if (previousEditingTitle !== editingTitle) {
+        setPreviousEditingTitle(editingTitle);
+        if (editingTitle) setHistoryOpen(false);
+    }
     const filteredChats = chats
         .filter((chat) => chat.id !== currentChatId)
         .filter((chat) =>
@@ -62,7 +67,6 @@ export function ChatPanelHeader({
 
     useEffect(() => {
         if (!editingTitle) return;
-        setHistoryOpen(false);
         // Wait for the actions menu to release its focus trap before focusing.
         const timer = window.setTimeout(() => titleInputRef.current?.focus(), 0);
         return () => window.clearTimeout(timer);
@@ -70,7 +74,6 @@ export function ChatPanelHeader({
 
     useEffect(() => {
         if (!historyOpen) return;
-        setNow(Date.now());
         const interval = window.setInterval(() => setNow(Date.now()), 60_000);
         return () => window.clearInterval(interval);
     }, [historyOpen]);
@@ -131,7 +134,10 @@ export function ChatPanelHeader({
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
                         <button
                             type="button"
-                            onClick={() => setHistoryOpen((open) => !open)}
+                            onClick={() => {
+                                setNow(Date.now());
+                                setHistoryOpen((open) => !open);
+                            }}
                             aria-expanded={historyOpen}
                             aria-haspopup="menu"
                             className={cn(

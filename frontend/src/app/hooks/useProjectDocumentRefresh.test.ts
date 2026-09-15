@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProjectDocumentRefresh } from "./useProjectDocumentRefresh";
@@ -12,6 +13,24 @@ afterEach(() => {
 });
 
 describe("useProjectDocumentRefresh", () => {
+    it("throttles the initial check through StrictMode setup and checks after the gap", async () => {
+        const refresh = vi.fn().mockResolvedValue(undefined);
+        renderHook(() => useProjectDocumentRefresh(refresh, "pdf"), {
+            wrapper: StrictMode,
+        });
+        expect(refresh).not.toHaveBeenCalled();
+        act(() => {
+            vi.advanceTimersByTime(29_999);
+            window.dispatchEvent(new Event("focus"));
+        });
+        expect(refresh).not.toHaveBeenCalled();
+        await act(async () => {
+            vi.advanceTimersByTime(1);
+            window.dispatchEvent(new Event("focus"));
+        });
+        expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
     it("checks on returning to an open tab, throttles duplicate focus events, and stops after closing", async () => {
         const refresh = vi.fn().mockResolvedValue(undefined);
         const { rerender, unmount } = renderHook(

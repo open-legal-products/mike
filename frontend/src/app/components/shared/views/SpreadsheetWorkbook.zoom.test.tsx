@@ -3,10 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Workbook, type WorkbookInstance } from "@fortune-sheet/react";
 import type { Sheet } from "@fortune-sheet/core";
-import {
-    SpreadsheetWorkbook,
-    type SpreadsheetSession,
-} from "./SpreadsheetWorkbook";
+import { SpreadsheetWorkbook } from "./SpreadsheetWorkbook";
 
 beforeEach(() => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
@@ -69,7 +66,8 @@ it.each([0.7, 1, 1.5])(
                 sheets={sheets}
                 hooks={{}}
                 workbookRef={createRef<WorkbookInstance>()}
-                sessionRef={createRef<SpreadsheetSession>()}
+                initialSession={null}
+                onSessionSave={vi.fn()}
             />,
         );
         await screen.findByText(`${zoomRatio * 100}%`);
@@ -108,14 +106,14 @@ it("scales row-number and column-letter headers with zoom buttons and keyboard z
         },
     ];
     const workbookRef = createRef<WorkbookInstance>();
-    const sessionRef = createRef<SpreadsheetSession>();
     const { container } = render(
         <SpreadsheetWorkbook
             Workbook={Workbook}
             sheets={sheets}
             hooks={{}}
             workbookRef={workbookRef}
-            sessionRef={sessionRef}
+            initialSession={null}
+            onSessionSave={vi.fn()}
         />,
     );
     await screen.findByText("100%");

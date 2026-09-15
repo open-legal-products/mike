@@ -23,7 +23,8 @@ interface Props {
     sheets: Sheet[];
     hooks: Hooks;
     workbookRef: RefObject<WorkbookInstance | null>;
-    sessionRef: RefObject<SpreadsheetSession | null>;
+    initialSession: SpreadsheetSession | null;
+    onSessionSave: (session: SpreadsheetSession) => void;
 }
 
 /** Mount only the active workbook: Fortune-sheet registers document-wide input handlers. */
@@ -32,11 +33,12 @@ export function SpreadsheetWorkbook({
     sheets,
     hooks,
     workbookRef,
-    sessionRef,
+    initialSession,
+    onSessionSave,
 }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [saved] = useState(() =>
-        sessionRef.current?.sourceSheets === sheets ? sessionRef.current : null,
+        initialSession?.sourceSheets === sheets ? initialSession : null,
     );
     // Fortune-sheet recalculates header dimensions when data changes, including zoomRatio.
     const [workbookSheets, setWorkbookSheets] = useState(
@@ -151,7 +153,7 @@ export function SpreadsheetWorkbook({
             const workbook = workbookRef.current;
             const container = containerRef.current;
             if (!workbook || !container) return;
-            sessionRef.current = {
+            onSessionSave({
                 sourceSheets: sheets,
                 // status chooses the initial sheet; zoomRatio is already part of the sheet data.
                 sheets: workbook.getAllSheets().map((sheet) => ({
@@ -166,9 +168,9 @@ export function SpreadsheetWorkbook({
                     container.querySelector<HTMLElement>(
                         ".luckysheet-scrollbar-y",
                     )?.scrollTop ?? 0,
-            };
+            });
         };
-    }, [saved, sheets, workbookRef, sessionRef]);
+    }, [saved, sheets, workbookRef, onSessionSave]);
 
     return (
         <div ref={containerRef} className="relative min-h-0 flex-1">

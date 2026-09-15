@@ -55,6 +55,37 @@ function RenameHarness({ onSave }: { onSave: (title: string) => void }) {
 }
 
 describe("ChatPanelHeader", () => {
+    it("closes history when title editing starts and keeps it closed when editing ends", () => {
+        const props = {
+            chats: [{ id: "chat-2", title: "Earlier advice" }],
+            currentChatId: "chat-1",
+            currentTitle: "Current draft",
+            actions: null,
+            onLoad: vi.fn(),
+            onNewChat: vi.fn(),
+        };
+        const { rerender } = render(<ChatPanelHeader {...props} />);
+        fireEvent.click(screen.getByRole("button", { name: "Current draft" }));
+        expect(screen.getByRole("menu")).toBeVisible();
+        rerender(
+            <ChatPanelHeader
+                {...props}
+                titleEdit={{
+                    value: "Current draft",
+                    onChange: vi.fn(),
+                    onSave: vi.fn(),
+                    onCancel: vi.fn(),
+                }}
+            />,
+        );
+        expect(screen.queryByRole("menu")).toBeNull();
+        rerender(<ChatPanelHeader {...props} />);
+        expect(screen.getByRole("button", { name: "Current draft" })).toHaveAttribute(
+            "aria-expanded", "false",
+        );
+        expect(screen.queryByRole("menu")).toBeNull();
+    });
+
     it("shows compact creation times alongside titles and omits unavailable timestamps", () => {
         const now = Date.parse("2026-09-15T12:00:00Z");
         const clock = vi.spyOn(Date, "now").mockReturnValue(now);

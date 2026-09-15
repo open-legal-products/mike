@@ -10,15 +10,17 @@ export function useProjectDocumentRefresh(
     refresh: () => Promise<void>,
     activeTabId: string | null,
 ) {
-    const lastCheckRef = useRef(Date.now());
+    const lastCheckRef = useRef<number | null>(null);
     const pendingRef = useRef<Promise<void> | null>(null);
     useEffect(() => {
+        // Initial project loading already fetched metadata; start the throttle on mount.
+        if (lastCheckRef.current === null) lastCheckRef.current = Date.now();
         if (!activeTabId) return;
         const check = () => {
             if (
                 document.visibilityState === "hidden" ||
                 pendingRef.current ||
-                Date.now() - lastCheckRef.current < MIN_CHECK_GAP_MS
+                Date.now() - (lastCheckRef.current ?? 0) < MIN_CHECK_GAP_MS
             )
                 return;
             lastCheckRef.current = Date.now();

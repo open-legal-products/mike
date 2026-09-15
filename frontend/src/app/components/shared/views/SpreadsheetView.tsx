@@ -253,7 +253,7 @@ export function SpreadsheetView({
     active = true,
 }: Props) {
     const workbookRef = useRef<WorkbookInstance>(null);
-    const sessionRef = useRef<SpreadsheetSession | null>(null);
+    const [session, setSession] = useState<SpreadsheetSession | null>(null);
     // The frame element, used to reach Fortune-sheet's scrollbars for measuring
     // the current scroll offset and viewport size when deciding whether to scroll.
     const containerRef = useRef<HTMLDivElement>(null);
@@ -537,7 +537,8 @@ export function SpreadsheetView({
                         key={workbookGeneration}
                         Workbook={WorkbookComponent}
                         workbookRef={workbookRef}
-                        sessionRef={sessionRef}
+                        initialSession={session}
+                        onSessionSave={setSession}
                         sheets={sheets}
                         hooks={hooks}
                     />
