@@ -160,6 +160,7 @@ module.exports = async (_env, options) => {
           "DocumentEventBlocksUI.tsx",
         ),
         "@mike/glass-card-ui": frontendSharedUi("GlassCardUI.tsx"),
+        "@mike/liquid-glass-ui": frontendSharedUi("LiquidGlassUI.ts"),
         "@mike/modal-ui": frontendSharedUi("ModalUI.tsx"),
         "@mike/header-buttons-ui": frontendSharedUi(
           "HeaderButtonsUI.tsx",
