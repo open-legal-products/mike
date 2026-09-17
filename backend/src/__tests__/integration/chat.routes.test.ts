@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
+import { streamAiSdk } from "../../lib/llm/aiSdk";
+import {
+    callStep,
+    config,
+    makeModel,
+    textStep,
+    tick,
+} from "../../lib/llm/__tests__/mockLanguageModel";
+import type { AssistantEvent } from "../../lib/chat/streaming";
 
 // #383's model-selection describes grew this file past the chat limiter's
 // 30-requests-per-window budget, so the last describe began answering 429
@@ -50,6 +59,38 @@ const {
         assistantMessageRows: null as Record<string, unknown>[] | null,
     },
 }));
+
+const { streamWithProvider, unexpectedFetch } = vi.hoisted(() => ({
+    streamWithProvider: vi.fn(),
+    unexpectedFetch: vi.fn(() => {
+        throw new Error("Unexpected network request in chat route tests");
+    }),
+}));
+
+vi.mock("../../lib/chatTitle", () => ({
+    generateAssistantChatTitle: vi.fn(async () => "Generated Title"),
+}));
+
+vi.mock("../../lib/llm/providers", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/llm/providers")>()),
+    streamWithProvider: (...args: unknown[]) => streamWithProvider(...args),
+}));
+
+vi.mock("../../lib/mcpConnectors", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/mcpConnectors")>()),
+    buildUserMcpTools: vi.fn(async () => []),
+}));
+
+beforeEach(() => {
+    unexpectedFetch.mockClear();
+    streamWithProvider.mockReset();
+    vi.stubGlobal("fetch", unexpectedFetch);
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+    expect(unexpectedFetch).not.toHaveBeenCalled();
+});
 
 // A permissive, chainable Supabase stub. Every query-builder method returns the
 // same object (so arbitrary chains work), the object is awaitable (thenable),
@@ -135,6 +176,16 @@ function makeQuery(table: string) {
                 data: null,
                 error: { message: "assistant reservation failed" },
             };
+        } else if (
+            table === "chat_messages" &&
+            dbControl.assistantMessageRows
+        ) {
+            dbControl.assistantMessageRows.push({
+                ...(value as Record<string, unknown>),
+                created_at: String(
+                    dbControl.assistantMessageRows.length,
+                ).padStart(4, "0"),
+            });
         }
         return q;
     });
@@ -191,6 +242,20 @@ function makeQuery(table: string) {
                 }
             }
             if (
+                activeUpdate?.table === "chat_messages" &&
+                dbControl.assistantMessageRows
+            ) {
+                for (const row of dbControl.assistantMessageRows) {
+                    if (
+                        activeUpdate.filters.every(
+                            (f) => row[f.column] === f.value,
+                        )
+                    ) {
+                        Object.assign(row, activeUpdate.value);
+                    }
+                }
+            }
+            if (
                 !activeUpdate &&
                 didSelect &&
                 table === "chat_messages" &&
@@ -229,6 +294,21 @@ function mockSupabase() {
     from: vi.fn((table: string) => makeQuery(table)),
     rpc: vi.fn((name: string, args: unknown) => {
       dbRpcCalls.push({ name, args });
+      // Model the append-only persistence seam for the wired pause/resume
+      // tests. The RPC implementation itself is not exercised here.
+      const params = args as Record<string, unknown>;
+      const row = dbControl.assistantMessageRows?.find(
+        (item) => item.id === params.p_message_id &&
+          item.chat_id === params.p_chat_id &&
+          item.author_user_id === params.p_author_user_id,
+      );
+      if (row && Array.isArray(row.content)) {
+        if (name === "append_chat_ask_inputs_response") {
+          row.content = [...row.content, params.p_response];
+        } else if (name === "append_chat_assistant_events") {
+          row.content = [...row.content, ...(params.p_events as unknown[])];
+        }
+      }
       return Promise.resolve({
         data: name.startsWith("append_chat_") ? "appended" : null,
         error: null,
@@ -344,6 +424,7 @@ function findAssistantUpdate() {
 describe("POST /chat — streaming endpoint", () => {
     beforeEach(() => {
     vi.clearAllMocks();
+    runLLMStream.mockReset();
     dbInserts.length = 0;
     dbUpdates.length = 0;
     dbRpcCalls.length = 0;
@@ -599,6 +680,255 @@ describe("POST /chat — streaming endpoint", () => {
         });
         expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
     });
+    it.each<AssistantEvent>([
+        {
+            type: "doc_created",
+            filename: "Draft.docx",
+            download_url: "/docx/draft",
+        },
+        {
+            type: "doc_download",
+            filename: "Draft.docx",
+            download_url: "/docx/draft",
+        },
+        {
+            type: "doc_edited",
+            filename: "Draft.docx",
+            document_id: "document-1",
+            version_id: "version-2",
+            version_number: 2,
+            download_url: "/docx/draft",
+            annotations: [],
+        },
+        {
+            type: "doc_replicated",
+            filename: "Template.docx",
+            count: 1,
+            copies: [
+                {
+                    new_filename: "Draft.docx",
+                    document_id: "document-1",
+                    version_id: "version-1",
+                },
+            ],
+        },
+        {
+            type: "workflow_applied",
+            workflow_id: "workflow-1",
+            title: "Draft a letter",
+        },
+        {
+            type: "error",
+            message: "Document generation failed.",
+            safe_to_display: true,
+        },
+    ])(
+        "persists a $type-only turn without an empty-response error",
+        async (event) => {
+            runLLMStream.mockResolvedValue({
+                fullText: "",
+                events: [event],
+                citations: [],
+            });
+
+            const res = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY);
+
+            expect(res.status).toBe(200);
+            expect(res.text).not.toContain("empty response");
+            expect(findAssistantUpdate()?.value).toMatchObject({
+                content: [event],
+            });
+            expect(res.text.match(/data: \[DONE\]/g)).toHaveLength(1);
+        },
+    );
+
+    it.each<AssistantEvent[]>([
+        [{ type: "reasoning", text: "Considering the request" }],
+        [{ type: "content", text: "   " }],
+        [{ type: "doc_read", filename: "Agreement.docx" }],
+        [
+            {
+                type: "doc_find",
+                filename: "Agreement.docx",
+                query: "notice",
+                total_matches: 1,
+            },
+        ],
+    ])(
+        "still reports an empty response for intermediate activity %#",
+        async (...events) => {
+            runLLMStream.mockResolvedValue({
+                fullText: " ",
+                events,
+                citations: [],
+            });
+
+            const res = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY);
+
+            expect(res.text).toContain("empty response");
+            expect(res.text.match(/data: \[DONE\]/g)).toHaveLength(1);
+            expect(findAssistantUpdate()).toBeUndefined();
+        },
+    );
+
+    it.each([false, true])(
+        "persists and resumes a real SDK clarification pause (malformed first call: %s)",
+        async (malformedFirstCall) => {
+            const realChat =
+                await vi.importActual<typeof import("../../lib/chat")>(
+                    "../../lib/chat",
+                );
+            const mockedChat = await import("../../lib/chat");
+            const question = {
+                id: "jurisdiction",
+                kind: "text",
+                question: "Which jurisdiction?",
+            };
+            const model = makeModel([
+                ...(malformedFirstCall
+                    ? [callStep("bad-1", "ask_inputs", '{"items":')]
+                    : []),
+                callStep("ask-1", "ask_inputs", { items: [question] }),
+                textStep("must not run after a clarification pause"),
+            ]);
+            streamWithProvider.mockImplementationOnce((params) =>
+                streamAiSdk(params, config(model)),
+            );
+            runLLMStream.mockImplementationOnce(realChat.runLLMStream);
+            vi.mocked(mockedChat.buildMessages).mockImplementationOnce(
+                realChat.buildMessages,
+            );
+            vi.mocked(mockedChat.enrichWithPriorEvents).mockImplementationOnce(
+                realChat.enrichWithPriorEvents,
+            );
+            dbControl.assistantMessageRows = [];
+            await seedResolvableModel();
+
+            const first = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send({ ...VALID_BODY, model: "gpt-5.6-terra" });
+
+            expect(first.text).toContain('"type":"ask_inputs"');
+            expect(first.text).not.toContain('"type":"error"');
+            expect(first.text.match(/data: \[DONE\]/g)).toHaveLength(1);
+            expect(findAssistantUpdate()?.value).toMatchObject({
+                content: expect.arrayContaining([
+                    expect.objectContaining({ type: "ask_inputs", items: [question] }),
+                ]),
+            });
+            await tick();
+            expect(model.doStreamCalls).toHaveLength(
+                malformedFirstCall ? 2 : 1,
+            );
+            if (malformedFirstCall) {
+                expect(
+                    JSON.stringify(model.doStreamCalls[1]?.prompt),
+                ).toContain("bad-1");
+                expect(
+                    JSON.stringify(model.doStreamCalls[1]?.prompt),
+                ).toContain("error");
+            }
+
+            const loaded = await request(app)
+                .get("/chat/chat-1")
+                .set("Authorization", "Bearer test");
+            expect(loaded.status).toBe(200);
+            expect(loaded.body.messages).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        role: "assistant",
+                        content: expect.arrayContaining([
+                            expect.objectContaining({ type: "ask_inputs", items: [question] }),
+                        ]),
+                    }),
+                ]),
+            );
+
+            const pausedMessage = loaded.body.messages.find(
+                (message: { role: string }) => message.role === "assistant",
+            );
+            const askEvent = pausedMessage.content.find(
+                (event: { type: string }) => event.type === "ask_inputs",
+            );
+            expect(askEvent.event_id).toEqual(expect.any(String));
+            const resumed = makeModel([textStep("I will use New York law.")]);
+            streamWithProvider.mockImplementationOnce((params) =>
+                streamAiSdk(params, config(resumed)),
+            );
+            runLLMStream.mockImplementationOnce(realChat.runLLMStream);
+            vi.mocked(mockedChat.buildMessages).mockImplementationOnce(
+                realChat.buildMessages,
+            );
+            vi.mocked(mockedChat.enrichWithPriorEvents).mockImplementationOnce(
+                realChat.enrichWithPriorEvents,
+            );
+            await seedResolvableModel();
+            const second = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send({
+                    model: "gpt-5.6-terra",
+                    chat_id: "chat-1",
+                    messages: [
+                        { role: "user", content: "Draft a letter." },
+                        { role: "assistant", content: "" },
+                        { role: "user", content: "New York" },
+                    ],
+                    ask_inputs_response: {
+                        assistant_message_id: pausedMessage.id,
+                        ask_event_id: askEvent.event_id,
+                        responses: [{ ...question, answer: "New York" }],
+                    },
+                });
+
+            expect(second.text).not.toContain('"type":"error"');
+            expect(dbRpcCalls).toContainEqual({
+                name: "append_chat_ask_inputs_response",
+                args: expect.objectContaining({
+                    p_chat_id: "chat-1",
+                    p_message_id: pausedMessage.id,
+                    p_ask_event_id: askEvent.event_id,
+                    p_author_user_id: "u1",
+                    p_response: expect.objectContaining({
+                        assistant_message_id: pausedMessage.id,
+                        ask_event_id: askEvent.event_id,
+                    }),
+                }),
+            });
+            const deltas = second.text
+                .split("\n\n")
+                .filter((line) => line.startsWith("data: {"))
+                .map((line) => JSON.parse(line.slice(6)))
+                .filter((event) => event.type === "content_delta");
+            expect(deltas.map((event) => event.text).join("")).toBe(
+                "I will use New York law.",
+            );
+            expect(second.text.match(/data: \[DONE\]/g)).toHaveLength(1);
+            expect(JSON.stringify(resumed.doStreamCalls[0]?.prompt)).toContain(
+                "user answered:",
+            );
+            expect(JSON.stringify(resumed.doStreamCalls[0]?.prompt)).toContain(
+                "New York",
+            );
+            const saved = dbControl.assistantMessageRows.filter(
+                (row) => row.role === "assistant",
+            );
+            expect(saved).toHaveLength(1);
+            expect(saved[0].content).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ type: "ask_inputs_response" }),
+                    { type: "content", text: "I will use New York law." },
+                ]),
+            );
+        },
+    );
 
     it("stores cloud Word chats only in the document-scoped Word tables", async () => {
         const chatLib = await import("../../lib/chat");

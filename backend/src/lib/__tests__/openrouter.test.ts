@@ -259,30 +259,32 @@ describe("OpenRouter LLM adapter", () => {
         // The upstream connection died mid-arguments: the JSON fragment can
         // never parse. Coercing it to {} would EXECUTE a side-effecting tool
         // with empty input; the stream must error like a mid-stream {"error"}.
-        vi.stubGlobal(
-            "fetch",
-            vi.fn().mockResolvedValue(
-                streamResponse([
-                    {
-                        choices: [
+        const body = `data: ${JSON.stringify({
+            choices: [
+                {
+                    delta: {
+                        tool_calls: [
                             {
-                                delta: {
-                                    tool_calls: [
-                                        {
-                                            index: 0,
-                                            id: "call-1",
-                                            type: "function",
-                                            function: {
-                                                name: "delete_document",
-                                                arguments: '{"term":"contr',
-                                            },
-                                        },
-                                    ],
+                                index: 0,
+                                id: "call-1",
+                                type: "function",
+                                function: {
+                                    name: "delete_document",
+                                    arguments: '{"term":"contr',
                                 },
                             },
                         ],
                     },
-                ]),
+                },
+            ],
+        })}\n\n`;
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(
+                new Response(body, {
+                    status: 200,
+                    headers: { "Content-Type": "text/event-stream" },
+                }),
             ),
         );
         const runTools = vi.fn();
@@ -297,6 +299,52 @@ describe("OpenRouter LLM adapter", () => {
                 runTools,
             }),
         ).rejects.toThrow(/malformed JSON arguments .* "delete_document"/);
+        expect(runTools).not.toHaveBeenCalled();
+    });
+
+    it("fails the stream when valid tool arguments arrive without a terminal event", async () => {
+        // A complete JSON object is still unsafe to execute if a proxy closed
+        // the stream before the provider finished the tool round.
+        const body = `data: ${JSON.stringify({
+            choices: [
+                {
+                    delta: {
+                        tool_calls: [
+                            {
+                                index: 0,
+                                id: "call-1",
+                                type: "function",
+                                function: {
+                                    name: "delete_document",
+                                    arguments: '{"term":"contract"}',
+                                },
+                            },
+                        ],
+                    },
+                },
+            ],
+        })}\n\n`;
+        vi.stubGlobal(
+            "fetch",
+            vi.fn().mockResolvedValue(
+                new Response(body, {
+                    status: 200,
+                    headers: { "Content-Type": "text/event-stream" },
+                }),
+            ),
+        );
+        const runTools = vi.fn();
+
+        await expect(
+            streamWithProvider({
+                model: "openrouter/anthropic/claude-sonnet-4.5",
+                systemPrompt: "Help",
+                messages: [{ role: "user", content: "Review" }],
+                tools: [functionTool("delete_document")],
+                apiKeys: { openrouter: "or-user-key" },
+                runTools,
+            }),
+        ).rejects.toThrow(/before a clean terminal event .* "delete_document"/);
         expect(runTools).not.toHaveBeenCalled();
     });
 
