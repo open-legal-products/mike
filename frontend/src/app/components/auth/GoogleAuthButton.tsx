@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { GoogleIconUI } from "@/shared/ui/GoogleIconUI";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { startGoogleOAuth } from "@/app/lib/authApi";
 
 interface GoogleAuthButtonProps {
@@ -38,7 +38,7 @@ export function GoogleAuthButton({
     };
 
     return (
-        <PillButton
+        <PillButtonUI
             type="button"
             tone="white"
             size="normal"
@@ -49,6 +49,6 @@ export function GoogleAuthButton({
         >
             <GoogleIconUI className="h-4 w-4" />
             {loading ? "Continuing…" : "Continue with Google"}
-        </PillButton>
+        </PillButtonUI>
     );
 }

@@ -48,7 +48,7 @@ import {
 } from "@/app/components/settings/SettingsText";
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { settingsGlassIconButtonClassName } from "../settingsStyles";
 
 type PendingMfaAction =
@@ -931,7 +931,7 @@ function ConnectorRow({
             className="shrink-0 justify-self-end"
             onClick={(event) => event.stopPropagation()}
           >
-            <ToggleSwitch
+            <ToggleSwitchUI
               checked={connector.enabled}
               disabled={busyKey === `connector:${connector.id}`}
               aria-busy={busyKey === `connector:${connector.id}`}
@@ -940,7 +940,7 @@ function ConnectorRow({
               }
             >
               {connector.enabled ? "Enabled" : "Disabled"}
-            </ToggleSwitch>
+            </ToggleSwitchUI>
           </div>
           <div className="min-w-0 truncate">
             <SettingsDescription>{connector.serverUrl}</SettingsDescription>
@@ -1025,7 +1025,7 @@ function McpConnectorDetailsModal({
       breadcrumbs={["Connectors", connector?.name ?? "MCP connector"]}
       headerAction={
         connector ? (
-          <ToggleSwitch
+          <ToggleSwitchUI
             checked={connector.enabled}
             disabled={busyKey === `connector:${connector.id}`}
             aria-busy={busyKey === `connector:${connector.id}`}
@@ -1034,7 +1034,7 @@ function McpConnectorDetailsModal({
             }
           >
             {connector.enabled ? "Enabled" : "Disabled"}
-          </ToggleSwitch>
+          </ToggleSwitchUI>
         ) : null
       }
       size="md"
@@ -1421,7 +1421,7 @@ function ScrollableToolList({
                   {toolLabel}
                 </p>
                 {onToolEnabled ? (
-                  <ToggleSwitch
+                  <ToggleSwitchUI
                     checked={tool.enabled}
                     disabled={disabled || busyKey === `tool:${tool.id}`}
                     aria-busy={busyKey === `tool:${tool.id}`}

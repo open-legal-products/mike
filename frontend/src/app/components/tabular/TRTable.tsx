@@ -22,7 +22,7 @@ import {
     TableScrollArea,
 } from "../shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { TRFirstColumnCell } from "./TRFirstColumnCell";
 import {
@@ -271,22 +271,22 @@ export const TRTable = forwardRef<TRTableHandle, Props>(function TRTable(
                         description="Add columns and documents to get started."
                         action={
                             <div className="flex items-center gap-2">
-                                <PillButton
+                                <PillButtonUI
                                     tone="black"
                                     size="sm"
                                     onClick={onAddColumn}
                                 >
                                     <Plus className="h-3.5 w-3.5" />
                                     Add Columns
-                                </PillButton>
-                                <PillButton
+                                </PillButtonUI>
+                                <PillButtonUI
                                     tone="white"
                                     size="sm"
                                     onClick={onAddDocuments}
                                 >
                                     <Upload className="h-3.5 w-3.5" />
                                     Add Documents
-                                </PillButton>
+                                </PillButtonUI>
                             </div>
                         }
                     />

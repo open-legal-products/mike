@@ -1,6 +1,6 @@
 import React from "react";
 import { Trash2 } from "lucide-react";
-import { ToggleSwitch } from "../../../shared/ui/toggle-switch";
+import { ToggleSwitchUI } from "@mike/toggle-switch-ui";
 import { PageTitle } from "../primitives/PageTitle";
 import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
@@ -55,7 +55,7 @@ export function SettingsPage({
                   your other devices.
                 </p>
               </div>
-              <ToggleSwitch
+              <ToggleSwitchUI
                 aria-label="Save chats in the cloud"
                 checked={storageMode === "cloud"}
                 disabled={saving}

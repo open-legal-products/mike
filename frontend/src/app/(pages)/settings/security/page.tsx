@@ -17,8 +17,8 @@ import {
   unenrollMfa,
   verifyMfa,
 } from "@/app/lib/authApi";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { PasswordSettingsSection } from "@/app/components/settings/PasswordSettingsSection";
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
@@ -493,7 +493,7 @@ export default function SecurityPage() {
                     Enabled
                   </span>
                 ) : !enrollment ? (
-                  <PillButton
+                  <PillButtonUI
                     tone="blue"
                     size="sm"
                     onClick={() => setSetupModalOpen(true)}
@@ -502,7 +502,7 @@ export default function SecurityPage() {
                     className="shrink-0"
                   >
                     {busy ? "Starting..." : "Set up"}
-                  </PillButton>
+                  </PillButtonUI>
                 ) : null}
               </SettingsRow>
 
@@ -516,7 +516,7 @@ export default function SecurityPage() {
                         instead of only before sensitive actions.
                       </SettingsDescription>
                     </div>
-                    <ToggleSwitch
+                    <ToggleSwitchUI
                       checked={loginMfaEnabled}
                       disabled={savingLoginPreference}
                       aria-busy={savingLoginPreference}

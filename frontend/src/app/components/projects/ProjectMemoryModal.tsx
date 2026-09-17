@@ -13,10 +13,10 @@ import { Modal } from "@/app/components/modals/Modal";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { FieldLabel } from "@/app/components/ui/form-field";
-import { GlassCard } from "@/app/components/ui/glass-card";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { MarkdownEditor } from "@/app/components/ui/markdown-editor";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import {
     getProjectMemory,
     setProjectMemoryEnabled,
@@ -220,7 +220,7 @@ export function ProjectMemoryModal({
                 {loading || projectLoading ? (
                     <ProjectMemorySkeleton />
                 ) : loadError || !memory ? (
-                    <GlassCard>
+                    <GlassCardUI>
                         <EmptyState
                             icon={<Brain />}
                             title="Project memory could not be loaded"
@@ -228,16 +228,16 @@ export function ProjectMemoryModal({
                             tone="error"
                             className="px-5 py-8"
                             action={
-                                <PillButton
+                                <PillButtonUI
                                     tone="black"
                                     size="sm"
                                     onClick={() => void load()}
                                 >
                                     Retry
-                                </PillButton>
+                                </PillButtonUI>
                             }
                         />
-                    </GlassCard>
+                    </GlassCardUI>
                 ) : (
                     <>
                         <div className="flex items-start justify-between gap-4">
@@ -248,7 +248,7 @@ export function ProjectMemoryModal({
                                     from chats in this project.
                                 </p>
                             </div>
-                            <ToggleSwitch
+                            <ToggleSwitchUI
                                 checked={memory.enabled}
                                 onCheckedChange={(enabled) => {
                                     setSavedNotice(null);
@@ -273,7 +273,7 @@ export function ProjectMemoryModal({
                         </div>
 
                         {!memory.enabled ? (
-                            <GlassCard>
+                            <GlassCardUI>
                                 <EmptyState
                                     icon={<Brain />}
                                     title="Project memory is off"
@@ -284,7 +284,7 @@ export function ProjectMemoryModal({
                                     }
                                     className="px-5 py-8"
                                 />
-                            </GlassCard>
+                            </GlassCardUI>
                         ) : (
                             <>
                                 {conflict ? (

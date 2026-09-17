@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { SiteLogo } from "@/app/components/site-logo";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { challengeAndVerifyMfa, listMfaFactors } from "@/app/lib/authApi";
 import { authGlassCardClassName } from "@/app/components/auth/authStyles";
@@ -202,7 +202,7 @@ export default function VerifyMfaPage() {
                         >
                             Cancel
                         </button>
-                        <PillButton
+                        <PillButtonUI
                             tone="black"
                             size="normal"
                             type="button"
@@ -211,7 +211,7 @@ export default function VerifyMfaPage() {
                             loading={verifying}
                         >
                             {verifying ? "Verifying..." : "Verify"}
-                        </PillButton>
+                        </PillButtonUI>
                     </div>
                 </div>
             </div>

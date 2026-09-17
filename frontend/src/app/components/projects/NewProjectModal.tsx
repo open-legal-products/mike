@@ -20,7 +20,7 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { Modal } from "../modals/Modal";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
 import { ModalSelect } from "../modals/ModalSelect";
-import { ToggleSwitch } from "../ui/toggle-switch";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { ProjectPracticeField } from "./ProjectPracticeField";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import {
@@ -500,7 +500,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
                         <div>
                             <FieldLabel as="p">Project memory</FieldLabel>
-                            <ToggleSwitch
+                            <ToggleSwitchUI
                                 checked={memoryEnabled}
                                 onCheckedChange={(enabled) => {
                                     memoryEditedRef.current = true;
@@ -509,7 +509,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                                 aria-label="Enable project memory"
                             >
                                 Let Mike remember shared project context
-                            </ToggleSwitch>
+                            </ToggleSwitchUI>
                         </div>
                     </div>
                 ) : step === "access" ? (

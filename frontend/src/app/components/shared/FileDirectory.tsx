@@ -13,7 +13,7 @@ import type { Document, LibraryFolder, Project } from "./types";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProjectSvgIcon, SubfolderSvgIcon } from "./FolderSvgIcon";
 import { SearchBar } from "@/app/components/ui/search-bar";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { SkeletonLine } from "./TablePrimitive";
 import { TableLoadMoreRow } from "./TableLoadMoreRow";
 import { useDirectoryData, type DirectoryTab } from "./useDirectoryData";
@@ -1312,13 +1312,13 @@ function FileDirectoryControls({
                     {tabs.map((tab) => {
                         const active = activeTab === tab.value;
                         return (
-                            <TabPillButton
+                            <TabPillButtonUI
                                 key={tab.value}
                                 active={active}
                                 onClick={() => onChange(tab.value)}
                             >
                                 {tab.label}
-                            </TabPillButton>
+                            </TabPillButtonUI>
                         );
                     })}
                 </div>

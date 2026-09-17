@@ -3,7 +3,7 @@
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { Trash2 } from "lucide-react";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 
@@ -68,10 +68,10 @@ export function ConfirmPopup({
           </div>
         )}
         <div className="mt-3 flex items-center justify-end gap-2">
-          <PillButton tone="white" size="sm" onClick={onCancel}>
+          <PillButtonUI tone="white" size="sm" onClick={onCancel}>
             {cancelLabel}
-          </PillButton>
-          <PillButton
+          </PillButtonUI>
+          <PillButtonUI
             tone={isDangerAction ? "danger" : "black"}
             size="sm"
             onClick={onConfirm}
@@ -82,7 +82,7 @@ export function ConfirmPopup({
               <Trash2 className="h-3 w-3 shrink-0" />
             )}
             {resolvedConfirmLabel}
-          </PillButton>
+          </PillButtonUI>
         </div>
       </div>
     </div>,

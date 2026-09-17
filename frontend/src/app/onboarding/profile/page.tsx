@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { OnboardingShell } from "@/app/components/auth/OnboardingShell";
 import { authInputClassName } from "@/app/components/auth/authStyles";
 import { Input } from "@/app/components/ui/input";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -119,7 +119,7 @@ function ProfileDetailsForm({
                 )}
 
                 <div className="pt-2">
-                    <PillButton
+                    <PillButtonUI
                         type="submit"
                         tone="black"
                         size="normal"
@@ -127,7 +127,7 @@ function ProfileDetailsForm({
                         className="w-full"
                     >
                         {submitting ? "Saving..." : "Continue"}
-                    </PillButton>
+                    </PillButtonUI>
                 </div>
             </form>
         </OnboardingShell>

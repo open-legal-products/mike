@@ -49,8 +49,8 @@ import {
     type TableSortDirection,
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { LiquidDropdownSurface } from "@/app/components/ui/liquid-dropdown";
 import {
@@ -499,10 +499,10 @@ export default function TabularReviewsPage() {
     const toolbarActions =
         selectedIds.length > 0 ? (
             <div ref={actionsRef} className="relative">
-                <TabPillButton onClick={() => setActionsOpen((v) => !v)}>
+                <TabPillButtonUI onClick={() => setActionsOpen((v) => !v)}>
                     Actions
                     <ChevronDown className="h-3.5 w-3.5" />
-                </TabPillButton>
+                </TabPillButtonUI>
                 {actionsOpen && (
                     <LiquidDropdownSurface className="absolute top-full right-0 mt-1 z-[100] w-36 overflow-hidden">
                         <button
@@ -641,14 +641,14 @@ export default function TabularReviewsPage() {
                         <p className="mt-1 text-xs text-gray-400">
                             Check your connection and try again.
                         </p>
-                        <PillButton
+                        <PillButtonUI
                             tone="black"
                             size="sm"
                             onClick={retry}
                             className="mt-4"
                         >
                             Try again
-                        </PillButton>
+                        </PillButtonUI>
                     </TableEmptyState>
                 ) : filtered.length === 0 ? (
                     <TableEmptyState>
@@ -664,7 +664,7 @@ export default function TabularReviewsPage() {
                                     Extract data from documents into tables
                                     using AI.
                                 </p>
-                                <PillButton
+                                <PillButtonUI
                                     tone="black"
                                     size="sm"
                                     onClick={() => setNewTROpen(true)}
@@ -672,7 +672,7 @@ export default function TabularReviewsPage() {
                                     className="mt-4"
                                 >
                                     Create
-                                </PillButton>
+                                </PillButtonUI>
                             </>
                         ) : (
                             <p className="text-sm text-gray-400">

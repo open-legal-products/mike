@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Input } from "@/app/components/ui/input";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { SiteLogo } from "@/app/components/site-logo";
 import {
     authGlassCardClassName,
@@ -119,14 +120,16 @@ function ResetPasswordContent() {
                                 Your password has been changed. Log in again
                                 with your new password.
                             </p>
-                            <PillButton
-                                asChild
-                                tone="black"
-                                size="normal"
-                                className="mt-6"
+                            <Link
+                                href="/login"
+                                className={pillButtonUIClassName({
+                                    tone: "black",
+                                    size: "normal",
+                                    className: "mt-6",
+                                })}
                             >
-                                <Link href="/login">Log in</Link>
-                            </PillButton>
+                                Log in
+                            </Link>
                         </div>
                     ) : resetUnavailable ? (
                         <div>
@@ -136,16 +139,16 @@ function ResetPasswordContent() {
                             <p className="mt-3 text-sm leading-relaxed text-gray-600">
                                 {displayedError}
                             </p>
-                            <PillButton
-                                asChild
-                                tone="black"
-                                size="normal"
-                                className="mt-6"
+                            <Link
+                                href="/forgot-password"
+                                className={pillButtonUIClassName({
+                                    tone: "black",
+                                    size: "normal",
+                                    className: "mt-6",
+                                })}
                             >
-                                <Link href="/forgot-password">
-                                    Request another link
-                                </Link>
-                            </PillButton>
+                                Request another link
+                            </Link>
                         </div>
                     ) : (
                         <>
@@ -198,7 +201,7 @@ function ResetPasswordContent() {
                                         {error}
                                     </div>
                                 )}
-                                <PillButton
+                                <PillButtonUI
                                     type="submit"
                                     tone="black"
                                     size="normal"
@@ -210,7 +213,7 @@ function ResetPasswordContent() {
                                     {loading
                                         ? "Updating password..."
                                         : "Update password"}
-                                </PillButton>
+                                </PillButtonUI>
                             </form>
                         </>
                     )}

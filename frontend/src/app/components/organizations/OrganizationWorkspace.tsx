@@ -39,7 +39,7 @@ import { ClosedProjectSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -259,10 +259,10 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
     activeTab === "people" && isAdmin && selectedMemberIds.length > 0 ? (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <TabPillButton>
+          <TabPillButtonUI>
             Actions
             <ChevronDown className="h-3.5 w-3.5" />
-          </TabPillButton>
+          </TabPillButtonUI>
         </DropdownMenuTrigger>
         <LiquidDropdownContent align="end" className="z-[130] w-44">
           <LiquidDropdownItem

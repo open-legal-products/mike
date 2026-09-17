@@ -40,7 +40,7 @@ import {
     LIQUID_GLASS_PRESSED_CLASS,
     LIQUID_FLOAT_PANEL_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
-import { GlassIconButton } from "@/app/components/ui/glass-icon-button";
+import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 
@@ -461,9 +461,9 @@ export function TRSidePanel({
                             )}
                         </button>
                     )}
-                    <GlassIconButton onClick={onClose} aria-label="Close">
+                    <GlassIconButtonUI onClick={onClose} aria-label="Close">
                         <X className="h-3.5 w-3.5" />
-                    </GlassIconButton>
+                    </GlassIconButtonUI>
                 </div>
 
                 {/* Analysis panel */}

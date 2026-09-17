@@ -16,8 +16,8 @@ import {
     LiquidDropdownContent,
     LiquidDropdownRadioItem,
 } from "@/app/components/ui/liquid-dropdown";
-import { GlassIconButton } from "@/app/components/ui/glass-icon-button";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {
     LIQUID_GLASS_FLOAT_CLASS,
@@ -254,12 +254,12 @@ export function TREditColumnMenu({
                         <p className="font-serif text-lg font-medium text-gray-900">
                             Edit Column
                         </p>
-                        <GlassIconButton
+                        <GlassIconButtonUI
                             onClick={() => setOpen(false)}
                             aria-label="Close"
                         >
                             <X className="h-3.5 w-3.5" />
-                        </GlassIconButton>
+                        </GlassIconButtonUI>
                     </div>
                     <FieldLabel htmlFor={`${menuId}-name`}>
                         Label
@@ -399,14 +399,14 @@ export function TREditColumnMenu({
                     </div>
 
                     <div className="mt-3 flex items-center justify-between gap-2">
-                        <PillButton
+                        <PillButtonUI
                             tone="danger"
                             onClick={handleDelete}
                             disabled={deleting || saving}
                         >
                             Delete
-                        </PillButton>
-                        <PillButton
+                        </PillButtonUI>
+                        <PillButtonUI
                             tone="black"
                             size="sm"
                             onClick={handleSave}
@@ -419,7 +419,7 @@ export function TREditColumnMenu({
                             }
                         >
                             {saving ? "Saving…" : "Save"}
-                        </PillButton>
+                        </PillButtonUI>
                     </div>
                     </div>,
                     document.body,

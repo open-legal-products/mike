@@ -18,8 +18,8 @@ import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { DocxView } from "@/app/components/shared/views/DocxView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
-import { GlassIconButton } from "@/app/components/ui/glass-icon-button";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import type { Document } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
@@ -517,9 +517,9 @@ export function DocumentSidePanel({
                             Details
                         </button>
                     </div>
-                    <GlassIconButton onClick={onClose} aria-label="Close">
+                    <GlassIconButtonUI onClick={onClose} aria-label="Close">
                         <X className="h-3.5 w-3.5" />
-                    </GlassIconButton>
+                    </GlassIconButtonUI>
                 </div>
             </div>
 
@@ -927,7 +927,7 @@ export function DocumentSidePanel({
                         )}
                     >
                         {readOnly ? (
-                            <PillButton
+                            <PillButtonUI
                                 tone="white"
                                 size="normal"
                                 onClick={() => void onDownloadDocument(doc.id)}
@@ -935,7 +935,7 @@ export function DocumentSidePanel({
                             >
                                 <Download className="h-3.5 w-3.5 shrink-0" />
                                 Download
-                            </PillButton>
+                            </PillButtonUI>
                         ) : (
                             <>
                                 <input
@@ -952,7 +952,7 @@ export function DocumentSidePanel({
                             className="hidden"
                             onChange={handleReplaceFileInputChange}
                         />
-                        <PillButton
+                        <PillButtonUI
                             tone="danger"
                             size="normal"
                             onClick={requestDeleteDocument}
@@ -970,8 +970,8 @@ export function DocumentSidePanel({
                         >
                             <Trash2 className="h-3.5 w-3.5 shrink-0" />
                             Delete
-                        </PillButton>
-                                <PillButton
+                        </PillButtonUI>
+                                <PillButtonUI
                                     tone="blue"
                                     size="normal"
                                     onClick={() =>
@@ -982,7 +982,7 @@ export function DocumentSidePanel({
                                 >
                                     <Upload className="h-3.5 w-3.5 shrink-0" />
                                     Upload new version
-                                </PillButton>
+                                </PillButtonUI>
                             </>
                         )}
                     </div>

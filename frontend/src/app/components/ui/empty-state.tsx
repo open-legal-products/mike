@@ -8,7 +8,7 @@ type EmptyStateProps = {
     icon?: ReactNode;
     title: ReactNode;
     description?: ReactNode;
-    /** Usually a `PillButton`. */
+    /** Usually a `PillButtonUI`. */
     action?: ReactNode;
     tone?: "default" | "error";
     className?: string;

@@ -10,7 +10,7 @@ import {
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 
 export default function AppearancePage() {
   const { profile, updateDarkMode } = useUserProfile();
@@ -53,7 +53,7 @@ export default function AppearancePage() {
               </p>
             )}
           </div>
-          <ToggleSwitch
+          <ToggleSwitchUI
             checked={profile.darkMode === true}
             disabled={savingDarkMode}
             aria-busy={savingDarkMode}

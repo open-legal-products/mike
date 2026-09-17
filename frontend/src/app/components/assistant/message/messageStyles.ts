@@ -1,4 +1,4 @@
-import { GLASS_CARD_SURFACE_CLASS } from "@/app/components/ui/glass-card";
+import { GLASS_CARD_SURFACE_CLASS } from "@/shared/ui/GlassCardUI";
 
 export const RESPONSE_GLASS_SURFACE = GLASS_CARD_SURFACE_CLASS;
 

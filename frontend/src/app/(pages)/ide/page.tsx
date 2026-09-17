@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { FolderOpen, Plus } from "lucide-react";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ProjectPickerModal } from "@/app/components/modals/ProjectPickerModal";
 import { NewProjectModal } from "@/app/components/projects/NewProjectModal";
 import type { Project } from "@/app/components/shared/types";
@@ -54,7 +54,7 @@ export default function IdePage() {
                     tone={projectPicker.error ? "error" : "default"}
                     action={
                         <div className="flex flex-wrap gap-2">
-                            <PillButton
+                            <PillButtonUI
                                 tone="black"
                                 size="sm"
                                 onClick={() => void projectPicker.openPicker()}
@@ -62,15 +62,15 @@ export default function IdePage() {
                             >
                                 <FolderOpen className="h-3.5 w-3.5" />
                                 Open project
-                            </PillButton>
-                            <PillButton
+                            </PillButtonUI>
+                            <PillButtonUI
                                 tone="white"
                                 size="sm"
                                 onClick={() => setNewProjectOpen(true)}
                             >
                                 <Plus className="h-3.5 w-3.5" />
                                 New project
-                            </PillButton>
+                            </PillButtonUI>
                         </div>
                     }
                 />

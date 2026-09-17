@@ -1,6 +1,6 @@
 import { CircleAlert } from "lucide-react";
 import type { Citation, DocumentCitationQuote } from "../../shared/types";
-import { PillButton } from "../../ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import {
   Popover,
   PopoverContent,
@@ -65,14 +65,14 @@ export function CitationVerificationBadge({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <PillButton
+        <PillButtonUI
           tone="white"
           size="xs"
           className="w-fit gap-1 font-sans !text-red-600 hover:!text-red-700"
         >
           <CircleAlert className="h-3 w-3" aria-hidden="true" />
           {presentation.label}
-        </PillButton>
+        </PillButtonUI>
       </PopoverTrigger>
       <PopoverContent
         align="end"

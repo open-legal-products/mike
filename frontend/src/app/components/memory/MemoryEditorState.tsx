@@ -1,6 +1,6 @@
 "use client";
 
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import type { MemoryAutosaveStatus } from "./useMemoryAutosave";
 import type { MemoryCurrent } from "@/app/lib/mikeApi";
 
@@ -32,12 +32,12 @@ export function MemoryConflictNotice({
         change.
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
-        <PillButton tone="white" size="sm" onClick={onReload}>
+        <PillButtonUI tone="white" size="sm" onClick={onReload}>
           Reload latest
-        </PillButton>
-        <PillButton tone="black" size="sm" onClick={onKeepDraft}>
+        </PillButtonUI>
+        <PillButtonUI tone="black" size="sm" onClick={onKeepDraft}>
           Keep my draft
-        </PillButton>
+        </PillButtonUI>
       </div>
     </div>
   );

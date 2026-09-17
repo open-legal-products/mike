@@ -16,6 +16,9 @@
 @source "../../../frontend/src/shared/ui/ModalUI.tsx";
 @source "../../../frontend/src/shared/ui/HeaderButtonsUI.tsx";
 @source "../../../frontend/src/shared/ui/PillButtonUI.tsx";
+@source "../../../frontend/src/shared/ui/PillButtonUI.styles.ts";
+@source "../../../frontend/src/shared/ui/TabPillButtonUI.tsx";
+@source "../../../frontend/src/shared/ui/ToggleSwitchUI.tsx";
 @source "../../../frontend/src/shared/ui/DropdownUI.tsx";
 @source "../../../frontend/src/shared/ui/CitationPillUI.tsx";
 @source "../../../frontend/src/shared/ui/ModelToggleUI.tsx";

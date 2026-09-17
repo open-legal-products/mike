@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { Modal } from "@/app/components/modals/Modal";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { SettingsTextInput } from "@/app/components/settings/SettingsTextInput";
@@ -374,7 +374,7 @@ export default function SettingsPage() {
                 action cannot be undone.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="danger"
               size="sm"
               onClick={() => setDeleteConfirm(true)}
@@ -384,7 +384,7 @@ export default function SettingsPage() {
             >
               <Trash2 className="h-4 w-4 shrink-0" />
               Delete account
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
         </SettingsCard>
       </section>

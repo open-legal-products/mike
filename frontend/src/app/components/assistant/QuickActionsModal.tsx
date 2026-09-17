@@ -7,7 +7,7 @@ import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
 import { ModalTextarea } from "../modals/ModalTextarea";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { ToggleSwitch } from "../ui/toggle-switch";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { SearchBar } from "../ui/search-bar";
 import { listWorkflows } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
@@ -403,7 +403,7 @@ function ToggleRow({
         <p className="text-sm font-medium text-gray-700">{label}</p>
         <p className="mt-1 text-xs leading-relaxed text-gray-400">{caption}</p>
       </div>
-      <ToggleSwitch
+      <ToggleSwitchUI
         checked={checked}
         onCheckedChange={onChange}
         aria-label={label}

@@ -100,7 +100,7 @@ import { DocumentSidePanel } from "@/app/components/shared/DocumentSidePanel";
 import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
 import { LibrarySkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_GROUP_HOVER_CLASS,
@@ -4058,7 +4058,7 @@ export function DocTable({
                                                 title={emptyStateTitle}
                                                 description="Upload documents or drop files and folders here"
                                                 action={
-                                                    <PillButton
+                                                    <PillButtonUI
                                                         tone="black"
                                                         size="sm"
                                                         onClick={(event) => {
@@ -4067,7 +4067,7 @@ export function DocTable({
                                                         }}
                                                     >
                                                         Upload
-                                                    </PillButton>
+                                                    </PillButtonUI>
                                                 }
                                             />
                                         </TableEmptyState>

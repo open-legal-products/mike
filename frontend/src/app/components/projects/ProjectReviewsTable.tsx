@@ -28,7 +28,7 @@ import {
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import type { Document, TabularReview } from "@/app/components/shared/types";
 import { formatDate } from "./ProjectPageParts";
@@ -235,14 +235,14 @@ export function ProjectReviewsTable({
                     <p className="mt-1 text-xs text-gray-400">
                         Check your connection and try again.
                     </p>
-                    <PillButton
+                    <PillButtonUI
                         tone="black"
                         size="sm"
                         onClick={onRetry}
                         className="mt-4"
                     >
                         Try again
-                    </PillButton>
+                    </PillButtonUI>
                 </TableEmptyState>
             ) : reviews.length === 0 ? (
                 <TableEmptyState>
@@ -256,7 +256,7 @@ export function ProjectReviewsTable({
                             title="Tabular Reviews"
                             description="Extract data from project documents into tables using AI."
                             action={
-                                <PillButton
+                                <PillButtonUI
                                     tone="black"
                                     size="sm"
                                     onClick={onCreateReview}
@@ -265,7 +265,7 @@ export function ProjectReviewsTable({
                                     }
                                 >
                                     Create
-                                </PillButton>
+                                </PillButtonUI>
                             }
                         />
                     )}

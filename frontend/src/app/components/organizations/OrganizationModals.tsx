@@ -8,7 +8,7 @@ import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import {
   cancelOrgInvitation,
   createOrg,
@@ -466,7 +466,7 @@ export function OrganizationSettingsModal({
               Only an empty organization can be deleted. Move or delete its
               projects, chats, reviews, documents and workflows first.
             </p>
-            <PillButton
+            <PillButtonUI
               tone="danger"
               size="sm"
               className="mt-3"
@@ -476,7 +476,7 @@ export function OrganizationSettingsModal({
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete organization
-            </PillButton>
+            </PillButtonUI>
           </div>
         </div>
       </Modal>

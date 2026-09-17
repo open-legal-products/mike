@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { login } from "@/app/lib/authApi";
 import { Input } from "@/app/components/ui/input";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import Link from "next/link";
 import { SiteLogo } from "@/app/components/site-logo";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -130,7 +130,7 @@ export default function LoginPage() {
                         )}
 
                         <div className="pt-2">
-                            <PillButton
+                            <PillButtonUI
                                 type="submit"
                                 tone="black"
                                 size="normal"
@@ -138,7 +138,7 @@ export default function LoginPage() {
                                 className="w-full"
                             >
                                 {loading ? "Logging in..." : "Log in"}
-                            </PillButton>
+                            </PillButtonUI>
                         </div>
                         <AuthDivider />
                         <GoogleAuthButton

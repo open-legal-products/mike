@@ -17,7 +17,7 @@ import { FileDirectory } from "../shared/FileDirectory";
 import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import {
     ModelToggle,
     type NoModelsReason,
@@ -521,7 +521,7 @@ export function NewTRModal({
                         {!isProjectMode && (
                             <div className="space-y-3">
                                 <FieldLabel as="p">Project</FieldLabel>
-                                <ToggleSwitch
+                                <ToggleSwitchUI
                                     checked={underProject}
                                     onCheckedChange={(next) => {
                                         setUnderProject(next);
@@ -534,7 +534,7 @@ export function NewTRModal({
                                     }}
                                 >
                                     Create under a project
-                                </ToggleSwitch>
+                                </ToggleSwitchUI>
 
                                 {underProject && (
                                     <ModalSelect
@@ -555,13 +555,13 @@ export function NewTRModal({
 
                         <div>
                             <FieldLabel as="p">Document grouping</FieldLabel>
-                            <ToggleSwitch
+                            <ToggleSwitchUI
                                 checked={groupBySubfolder}
                                 onCheckedChange={setGroupBySubfolder}
                             >
                                 Treat documents in the same folder as one review
                                 row
-                            </ToggleSwitch>
+                            </ToggleSwitchUI>
                         </div>
                     </div>
                 ) : step === "access" ? (

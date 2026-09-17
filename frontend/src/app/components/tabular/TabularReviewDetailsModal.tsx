@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import type { Project, TabularReview } from "../shared/types";
 
 interface TabularReviewDetailsModalProps {
@@ -152,7 +152,7 @@ export function TabularReviewDetailsModal({
                 {!lockProject && (
                     <div className="space-y-3">
                         <FieldLabel as="p">Project</FieldLabel>
-                        <ToggleSwitch
+                        <ToggleSwitchUI
                             checked={underProject}
                             disabled={!canEdit || saving}
                             onCheckedChange={(next) => {
@@ -163,7 +163,7 @@ export function TabularReviewDetailsModal({
                             }}
                         >
                             Move under a project
-                        </ToggleSwitch>
+                        </ToggleSwitchUI>
 
                         {underProject && (
                             <ModalSelect

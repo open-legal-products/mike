@@ -9,7 +9,7 @@ import {
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 
 export default function FeaturesPage() {
@@ -72,7 +72,7 @@ export default function FeaturesPage() {
                 </p>
               )}
             </div>
-            <ToggleSwitch
+            <ToggleSwitchUI
               checked={quickActionsVisible}
               disabled={savingQuickActions}
               aria-busy={savingQuickActions}
@@ -100,7 +100,7 @@ export default function FeaturesPage() {
                 </p>
               )}
             </div>
-            <ToggleSwitch
+            <ToggleSwitchUI
               checked={courtListenerEnabled}
               disabled={saving}
               aria-busy={saving}

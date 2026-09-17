@@ -17,7 +17,6 @@ import {
   ListOrdered,
   Table2,
 } from "lucide-react";
-import { Button } from "@/app/components/ui/button";
 import { EDITOR_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import {
   DropdownMenu,
@@ -106,24 +105,23 @@ function AppToolbarButton({
   disabled?: boolean;
 }) {
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
-      size="icon-sm"
       disabled={disabled}
       title={title}
       aria-label={title}
       aria-pressed={active}
-      className={`h-7 w-7 text-gray-600 hover:bg-white hover:text-gray-900 ${
-        active ? "bg-gray-300 text-gray-950 hover:bg-gray-300" : ""
-      }`}
+      className={cn(
+        "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-white hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+        active && "bg-gray-300 text-gray-950 hover:bg-gray-300",
+      )}
       onMouseDown={(e) => {
         e.preventDefault(); // keep editor focus
       }}
       onClick={onClick}
     >
       {children}
-    </Button>
+    </button>
   );
 }
 
@@ -536,23 +534,21 @@ export function MarkdownEditor({
                 }}
               >
                 <DropdownMenuTrigger asChild>
-                  <Button
+                  <button
                     type="button"
-                    variant="ghost"
-                    size="icon-sm"
                     disabled={suspended}
                     title="Insert table"
                     aria-label="Insert table"
                     aria-pressed={tablePickerOpen}
-                    className={`h-7 w-7 text-gray-600 hover:bg-white hover:text-gray-900 ${
-                      tablePickerOpen
-                        ? "bg-gray-300 text-gray-950 hover:bg-gray-300"
-                        : ""
-                    }`}
+                    className={cn(
+                      "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-white hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+                      tablePickerOpen &&
+                        "bg-gray-300 text-gray-950 hover:bg-gray-300",
+                    )}
                     onPointerDown={rememberTableInsertionSelection}
                   >
                     <Table2 className="h-4 w-4" />
-                  </Button>
+                  </button>
                 </DropdownMenuTrigger>
                 <LiquidDropdownContent
                   align="start"

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 
 export default function GlobalError({
     error,
@@ -62,14 +62,14 @@ export default function GlobalError({
                         We encountered an unexpected error. This has been logged
                         and our team will look into it.
                     </p>
-                    <PillButton
+                    <PillButtonUI
                         tone="blue"
                         size="normal"
                         className="btn-back"
                         onClick={() => window.history.back()}
                     >
                         Back
-                    </PillButton>
+                    </PillButtonUI>
                 </div>
             </body>
         </html>

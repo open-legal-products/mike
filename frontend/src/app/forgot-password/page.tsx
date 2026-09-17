@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Input } from "@/app/components/ui/input";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { SiteLogo } from "@/app/components/site-logo";
 import {
     authGlassCardClassName,
@@ -55,14 +56,16 @@ export default function ForgotPasswordPage() {
                                 a password-reset link. The link expires and can
                                 only be used once.
                             </p>
-                            <PillButton
-                                asChild
-                                tone="black"
-                                size="normal"
-                                className="mt-6"
+                            <Link
+                                href="/login"
+                                className={pillButtonUIClassName({
+                                    tone: "black",
+                                    size: "normal",
+                                    className: "mt-6",
+                                })}
                             >
-                                <Link href="/login">Return to login</Link>
-                            </PillButton>
+                                Return to login
+                            </Link>
                         </div>
                     ) : (
                         <>
@@ -93,7 +96,7 @@ export default function ForgotPasswordPage() {
                                         className={`w-full ${authInputClassName}`}
                                     />
                                 </div>
-                                <PillButton
+                                <PillButtonUI
                                     type="submit"
                                     tone="black"
                                     size="normal"
@@ -103,7 +106,7 @@ export default function ForgotPasswordPage() {
                                     {loading
                                         ? "Sending reset link..."
                                         : "Send reset link"}
-                                </PillButton>
+                                </PillButtonUI>
                             </form>
                             <div className="mt-5 text-center">
                                 <Link

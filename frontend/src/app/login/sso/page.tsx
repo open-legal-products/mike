@@ -11,7 +11,7 @@ import {
 } from "@/app/components/auth/authStyles";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { Input } from "@/app/components/ui/input";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { startSso } from "@/app/lib/authApi";
 import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
@@ -106,7 +106,7 @@ export default function SsoLoginPage() {
                         )}
 
                         <div className="pt-2">
-                            <PillButton
+                            <PillButtonUI
                                 type="submit"
                                 tone="black"
                                 size="normal"
@@ -121,7 +121,7 @@ export default function SsoLoginPage() {
                                     />
                                 )}
                                 {loading ? "Continuing…" : "Continue"}
-                            </PillButton>
+                            </PillButtonUI>
                         </div>
                     </form>
                 </div>

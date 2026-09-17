@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Download, Trash2 } from "lucide-react";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import {
   SettingsDescription,
   SettingsLabel,
@@ -294,7 +294,7 @@ export default function PrivacyDataPage() {
                 Download assistant and tabular review chat history as JSON.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="black"
               size="sm"
               onClick={handleExportChatData}
@@ -304,7 +304,7 @@ export default function PrivacyDataPage() {
             >
               <Download className="h-4 w-4 shrink-0" />
               {isExportingChats ? "Exporting..." : "Export"}
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
@@ -314,7 +314,7 @@ export default function PrivacyDataPage() {
                 records as JSON.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="black"
               size="sm"
               onClick={handleExportTabularReviewsData}
@@ -324,7 +324,7 @@ export default function PrivacyDataPage() {
             >
               <Download className="h-4 w-4 shrink-0" />
               {isExportingTabularReviews ? "Exporting..." : "Export"}
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
@@ -334,7 +334,7 @@ export default function PrivacyDataPage() {
                 workflows, and review data as JSON.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="black"
               size="sm"
               onClick={handleExportAccountData}
@@ -344,7 +344,7 @@ export default function PrivacyDataPage() {
             >
               <Download className="h-4 w-4 shrink-0" />
               {isExportingAccount ? "Exporting..." : "Export"}
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
@@ -354,7 +354,7 @@ export default function PrivacyDataPage() {
                 as Markdown files in a ZIP archive.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="black"
               size="sm"
               aria-label="Export memory"
@@ -365,7 +365,7 @@ export default function PrivacyDataPage() {
             >
               <Download className="h-4 w-4 shrink-0" />
               {isExportingMemory ? "Exporting..." : "Export"}
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
         </SettingsCard>
       </section>
@@ -381,7 +381,7 @@ export default function PrivacyDataPage() {
                 history.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="danger"
               size="sm"
               onClick={() => setPendingDeleteAction("chats")}
@@ -391,7 +391,7 @@ export default function PrivacyDataPage() {
             >
               <Trash2 className="h-4 w-4 shrink-0" />
               Delete
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
@@ -401,7 +401,7 @@ export default function PrivacyDataPage() {
                 and review chats.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="danger"
               size="sm"
               onClick={() => setPendingDeleteAction("tabular-reviews")}
@@ -411,7 +411,7 @@ export default function PrivacyDataPage() {
             >
               <Trash2 className="h-4 w-4 shrink-0" />
               Delete
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
@@ -421,7 +421,7 @@ export default function PrivacyDataPage() {
                 chats, and tabular reviews.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="danger"
               size="sm"
               onClick={() => setPendingDeleteAction("projects")}
@@ -431,7 +431,7 @@ export default function PrivacyDataPage() {
             >
               <Trash2 className="h-4 w-4 shrink-0" />
               Delete
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
           <SettingsRow>
             <div className="space-y-1">
@@ -441,7 +441,7 @@ export default function PrivacyDataPage() {
                 projects you created.
               </SettingsDescription>
             </div>
-            <PillButton
+            <PillButtonUI
               tone="danger"
               size="sm"
               aria-label="Delete all memory"
@@ -452,7 +452,7 @@ export default function PrivacyDataPage() {
             >
               <Trash2 className="h-4 w-4 shrink-0" />
               Delete
-            </PillButton>
+            </PillButtonUI>
           </SettingsRow>
         </SettingsCard>
       </section>

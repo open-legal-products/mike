@@ -55,8 +55,8 @@ import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { OpenSourceWorkflowModal } from "@/app/components/workflows/OpenSourceWorkflowModal";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import {
   EDITOR_SURFACE_CLASS,
   LIQUID_GLASS_FLOAT_CLASS,
@@ -683,12 +683,12 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                             ref={colActionsRef}
                             className="relative max-md:hidden"
                           >
-                            <TabPillButton
+                            <TabPillButtonUI
                               onClick={() => setColActionsOpen((open) => !open)}
                             >
                               Actions
                               <ChevronDown className="h-3.5 w-3.5" />
-                            </TabPillButton>
+                            </TabPillButtonUI>
                             {colActionsOpen && (
                               <div className={`absolute right-0 top-full z-50 mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}>
                                 <button
@@ -700,18 +700,18 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                               </div>
                             )}
                           </div>
-                          <TabPillButton
+                          <TabPillButtonUI
                             onClick={handleDeleteSelectedColumns}
                             className="text-red-600 md:hidden"
                           >
                             Delete
-                          </TabPillButton>
+                          </TabPillButtonUI>
                         </>
                       )}
-                    <TabPillButton onClick={() => setAddColumnOpen(true)}>
+                    <TabPillButtonUI onClick={() => setAddColumnOpen(true)}>
                       <Plus className="h-3.5 w-3.5" />
                       Add Column
-                    </TabPillButton>
+                    </TabPillButtonUI>
                   </div>
                 }
               />
@@ -779,14 +779,14 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                     description="Add columns to define what this tabular review workflow extracts from each document."
                     action={
                       !readOnly && (
-                        <PillButton
+                        <PillButtonUI
                           tone="black"
                           size="sm"
                           onClick={() => setAddColumnOpen(true)}
                         >
                           <Plus className="h-3.5 w-3.5" />
                           Add Column
-                        </PillButton>
+                        </PillButtonUI>
                       )
                     }
                   />

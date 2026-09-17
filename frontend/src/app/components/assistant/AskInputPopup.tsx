@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Check, X } from "lucide-react";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import type { AssistantEvent, Document, MessageFile } from "../shared/types";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
@@ -381,7 +381,7 @@ export function AskInputPopup({
                                                 ? "Documents"
                                                 : "Question";
                                         return (
-                                            <TabPillButton
+                                            <TabPillButtonUI
                                                 key={item.id}
                                                 active={isActive}
                                                 disabled={submitted}
@@ -396,7 +396,7 @@ export function AskInputPopup({
                                                     <span className="h-2.5 w-2.5 rounded-full border border-current opacity-70" />
                                                 )}
                                                 {label}
-                                            </TabPillButton>
+                                            </TabPillButtonUI>
                                         );
                                     })}
                                 </div>
@@ -404,14 +404,14 @@ export function AskInputPopup({
                         </div>
                     </div>
                     {!submitted && (
-                        <TabPillButton
+                        <TabPillButtonUI
                             type="button"
                             onClick={dismiss}
                             aria-label="Dismiss"
                             className="h-6 w-6 shrink-0 px-0"
                         >
                             <X className="h-3 w-3" />
-                        </TabPillButton>
+                        </TabPillButtonUI>
                     )}
                 </div>
 
@@ -594,7 +594,7 @@ export function AskInputPopup({
                                             ? "Unskip"
                                             : "Skip"}
                                     </button>
-                                    <PillButton
+                                    <PillButtonUI
                                         tone="black"
                                         size="xs"
                                         type="button"
@@ -616,7 +616,7 @@ export function AskInputPopup({
                                         ) : (
                                             "Confirm"
                                         )}
-                                    </PillButton>
+                                    </PillButtonUI>
                                 </div>
                             )}
                         </div>

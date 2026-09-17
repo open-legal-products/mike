@@ -61,8 +61,8 @@ import {
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { AccessScopeLabel } from "@/app/components/shared/AccessScopeLabel";
@@ -504,10 +504,10 @@ export function ProjectsOverview() {
     const toolbarActions =
         selectedIds.length > 0 ? (
             <div ref={actionsRef} className="relative">
-                <TabPillButton onClick={() => setActionsOpen((v) => !v)}>
+                <TabPillButtonUI onClick={() => setActionsOpen((v) => !v)}>
                     Actions
                     <ChevronDown className="h-3.5 w-3.5" />
-                </TabPillButton>
+                </TabPillButtonUI>
                 {actionsOpen && (
                     <div
                         className={`absolute right-0 top-full z-[120] mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
@@ -684,13 +684,13 @@ export function ProjectsOverview() {
                             description={loadError}
                             tone="error"
                             action={
-                                <PillButton
+                                <PillButtonUI
                                     tone="black"
                                     size="sm"
                                     onClick={retry}
                                 >
                                     Try again
-                                </PillButton>
+                                </PillButtonUI>
                             }
                         />
                     </TableEmptyState>
@@ -706,13 +706,13 @@ export function ProjectsOverview() {
                                 title="Projects"
                                 description="Upload documents into projects and to commence chats and tabular reviews with them."
                                 action={
-                                    <PillButton
+                                    <PillButtonUI
                                         tone="black"
                                         size="sm"
                                         onClick={() => setModalOpen(true)}
                                     >
                                         Create
-                                    </PillButton>
+                                    </PillButtonUI>
                                 }
                             />
                         )}

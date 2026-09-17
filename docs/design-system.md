@@ -26,11 +26,14 @@ also register it for Tailwind class scanning in
 @source "../../../frontend/src/shared/ui/YourThingUI.tsx";
 ```
 
-The convention for a cross-target primitive is a `XxxUI.tsx` in `src/shared/ui/`
-plus a thin re-export in `components/ui/` so web callers use one import path —
-see `GlassCardUI`/`glass-card.tsx`, `PillButtonUI`/`pill-button.tsx`, and
-`GlassIconButtonUI`/`glass-icon-button.tsx`. `MikeIconUI` similarly owns the
-single icon implementation used by thin web and Word add-in re-exports.
+Cross-target primitives use the `XxxUI.tsx` convention and are imported
+directly from `@/shared/ui/XxxUI` by the web app. Do not add a web-only
+re-export whose only job is to rename `XxxUI`: it adds another file, test, and
+catalog entry without adding behavior. `GlassCardUI`, `PillButtonUI`,
+`GlassIconButtonUI`, `TabPillButtonUI`, and `ToggleSwitchUI` are the canonical
+implementations used by both targets. To style a link as a pill, apply
+`pillButtonUIClassName` from `PillButtonUI.styles` directly to the link; this
+keeps the correct link semantics and is safe in server components.
 
 ## Color tokens
 
@@ -201,31 +204,31 @@ treatment because chat messages visibly pass underneath it.
 
 Compose the material classes through the established primitives and constants:
 
-- `GLASS_CARD_SURFACE_CLASS` / `GlassCard` — cards
+- `GLASS_CARD_SURFACE_CLASS` / `GlassCardUI` — cards
 - `LIQUID_FLOAT_PANEL_SURFACE_CLASS`,
   `LIQUID_SUBTLE_PANEL_SURFACE_CLASS`, and `LIQUID_TABLE_SURFACE_CLASS` in
   `components/ui/liquid-surface.ts` — panels and tables
 - `LiquidDropdownContent` / `LiquidDropdownSurface` — menus
-- `GlassIconButton` — circular icon buttons
+- `GlassIconButtonUI` — circular icon buttons
 
-## Primitives in `components/ui/`
+## UI primitives
 
-| Primitive | Use it for |
-| --- | --- |
-| `button` | shadcn's button. Variant/size API, `asChild`. Note it has no `type` default — set `type="button"` inside a form. |
-| `pill-button` | The app's primary action button (`tone`: black/white/blue/danger). Shared with the add-in via `PillButtonUI`. |
-| `tab-pill-button` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. |
-| `glass-icon-button` | Circular glass icon button — modal close, panel dismiss. Requires `aria-label`. |
-| `cite-button` | Copy-quote-and-citation control. |
-| `input`, `form-field` | shadcn input; `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
-| `search-bar` | Search input with clear button. Pass `label` for a meaningful accessible name. |
-| `toggle-switch` | `role="switch"` toggle with a text label. |
-| `dropdown-menu` | Radix/shadcn menu primitives. |
-| `liquid-dropdown` | The glass skin over `dropdown-menu` — use this in app chrome. |
-| `CitationPillUI` | Canonical numbered citation control for web, tabular review, and Word. Uses neutral gray by default, red for verification errors, and blue for the selected state. |
-| `glass-card`, `liquid-surface` | Card component and shared surface class constants. |
-| `empty-state` | Icon + display heading + copy + optional action, for "nothing here yet". Wrap in `TableEmptyState` inside a table. |
-| `check-square` | The selection square used by directory/picker rows. Decorative by default; the row owns the ARIA state. |
+| Primitive | Location | Use it for |
+| --- | --- | --- |
+| `PillButtonUI` | `shared/ui` | Primary action button (`tone`: black/white/blue/danger). |
+| `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. |
+| `GlassIconButtonUI` | `shared/ui` | Circular glass icon button — modal close, panel dismiss. Requires `aria-label`. |
+| `GlassCardUI` | `shared/ui` | Canonical liquid-glass card surface. |
+| `ToggleSwitchUI` | `shared/ui` | `role="switch"` toggle with an optional text label. |
+| `CitationPillUI` | `shared/ui` | Canonical numbered citation control for web, tabular review, and Word. Uses neutral gray by default, red for verification errors, and blue for the selected state. |
+| `cite-button` | `components/ui` | Copy-quote-and-citation control. |
+| `input`, `form-field` | `components/ui` | shadcn input; `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
+| `search-bar` | `components/ui` | Search input with clear button. Pass `label` for a meaningful accessible name. |
+| `dropdown-menu` | `components/ui` | Radix/shadcn menu primitives. |
+| `liquid-dropdown` | `components/ui` | The glass skin over `dropdown-menu` — use this in app chrome. |
+| `liquid-surface` | `components/ui` | Web-only shared surface class constants. |
+| `empty-state` | `components/ui` | Icon + display heading + copy + optional action, for "nothing here yet". Wrap in `TableEmptyState` inside a table. |
+| `check-square` | `components/ui` | The selection square used by directory/picker rows. Decorative by default; the row owns the ARIA state. |
 
 For a real standalone checkbox use `<input type="checkbox">` with
 `TABLE_CHECKBOX_CLASS` (see `TablePrimitive.tsx`), not `check-square`.
@@ -263,18 +266,18 @@ These are the rules the primitives already follow. Match them in new work.
 - **A background tint is not a focus indicator** when the tint is a small
   luminance step. `liquid-dropdown` items pair the semantic focus tint with a
   ring for this reason.
-- **Icon-only controls need a name.** `GlassIconButton` requires `aria-label` in
+- **Icon-only controls need a name.** `GlassIconButtonUI` requires `aria-label` in
   its type. When a control has a *visible* label, do not override it with a
   different `aria-label` (WCAG 2.5.3) — `cite-button` only sets one when its text
   is hidden.
 - **`type="button"` on every non-submit button.** Anything inside a `<form>`
   defaults to submitting.
-- **State goes in ARIA, not only in color.** `toggle-switch` uses
-  `role="switch"` + `aria-checked`, `tab-pill-button` uses `aria-pressed`,
+- **State goes in ARIA, not only in color.** `ToggleSwitchUI` uses
+  `role="switch"` + `aria-checked`, `TabPillButtonUI` uses `aria-pressed`,
   `check-square` callers that own the interaction pass
   `role="checkbox"` + `aria-checked` (`"mixed"` for indeterminate).
 - **Non-text contrast ≥ 3:1** for control boundaries (WCAG 1.4.11). The
-  off-state switch track needs `bg-gray-300 ring-1 ring-inset ring-gray-400` to
+  off-state switch track needs `bg-gray-300 ring-1 ring-inset ring-gray-500` to
   clear it against white; `bg-gray-100` does not.
 - **Decorative elements are hidden.** Icons inside a labelled control get
   `aria-hidden`.
@@ -289,9 +292,11 @@ npm run catalog          # dev server on http://localhost:61000
 npm run catalog:build    # static build; this is what CI smoke-tests
 ```
 
-Stories are colocated with the primitive as `*.stories.tsx`, the same way tests
-are. When you add a primitive to `components/ui/`, add a story for it in the
-same change. Stories are inside the app's `tsconfig`, so `npm run build`
+Stories live in a `stories/` directory beside each primitive collection:
+`components/ui/stories/` for web primitives and `shared/ui/stories/` for
+cross-target primitives. When you add a primitive, add a story to the matching
+directory in the same change. Stories are inside the app's `tsconfig`, so
+`npm run build`
 type-checks them: a story that drifts from its primitive's props fails CI
 rather than rotting quietly. `npm run catalog:build` then bundles them, which
 catches a story importing an export that no longer exists.
@@ -303,8 +308,9 @@ Two things about the catalog environment are worth knowing before you edit it:
   class the Settings > Appearance preference sets, so dark values are real.
 - Tailwind v4's automatic source detection skips dot-directories, so nothing
   in `frontend/.ladle/` is scanned for class names. Catalog chrome is styled
-  with plain CSS in `.ladle/ladle.css` for that reason. Story files live under
-  `src/` and are scanned normally, so use Tailwind freely in a `*.stories.tsx`.
+  with plain CSS in `.ladle/ladle.css` for that reason. Both `stories/`
+  directories live under `src/` and are scanned normally, so use Tailwind
+  freely in a `*.stories.tsx`.
 
 ## Related
 

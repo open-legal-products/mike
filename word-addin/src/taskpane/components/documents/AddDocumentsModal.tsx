@@ -16,7 +16,7 @@ import {
 } from "../../lib/documentUpload";
 import { Modal } from "../primitives/Modal";
 import { Spinner } from "../../../shared/ui/spinner";
-import { TabPillButton } from "../../../shared/ui/tab-pill-button";
+import { TabPillButtonUI } from "@mike/tab-pill-button-ui";
 import {
   FileTypeIcon,
   ProjectSvgIcon,
@@ -882,14 +882,14 @@ export function AddDocumentsModal({
           className="-mx-2 -my-2 flex min-w-0 items-center gap-1 overflow-x-auto px-2 py-2"
         >
           {TABS.map((tab) => (
-            <TabPillButton
+            <TabPillButtonUI
               key={tab.value}
               active={activeTab === tab.value}
               onClick={() => setActiveTab(tab.value)}
               className="shrink-0 px-2.5"
             >
               {tab.label}
-            </TabPillButton>
+            </TabPillButtonUI>
           ))}
         </div>
         {selectedDocuments.length > 0 && (

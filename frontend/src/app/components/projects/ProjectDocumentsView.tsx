@@ -31,7 +31,7 @@ import {
     type DocTableSelectionActions,
     type DocTableFolder,
 } from "@/app/components/documents/DocTable";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { ProjectSectionToolbar, useProjectWorkspace } from "./ProjectWorkspace";
 import {
     LIQUID_GLASS_HOVER_CLASS,
@@ -302,12 +302,12 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
         <div className="flex items-center gap-1.5">
             {selectionActions && (
                 <div ref={actionsRef} className="relative">
-                    <TabPillButton
+                    <TabPillButtonUI
                         onClick={() => setActionsOpen((open) => !open)}
                     >
                         Actions
                         <ChevronDown className="h-3.5 w-3.5" />
-                    </TabPillButton>
+                    </TabPillButtonUI>
                     {actionsOpen && (
                         <div
                             className={`absolute right-0 top-full z-[120] mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
@@ -346,7 +346,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 </div>
             )}
             {(!roleKnown || canDo("docs.organize")) && (
-                <TabPillButton
+                <TabPillButtonUI
                     onClick={createFolderAction ?? undefined}
                     disabled={
                         !roleKnown || !createFolderAction || projectLoading
@@ -354,7 +354,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 >
                     <Plus className="h-3.5 w-3.5" />
                     <span className="hidden sm:inline">Folder</span>
-                </TabPillButton>
+                </TabPillButtonUI>
             )}
         </div>
     );

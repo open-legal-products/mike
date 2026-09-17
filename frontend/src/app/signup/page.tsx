@@ -4,7 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signup } from "@/app/lib/authApi";
 import { Input } from "@/app/components/ui/input";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import Link from "next/link";
 import { SiteLogo } from "@/app/components/site-logo";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -121,14 +122,16 @@ function SignupContent() {
                         <p className="mt-3 text-sm leading-relaxed text-gray-600">
                             Redirecting you to finish setting up your account...
                         </p>
-                        <PillButton
-                            asChild
-                            tone="black"
-                            size="normal"
-                            className="mt-6"
+                        <Link
+                            href="/onboarding/profile"
+                            className={pillButtonUIClassName({
+                                tone: "black",
+                                size: "normal",
+                                className: "mt-6",
+                            })}
                         >
-                            <Link href="/onboarding/profile">Continue</Link>
-                        </PillButton>
+                            Continue
+                        </Link>
                     </div>
                 </div>
             </div>
@@ -220,7 +223,7 @@ function SignupContent() {
                                     Privacy Policy
                                 </Link>
                             </div>
-                            <PillButton
+                            <PillButtonUI
                                 type="submit"
                                 tone="black"
                                 size="normal"
@@ -228,7 +231,7 @@ function SignupContent() {
                                 className="w-full"
                             >
                                 {loading ? "Creating account..." : "Sign up"}
-                            </PillButton>
+                            </PillButtonUI>
                             <AuthDivider />
                             <GoogleAuthButton
                                 onError={setError}

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { Loader2 } from "lucide-react";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { cn } from "@/app/lib/utils";
 import type {
     PanelDocument,
@@ -217,9 +217,9 @@ export function CaseView({
                             {visibleError}
                         </p>
                         {onRetry && (
-                            <PillButton tone="white" onClick={onRetry}>
+                            <PillButtonUI tone="white" onClick={onRetry}>
                                 Try again
-                            </PillButton>
+                            </PillButtonUI>
                         )}
                     </div>
                 )}

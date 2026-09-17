@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
-import { ToggleSwitch } from "../../../shared/ui/toggle-switch";
+import { ToggleSwitchUI } from "@mike/toggle-switch-ui";
 import {
   createQuickAction,
   listWorkflows,
@@ -408,7 +408,7 @@ function ToggleRow({
         <p className="text-sm font-medium text-gray-700">{label}</p>
         <p className="mt-1 text-xs leading-relaxed text-gray-400">{caption}</p>
       </div>
-      <ToggleSwitch
+      <ToggleSwitchUI
         checked={checked}
         onCheckedChange={onChange}
         aria-label={label}

@@ -32,7 +32,7 @@ import {
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ChatSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import type { Chat } from "@/app/components/shared/types";
 import { can, roleFrom } from "@/app/lib/permissions";
@@ -246,13 +246,13 @@ export function ProjectAssistantTable({
                         title="Assistant"
                         description="Ask questions and get answers grounded in the documents in this project."
                         action={
-                            <PillButton
+                            <PillButtonUI
                                 tone="black"
                                 size="sm"
                                 onClick={onCreateChat}
                             >
                                 Create
-                            </PillButton>
+                            </PillButtonUI>
                         }
                     />
                 </TableEmptyState>

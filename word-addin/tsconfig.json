@@ -51,6 +51,12 @@
       "@mike/pill-button-ui": [
         "../frontend/src/shared/ui/PillButtonUI.tsx"
       ],
+      "@mike/tab-pill-button-ui": [
+        "../frontend/src/shared/ui/TabPillButtonUI.tsx"
+      ],
+      "@mike/toggle-switch-ui": [
+        "../frontend/src/shared/ui/ToggleSwitchUI.tsx"
+      ],
       "@mike/dropdown-ui": [
         "../frontend/src/shared/ui/DropdownUI.tsx"
       ],

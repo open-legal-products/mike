@@ -4,7 +4,8 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
 import { getDocumentFile } from "@/app/lib/mikeApi";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { PdfView } from "../shared/views/PdfView";
 import { DocxView } from "../shared/views/DocxView";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
@@ -398,25 +399,21 @@ function UrlDownloadButton({
     compact: boolean;
 }) {
     return (
-        <PillButton
-            asChild
-            tone="white"
-            size={compact ? "icon-xs" : "sm"}
+        <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            download
+            aria-label="Download"
+            title="Download"
+            className={pillButtonUIClassName({
+                tone: "white",
+                size: compact ? "icon-xs" : "sm",
+            })}
         >
-            <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                download
-                aria-label="Download"
-                title="Download"
-            >
-                <Download className="h-3.5 w-3.5" />
-                <span className={compact ? "sr-only" : undefined}>
-                    Download
-                </span>
-            </a>
-        </PillButton>
+            <Download className="h-3.5 w-3.5" />
+            <span className={compact ? "sr-only" : undefined}>Download</span>
+        </a>
     );
 }
 
@@ -428,24 +425,22 @@ function ExternalSourceLinkButton({
     compact: boolean;
 }) {
     return (
-        <PillButton
-            asChild
-            tone="white"
-            size={compact ? "icon-xs" : "sm"}
+        <a
+            href={link.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={link.title}
+            title={link.title}
+            className={pillButtonUIClassName({
+                tone: "white",
+                size: compact ? "icon-xs" : "sm",
+            })}
         >
-            <a
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={link.title}
-                title={link.title}
-            >
-                <ExternalLink className="h-3.5 w-3.5" />
-                <span className={compact ? "sr-only" : undefined}>
-                    {link.label}
-                </span>
-            </a>
-        </PillButton>
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span className={compact ? "sr-only" : undefined}>
+                {link.label}
+            </span>
+        </a>
     );
 }
 
@@ -485,7 +480,7 @@ function DownloadButton({
 
     const spinning = busy || isReloading;
     return (
-        <PillButton
+        <PillButtonUI
             tone="white"
             size={compact ? "icon-xs" : "sm"}
             onClick={handleClick}
@@ -494,6 +489,6 @@ function DownloadButton({
         >
             <Download className="h-3.5 w-3.5" />
             <span className={compact ? "sr-only" : undefined}>Download</span>
-        </PillButton>
+        </PillButtonUI>
     );
 }

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 
 export default function NotFound() {
     return (
@@ -13,9 +13,15 @@ export default function NotFound() {
                     have been moved.
                 </p>
 
-                <PillButton asChild tone="black" size="normal">
-                    <Link href="/">Go home</Link>
-                </PillButton>
+                <Link
+                    href="/"
+                    className={pillButtonUIClassName({
+                        tone: "black",
+                        size: "normal",
+                    })}
+                >
+                    Go home
+                </Link>
             </div>
         </div>
     );

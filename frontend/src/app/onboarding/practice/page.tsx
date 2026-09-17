@@ -8,7 +8,7 @@ import {
     personalisationInitialValues,
     usePersonalisationFields,
 } from "@/app/components/settings/PersonalisationFields";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -110,7 +110,7 @@ function PracticeDetailsForm({
                 )}
 
                 <div className="flex items-center justify-between gap-3 pt-6">
-                    <PillButton
+                    <PillButtonUI
                         type="button"
                         tone="white"
                         size="normal"
@@ -118,7 +118,7 @@ function PracticeDetailsForm({
                         onClick={() => router.push("/onboarding/profile")}
                     >
                         Back
-                    </PillButton>
+                    </PillButtonUI>
                     <div className="flex items-center gap-4">
                         <button
                             type="button"
@@ -128,14 +128,14 @@ function PracticeDetailsForm({
                         >
                             Skip
                         </button>
-                        <PillButton
+                        <PillButtonUI
                             type="submit"
                             tone="black"
                             size="normal"
                             disabled={submitting}
                         >
                             {submitting ? "Finishing..." : "Finish"}
-                        </PillButton>
+                        </PillButtonUI>
                     </div>
                 </div>
             </form>

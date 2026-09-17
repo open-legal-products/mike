@@ -20,7 +20,7 @@ import {
   type TableSortDirection,
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { OrganizationSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import {
@@ -204,7 +204,7 @@ export function OrganizationsOverview() {
                     invited you as {ORG_ROLE_LABELS[invitation.role]}.
                   </p>
                   <div className="flex gap-2">
-                    <PillButton
+                    <PillButtonUI
                       tone="black"
                       size="sm"
                       disabled={answeringId === invitation.id}
@@ -213,15 +213,15 @@ export function OrganizationsOverview() {
                     >
                       <Check className="h-3.5 w-3.5" />
                       Accept
-                    </PillButton>
-                    <PillButton
+                    </PillButtonUI>
+                    <PillButtonUI
                       tone="white"
                       size="sm"
                       disabled={answeringId === invitation.id}
                       onClick={() => void answer(invitation, false)}
                     >
                       Decline
-                    </PillButton>
+                    </PillButtonUI>
                   </div>
                 </div>
               ))}
@@ -303,13 +303,13 @@ export function OrganizationsOverview() {
                 description={loadError}
                 tone="error"
                 action={
-                  <PillButton
+                  <PillButtonUI
                     tone="black"
                     size="sm"
                     onClick={() => void load()}
                   >
                     Try again
-                  </PillButton>
+                  </PillButtonUI>
                 }
               />
             </TableEmptyState>
@@ -320,13 +320,13 @@ export function OrganizationsOverview() {
                 title="Organizations"
                 description="Create an organization to share projects, chats and reviews with your team."
                 action={
-                  <PillButton
+                  <PillButtonUI
                     tone="black"
                     size="sm"
                     onClick={() => setCreateOpen(true)}
                   >
                     Create
-                  </PillButton>
+                  </PillButtonUI>
                 }
               />
             </TableEmptyState>

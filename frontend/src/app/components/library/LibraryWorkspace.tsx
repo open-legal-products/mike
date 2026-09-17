@@ -24,7 +24,7 @@ import type {
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { DocumentUploadMenu } from "@/app/components/shared/DocumentUploadMenu";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import {
   bulkDeleteLibraryDocuments,
     createLibraryFolder,
@@ -948,20 +948,20 @@ export function LibraryCollectionPage({
                     }
                     leading={
                         folderBackAction ? (
-                            <TabPillButton onClick={folderBackAction}>
+                            <TabPillButtonUI onClick={folderBackAction}>
                                 <ChevronLeft className="h-3.5 w-3.5" />
                                 Back
-                            </TabPillButton>
+                            </TabPillButtonUI>
                         ) : undefined
                     }
                     actions={
-                        <TabPillButton
+                        <TabPillButtonUI
                             onClick={createFolderAction ?? undefined}
                             disabled={!createFolderAction || loading}
                         >
                             <Plus className="h-3.5 w-3.5" />
                             <span className="hidden sm:inline">Folder</span>
-                        </TabPillButton>
+                        </TabPillButtonUI>
                     }
                 />
                 <DocTable

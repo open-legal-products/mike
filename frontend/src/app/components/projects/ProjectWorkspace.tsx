@@ -32,7 +32,7 @@ import type {
     Project,
 } from "@/app/components/shared/types";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { NewTRModal } from "@/app/components/tabular/NewTRModal";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import {
@@ -704,10 +704,10 @@ export function ProjectSectionToolbar({
             }}
             leading={
                 backAction ? (
-                    <TabPillButton onClick={backAction}>
+                    <TabPillButtonUI onClick={backAction}>
                         <ChevronLeft className="h-3.5 w-3.5" />
                         Back
-                    </TabPillButton>
+                    </TabPillButtonUI>
                 ) : undefined
             }
             actions={actions}

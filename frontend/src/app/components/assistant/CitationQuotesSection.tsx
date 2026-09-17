@@ -2,7 +2,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { CiteButton } from "@/app/components/ui/cite-button";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import type { PanelDocument, PanelDocumentQuote } from "../shared/types";
 import {
     CitationVerificationBadge,
@@ -267,14 +267,14 @@ function QuoteItem({
                     className={`h-6 rounded-full px-2 text-gray-600 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS}`}
                     showText
                 />
-                <PillButton
+                <PillButtonUI
                     tone="black"
                     size="sm"
                     disabled={isUnverified}
                     onClick={onView}
                 >
                     View
-                </PillButton>
+                </PillButtonUI>
             </div>
         </div>
     );

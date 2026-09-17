@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 
 export default function Error({
     error,
@@ -24,9 +24,15 @@ export default function Error({
                     our team will look into it.
                 </p>
 
-                <PillButton asChild tone="black" size="normal">
-                    <Link href="/">Home</Link>
-                </PillButton>
+                <Link
+                    href="/"
+                    className={pillButtonUIClassName({
+                        tone: "black",
+                        size: "normal",
+                    })}
+                >
+                    Home
+                </Link>
             </div>
         </div>
     );

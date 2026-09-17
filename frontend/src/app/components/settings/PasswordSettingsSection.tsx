@@ -8,7 +8,7 @@ import {
 } from "@/app/components/auth/passwordPolicy";
 import { Modal } from "@/app/components/modals/Modal";
 import { Input } from "@/app/components/ui/input";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { requestPasswordReset } from "@/app/lib/authApi";
@@ -107,7 +107,7 @@ export function PasswordSettingsSection() {
               <p className="text-xs text-gray-500">{passwordStatus}</p>
             )}
           </div>
-          <PillButton
+          <PillButtonUI
             tone="black"
             size="sm"
             onClick={() =>
@@ -123,7 +123,7 @@ export function PasswordSettingsSection() {
               : passwordResetSending
                 ? "Sending..."
                 : "Send reset email"}
-          </PillButton>
+          </PillButtonUI>
         </SettingsRow>
       </SettingsCard>
 

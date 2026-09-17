@@ -30,8 +30,8 @@ import { RowActionMenuItems, RowActions } from "../shared/RowActions";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { LiquidDropdownSurface } from "@/app/components/ui/liquid-dropdown";
 import {
   ChatSkeuoIcon,
@@ -415,10 +415,10 @@ export function WorkflowList({
   const workflowToolbarActions =
     activeTab !== "addons" && selectedWorkflowIds.length > 0 ? (
       <div ref={workflowActionsRef} className="relative">
-        <TabPillButton onClick={() => setWorkflowActionsOpen((open) => !open)}>
+        <TabPillButtonUI onClick={() => setWorkflowActionsOpen((open) => !open)}>
           Actions
           <ChevronDown className="h-3.5 w-3.5" />
-        </TabPillButton>
+        </TabPillButtonUI>
         {workflowActionsOpen && (
           <LiquidDropdownSurface className="absolute top-full right-0 z-[100] mt-1 w-36 overflow-hidden">
             <button
@@ -441,7 +441,7 @@ export function WorkflowList({
     ) : undefined;
   const addonToolbarActions =
     activeTab === "addons" && selectedAddonIds.length > 0 ? (
-      <PillButton
+      <PillButtonUI
         tone="black"
         size="sm"
         disabled={bulkImportingAddons}
@@ -451,7 +451,7 @@ export function WorkflowList({
         {bulkImportingAddons
           ? "Importing…"
           : `Import${selectedAddonIds.length > 1 ? ` (${selectedAddonIds.length})` : ""}`}
-      </PillButton>
+      </PillButtonUI>
     ) : undefined;
   const pendingDefaultDeleteCount = pendingDeleteWorkflows.filter(
     (workflow) => workflow.is_default,
@@ -514,10 +514,10 @@ export function WorkflowList({
         onChange={changeTab}
         leading={
           packKey ? (
-            <TabPillButton onClick={closeAddonPack}>
+            <TabPillButtonUI onClick={closeAddonPack}>
               <ChevronLeft className="h-3.5 w-3.5" />
               Back
-            </TabPillButton>
+            </TabPillButtonUI>
           ) : undefined
         }
         actions={
@@ -929,9 +929,9 @@ function WorkflowTable({
               error || "Create a reusable workflow or import one from Add-ons."
             }
             action={
-              <PillButton tone="black" size="sm" onClick={onCreate}>
+              <PillButtonUI tone="black" size="sm" onClick={onCreate}>
                 Create
-              </PillButton>
+              </PillButtonUI>
             }
           />
         </TableEmptyState>

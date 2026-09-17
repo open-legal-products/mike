@@ -6,7 +6,7 @@ import {
     lookupUserByEmail,
     type UserLookupResult,
 } from "@/app/lib/mikeApi";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { cn } from "@/app/lib/utils";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
@@ -159,7 +159,7 @@ export function AddUserInput({
                         Add
                     </button>
                 ) : showAddButton ? (
-                    <PillButton
+                    <PillButtonUI
                         tone="blue"
                         size="xs"
                         type="button"
@@ -171,7 +171,7 @@ export function AddUserInput({
                         className="shrink-0"
                     >
                         Add
-                    </PillButton>
+                    </PillButtonUI>
                 ) : null}
             </div>
             {error && <p className="mt-1.5 text-xs text-red-500">{error}</p>}

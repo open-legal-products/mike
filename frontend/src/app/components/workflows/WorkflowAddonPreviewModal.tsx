@@ -9,7 +9,7 @@ import {
   LIQUID_GLASS_HOVER_CLASS,
   LIQUID_SUBTLE_PANEL_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { Modal } from "../modals/Modal";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { PdfView } from "../shared/views/PdfView";
@@ -171,13 +171,13 @@ function DetailTabs({
   return (
     <div className="flex items-center gap-1.5">
       {tabs.map((tab) => (
-        <TabPillButton
+        <TabPillButtonUI
           key={tab.id}
           active={active === tab.id}
           onClick={() => onChange(tab.id)}
         >
           {tab.label}
-        </TabPillButton>
+        </TabPillButtonUI>
       ))}
     </div>
   );

@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { Plus } from "lucide-react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { TableToolbar } from "./TableToolbar";
 
 describe("TableToolbar", () => {
@@ -22,10 +22,10 @@ describe("TableToolbar", () => {
                 items={[{ id: "all", label: "All" }]}
                 active="all"
                 actions={
-                    <TabPillButton>
+                    <TabPillButtonUI>
                         <Plus aria-hidden="true" />
                         Folder
-                    </TabPillButton>
+                    </TabPillButtonUI>
                 }
             />,
         );

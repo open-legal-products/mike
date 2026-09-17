@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { GlassCard } from "@/app/components/ui/glass-card";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 
 export function SettingsCard({ children }: { children: ReactNode }) {
-  return <GlassCard>{children}</GlassCard>;
+  return <GlassCardUI>{children}</GlassCardUI>;
 }

@@ -2,7 +2,7 @@
 
 import React, { useSyncExternalStore } from "react";
 import { Settings2 } from "lucide-react";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import {
     DropdownMenu,
     DropdownMenuTrigger,
@@ -66,13 +66,13 @@ export function TableToolbar<T extends string>({
                 <div className="-my-2 flex flex-1 items-center gap-1.5 py-2">
                     {leading}
                     {items.map((item) => (
-                        <TabPillButton
+                        <TabPillButtonUI
                             key={item.id}
                             active={active === item.id}
                             onClick={() => onChange?.(item.id)}
                         >
                             {item.label}
-                        </TabPillButton>
+                        </TabPillButtonUI>
                     ))}
                 </div>
             )}

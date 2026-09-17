@@ -5,7 +5,7 @@ import {
   ModalUI,
   type ModalUISize,
 } from "@/shared/ui/ModalUI";
-import { PillButton } from "@/app/components/ui/pill-button";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { cn } from "@/app/lib/utils";
 
 type ModalAction = Omit<
@@ -128,9 +128,9 @@ function ModalActionButton({
             : "white";
 
   return (
-    <PillButton tone={tone} size="normal" {...props}>
+    <PillButtonUI tone={tone} size="normal" {...props}>
       {icon}
       {label}
-    </PillButton>
+    </PillButtonUI>
   );
 }

@@ -7,8 +7,8 @@ import { SettingsCard } from "@/app/components/settings/SettingsCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { MarkdownEditor } from "@/app/components/ui/markdown-editor";
-import { PillButton } from "@/app/components/ui/pill-button";
-import { ToggleSwitch } from "@/app/components/ui/toggle-switch";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import {
   SettingsDescription,
   SettingsLabel,
@@ -145,9 +145,9 @@ export function UserMemoryPage() {
                   Could not load memory settings. Please try again.
                 </p>
               </div>
-              <PillButton tone="white" size="sm" onClick={() => void load()}>
+              <PillButtonUI tone="white" size="sm" onClick={() => void load()}>
                 Retry
-              </PillButton>
+              </PillButtonUI>
             </SettingsRow>
           ) : (
             <SettingsRow>
@@ -159,7 +159,7 @@ export function UserMemoryPage() {
                 </SettingsDescription>
               </div>
               <div className="flex items-center gap-3">
-                <ToggleSwitch
+                <ToggleSwitchUI
                   checked={memory.enabled}
                   disabled={interactionLocked}
                   aria-busy={settingsMutation === "enable"}
@@ -297,7 +297,7 @@ function ProjectMemoryDefaultRow() {
           </p>
         ) : null}
       </div>
-      <ToggleSwitch
+      <ToggleSwitchUI
         checked={profile?.projectMemoryDefault !== false}
         disabled={!profile || saving}
         aria-busy={saving}

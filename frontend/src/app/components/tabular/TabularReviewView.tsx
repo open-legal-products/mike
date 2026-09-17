@@ -81,7 +81,7 @@ import { exportTabularReviewToExcel } from "./exportToExcel";
 import { useSidebar } from "@/app/contexts/SidebarContext";
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
-import { TabPillButton } from "@/app/components/ui/tab-pill-button";
+import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { ModelToggle, type NoModelsReason } from "../assistant/ModelToggle";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
@@ -1488,7 +1488,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 ref={actionsRef}
                                                 className="relative max-md:hidden"
                                             >
-                                                <TabPillButton
+                                                <TabPillButtonUI
                                                     onClick={() =>
                                                         setActionsOpen(
                                                             (v) => !v,
@@ -1497,7 +1497,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 >
                                                     Actions
                                                     <ChevronDown className="h-3.5 w-3.5" />
-                                                </TabPillButton>
+                                                </TabPillButtonUI>
                                                 {actionsOpen && (
                                                     <div
                                                         className={`absolute right-0 top-full z-50 mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
@@ -1525,23 +1525,23 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 )}
                                             </div>
                                             {/* Mobile (toolbar dropdown): flattened entries */}
-                                            <TabPillButton
+                                            <TabPillButtonUI
                                                 onClick={handleClearResults}
                                                 disabled={cellMutationsBlocked}
                                                 className="md:hidden"
                                             >
                                                 Clear results
-                                            </TabPillButton>
-                                            <TabPillButton
+                                            </TabPillButtonUI>
+                                            <TabPillButtonUI
                                                 onClick={handleDeleteDocuments}
                                                 className="md:hidden text-red-600"
                                             >
                                                 Delete
-                                            </TabPillButton>
+                                            </TabPillButtonUI>
                                         </>
                                     )}
                                     {!loading && (
-                                        <TabPillButton
+                                        <TabPillButtonUI
                                             onClick={() => setAddColOpen(true)}
                                             disabled={
                                                 savingColumn ||
@@ -1550,7 +1550,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                         >
                                             <Plus className="h-3.5 w-3.5" />
                                             Add Columns
-                                        </TabPillButton>
+                                        </TabPillButtonUI>
                                     )}
                                 </div>
                             }
