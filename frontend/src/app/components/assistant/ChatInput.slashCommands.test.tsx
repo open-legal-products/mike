@@ -59,41 +59,46 @@ describe("ChatInput workflow slash commands", () => {
         vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     });
 
-    it("opens an attached document without removing it", async () => {
-        const ref = createRef<ChatInputHandle>();
-        const onDocumentClick = vi.fn();
-        const user = userEvent.setup();
-        const document = {
-            id: "document-1",
-            filename: "agreement.docx",
-            file_type: "docx",
-        } as Document;
+    it.each(["docx", "pdf", "xlsx", "xlsm", "xls"])(
+        "opens an attached %s document without removing it",
+        async (extension) => {
+            const ref = createRef<ChatInputHandle>();
+            const onDocumentClick = vi.fn();
+            const user = userEvent.setup();
+            const document = {
+                id: "document-1",
+                filename: `agreement.${extension}`,
+                file_type: extension,
+            } as Document;
 
-        render(
-            <ChatInput
-                ref={ref}
-                onSubmit={vi.fn()}
-                onCancel={vi.fn()}
-                isLoading={false}
-                onDocumentClick={onDocumentClick}
-            />,
-        );
+            render(
+                <ChatInput
+                    ref={ref}
+                    onSubmit={vi.fn()}
+                    onCancel={vi.fn()}
+                    isLoading={false}
+                    onDocumentClick={onDocumentClick}
+                />,
+            );
 
-        act(() => ref.current?.addDoc(document));
-        const openButton = screen.getByRole("button", {
-            name: "Open agreement.docx",
-        });
-        expect(openButton.parentElement).toHaveClass("liquid-glass-flat");
-        expect(openButton.parentElement).not.toHaveClass(
-            "liquid-glass-subtle",
-        );
-        await user.click(openButton);
+            act(() => ref.current?.addDoc(document));
+            const openButton = screen.getByRole("button", {
+                name: `Open agreement.${extension}`,
+            });
+            expect(openButton.parentElement).toHaveClass("liquid-glass-flat");
+            expect(openButton.parentElement).not.toHaveClass(
+                "liquid-glass-subtle",
+            );
+            await user.click(openButton);
 
-        expect(onDocumentClick).toHaveBeenCalledWith(document);
-        expect(
-            screen.getByRole("button", { name: "Remove agreement.docx" }),
-        ).toBeInTheDocument();
-    });
+            expect(onDocumentClick).toHaveBeenCalledWith(document);
+            expect(
+                screen.getByRole("button", {
+                    name: `Remove agreement.${extension}`,
+                }),
+            ).toBeInTheDocument();
+        },
+    );
 
     it("submits the attached document's current version", async () => {
         const ref = createRef<ChatInputHandle>();

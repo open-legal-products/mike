@@ -40,9 +40,7 @@ import {
     type AccessContact,
 } from "@/app/components/popups/PermissionDeniedPopup";
 import { AccessModal } from "@/app/components/modals/AccessModal";
-import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useAuth } from "@/app/contexts/AuthContext";
-import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import {
     type Capability,
     type ProjectRole,
@@ -110,9 +108,8 @@ type ProjectWorkspaceValue = {
     projectChatsLoading: boolean;
     ensureProjectChats: () => Promise<Chat[]>;
     prefetchProjectSections: () => void;
-    creatingChat: boolean;
     creatingReview: boolean;
-    createChat: () => Promise<void>;
+    createChat: () => void;
     openNewReview: () => void;
     setDocumentUploadHeaderAction: (
         kind: "savedFiles" | "uploadFiles" | "uploadFolder",
@@ -199,7 +196,6 @@ export function ProjectWorkspaceProvider({
         "idle" | "deleting" | "deleted"
     >("idle");
     const [newTRModalOpen, setNewTRModalOpen] = useState(false);
-    const [creatingChat, setCreatingChat] = useState(false);
     const [creatingReview, setCreatingReview] = useState(false);
     const [documentUploadActions, setDocumentUploadActions] = useState<{
         savedFiles: (() => void) | null;
@@ -214,8 +210,6 @@ export function ProjectWorkspaceProvider({
     const showShell = shouldShowWorkspaceShell(segments);
     const router = useRouter();
     const { user } = useAuth();
-    const { profile } = useUserProfile();
-    const { saveChat } = useChatHistoryContext();
     const projectChatsPromiseRef = useRef<Promise<Chat[]> | null>(null);
 
     useEffect(() => {
@@ -377,60 +371,13 @@ export function ProjectWorkspaceProvider({
             void refreshGrants();
     }, [accessModalOpen, grants, refreshGrants, canDo]);
 
-    const createChat = useCallback(async () => {
-        // Creating a chat in a project is member-tier server-side; without
-        // this gate an org viewer's click fails with a silent 404.
+    const createChat = useCallback(() => {
         if (!canDo("content.edit")) {
-            denyUnlessLoading({
-                action: "start a chat in this project",
-                requiredRole: "editor",
-            });
+            denyUnlessLoading({ action: "create a chat", requiredRole: "editor" });
             return;
         }
-        setCreatingChat(true);
-        try {
-            const id = await saveChat(projectId);
-            if (id) {
-                const now = new Date().toISOString();
-                setProjectChats((prev) =>
-                    prev
-                        ? [
-                              {
-                                  id,
-                                  project_id: projectId,
-                                  user_id: user?.id ?? "",
-                                  creator_display_name:
-                                      profile?.displayName ?? null,
-                                  title: null,
-                                  created_at: now,
-                                  // The row the server would have served for
-                                  // a chat we just created: its creator is
-                                  // its admin. Without these the client's
-                                  // `roleFrom` falls back to viewer — fail
-                                  // closed, correct as a default and wrong
-                                  // here — and the author could not rename or
-                                  // delete their own new chat until reload.
-                                  is_owner: true,
-                                  access_role: "owner",
-                              },
-                              ...prev,
-                          ]
-                        : prev,
-                );
-                router.push(`/projects/${projectId}/assistant/chat/${id}`);
-            }
-        } finally {
-            setCreatingChat(false);
-        }
-    }, [
-        canDo,
-        denyUnlessLoading,
-        profile?.displayName,
-        projectId,
-        router,
-        saveChat,
-        user?.id,
-    ]);
+        router.push(`/projects/${projectId}/assistant/chat`);
+    }, [projectId, router, canDo, denyUnlessLoading]);
 
     const openNewReview = useCallback(() => {
         // Creating a review is member-tier server-side (POST /tabular-review
@@ -550,7 +497,6 @@ export function ProjectWorkspaceProvider({
             projectChatsLoading,
             ensureProjectChats,
             prefetchProjectSections,
-            creatingChat,
             creatingReview,
             createChat,
             openNewReview,
@@ -572,7 +518,6 @@ export function ProjectWorkspaceProvider({
             projectChatsLoading,
             ensureProjectChats,
             prefetchProjectSections,
-            creatingChat,
             creatingReview,
             createChat,
             openNewReview,
@@ -597,7 +542,6 @@ export function ProjectWorkspaceProvider({
                     project={project}
                     search={search}
                     activeSection={activeSection}
-                    creatingChat={creatingChat}
                     creatingReview={creatingReview}
                     canManageProject={canDo("access.manage")}
                     roleKnown={roleKnown}

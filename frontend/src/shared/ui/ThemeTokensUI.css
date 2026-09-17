@@ -1,6 +1,7 @@
 :root {
     /* Color roles shared by the web app and Word add-in. These describe what a
        color does; liquid-glass classes separately describe surface depth. */
+    --document-canvas-background: var(--color-gray-100, #f3f4f6);
     --document-tab-active-background: var(--app-surface, #fdfdfe);
     --document-tab-inactive-background: #f3f4f6;
     --document-tab-strip-background: rgba(229, 231, 235, 0.8);
@@ -40,6 +41,7 @@
 }
 
 .dark {
+    --document-canvas-background: var(--app-surface-hover, #19212c);
     --document-tab-active-background: var(--app-surface, #131922);
     --document-tab-inactive-background: var(--app-surface-hover, #19212c);
     --document-tab-strip-background: rgba(34, 44, 56, 0.84);
@@ -80,6 +82,15 @@
 
 .document-tab-strip {
     background-color: var(--document-tab-strip-background);
+}
+
+.project-document-tabs {
+    --document-tab-active-background: var(--document-canvas-background);
+    --document-tab-inactive-background: var(--app-surface);
+}
+
+.document-canvas {
+    background-color: var(--document-canvas-background);
 }
 
 .document-tab {
@@ -207,15 +218,17 @@
 .tr-chat-message-fades {
     mask-image: linear-gradient(
         to bottom,
-        transparent 0,
-        black 2.5rem,
+        rgba(0, 0, 0, 0.15) 0,
+        rgba(0, 0, 0, 0.4) 2rem,
+        black 4rem,
         black calc(100% - 8rem),
         transparent 100%
     );
     -webkit-mask-image: linear-gradient(
         to bottom,
-        transparent 0,
-        black 2.5rem,
+        rgba(0, 0, 0, 0.15) 0,
+        rgba(0, 0, 0, 0.4) 2rem,
+        black 4rem,
         black calc(100% - 8rem),
         transparent 100%
     );

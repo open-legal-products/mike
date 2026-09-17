@@ -70,6 +70,7 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
+    addFiles: (files: File[]) => void;
     startWorkflow: (
         workflow: { id: string; title: string },
         prompt?: string,
@@ -96,6 +97,10 @@ interface Props {
     projectName?: string;
     projectCmNumber?: string | null;
     projectId?: string;
+    /** Whether window-level file drops should be captured by this composer. */
+    enableGlobalFileDrop?: boolean;
+    /** Whether dropped files should be added to the project or only attached. */
+    dropUploadsToProject?: boolean;
     onDocumentsUploaded?: (documents: Document[]) => void;
     onDocumentClick?: (document: Document) => void;
     chatModel?: string | null;
@@ -114,6 +119,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         projectName,
         projectCmNumber,
         projectId,
+        enableGlobalFileDrop = true,
+        dropUploadsToProject = true,
         onDocumentsUploaded,
         onDocumentClick,
         chatModel,
@@ -241,33 +248,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         Math.max(0, matchingWorkflows.length - 1),
     );
 
-    useImperativeHandle(ref, () => ({
-        addDoc: (doc: Document) => {
-            setAttachedDocs((prev) => {
-                if (prev.some((d) => d.id === doc.id)) return prev;
-                return [...prev, doc];
-            });
-        },
-        startWorkflow: (workflow, prompt) => {
-            setSelectedWorkflow(workflow);
-            if (prompt !== undefined) setValue(prompt);
-            requestAnimationFrame(() => textareaRef.current?.focus());
-        },
-        startWorkflowDocumentSelection: (workflow, prompt, options) => {
-            setSelectedWorkflow(workflow);
-            setDocSelectorInitialTab(options?.initialDocumentTab ?? "files");
-            if (prompt !== undefined) {
-                setValue(prompt);
-                requestAnimationFrame(() => {
-                    if (!textareaRef.current) return;
-                    textareaRef.current.style.height = "auto";
-                    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-                });
-            }
-            setDocSelectorOpen(true);
-        },
-    }));
-
     useEffect(() => {
         const el = controlsRef.current;
         if (!el) return;
@@ -369,7 +349,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 }
             };
             try {
-                const outcomes = projectId
+                const uploadsToProject = dropUploadsToProject && !!projectId;
+                const outcomes = uploadsToProject
                     ? await uploadProjectDocuments(projectId, uploadInputs, {
                           onProgress: handleProgress,
                       })
@@ -382,7 +363,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         : [],
                 );
                 uploaded.forEach(addCompletedDocument);
-                if (uploaded.length > 0) onDocumentsUploaded?.(uploaded);
+                if (uploadsToProject && uploaded.length > 0) {
+                    onDocumentsUploaded?.(uploaded);
+                }
                 if (outcomes.some((outcome) => outcome.status === "error")) {
                     setUploadWarning(failedUploadMessage(outcomes));
                 }
@@ -399,10 +382,47 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 setUploadingFiles([]);
             }
         },
-        [addAttachedDocuments, canSend, onDocumentsUploaded, projectId],
+        [
+            addAttachedDocuments,
+            canSend,
+            dropUploadsToProject,
+            onDocumentsUploaded,
+            projectId,
+        ],
     );
 
+    useImperativeHandle(ref, () => ({
+        addDoc: (doc: Document) => {
+            setAttachedDocs((prev) => {
+                if (prev.some((d) => d.id === doc.id)) return prev;
+                return [...prev, doc];
+            });
+        },
+        addFiles: (files: File[]) => {
+            void handleDroppedFiles(files);
+        },
+        startWorkflow: (workflow, prompt) => {
+            setSelectedWorkflow(workflow);
+            if (prompt !== undefined) setValue(prompt);
+            requestAnimationFrame(() => textareaRef.current?.focus());
+        },
+        startWorkflowDocumentSelection: (workflow, prompt, options) => {
+            setSelectedWorkflow(workflow);
+            setDocSelectorInitialTab(options?.initialDocumentTab ?? "files");
+            if (prompt !== undefined) {
+                setValue(prompt);
+                requestAnimationFrame(() => {
+                    if (!textareaRef.current) return;
+                    textareaRef.current.style.height = "auto";
+                    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+                });
+            }
+            setDocSelectorOpen(true);
+        },
+    }));
+
     useEffect(() => {
+        if (!enableGlobalFileDrop) return;
         const hasFiles = (dataTransfer: DataTransfer | null) =>
             !!dataTransfer && Array.from(dataTransfer.types).includes("Files");
 
@@ -443,7 +463,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             window.removeEventListener("dragleave", handleDragLeave);
             window.removeEventListener("drop", handleDrop);
         };
-    }, [handleDroppedFiles]);
+    }, [enableGlobalFileDrop, handleDroppedFiles]);
 
     const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         setValue(e.target.value);
@@ -821,7 +841,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 initialSelectedDocuments={attachedDocs}
                 externalUploadedDocuments={droppedDocuments}
                 initialTab={docSelectorInitialTab}
-                projectId={projectId}
+                projectId={dropUploadsToProject ? projectId : undefined}
                 uploadStateId={`assistant-chat:${projectId ?? "standalone"}`}
                 breadcrumb={
                     selectedWorkflow

@@ -8,11 +8,16 @@ import {
     useProjectWorkspace,
 } from "./ProjectWorkspace";
 
+const { routerPush, saveChat } = vi.hoisted(() => ({
+    routerPush: vi.fn(),
+    saveChat: vi.fn(async () => "chat-1"),
+}));
+
 // The shell's chrome and its heavy modals are out of scope: this file pins
 // WHAT THE ROLE IS while the project row is in flight, and what the gated
 // entry points do in that window.
 vi.mock("next/navigation", () => ({
-    useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+    useRouter: () => ({ push: routerPush, replace: vi.fn() }),
     useSelectedLayoutSegments: () => [],
 }));
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -44,7 +49,7 @@ vi.mock("./ProjectMemoryModal", () => ({
     },
 }));
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
-    useChatHistoryContext: () => ({ saveChat: vi.fn(async () => "chat-1") }),
+    useChatHistoryContext: () => ({ saveChat }),
 }));
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({ user: { id: "u1", email: "a@firm.test" } }),
@@ -59,15 +64,18 @@ vi.mock("./ProjectPageParts", () => ({
     ProjectPageHeader: ({
         roleKnown,
         onDeleteProject,
+        onNewChat,
         onNewReview,
     }: {
         roleKnown?: boolean;
         onDeleteProject: () => void;
+        onNewChat: () => void;
         onNewReview: () => void;
     }) => (
         <div>
             <span data-testid="role-known">{String(roleKnown)}</span>
             <button onClick={onDeleteProject}>delete project</button>
+            <button onClick={onNewChat}>new chat</button>
             <button onClick={onNewReview}>new review</button>
         </div>
     ),
@@ -157,6 +165,30 @@ describe("ProjectWorkspace while the project is still loading", () => {
 
         fireEvent.click(screen.getByText("delete project"));
         expect(screen.getByText("Delete project?")).toBeInTheDocument();
+    });
+
+    it("refuses a viewer's new chat and explains the editor requirement", async () => {
+        vi.mocked(getProject).mockResolvedValue({ ...OWNER_PROJECT, access_role: "viewer" } as unknown as Project);
+        renderWorkspace();
+        await waitFor(() => expect(screen.getByTestId("role")).toHaveTextContent("viewer"));
+        fireEvent.click(screen.getByText("new chat"));
+        expect(routerPush).not.toHaveBeenCalled();
+        expect(screen.getByText("Only an editor can create a chat.")).toBeInTheDocument();
+    });
+
+    it("opens an empty project chat without creating a database row", async () => {
+        vi.mocked(getProject).mockResolvedValue(OWNER_PROJECT);
+        renderWorkspace();
+
+        await waitFor(() =>
+            expect(screen.getByTestId("role")).toHaveTextContent("owner"),
+        );
+        fireEvent.click(screen.getByText("new chat"));
+
+        expect(routerPush).toHaveBeenCalledWith(
+            "/projects/p1/assistant/chat",
+        );
+        expect(saveChat).not.toHaveBeenCalled();
     });
 
     it("forgets the previous project's role the moment the id changes", async () => {

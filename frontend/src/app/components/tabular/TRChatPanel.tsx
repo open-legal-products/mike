@@ -1,18 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { createPortal } from "react-dom";
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+    type CSSProperties,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-    MoreHorizontal,
-    Pencil,
-    Plus,
-    Search,
-    ChevronDown,
-    Trash2,
-    X,
-} from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
 import {
     streamTabularChat,
@@ -39,14 +37,10 @@ import {
 } from "../assistant/message/EventBlocks";
 import {
     LIQUID_GLASS_FLAT_CLASS,
-    LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_HOVER_CLASS,
-    LIQUID_GLASS_SUBTLE_CLASS,
 } from "@/app/components/ui/liquid-surface";
-import {
-    LiquidDropdownButton,
-    LiquidDropdownSurface,
-} from "@/app/components/ui/liquid-dropdown";
+import { ChatPanelHeader } from "../shared/ChatPanelHeader";
+import { HeaderActionsMenu } from "../shared/HeaderActionsMenu";
 import { cn } from "@/app/lib/utils";
 import { buildTabularChatHistory } from "@/app/lib/tabularChatHistory";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
@@ -121,7 +115,6 @@ interface Props {
     reviewTitle?: string | null;
     projectName?: string | null;
     onCitationClick: (colIdx: number, rowIdx: number) => void;
-    onClose: () => void;
     initialChatId?: string | null;
     onChatIdChange?: (chatId: string | null) => void;
     /** Sending is member-tier server-side; false renders a read-only composer. */
@@ -426,175 +419,6 @@ function MessageBubble({
 }
 
 // ---------------------------------------------------------------------------
-// History dropdown
-// ---------------------------------------------------------------------------
-
-function HistoryDropdown({
-    chats,
-    currentChatId,
-    onLoad,
-    onRename,
-    onDelete,
-}: {
-    chats: TRChat[];
-    currentChatId: string | null;
-    onLoad: (chatId: string) => void;
-    onRename: (chatId: string, title: string) => void;
-    onDelete: (chatId: string) => void;
-}) {
-    const [query, setQuery] = useState("");
-    const [menu, setMenu] = useState<{
-        chatId: string;
-        top: number;
-        left: number;
-    } | null>(null);
-    const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
-    const [renameValue, setRenameValue] = useState("");
-    const filtered = chats
-        .filter((c) => c.id !== currentChatId)
-        .filter((c) => {
-            const label = c.title ?? "";
-            return label.toLowerCase().includes(query.toLowerCase());
-        });
-
-    function commitRename(chatId: string) {
-        const trimmed = renameValue.trim();
-        setRenamingChatId(null);
-        if (trimmed) onRename(chatId, trimmed);
-    }
-
-    return (
-        <>
-            <div className="flex items-center gap-1.5 px-3 py-2 border-b border-white/40">
-                <Search className="h-3 w-3 text-gray-400 shrink-0" />
-                <input
-                    autoFocus
-                    type="text"
-                    placeholder="Search chats…"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    className="flex-1 text-xs bg-transparent outline-none placeholder:text-gray-400 text-gray-700"
-                />
-            </div>
-            <div
-                className="max-h-48 overflow-y-auto p-1"
-                onScroll={() => setMenu(null)}
-            >
-                {filtered.length === 0 ? (
-                    <p className="px-2 py-1.5 text-xs text-gray-400">
-                        {chats.filter((c) => c.id !== currentChatId).length ===
-                        0
-                            ? "No previous chats."
-                            : "No matches."}
-                    </p>
-                ) : (
-                    filtered.map((chat) => {
-                        const label = chat.title ?? "Chat";
-                        if (renamingChatId === chat.id) {
-                            return (
-                                <input
-                                    key={chat.id}
-                                    autoFocus
-                                    type="text"
-                                    value={renameValue}
-                                    onChange={(e) =>
-                                        setRenameValue(e.target.value)
-                                    }
-                                    onKeyDown={(e) => {
-                                        if (e.key === "Enter")
-                                            commitRename(chat.id);
-                                        if (e.key === "Escape")
-                                            setRenamingChatId(null);
-                                    }}
-                                    onBlur={() => commitRename(chat.id)}
-                                    className={`w-full rounded-lg px-2 py-1.5 text-xs text-gray-700 outline-none ${LIQUID_GLASS_SELECTED_CLASS}`}
-                                />
-                            );
-                        }
-                        return (
-                            <div
-                                key={chat.id}
-                                className="group relative flex items-center"
-                            >
-                                <LiquidDropdownButton
-                                    onClick={() => onLoad(chat.id)}
-                                    className="w-full min-w-0 rounded-lg px-2 py-1.5 pr-7 text-left truncate"
-                                >
-                                    {label}
-                                </LiquidDropdownButton>
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        const rect =
-                                            e.currentTarget.getBoundingClientRect();
-                                        setMenu((v) =>
-                                            v?.chatId === chat.id
-                                                ? null
-                                                : {
-                                                      chatId: chat.id,
-                                                      top: rect.bottom + 4,
-                                                      left: rect.right - 112,
-                                                  },
-                                        );
-                                    }}
-                                    title="Chat options"
-                                    className={cn(
-                                        `absolute right-1.5 flex h-5 w-5 items-center justify-center rounded-full text-gray-400 transition-colors hover:text-gray-700 ${LIQUID_GLASS_HOVER_CLASS}`,
-                                        menu?.chatId === chat.id
-                                            ? "opacity-100"
-                                            : "opacity-0 group-hover:opacity-100",
-                                    )}
-                                >
-                                    <MoreHorizontal className="h-3.5 w-3.5" />
-                                </button>
-                                {menu?.chatId === chat.id &&
-                                    createPortal(
-                                        <LiquidDropdownSurface
-                                            onMouseDown={(e) =>
-                                                e.stopPropagation()
-                                            }
-                                            className="fixed z-[130] w-28 p-1"
-                                            style={{
-                                                top: menu.top,
-                                                left: menu.left,
-                                            }}
-                                        >
-                                            <LiquidDropdownButton
-                                                onClick={() => {
-                                                    setMenu(null);
-                                                    setRenameValue(
-                                                        chat.title ?? "",
-                                                    );
-                                                    setRenamingChatId(chat.id);
-                                                }}
-                                                className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left"
-                                            >
-                                                <Pencil className="h-3 w-3" />
-                                                Rename
-                                            </LiquidDropdownButton>
-                                            <LiquidDropdownButton
-                                                onClick={() => {
-                                                    setMenu(null);
-                                                    onDelete(chat.id);
-                                                }}
-                                                className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-red-600 hover:text-red-600 focus:text-red-600"
-                                            >
-                                                <Trash2 className="h-3 w-3" />
-                                                Delete
-                                            </LiquidDropdownButton>
-                                        </LiquidDropdownSurface>,
-                                        document.body,
-                                    )}
-                            </div>
-                        );
-                    })
-                )}
-            </div>
-        </>
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Drip helpers
 // ---------------------------------------------------------------------------
 
@@ -605,13 +429,7 @@ function findLastContentIndex(events: AssistantEvent[]): number {
     return -1;
 }
 
-// ---------------------------------------------------------------------------
-// Header pills (matches PageHeader action group styling)
-// ---------------------------------------------------------------------------
-
-const HEADER_PILL_CLASS = `flex shrink-0 items-center gap-1 rounded-full px-1 py-0.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`;
-const HEADER_PILL_BUTTON_CLASS = `flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:text-gray-900 ${LIQUID_GLASS_HOVER_CLASS}`;
-const MESSAGE_TOP_INSET = 48;
+const MESSAGE_TOP_INSET = 80;
 const MESSAGE_GAP = 16;
 const COMPOSER_GAP = 16;
 
@@ -624,7 +442,6 @@ export function TRChatPanel({
     reviewTitle,
     projectName,
     onCitationClick,
-    onClose,
     initialChatId,
     onChatIdChange,
     canSend = true,
@@ -643,7 +460,8 @@ export function TRChatPanel({
         NonNullable<Message["reasoning"]> | null | undefined
     >(initialChatId ? undefined : null);
     const [messages, setMessages] = useState<TRMessage[]>([]);
-    const [historyOpen, setHistoryOpen] = useState(false);
+    const [titleDraft, setTitleDraft] = useState<string | null>(null);
+    const [isLoadingChats, setIsLoadingChats] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
     const [isLoadingMessages, setIsLoadingMessages] = useState(false);
     const [minHeight, setMinHeight] = useState("0px");
@@ -702,8 +520,20 @@ export function TRChatPanel({
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
     const abortRef = useRef<AbortController | null>(null);
-    const historyRef = useRef<HTMLDivElement>(null);
     const hasScrolledRef = useRef(false);
+    const scrollLatestUserToTop = useCallback((behavior: ScrollBehavior) => {
+        const container = messagesContainerRef.current;
+        const message = latestUserMessageRef.current;
+        if (!container || !message) return;
+        const messageTop =
+            message.getBoundingClientRect().top -
+            container.getBoundingClientRect().top +
+            container.scrollTop;
+        container.scrollTo({
+            top: Math.max(0, messageTop - MESSAGE_TOP_INSET),
+            behavior,
+        });
+    }, []);
 
     // Drip animation refs
     const dripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -731,7 +561,8 @@ export function TRChatPanel({
                     setCurrentChatModel(null);
                     setCurrentChatReasoningLevel(null);
                 }
-            });
+            })
+            .finally(() => setIsLoadingChats(false));
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps -- initialChatId is the mount-time thread; live chat id changes must not refetch settings
 
     // ChatInput persists through UserProfileContext. Mirror successful saves
@@ -798,6 +629,15 @@ export function TRChatPanel({
     }, [currentChatId]);
 
     useEffect(() => {
+        hasScrolledRef.current = false;
+    }, [currentChatId]);
+
+    useEffect(() => {
+        if (isLoadingMessages) {
+            hasScrolledRef.current = false;
+            setMessagesVisible(false);
+            return;
+        }
         if (messages.length === 0) {
             hasScrolledRef.current = false;
             setMessagesVisible(false);
@@ -810,26 +650,21 @@ export function TRChatPanel({
                 latestUserMessageRef.current &&
                 messagesContainerRef.current
             ) {
-                setTimeout(() => {
-                    const container = messagesContainerRef.current;
-                    const element = latestUserMessageRef.current;
-                    if (container && element) {
-                        container.scrollTo({
-                            top: element.offsetTop - MESSAGE_TOP_INSET,
-                            behavior: "instant",
-                        });
-                    }
+                const timer = setTimeout(() => {
+                    scrollLatestUserToTop("auto");
                     hasScrolledRef.current = true;
                     setMessagesVisible(true);
                 }, 100);
+                return () => clearTimeout(timer);
             } else {
                 hasScrolledRef.current = true;
                 setMessagesVisible(true);
             }
         }
-    }, [messages]);
+    }, [messages, isLoadingMessages, currentChatId, scrollLatestUserToTop]);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        if (isLoadingMessages) return;
         const userEl = latestUserMessageRef.current;
         const containerEl = messagesContainerRef.current;
         if (!userEl || !containerEl) return;
@@ -844,22 +679,11 @@ export function TRChatPanel({
                     composerSpace,
             )}px`,
         );
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [inputHeight, messages.length, latestUserMessageRef.current]);
+    }, [inputHeight, messages.length, isLoadingMessages, currentChatId]);
 
     useEffect(() => {
-        if (!historyOpen) return;
-        function handleClick(e: MouseEvent) {
-            if (
-                historyRef.current &&
-                !historyRef.current.contains(e.target as Node)
-            ) {
-                setHistoryOpen(false);
-            }
-        }
-        document.addEventListener("mousedown", handleClick);
-        return () => document.removeEventListener("mousedown", handleClick);
-    }, [historyOpen]);
+        setTitleDraft(null);
+    }, [currentChatId]);
 
     // ---- drip ----
 
@@ -1023,7 +847,6 @@ export function TRChatPanel({
         setCurrentChatModel(null);
         setCurrentChatReasoningLevel(null);
         setMessages([]);
-        setHistoryOpen(false);
     }
 
     async function handleDeleteChat(chatId: string) {
@@ -1061,7 +884,6 @@ export function TRChatPanel({
         setCurrentChatModel(chat?.model ?? null);
         setCurrentChatReasoningLevel(chat?.reasoning_level ?? null);
         setMessages([]);
-        setHistoryOpen(false);
         setIsLoadingMessages(true);
         try {
             const raw = await getTabularChatMessages(reviewId, chatId);
@@ -1100,14 +922,7 @@ export function TRChatPanel({
         setIsLoading(true);
 
         setTimeout(() => {
-            const container = messagesContainerRef.current;
-            const element = latestUserMessageRef.current;
-            if (container && element) {
-                container.scrollTo({
-                    top: element.offsetTop - MESSAGE_TOP_INSET,
-                    behavior: "smooth",
-                });
-            }
+            scrollLatestUserToTop("smooth");
         }, 50);
 
         stopDrip();
@@ -1718,7 +1533,7 @@ export function TRChatPanel({
                 // Mobile: replaces the table, filling the row minus margins.
                 // md+: fixed width beside the table, top-aligned with it
                 // (below the toolbar).
-                "flex-1 min-w-0 mx-3 mb-3 md:flex-none md:w-[var(--tr-chat-panel-width)] md:mt-12 md:-ml-4 md:mr-6",
+                "flex-1 min-w-0 mx-3 mb-3 md:flex-none md:w-[var(--tr-chat-panel-width)] md:mt-12 md:-ml-6 md:mr-6",
                 "rounded-2xl",
                 LIQUID_GLASS_FLAT_CLASS,
                 "overflow-hidden",
@@ -1741,69 +1556,91 @@ export function TRChatPanel({
                 }`}
             />
             {/* Header — fixed, overlaid on top of the messages */}
-            <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between gap-2 px-2 py-2">
-                {/* Title pill — opens chat history */}
-                <div ref={historyRef} className="relative shrink min-w-0">
-                    <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
-                        <button
-                            onClick={() => setHistoryOpen((v) => !v)}
-                            title="Chat history"
-                            className={`flex h-5 min-w-0 items-center gap-1 rounded-full px-1.5 text-gray-700 transition-colors ${LIQUID_GLASS_HOVER_CLASS}`}
-                        >
-                            <span className="min-w-0 truncate text-xs font-medium">
-                                {currentChatTitle ?? "New chat"}
-                            </span>
-                            <ChevronDown
-                                className={cn(
-                                    "h-3 w-3 shrink-0 text-gray-400 transition-transform duration-200",
-                                    historyOpen && "rotate-180",
-                                )}
+            <div className="absolute inset-x-0 top-0 z-10">
+                <ChatPanelHeader
+                    chats={chats}
+                    currentChatId={currentChatId ?? ""}
+                    currentTitle={currentChatTitle}
+                    loading={isLoadingChats}
+                    newChatDisabled={!canSend || isLoading}
+                    onLoad={(chatId) => void handleLoadChat(chatId)}
+                    onNewChat={handleNewChat}
+                    titleEdit={
+                        titleDraft !== null
+                            ? {
+                                  value: titleDraft,
+                                  onChange: setTitleDraft,
+                                  onSave: () => {
+                                      const title = titleDraft.trim();
+                                      setTitleDraft(null);
+                                      if (
+                                          currentChatId &&
+                                          title &&
+                                          title !== currentChatTitle
+                                      ) {
+                                          void handleRenameChat(
+                                              currentChatId,
+                                              title,
+                                          );
+                                      }
+                                  },
+                                  onCancel: () => setTitleDraft(null),
+                              }
+                            : undefined
+                    }
+                    actions={
+                        currentChatId ? (
+                            <HeaderActionsMenu
+                                triggerClassName="h-6 w-6"
+                                onCloseAutoFocus={(event) => {
+                                    if (titleDraft !== null)
+                                        event.preventDefault();
+                                }}
+                                items={[
+                                    {
+                                        label: "Rename",
+                                        icon: Pencil,
+                                        onSelect: () =>
+                                            setTitleDraft(
+                                                currentChatTitle ?? "New Chat",
+                                            ),
+                                        disabled:
+                                            !canSend ||
+                                            isLoadingChats ||
+                                            isLoadingMessages ||
+                                            isLoading,
+                                    },
+                                    {
+                                        label: "Delete",
+                                        icon: Trash2,
+                                        onSelect: () => {
+                                            if (currentChatId)
+                                                void handleDeleteChat(
+                                                    currentChatId,
+                                                );
+                                        },
+                                        disabled:
+                                            !canSend ||
+                                            isLoadingChats ||
+                                            isLoadingMessages ||
+                                            isLoading,
+                                        variant: "danger",
+                                    },
+                                ]}
                             />
-                        </button>
-                    </div>
-                    {historyOpen && (
-                        <LiquidDropdownSurface className="absolute top-full left-0 z-50 mt-2 w-64 overflow-hidden">
-                            <HistoryDropdown
-                                chats={chats}
-                                currentChatId={currentChatId}
-                                onLoad={handleLoadChat}
-                                onRename={handleRenameChat}
-                                onDelete={handleDeleteChat}
-                            />
-                        </LiquidDropdownSurface>
-                    )}
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                    {/* New chat circle — only once a chat has started */}
-                    {messages.length > 0 && (
-                        <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
-                            <button
-                                onClick={handleNewChat}
-                                title="New chat"
-                                className={HEADER_PILL_BUTTON_CLASS}
-                            >
-                                <Plus className="h-3.5 w-3.5" />
-                            </button>
-                        </div>
-                    )}
-                    {/* Close circle */}
-                    <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
-                        <button
-                            onClick={onClose}
-                            title="Close"
-                            className={HEADER_PILL_BUTTON_CLASS}
-                        >
-                            <X className="h-3.5 w-3.5" />
-                        </button>
-                    </div>
-                </div>
+                        ) : null
+                    }
+                />
             </div>
 
-            {/* Messages */}
+            {/* Messages and loading skeleton share the spacer's top inset. */}
             <div
                 ref={messagesContainerRef}
-                className="tr-chat-message-fades flex-1 overflow-y-auto px-4 pt-12 flex flex-col"
-                style={{ paddingBottom: Math.ceil(inputHeight + 16) }}
+                className="tr-chat-message-fades flex-1 overflow-y-auto px-4 flex flex-col"
+                style={{
+                    paddingTop: MESSAGE_TOP_INSET,
+                    paddingBottom: Math.ceil(inputHeight + COMPOSER_GAP),
+                }}
             >
                 {isLoadingMessages && (
                     <div className="flex flex-col gap-4">

@@ -124,9 +124,9 @@ describe("MarkdownEditor", () => {
       screen.getByRole("button", { name: "Show raw Markdown" }),
     ).toBeDisabled();
     expect(mocks.editor.setEditable).toHaveBeenLastCalledWith(false, false);
-    expect(
-      container.querySelector(".flex-1.overflow-y-auto"),
-    ).toHaveClass("opacity-50");
+    expect(container.querySelector(".flex-1.overflow-y-auto")).toHaveClass(
+      "opacity-50",
+    );
   });
 
   it("withholds the table control when tables are not allowed", () => {
@@ -160,9 +160,7 @@ describe("MarkdownEditor", () => {
       }),
     );
 
-    await user.click(
-      screen.getByRole("button", { name: "Show raw Markdown" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Show raw Markdown" }));
     expect(
       screen.getByRole("textbox", {
         name: "Memory document (raw Markdown)",
@@ -192,9 +190,7 @@ describe("MarkdownEditor", () => {
     const { rerender } = render(
       <MarkdownEditor value="Prompt" ariaLabel="Memory document" />,
     );
-    await user.click(
-      screen.getByRole("button", { name: "Show raw Markdown" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Show raw Markdown" }));
 
     rerender(
       <MarkdownEditor
@@ -233,9 +229,32 @@ describe("MarkdownEditor", () => {
         name: "Memory document (raw Markdown)",
       }),
     ).toHaveValue("![diagram](diagram.png)\n\nplain text");
+    expect(screen.getByText("Raw view preserves this Markdown")).toBeVisible();
+  });
+
+  it("allows rich editing when list and emphasis syntax is normalized", async () => {
+    const source =
+      "# Project memory\n\n* __Client__: Acme\n* _Deadline_: Friday";
+    mocks.editor.storage.markdown.getMarkdown = () =>
+      "# Project memory\n\n- **Client**: Acme\n- *Deadline*: Friday";
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <MarkdownEditor
+        value={source}
+        onChange={onChange}
+        ariaLabel="Project memory"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Show raw Markdown" }));
+    await user.click(screen.getByRole("button", { name: "Show rich editor" }));
+
+    expect(screen.getByTestId("editor-content")).toBeVisible();
     expect(
-      screen.getByText("Raw view preserves this Markdown"),
-    ).toBeVisible();
+      screen.queryByRole("textbox", { name: "Project memory (raw Markdown)" }),
+    ).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("preserves Markdown hard breaks when the rich editor drops them", async () => {

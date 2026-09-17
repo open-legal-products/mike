@@ -23,6 +23,7 @@ import { MikeIcon } from "@/app/components/chat/mike-icon";
 import { SidebarChatItem } from "@/app/components/shared/SidebarChatItem";
 import {
     ChatSkeuoIcon,
+    IdeSkeuoIcon,
     FolderSkeuoIcon,
     LibrarySkeuoIcon,
     TabularReviewSkeuoIcon,
@@ -44,6 +45,7 @@ import {
 
 const NAV_ITEMS = [
     { href: "/assistant", label: "Assistant", icon: ChatSkeuoIcon },
+    { href: "/ide", label: "IDE", icon: IdeSkeuoIcon },
     { href: "/projects", label: "Projects", icon: FolderSkeuoIcon },
     { href: "/library", label: "Library", icon: LibrarySkeuoIcon },
     {
@@ -269,7 +271,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             >
                 {/* Toggle + Logo */}
                 <div
-                    className={`items-center justify-between px-2 py-2 ${
+                    className={`h-12 shrink-0 items-center justify-between px-2 ${
                         !isOpen ? "hidden md:flex" : "flex"
                     }`}
                 >
@@ -291,7 +293,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                         </div>
                     )}
                     <button
+                        type="button"
                         onClick={handleToggle}
+                        aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
                         className={cn(
                             "flex h-8 w-8 shrink-0 items-center p-2 transition-colors",
                             "rounded-md",
@@ -560,11 +564,12 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 type="button"
                                 aria-expanded={isDropdownOpen}
                                 aria-controls="account-dropdown"
+                                aria-label="Account menu"
                                 onClick={() =>
                                     setIsDropdownOpen(!isDropdownOpen)
                                 }
                                 className={cn(
-                                    "flex w-full items-center rounded-xl px-2 py-3 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                                    "flex h-12 w-full shrink-0 items-center rounded-xl px-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
                                     !isOpen ? "hidden md:flex" : "",
                                     pathname.startsWith("/settings") ||
                                         pathname === "/history" ||

@@ -22,7 +22,7 @@ const inFlight = new Map<string, Promise<ArrayBuffer>>();
 function cacheKey(
     documentId: string,
     versionId?: string | null,
-    refetchKey?: number,
+    refetchKey?: number | string,
     sourceUrl?: string | null,
 ): string {
     return `${sourceUrl ?? documentId}:${versionId ?? ""}:${refetchKey ?? ""}`;
@@ -36,12 +36,14 @@ function cacheKey(
 export function useFetchDocxBytes(
     documentId: string | null | undefined,
     versionId?: string | null,
-    refetchKey?: number,
+    refetchKey?: number | string,
     sourceUrl?: string | null,
+    cacheBytes = true,
 ): FetchDocxResult {
-    const initialKey = documentId
-        ? cacheKey(documentId, versionId, refetchKey, sourceUrl)
-        : null;
+    const initialKey =
+        cacheBytes && documentId
+            ? cacheKey(documentId, versionId, refetchKey, sourceUrl)
+            : null;
     const [bytes, setBytes] = useState<ArrayBuffer | null>(
         initialKey ? (bytesCache.get(initialKey) ?? null) : null,
     );
@@ -59,7 +61,7 @@ export function useFetchDocxBytes(
         const url = sourceUrl ?? getDocumentFileUrl(documentId, versionId);
 
         // Cache hit: reuse bytes synchronously, no network, no spinner.
-        const cached = bytesCache.get(key);
+        const cached = cacheBytes ? bytesCache.get(key) : undefined;
         if (cached) {
             setBytes(cached);
             setLoading(false);
@@ -68,21 +70,24 @@ export function useFetchDocxBytes(
         }
 
         let cancelled = false;
+        const controller = new AbortController();
         setLoading(true);
         setError(null);
 
         const pending =
-            inFlight.get(key) ??
+            (cacheBytes ? inFlight.get(key) : undefined) ??
             (async () => {
                 // Stream bytes through the backend (avoids CORS on R2
                 // signed URLs).
-                const bin = await authenticatedFetch(url);
+                const bin = await authenticatedFetch(url, {
+                    signal: cacheBytes ? undefined : controller.signal,
+                });
                 if (!bin.ok) throw new Error(`HTTP ${bin.status}`);
                 const buf = await bin.arrayBuffer();
-                bytesCache.set(key, buf);
+                if (cacheBytes) bytesCache.set(key, buf);
                 return buf;
             })();
-        if (!inFlight.has(key)) inFlight.set(key, pending);
+        if (cacheBytes && !inFlight.has(key)) inFlight.set(key, pending);
 
         pending
             .then((buf) => {
@@ -96,14 +101,17 @@ export function useFetchDocxBytes(
                 );
             })
             .finally(() => {
-                inFlight.delete(key);
+                if (cacheBytes && inFlight.get(key) === pending) {
+                    inFlight.delete(key);
+                }
                 if (!cancelled) setLoading(false);
             });
 
         return () => {
             cancelled = true;
+            if (!cacheBytes) controller.abort();
         };
-    }, [documentId, versionId, refetchKey, sourceUrl]);
+    }, [documentId, versionId, refetchKey, sourceUrl, cacheBytes]);
 
     return { bytes, loading, error };
 }

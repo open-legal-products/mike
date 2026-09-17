@@ -367,7 +367,6 @@ export function ProjectPageHeader({
     project,
     search,
     activeSection,
-    creatingChat,
     creatingReview,
     canManageProject,
     roleKnown = true,
@@ -388,7 +387,6 @@ export function ProjectPageHeader({
     project: Project | null;
     search: string;
     activeSection: ProjectWorkspaceSection;
-    creatingChat: boolean;
     creatingReview: boolean;
     /** Whether the caller holds access.manage on this project. */
     canManageProject: boolean;
@@ -430,12 +428,8 @@ export function ProjectPageHeader({
             : activeSection === "assistant"
               ? {
                     onClick: onNewChat,
-                    disabled: creatingChat || !roleKnown,
-                    icon: creatingChat ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                        <Plus className="h-4 w-4" />
-                    ),
+                    disabled: !roleKnown,
+                    icon: <Plus className="h-4 w-4" />,
                     label: <span className="hidden sm:inline">Chat</span>,
                     title: "Create chat",
                 }

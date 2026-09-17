@@ -66,6 +66,7 @@ interface Props {
     mode: DocPanelMode;
     isReloading?: boolean;
     compactActions?: boolean;
+    active?: boolean;
     warning?: string | null;
     onWarningDismiss?: () => void;
     initialScrollTop?: number | null;
@@ -78,6 +79,7 @@ export function DocPanel({
     mode,
     isReloading = false,
     compactActions = false,
+    active = true,
     warning,
     onWarningDismiss,
     initialScrollTop,
@@ -244,6 +246,7 @@ export function DocPanel({
                     />
                 ) : viewType === "spreadsheet" ? (
                     <SpreadsheetView
+                        active={active}
                         documentId={documentId}
                         versionId={versionId}
                         rounded={false}
