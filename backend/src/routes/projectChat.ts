@@ -345,6 +345,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
         projectId,
         userId,
         db,
+        messages,
     );
     const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
         doc_id,

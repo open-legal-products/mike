@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, ZoomIn, ZoomOut } from "lucide-react";
-import { useFetchSingleDoc } from "@/app/hooks/useFetchSingleDoc";
+import {
+    useFetchSingleDoc,
+    type DocResult,
+} from "@/app/hooks/useFetchSingleDoc";
 import type { CitationQuote } from "../types";
 import {
     clearHighlights,
@@ -15,6 +18,7 @@ import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/shared/ui/LiquidGlassUI";
 interface Props {
     doc: { document_id: string; version_id?: string | null } | null;
     displayUrl?: string | null;
+    refetchKey?: number | string;
     /** Preferred: one or more (page, quote) pairs to highlight. */
     quotes?: CitationQuote[];
     /** Changes when the parent wants the current quote re-focused. */
@@ -59,6 +63,7 @@ export function getObservedPanelWidth(entry: ResizeObserverEntry): number {
 export function PdfView({
     doc,
     displayUrl,
+    refetchKey,
     quotes,
     quoteFocusKey,
     quote,
@@ -92,12 +97,19 @@ export function PdfView({
     const [zoom, setZoom] = useState(1.0);
     const [currentPage, setCurrentPage] = useState(1);
     const [numPages, setNumPages] = useState(0);
+    const [pdfLoadError, setPdfLoadError] = useState<{
+        result: DocResult;
+        message: string;
+    } | null>(null);
 
     const { result, loading, error } = useFetchSingleDoc(
         doc?.document_id ?? null,
         doc?.version_id ?? null,
         displayUrl,
+        refetchKey,
     );
+    const documentError =
+        error ?? (pdfLoadError?.result === result ? pdfLoadError?.message : null);
 
     // Track container width via ResizeObserver so re-renders fire on resize
     useEffect(() => {
@@ -500,26 +512,38 @@ export function PdfView({
         const list = quoteList;
 
         let cancelled = false;
+        let loadingTask: import("pdfjs-dist").PDFDocumentLoadingTask | null =
+            null;
         queueMicrotask(() => {
             if (cancelled) return;
             setZoom(1.0);
             setNumPages(0);
+            setPdfLoadError(null);
         });
 
         (async () => {
             const lib = await getPdfJs();
             if (cancelled) return;
-            const pdfDoc = await lib.getDocument({
-                data: new Uint8Array(result.buffer),
+            loadingTask = lib.getDocument({
+                // PDF.js transfers this buffer to its worker. Keep the fetched
+                // bytes attached so another render can load the same result.
+                data: new Uint8Array(result.buffer.slice(0)),
                 standardFontDataUrl: STANDARD_FONT_DATA_URL,
-            }).promise;
+            });
+            const pdfDoc = await loadingTask.promise;
             if (cancelled) return;
             pdfDocRef.current = pdfDoc;
             await renderPDF(pdfDoc, list);
-        })();
+        })().catch(() => {
+            if (!cancelled)
+                setPdfLoadError({ result, message: "Failed to load document." });
+        });
         return () => {
             cancelled = true;
             renderGenerationRef.current += 1;
+            pdfDocRef.current = null;
+            renderedPagesRef.current = [];
+            void loadingTask?.destroy().catch(() => {});
         };
     }, [result, renderPDF]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -575,7 +599,7 @@ export function PdfView({
 
     return (
         <div
-            className={`relative flex flex-col bg-gray-100 flex-1 overflow-hidden ${rounded ? "rounded-lg" : ""}`}
+            className={`document-canvas relative flex flex-col flex-1 overflow-hidden ${rounded ? "rounded-lg" : ""}`}
         >
             <div
                 ref={scrollContainerRef}
@@ -586,9 +610,9 @@ export function PdfView({
                         <Loader2 className="h-7 w-7 animate-spin text-gray-400" />
                     </div>
                 )}
-                {error && (
+                {documentError && (
                     <div className="flex h-full items-center justify-center">
-                        <p className="text-sm text-red-500">{error}</p>
+                        <p className="text-sm text-red-500">{documentError}</p>
                     </div>
                 )}
                 <div ref={containerRef} />

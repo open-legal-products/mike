@@ -1,3 +1,5 @@
+import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+
 type DragPreviewOptions = {
     dataTransfer: Pick<DataTransfer, "setDragImage">;
     tableRoot: HTMLElement | null;
@@ -8,8 +10,8 @@ type DragPreviewOptions = {
 };
 
 /**
- * Replace the browser's single-row drag image with the complete visible
- * selection. The preview is removed after the drag image has been captured.
+ * Capture only the selected rows, including single-row drags: native capture
+ * can include the table's scrollbar. Remove the preview after capture.
  */
 export function setDocumentRowsDragPreview({
     dataTransfer,
@@ -19,7 +21,7 @@ export function setDocumentRowsDragPreview({
     clientX,
     clientY,
 }: DragPreviewOptions): void {
-    if (!tableRoot || draggedDocumentIds.length < 2) return;
+    if (!tableRoot || draggedDocumentIds.length === 0) return;
 
     const draggedIdSet = new Set(draggedDocumentIds);
     const rows = Array.from(
@@ -30,7 +32,7 @@ export function setDocumentRowsDragPreview({
         const id = row.dataset.documentId;
         return !!id && draggedIdSet.has(id);
     });
-    if (rows.length < 2) return;
+    if (rows.length === 0) return;
 
     const draggedRowIndex = Math.max(
         0,
@@ -43,6 +45,7 @@ export function setDocumentRowsDragPreview({
     const previewWidth = Math.max(1, Math.ceil(draggedRect.width));
     const preview = document.createElement("div");
     preview.setAttribute("aria-hidden", "true");
+    preview.className = LIQUID_GLASS_FLOAT_CLASS;
     Object.assign(preview.style, {
         position: "fixed",
         left: "-10000px",
@@ -50,8 +53,9 @@ export function setDocumentRowsDragPreview({
         width: `${previewWidth}px`,
         overflow: "hidden",
         pointerEvents: "none",
-        borderRadius: "10px",
-        boxShadow: "0 12px 30px rgba(15, 23, 42, 0.18)",
+        borderRadius: "0",
+        border: "0",
+        boxShadow: "none",
     });
 
     for (const row of rows) {
@@ -59,7 +63,16 @@ export function setDocumentRowsDragPreview({
         clone.removeAttribute("draggable");
         clone.style.width = `${previewWidth}px`;
         clone.style.minWidth = `${previewWidth}px`;
-        clone.style.backgroundColor = getComputedStyle(row).backgroundColor;
+        // One square surface, without selected/hover fills or backing shadows.
+        clone.style.backgroundColor = "transparent";
+        clone.style.borderRadius = "0";
+        clone.style.boxShadow = "none";
+        clone.style.transition = "none";
+        for (const cell of clone.querySelectorAll<HTMLElement>(
+            ".table-sticky-cell",
+        )) {
+            cell.style.backgroundColor = "transparent";
+        }
         preview.appendChild(clone);
     }
 

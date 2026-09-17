@@ -103,6 +103,8 @@ export interface Document {
   updated_at?: string | null;
   /** Stable id of the document version currently selected for this row. */
   current_version_id?: string | null;
+  /** SHA-256 of the active version bytes; changes on in-place edits as well. */
+  content_sha256?: string | null;
   /** Version number of the document row pointed to by current_version_id. */
   active_version_number?: number | null;
   /** Legacy: max version_number across assistant_edit rows, null if doc is unedited. */

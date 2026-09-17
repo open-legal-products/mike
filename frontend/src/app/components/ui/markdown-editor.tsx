@@ -4,6 +4,7 @@ import { useEditor, EditorContent, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TableKit } from "@tiptap/extension-table";
 import { Markdown } from "tiptap-markdown";
+import { marked } from "marked";
 import { useEffect, useRef, useState } from "react";
 import {
   Bold,
@@ -66,7 +67,17 @@ function comparableMarkdown(value: string) {
 }
 
 function markdownRoundTrips(source: string, serialized: string) {
-  return comparableMarkdown(source) === comparableMarkdown(serialized);
+  const original = comparableMarkdown(source);
+  const normalized = comparableMarkdown(serialized);
+  if (original === normalized) return true;
+  // Rich editing normalizes equivalent syntax (list markers, emphasis,
+  // heading styles, table padding). Compare rendered structure so those
+  // changes do not lock the editor in raw mode. Lost content and meaningful
+  // formatting, such as hard breaks, still require the lossless raw view.
+  return (
+    marked.parse(original, { async: false }) ===
+    marked.parse(normalized, { async: false })
+  );
 }
 
 const TABLE_PICKER_MAX_ROWS = 8;

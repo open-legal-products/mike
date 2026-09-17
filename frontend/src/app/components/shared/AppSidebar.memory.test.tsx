@@ -58,4 +58,39 @@ describe("AppSidebar account dropdown", () => {
     expect(screen.getByRole("button", { name: "Settings" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Memory" })).toBeNull();
   });
+
+  it("shows the IDE navigation directly below Assistant", () => {
+    render(<AppSidebar isOpen onToggle={vi.fn()} />);
+
+    const assistant = screen.getByRole("button", { name: "Assistant" });
+    const ide = screen.getByRole("button", { name: "IDE" });
+
+    expect(assistant.parentElement?.nextElementSibling).toContainElement(ide);
+  });
+
+  it.each([
+    { isOpen: true, toggleName: "Close sidebar" },
+    { isOpen: false, toggleName: "Open sidebar" },
+  ])(
+    "keeps the header row at a fixed height when isOpen is $isOpen",
+    ({ isOpen, toggleName }) => {
+      render(<AppSidebar isOpen={isOpen} onToggle={vi.fn()} />);
+
+      expect(
+        screen.getByRole("button", { name: toggleName }).parentElement,
+      ).toHaveClass("h-12", "shrink-0");
+    },
+  );
+
+  it.each([true, false])(
+    "keeps the account button at a fixed height when isOpen is %s",
+    (isOpen) => {
+      render(<AppSidebar isOpen={isOpen} onToggle={vi.fn()} />);
+
+      expect(screen.getByRole("button", { name: "Account menu" })).toHaveClass(
+        "h-12",
+        "shrink-0",
+      );
+    },
+  );
 });

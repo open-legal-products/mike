@@ -245,52 +245,54 @@ export function ModelToggleUI({
         side={modalInput ? "bottom" : "top"}
         align={modalInput ? "start" : "end"}
         sideOffset={modalInput ? 4 : 8}
-        className={`max-h-[min(420px,70vh)] overflow-y-auto rounded-2xl text-gray-700 ${modalInput ? "w-[var(--radix-dropdown-menu-trigger-width)]" : "w-56"}`}
+        className={`flex max-h-[min(320px,60vh)] flex-col overflow-hidden rounded-2xl text-gray-700 ${modalInput ? "w-[var(--radix-dropdown-menu-trigger-width)]" : "w-56"}`}
       >
-        {availableGroups.map(({ group, items }) => {
-          const expanded = expandedGroup === group;
-          return (
-            <React.Fragment key={group}>
-              <DropdownItem
-                aria-expanded={expanded}
-                className={`${itemClassName} py-2 font-medium`}
-                onSelect={(event) => {
-                  event.preventDefault();
-                  setExpandedGroup(expanded ? null : group);
-                }}
-              >
-                <span className="flex-1">{group}</span>
-                <ChevronDown
-                  className={`h-3.5 w-3.5 text-gray-400 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
-                />
-              </DropdownItem>
-              {expanded &&
-                items.map((model) => (
-                  <DropdownItem
-                    key={model.id}
-                    selected={model.id === value}
-                    className={`${itemClassName} ${model.id === value ? "text-gray-900" : ""}`}
-                    onSelect={() => onChange(model.id)}
-                  >
-                    <span className="flex-1">{model.label}</span>
-                    {model.source &&
-                      (routeCounts.get(
-                        `${model.group}\u0000${model.label.toLocaleLowerCase()}`,
-                      ) ?? 0) > 1 && (
-                        <span className="text-[9px] font-medium text-gray-400">
-                          {model.source}
-                        </span>
+        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+          {availableGroups.map(({ group, items }) => {
+            const expanded = expandedGroup === group;
+            return (
+              <React.Fragment key={group}>
+                <DropdownItem
+                  aria-expanded={expanded}
+                  className={`${itemClassName} py-2 font-medium`}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    setExpandedGroup(expanded ? null : group);
+                  }}
+                >
+                  <span className="flex-1">{group}</span>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 text-gray-400 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+                  />
+                </DropdownItem>
+                {expanded &&
+                  items.map((model) => (
+                    <DropdownItem
+                      key={model.id}
+                      selected={model.id === value}
+                      className={`${itemClassName} ${model.id === value ? "text-gray-900" : ""}`}
+                      onSelect={() => onChange(model.id)}
+                    >
+                      <span className="flex-1">{model.label}</span>
+                      {model.source &&
+                        (routeCounts.get(
+                          `${model.group}\u0000${model.label.toLocaleLowerCase()}`,
+                        ) ?? 0) > 1 && (
+                          <span className="text-[9px] font-medium text-gray-400">
+                            {model.source}
+                          </span>
+                        )}
+                      {model.id === value && (
+                        <Check className="ml-1 h-3.5 w-3.5 text-gray-600" />
                       )}
-                    {model.id === value && (
-                      <Check className="ml-1 h-3.5 w-3.5 text-gray-600" />
-                    )}
-                  </DropdownItem>
-                ))}
-            </React.Fragment>
-          );
-        })}
+                    </DropdownItem>
+                  ))}
+              </React.Fragment>
+            );
+          })}
+        </div>
         {reasoningLevel !== undefined && onReasoningChange && (
-          <>
+          <div className="shrink-0">
             <DropdownSeparator />
             <DropdownItem
               aria-label={`Reasoning level: ${REASONING_LEVEL_LABELS[reasoningLevel]}`}
@@ -374,7 +376,7 @@ export function ModelToggleUI({
                 </div>
               </div>
             </DropdownItem>
-          </>
+          </div>
         )}
       </DropdownContent>
     </Dropdown>

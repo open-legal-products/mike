@@ -14,6 +14,15 @@ npm test              # run all unit tests
 npm run test:coverage # same, plus the per-file coverage table + floor check
 ```
 
+TypeScript is pinned to 5.9.3 so ESLint can use the compiler API supported by
+the installed TypeScript ESLint parser. When upgrading it, run `npm run lint`
+and `npx tsc --noEmit` together to check parser and compiler compatibility.
+
+Fortune-sheet is pinned because the spreadsheet viewer adjusts internal DOM
+scroll extents. Upgrades must pass `SpreadsheetWorkbook.zoom.test.tsx` and
+`SpreadsheetView.session.test.tsx`, followed by a browser check of zoom and
+scrolling to the last row and column.
+
 Tests live next to the code they test (`*.test.ts` / `*.test.tsx`). Read a
 couple of the existing suites first (`src/app/lib/mikeApi.test.ts`,
 `src/app/hooks/useAssistantChat.sse.test.ts`) and match their conventions:

@@ -1646,10 +1646,6 @@ export function TRView({ reviewId, projectId }: Props) {
                             reviewTitle={review?.title ?? null}
                             projectName={project?.name ?? null}
                             onCitationClick={handleTabularCitationClick}
-                            onClose={() => {
-                                setSelectedChatId(null);
-                                setChatOpen(false);
-                            }}
                             initialChatId={selectedChatId}
                             onChatIdChange={setSelectedChatId}
                             canSend={canEditContent}

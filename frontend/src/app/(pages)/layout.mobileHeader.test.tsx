@@ -50,6 +50,23 @@ describe("mobile page header", () => {
         );
     });
 
+    it("floats transparently over project chat workspaces", () => {
+        navigation.pathname = "/projects/project-1/assistant/chat/chat-1";
+        render(
+            <MikeLayout>
+                <div>Project chat</div>
+            </MikeLayout>,
+        );
+
+        const header = document.querySelector('[data-slot="mobile-header"]');
+        expect(header).toHaveClass(
+            "fixed",
+            "inset-x-0",
+            "top-0",
+            "bg-transparent",
+        );
+    });
+
     it("uses the header-button styling for the sidebar toggle", () => {
         render(
             <MikeLayout>

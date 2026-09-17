@@ -6,7 +6,7 @@ type IconProps = Omit<
 >;
 
 const ICON_BASE_PATH = "/icons";
-const ICON_VERSION = "41";
+const ICON_VERSION = "44";
 
 function AppSidebarIcon({
   name,
@@ -30,6 +30,10 @@ function AppSidebarIcon({
 
 export function ChatSkeuoIcon(props: IconProps) {
   return <AppSidebarIcon name="features/chat" {...props} />;
+}
+
+export function IdeSkeuoIcon(props: IconProps) {
+  return <AppSidebarIcon name="features/ide" {...props} />;
 }
 
 export function FolderSkeuoIcon(props: IconProps) {

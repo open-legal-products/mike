@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { API_BASE } from "@/app/lib/mikeApi";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 
@@ -28,18 +28,20 @@ export function useFetchSingleDoc(
     documentId: string | null | undefined,
     versionId?: string | null,
     displayUrl?: string | null,
+    refetchKey?: number | string,
 ) {
     const [result, setResult] = useState<DocResult>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const prevKeyRef = useRef<string | null>(null);
 
     useEffect(() => {
-        if (!documentId) return;
-        const requestKey =
-            displayUrl ?? `${documentId}:${versionId ?? "current"}`;
-        if (requestKey === prevKeyRef.current) return;
-        prevKeyRef.current = requestKey;
+        if (!documentId) {
+            setResult(null);
+            setLoading(false);
+            setError(null);
+            return;
+        }
+        const controller = new AbortController();
 
         setLoading(true);
         setError(null);
@@ -56,7 +58,7 @@ export function useFetchSingleDoc(
                 const response = await authenticatedFetch(
                     displayUrl ??
                         `${API_BASE}/single-documents/${documentId}/display${qs}`,
-                    { credentials: "include" },
+                    { credentials: "include", signal: controller.signal },
                 );
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 if (cancelled) return;
@@ -84,9 +86,9 @@ export function useFetchSingleDoc(
 
         return () => {
             cancelled = true;
-            prevKeyRef.current = null;
+            controller.abort();
         };
-    }, [displayUrl, documentId, versionId]);
+    }, [displayUrl, documentId, versionId, refetchKey]);
 
     return { result, loading, error };
 }

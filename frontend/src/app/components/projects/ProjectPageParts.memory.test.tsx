@@ -56,7 +56,6 @@ function renderHeader(overrides: { roleKnown?: boolean } = {}) {
             project={{ id: "project-1", name: "Matter" } as never}
             search=""
             activeSection="documents"
-            creatingChat={false}
             creatingReview={false}
             canManageProject
             roleKnown

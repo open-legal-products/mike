@@ -34,6 +34,8 @@ interface VersionPathRow extends DocRow {
     /** Set from document_versions.pdf_storage_path of the active version. */
     pdf_storage_path?: string | null;
     current_version_id?: string | null;
+    /** Content hash of the active version, including in-place byte updates. */
+    content_sha256?: string | null;
     /** Set from document_versions.version_number of the active version. */
     active_version_number?: number | null;
     /** Active-version file metadata. */
@@ -144,13 +146,14 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
             d.file_type = null;
             d.size_bytes = null;
             d.page_count = null;
+            d.content_sha256 = null;
         }
         return docs;
     }
     const { data: rows } = await db
         .from("document_versions")
         .select(
-            "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count",
+            "id, storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, content_sha256",
         )
         .in("id", versionIds)
         .is("deleted_at", null);
@@ -165,6 +168,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
             file_type: string | null;
             size_bytes: number | null;
             page_count: number | null;
+            content_sha256: string | null;
         }
     >();
     for (const r of (rows ?? []) as {
@@ -177,6 +181,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         file_type: string | null;
         size_bytes: number | null;
         page_count: number | null;
+        content_sha256: string | null;
     }[]) {
         byId.set(r.id, {
             storage_path: r.storage_path ?? null,
@@ -187,6 +192,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
             file_type: r.file_type ?? null,
             size_bytes: r.size_bytes ?? null,
             page_count: r.page_count ?? null,
+            content_sha256: r.content_sha256 ?? null,
         });
     }
     for (const d of docs) {
@@ -199,6 +205,7 @@ export async function attachActiveVersionPaths<T extends VersionPathRow>(
         d.file_type = v?.file_type ?? null;
         d.size_bytes = v?.size_bytes ?? null;
         d.page_count = v?.page_count ?? null;
+        d.content_sha256 = v?.content_sha256 ?? null;
     }
     return docs;
 }
