@@ -1,14 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../storage", () => ({
+vi.mock("../storage", () => {
+    const deleteFile = vi.fn(async (_key: string) => {});
+    return {
     assertStorageConfigured: vi.fn(),
-    deleteFile: vi.fn(async () => {}),
+    deleteFile,
+    // The best-effort wrapper resolves through the mocked delete so the
+    // assertions on which paths were removed keep working.
+    deleteFileBestEffort: (key: string) =>
+        Promise.resolve(deleteFile(key)).catch(() => undefined),
     listFiles: vi.fn(async () => [] as string[]),
     // Kept real: cleanup must delete the exact key the
     // document.precompute_text job writes, so a fake would defeat the point
     // of asserting on the collected paths.
     extractedTextKey: (versionId: string) => `extracted-text/${versionId}.txt`,
-}));
+    };
+});
 
 import { deleteFile, listFiles } from "../storage";
 import {

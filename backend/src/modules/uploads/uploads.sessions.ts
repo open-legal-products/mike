@@ -20,6 +20,7 @@ import { mapWithConcurrency } from "../../lib/concurrency";
 import {
   copyFile,
   deleteFile,
+  deleteFileBestEffort,
   getSignedUploadUrl,
   headFile,
   StorageOperationError,
@@ -167,7 +168,7 @@ async function verifyAndSealSessionFiles(
         staged.size !== file.expected_size_bytes
           ? "size_mismatch"
           : "content_type_mismatch";
-      await deleteFile(file.staging_storage_path).catch(() => {});
+      await deleteFileBestEffort(file.staging_storage_path, "seal-mismatch");
       await writeSealResult(file, {
         status: "error",
         observed_size_bytes: staged.size,
@@ -269,8 +270,8 @@ async function completeSessionFile(
     }
     if (file.status === "pending_upload" || file.status === "verifying") {
       await Promise.all([
-        deleteFile(file.staging_storage_path).catch(() => {}),
-        deleteFile(file.sealed_storage_path).catch(() => {}),
+        deleteFileBestEffort(file.staging_storage_path, "seal-recover"),
+        deleteFileBestEffort(file.sealed_storage_path, "seal-recover"),
       ]);
       const { error } = await db
         .from("upload_session_files")
@@ -620,8 +621,8 @@ export async function cancelUploadSession(
 
   await mapWithConcurrency(files, 5, async (file) => {
     await Promise.all([
-      deleteFile(file.staging_storage_path).catch(() => {}),
-      deleteFile(file.sealed_storage_path).catch(() => {}),
+      deleteFileBestEffort(file.staging_storage_path, "session-cancel"),
+      deleteFileBestEffort(file.sealed_storage_path, "session-cancel"),
     ]);
   });
   const { error: cleanupError } = await db

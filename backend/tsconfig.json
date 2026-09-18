@@ -4,6 +4,10 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "outDir": "./dist",
+    // Emitted next to each .js so `node --enable-source-maps` (set through
+    // NODE_OPTIONS in the Dockerfile and the start script) rewrites stack
+    // frames to the .ts file and line — what Sentry shows for a backend error.
+    "sourceMap": true,
     "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,

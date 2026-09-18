@@ -165,6 +165,27 @@ Model-provider keys and the CourtListener token can be configured globally in
 precedence over the matching globally configured key; removing the personal
 key restores the global key as the fallback.
 
+### Error tracking
+
+Error reports are sent to the Mike project's own Sentry by default, so the
+maintainers can fix what forks and self-hosted installs run into. A report
+never contains document text, request bodies, cookies, auth headers, or email
+addresses; on a community install it also drops the machine name, user ids,
+request headers, breadcrumbs, device and locale details, and any absolute file
+path, keeping only where in Mike's own code the error happened, the route
+pattern, OS/runtime name and version, environment, and release. Everything is
+scrubbed in-process before it leaves your machine (see
+docs/observability.md). To opt out, set `SENTRY_DISABLED=true`
+(`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
+browser and add-in builds); to use your own Sentry instead, set the matching
+`*_SENTRY_DSN`.
+
+For the compose stack that is `SENTRY_DISABLED=true` in the root `.env`
+(the backend reads it through `env_file`; the frontend build and the Next
+server receive it from compose). To report to your own Sentry instead, set
+`SENTRY_DSN` (backend) and `FRONTEND_SENTRY_DSN` (web app). What is reported,
+what is scrubbed, and how to verify are in [observability.md](observability.md).
+
 ## Authentication email
 
 Supabase Auth sends signup, email-change, and password-recovery messages.

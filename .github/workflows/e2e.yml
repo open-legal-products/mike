@@ -209,10 +209,16 @@ jobs:
             # repository's main branch changes independently of this PR.
             echo "MIKE_WORKFLOWS_REF=ce62e6a2d3f47e1d3567a4f2edc61898cfe9e78a"
             echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}"
+            # Error reporting is on by default; CI runs must not report.
+            echo "SENTRY_DISABLED=true"
           } >> backend/.env
           # The web client talks to its own /api gateway. Only the Next server
           # needs the upstream backend origin.
-          echo "API_BASE_URL=http://localhost:3001" > frontend/.env.local
+          {
+            echo "API_BASE_URL=http://localhost:3001"
+            echo "SENTRY_DISABLED=true"
+            echo "NEXT_PUBLIC_SENTRY_DISABLED=true"
+          } > frontend/.env.local
 
       # Production runs this as a release job after migrations and before the
       # backend starts. E2E must exercise the same ordering so defaults exist.

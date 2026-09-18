@@ -10,6 +10,7 @@ import {
 } from "../../lib/documentVersions";
 import {
   deleteFile,
+  deleteFileBestEffort,
   downloadFile,
   uploadFile,
   storageKey,
@@ -283,9 +284,9 @@ export async function assignOrCopyDocument(
     } catch (err) {
       console.error("[projects/documents/copy] failed", err);
       await Promise.all([
-        deleteFile(newKey).catch(() => {}),
+        deleteFileBestEffort(newKey, "copy-rollback"),
         newPdfPath && newPdfPath !== newKey
-          ? deleteFile(newPdfPath).catch(() => {})
+          ? deleteFileBestEffort(newPdfPath, "copy-rollback")
           : Promise.resolve(),
         db.from("documents").delete().eq("id", copy.id),
       ]);

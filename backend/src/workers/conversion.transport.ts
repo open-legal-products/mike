@@ -1,6 +1,7 @@
 // conversion transport — implementation behind the module facade.
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection } from "../lib/queue/connection";
+import { reportError } from "../lib/observability/sentry";
 import { CONVERSION_QUEUE, type ConversionJobData } from "../lib/queue/conversionQueue";
 import { createServerSupabase } from "../lib/supabase";
 import { runConversionJob, setDocumentTerminalStatus } from "../modules/documents/documents.service";
@@ -37,11 +38,25 @@ export function createConversionWorker(): Worker<ConversionJobData> {
         );
     });
     worker.on("failed", async (job, err) => {
+        const permanent = !!job && isPermanentFailure(job);
+        reportError(err, {
+            level: permanent ? "error" : "warning",
+            tags: {
+                component: "conversion-worker",
+                terminal: permanent,
+                attempt: job?.attemptsMade,
+            },
+            extra: {
+                job_id: job?.id,
+                document_id: job?.data.documentId,
+                version_id: job?.data.versionId,
+            },
+        });
         if (!job) {
             console.error("[conversion-worker] job failed (no job)", { err });
             return;
         }
-        if (!isPermanentFailure(job)) {
+        if (!permanent) {
             console.error(
                 "[conversion-worker] job failed (will retry, attempts remain)",
                 { jobId: job.id, err },

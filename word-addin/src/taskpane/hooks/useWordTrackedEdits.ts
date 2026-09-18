@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { reportWordFailure } from "../lib/errorReporting";
 import {
   releaseTrackedEdits,
   revealProposedEdit,
@@ -1265,6 +1266,7 @@ export function useWordTrackedEdits({
           });
         }
       } catch (error) {
+        reportWordFailure(error, { stage: "resolve" });
         if (
           !mountedRef.current ||
           generation !== sessionGenerationRef.current
@@ -1360,6 +1362,7 @@ export function useWordTrackedEdits({
           }
         }
       } catch (error) {
+        reportWordFailure(error, { stage: "resolve-batch" });
         if (
           !mountedRef.current ||
           generation !== sessionGenerationRef.current

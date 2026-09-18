@@ -25,12 +25,14 @@ import { resolveContentOrgId } from "../../lib/access";
 import { recordAudit } from "../../lib/audit";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
 import { convertedPdfKey, officeFileToPdf } from "../../lib/convert";
+import { reportError } from "../../lib/observability/sentry";
 import { shouldConvertToPdf } from "../../lib/documentTypes";
 import { uploadJobWallClockMs } from "../../lib/runtimeConfig";
 import {
   copyFile,
   createFileReadStream,
   deleteFile,
+  deleteFileBestEffort,
   StorageOperationError,
   storageKey,
   uploadFileFromPath,
@@ -188,6 +190,20 @@ async function buildPdfRendition(args: {
     await uploadFileFromPath(key, pdfPath, "application/pdf");
     return key;
   } catch (error) {
+    // Non-fatal for the upload (the original stays usable) but a conversion
+    // that fails is either a LibreOffice regression or a malformed file we
+    // should know about — grouped by file type so a format-wide break is one
+    // issue with a count, not noise.
+    reportError(error, {
+      level: "warning",
+      tags: {
+        component: "upload-worker",
+        stage: "conversion",
+        file_type: args.fileType,
+      },
+      extra: { document_id: args.documentId },
+      fingerprint: ["upload-conversion-failed", args.fileType],
+    });
     console.error("[upload-worker] document conversion failed", {
       documentId: args.documentId,
       fileType: args.fileType,
@@ -693,11 +709,13 @@ async function removeFailedCreatedDocument(
 ): Promise<void> {
   if (session.purpose !== "document_create") return;
   await Promise.all([
-    deleteFile(
+    deleteFileBestEffort(
       storageKey(session.user_id, file.resource_id, file.filename),
-    ).catch(() => {}),
-    deleteFile(convertedPdfKey(session.user_id, file.resource_id)).catch(
-      () => {},
+      "failed-document-remove",
+    ),
+    deleteFileBestEffort(
+      convertedPdfKey(session.user_id, file.resource_id),
+      "failed-document-remove",
     ),
   ]);
   const { error } = await db
@@ -759,6 +777,11 @@ export async function processUploadJob(
       return;
     }
     void heartbeatJob(db, jobId, workerId).catch((error) => {
+      reportError(error, {
+        level: "warning",
+        tags: { component: "upload-worker", stage: "heartbeat" },
+        extra: { job_id: jobId, worker_id: workerId },
+      });
       console.error("[upload-worker] heartbeat failed", { jobId, error });
     });
   }, UPLOAD_WORKER_HEARTBEAT_MS);
@@ -790,6 +813,18 @@ export async function processUploadJob(
         failed = true;
         // A deleted destination is the one failure a retry makes WORSE.
         documentDeleted = error instanceof DeletedDocumentError;
+        reportError(error, {
+          tags: {
+            component: "upload-worker",
+            stage: "process-file",
+            purpose: typedSession.purpose,
+          },
+          extra: {
+            job_id: jobId,
+            session_id: typedSession.id,
+            file_id: file.id,
+          },
+        });
         console.error("[upload-worker] file processing failed", {
           jobId,
           sessionId: typedSession.id,
@@ -833,7 +868,7 @@ export async function processUploadJob(
           .eq("id", file.id)
           .eq("session_id", typedSession.id);
         if (error) throw error;
-        await deleteFile(file.sealed_storage_path).catch(() => {});
+        await deleteFileBestEffort(file.sealed_storage_path, "sealed-source-after-process");
         await heartbeatJob(db, jobId, workerId);
       }
     }
@@ -896,7 +931,7 @@ export async function processUploadJob(
       .eq("status", "error");
     for (const failedFile of failedFiles ?? []) {
       if (failedFile.sealed_storage_path) {
-        await deleteFile(failedFile.sealed_storage_path).catch(() => {});
+        await deleteFileBestEffort(failedFile.sealed_storage_path, "failed-file-sealed");
       }
     }
   }
@@ -1006,10 +1041,10 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
       }
       await Promise.all([
         file.staging_storage_path
-          ? deleteFile(file.staging_storage_path).catch(() => {})
+          ? deleteFileBestEffort(file.staging_storage_path, "session-expiry")
           : Promise.resolve(),
         file.sealed_storage_path
-          ? deleteFile(file.sealed_storage_path).catch(() => {})
+          ? deleteFileBestEffort(file.sealed_storage_path, "session-expiry")
           : Promise.resolve(),
       ]);
     }
@@ -1094,6 +1129,12 @@ function startUploadProcessingWorker(options: {
       await processUploadJob(db, jobId, workerId);
       schedule(0);
     } catch (error) {
+      // Nothing above this loop: an error here means claiming or the job
+      // wrapper itself broke, and without a report the worker just polls on.
+      reportError(error, {
+        tags: { component: "upload-worker", stage: "iteration" },
+        extra: { worker_id: workerId },
+      });
       console.error("[upload-worker] iteration failed", { workerId, error });
       schedule(UPLOAD_WORKER_POLL_MS);
     }

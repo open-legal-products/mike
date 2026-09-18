@@ -1,7 +1,8 @@
-// Imported from the base client (not the ../api/mikeApi barrel) so this
-// module's compile graph stays free of Office globals: the drift-guard test in
+// Imported from the pure types module (not the API client, whose runtime
+// imports include the Sentry SDK) so this module's compile graph stays free
+// of Office globals and add-in-only packages: the drift-guard test in
 // frontend/src/wordAddin imports this file across packages.
-import type { ApiKeyStatus } from "../api/client";
+import type { ApiKeyStatus } from "../types";
 
 /**
  * Keep this catalog, its labels, and DEFAULT_MODEL_ID in sync with

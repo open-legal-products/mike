@@ -28,6 +28,10 @@ vi.mock("../../../lib/storage", async (importOriginal) => {
   return {
     ...actual,
     deleteFile: mocks.deleteFile,
+    // The best-effort wrapper resolves through the mocked delete so the
+    // assertions on which objects were removed keep working.
+    deleteFileBestEffort: (key: string) =>
+      Promise.resolve(mocks.deleteFile(key)).catch(() => undefined),
     createFileReadStream: mocks.createFileReadStream,
     copyFile: mocks.copyFile,
     uploadFileFromPath: mocks.uploadFileFromPath,

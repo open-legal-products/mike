@@ -56,6 +56,21 @@ The bundled credentials and infrastructure are intended for local development
 only. See [Local development](docs/local-development.md) for service endpoints,
 authentication behavior, Ollama setup, and first-run guidance.
 
+### Telemetry
+
+Error reports are sent to the Mike project's own Sentry by default, so the
+maintainers can fix what forks and self-hosted installs run into. A report
+never contains document text, request bodies, cookies, auth headers, or email
+addresses; on a community install it also drops the machine name, user ids,
+request headers, breadcrumbs, device and locale details, and any absolute file
+path, keeping only where in Mike's own code the error happened, the route
+pattern, OS/runtime name and version, environment, and release. Everything is
+scrubbed in-process before it leaves your machine (see
+docs/observability.md). To opt out, set `SENTRY_DISABLED=true`
+(`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
+browser and add-in builds); to use your own Sentry instead, set the matching
+`*_SENTRY_DSN`.
+
 ## Repository
 
 | Path | Purpose |

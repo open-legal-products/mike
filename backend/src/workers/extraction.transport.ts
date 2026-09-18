@@ -1,6 +1,7 @@
 // extraction transport — implementation behind the module facade.
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection } from "../lib/queue/connection";
+import { reportError } from "../lib/observability/sentry";
 import { EXTRACTION_QUEUE, type ExtractionJobData } from "../lib/queue/extractionQueue";
 import { runExtractionJob, markExtractionFailed } from "../modules/tabular/tabular.service";
 
@@ -36,11 +37,25 @@ export function createExtractionWorker(): Worker<ExtractionJobData> {
         );
     });
     worker.on("failed", async (job, err) => {
+        const permanent = !!job && isPermanentFailure(job);
+        reportError(err, {
+            level: permanent ? "error" : "warning",
+            tags: {
+                component: "extraction-worker",
+                terminal: permanent,
+                attempt: job?.attemptsMade,
+            },
+            extra: {
+                job_id: job?.id,
+                review_id: job?.data.reviewId,
+                row_id: job?.data.rowId,
+            },
+        });
         if (!job) {
             console.error("[extraction-worker] job failed (no job)", { err });
             return;
         }
-        if (!isPermanentFailure(job)) {
+        if (!permanent) {
             console.error(
                 "[extraction-worker] job failed (will retry, attempts remain)",
                 { jobId: job.id, err },

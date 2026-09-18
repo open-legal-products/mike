@@ -1,6 +1,7 @@
 /// <reference types="office-js" />
 
 import { useCallback } from "react";
+import { reportWordFailure } from "../lib/errorReporting";
 import { toWordText } from "../lib/wordText";
 import {
   renderDocumentMarkdown,
@@ -532,6 +533,7 @@ async function removePersistentAnchorForEntry(
         await context.sync();
       });
     } catch (error) {
+      reportWordFailure(error, { stage: "anchor-cleanup", level: "warning" });
       errors.push(getErrorMessage(error));
     }
   }
@@ -539,6 +541,7 @@ async function removePersistentAnchorForEntry(
     try {
       await removeWordEditAnchor(entry.stableEditId);
     } catch (error) {
+      reportWordFailure(error, { stage: "anchor-cleanup", level: "warning" });
       errors.push(getErrorMessage(error));
     }
   }
@@ -1268,6 +1271,7 @@ async function resolveTrackedEditNow(
         await context.sync();
       });
     } catch (error) {
+      reportWordFailure(error, { stage: "resolve-cleanup", level: "warning" });
       cleanupErrors.push(getErrorMessage(error));
     }
     return {
@@ -1281,6 +1285,7 @@ async function resolveTrackedEditNow(
         : {}),
     };
   } catch (error) {
+    reportWordFailure(error, { stage: "resolve" });
     // Office batches can fail after executing earlier queued commands. Never
     // retry stale proxies, but rebuild a fresh handle from the durable bookmark
     // when Word still reports the exact expected revision set.
@@ -1519,6 +1524,7 @@ async function restoreTrackedEditNow(
     });
     return { stableEditId, status: "restored", handle };
   } catch (error) {
+    reportWordFailure(error, { stage: "restore", extra: { stableEditId } });
     return {
       stableEditId,
       status: "error",
@@ -1870,6 +1876,7 @@ export function revealPersistedTrackedEdit(
 
       return { stableEditId, status };
     } catch (error) {
+      reportWordFailure(error, { stage: "reveal", extra: { stableEditId, bookmarkName } });
       console.error(
         "[tracked-edit/view] Word failed while revealing the persistent bookmark.",
         { stableEditId, bookmarkName, error },
@@ -1980,6 +1987,7 @@ export function validateTrackedEdit(
         } as const;
       });
     } catch (error) {
+      reportWordFailure(error, { stage: "locate" });
       return {
         status: "error",
         matches: 0,
@@ -2043,6 +2051,7 @@ export function revealProposedEdit(
         return { status: "revealed" } as const;
       });
     } catch (error) {
+      reportWordFailure(error, { stage: "reveal" });
       return {
         status: "error",
         error: describeWordFailure(
@@ -2104,6 +2113,7 @@ export function selectDocumentText(
         return "selected" as const;
       });
     } catch (error) {
+      reportWordFailure(error, { stage: "citation-select", level: "warning" });
       console.debug(
         "[citation] Word couldn’t select the cited text.",
         getErrorMessage(error),
@@ -2170,6 +2180,7 @@ export function releaseTrackedEdits(
         rememberTerminalState(handle, "released");
         results.push({ handle, status: "released" });
       } catch (error) {
+        reportWordFailure(error, { stage: "release", level: "warning" });
         // A proxy that failed to untrack is not safe to hand back to a later
         // tracked-edit controller. Evict it so a reload reconstructs fresh
         // proxies from the document bookmark instead of shadowing that valid
@@ -2212,6 +2223,7 @@ export function useWordDoc() {
           try {
             return await renderBodyAsMarkdown(context, body);
           } catch (error) {
+            reportWordFailure(error, { stage: "document-read", level: "warning" });
             console.warn(
               "Structured document read failed; sending flat text",
               getErrorMessage(error),

@@ -3,6 +3,7 @@ import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import { type ConversionJobData } from "../../lib/queue/conversionQueue";
 import { downloadFile, uploadFile } from "../../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../../lib/convert";
+import { reportError } from "../../lib/observability/sentry";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 
 /**
@@ -45,6 +46,12 @@ export async function runConversionJob(
         // Conversion failure is non-fatal (mirrors the sync path): the version
         // stays usable without a PDF rendition. Retrying LibreOffice on the
         // same bytes just fails the same way.
+        reportError(err, {
+            level: "warning",
+            tags: { component: "conversion-worker", stage: "docx-to-pdf" },
+            extra: { document_id: documentId, version_id: versionId },
+            fingerprint: ["conversion-worker-docx-to-pdf"],
+        });
         console.error(
             "[conversion-worker] DOCX→PDF failed; finalizing without a PDF rendition",
             { err, documentId, versionId },

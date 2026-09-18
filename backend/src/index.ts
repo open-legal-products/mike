@@ -1,3 +1,5 @@
+// Sentry must hook http/express before anything else loads (see file).
+import "./instrument";
 import type { Server } from "node:http";
 import { Worker as ThreadWorker } from "node:worker_threads";
 import path from "node:path";
@@ -6,6 +8,7 @@ import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
+import { flushSentry, reportError } from "./lib/observability/sentry";
 
 const PORT = process.env.PORT ?? 3001;
 
@@ -13,15 +16,24 @@ const PORT = process.env.PORT ?? 3001;
 // first export fails. Unset is a valid choice and means manifests go out
 // unsigned; malformed is a misconfiguration, so stop rather than serve a
 // deployment whose exports will fail later.
-try {
-  validateRuntimeConfiguration();
-  const signingKey = manifestPublicKey();
-  if (signingKey) {
-    console.log(`Export manifests signed with key ${signingKey.key_id}`);
+//
+// Runs inside main() and is awaited: the fatal report has to be flushed to
+// Sentry before exit, and while that flush is in flight nothing below may
+// bind the port or start a worker — a process that has already decided to
+// exit must not serve a request or claim a job in its last two seconds.
+async function validateBootConfiguration(): Promise<void> {
+  try {
+    validateRuntimeConfiguration();
+    const signingKey = manifestPublicKey();
+    if (signingKey) {
+      console.log(`Export manifests signed with key ${signingKey.key_id}`);
+    }
+  } catch (err) {
+    reportError(err, { tags: { component: "boot" }, level: "fatal" });
+    console.error(err instanceof Error ? err.message : String(err));
+    await flushSentry();
+    process.exit(1);
   }
-} catch (err) {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
 }
 
 /**
@@ -55,6 +67,15 @@ function spawnWorkerThread(): void {
     execArgv: isTs ? ["--require", "tsx/cjs"] : [],
   });
   workerThread.on("error", (err) => {
+    // An uncaught throw inside the thread. The thread's own Sentry client
+    // reports it with the real stack and job context; what arrives here is
+    // a structured clone. Sentry groups, it does not deduplicate, so this
+    // supervisor view is fingerprinted as its own issue ("a worker thread
+    // crashed", with a count) rather than doubling every thread issue.
+    reportError(err, {
+      tags: { component: "worker-thread-supervisor" },
+      fingerprint: ["worker-thread-supervisor-error"],
+    });
     console.error("[worker-thread] error", err);
   });
   workerThread.on("exit", (code) => {
@@ -63,6 +84,14 @@ function spawnWorkerThread(): void {
     // A crashed worker thread must not silently kill all background
     // processing — respawn after a short pause. Durable state (db_jobs,
     // Redis) means nothing is lost across the gap.
+    reportError(
+      new Error(`Background worker thread exited with code ${code}`),
+      {
+        tags: { component: "worker-thread-supervisor" },
+        extra: { exit_code: code },
+        fingerprint: ["worker-thread-exit"],
+      },
+    );
     console.error(
       `[worker-thread] exited with code ${code}; respawning in 5s`,
     );
@@ -73,6 +102,7 @@ function spawnWorkerThread(): void {
 let server: Server | null = null;
 
 async function main(): Promise<void> {
+  await validateBootConfiguration();
   // Deploying this code against a database that has not run the
   // document-lifecycle migrations leaks storage silently and fails every
   // upload — see lifecycleGuard. The probe is AWAITED before the port is
@@ -137,10 +167,13 @@ async function shutdown(signal: string) {
         listening.close((err) => (err ? reject(err) : resolve())),
       );
     await stopBackgroundWork();
+    await flushSentry();
     console.log("Shutdown complete");
     process.exit(0);
   } catch (err) {
+    reportError(err, { tags: { component: "shutdown" } });
     console.error("Error during graceful shutdown", err);
+    await flushSentry();
     process.exit(1);
   }
 }

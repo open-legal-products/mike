@@ -1,6 +1,12 @@
 import express from "express";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const reportMessage = vi.hoisted(() => vi.fn(() => "event-1"));
+vi.mock("../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/observability/sentry")>()),
+  reportMessage,
+}));
 import {
   INTERNAL_ERROR_CODE,
   INTERNAL_ERROR_MESSAGE,
@@ -22,7 +28,39 @@ function testApp(status: number, body: unknown) {
 }
 
 describe("protectInternalErrorResponses", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  it("reports a hand-written 5xx under its mounted route pattern, so two routers with the same relative path stay separate issues", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = express();
+    app.use(protectInternalErrorResponses);
+    const projects = express.Router();
+    projects.get("/:id", (_req, res) =>
+      res.status(500).json({ detail: "projects broke" }),
+    );
+    const documents = express.Router();
+    documents.get("/:id", (_req, res) =>
+      res.status(500).json({ detail: "documents broke" }),
+    );
+    app.use("/projects", projects);
+    app.use("/documents", documents);
+
+    await request(app).get("/projects/p-1");
+    await request(app).get("/documents/d-1");
+
+    expect(reportMessage).toHaveBeenCalledTimes(2);
+    const [first, second] = reportMessage.mock.calls as unknown as [
+      [string, { tags: { http_route: string }; fingerprint: string[] }],
+      [string, { tags: { http_route: string }; fingerprint: string[] }],
+    ];
+    expect(first[1].tags.http_route).toBe("/projects/:id");
+    expect(second[1].tags.http_route).toBe("/documents/:id");
+    expect(first[1].fingerprint).toEqual(["sanitized-5xx", "GET", "/projects/:id"]);
+    expect(second[1].fingerprint).toEqual(["sanitized-5xx", "GET", "/documents/:id"]);
+  });
 
   it.each([500, 502, 503])(
     "replaces raw %i responses with the public contract",

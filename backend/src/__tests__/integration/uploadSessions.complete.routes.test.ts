@@ -101,6 +101,8 @@ vi.mock("../../lib/storage", () => ({
   getSignedUploadUrl: mocks.getSignedUploadUrl,
   copyFile: mocks.copyFile,
   deleteFile: mocks.deleteFile,
+  deleteFileBestEffort: (key: string) =>
+    Promise.resolve(mocks.deleteFile(key)).catch(() => undefined),
   headFile: mocks.headFile,
 }));
 
