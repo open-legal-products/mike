@@ -1,7 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { AlertCircle, X } from "lucide-react";
 import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
@@ -35,6 +35,15 @@ export function WarningPopup({
     primaryAction,
     className,
 }: WarningPopupProps) {
+    useEffect(() => {
+        if (!open) return;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") onClose();
+        };
+        document.addEventListener("keydown", handleKeyDown);
+        return () => document.removeEventListener("keydown", handleKeyDown);
+    }, [onClose, open]);
+
     if (!open) return null;
 
     const warningIcon = icon ?? (
@@ -44,6 +53,9 @@ export function WarningPopup({
     return createPortal(
         <div className="pointer-events-none fixed left-1/2 top-5 z-[220] w-[min(92vw,520px)] -translate-x-1/2 px-4">
             <div
+                role="alert"
+                aria-live="assertive"
+                aria-atomic="true"
                 className={cn(
                     `pointer-events-auto relative flex rounded-2xl px-3 py-3 text-xs ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`,
                     className,

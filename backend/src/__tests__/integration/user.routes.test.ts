@@ -622,7 +622,7 @@ describe("user.routes", () => {
             expect(saveUserApiKey).not.toHaveBeenCalled();
         });
 
-        it("returns 409 when the provider is configured by the server env", async () => {
+        it("stores a user key when the provider is also configured by the server env", async () => {
             hasEnvApiKey.mockReturnValue(true);
 
             const res = await request(app)
@@ -630,8 +630,13 @@ describe("user.routes", () => {
                 .set(...AUTH)
                 .send({ api_key: "sk-x" });
 
-            expect(res.status).toBe(409);
-            expect(saveUserApiKey).not.toHaveBeenCalled();
+            expect(res.status).toBe(200);
+            expect(saveUserApiKey).toHaveBeenCalledWith(
+                "u1",
+                "claude",
+                "sk-x",
+                expect.anything(),
+            );
         });
 
         it("returns 500 when saving the key throws", async () => {

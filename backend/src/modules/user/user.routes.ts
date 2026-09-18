@@ -321,10 +321,6 @@ userRouter.put(
         const db = createServerSupabase();
         const result = await saveApiKey(db, { userId, provider, apiKey });
         if (!result.ok) {
-            if (result.kind === "env_configured")
-                return void res.status(409).json({
-                    detail: "This provider is configured by the server environment and cannot be changed from the browser.",
-                });
             return void sendInternalError(res, result.error);
         }
         res.json(result.status);

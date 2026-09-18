@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { getTabularReview, updateTabularReview } from "@/app/lib/mikeApi";
+import {
+    getProject,
+    getTabularReview,
+    listProjects,
+    updateTabularReview,
+} from "@/app/lib/mikeApi";
 import type { TabularReview } from "@/app/components/shared/types";
 import { TRView } from "./TabularReviewView";
 
@@ -148,6 +153,34 @@ describe("TabularReviewView details gate", () => {
                 title: "Renamed",
             }),
         );
+    });
+
+    it("warns when the review project cannot be loaded", async () => {
+        mockDetail({ access_role: "editor", project_id: "p1" });
+        vi.mocked(getProject).mockRejectedValue(new Error("network unavailable"));
+
+        render(<TRView reviewId="r1" projectId="p1" />);
+
+        expect(
+            await screen.findByText("Project unavailable"),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "The project for this tabular review could not be loaded. Please try again.",
+            ),
+        ).toBeInTheDocument();
+    });
+
+    it("does not warn on page load when the optional project list fails", async () => {
+        mockDetail({ access_role: "editor", project_id: null });
+        vi.mocked(listProjects).mockRejectedValueOnce(
+            new Error("network unavailable"),
+        );
+
+        render(<TRView reviewId="r1" />);
+
+        await waitFor(() => expect(listProjects).toHaveBeenCalled());
+        expect(screen.queryByText("Project unavailable")).toBeNull();
     });
 
     it("refuses a viewer with the editor tier, not the owner one", async () => {

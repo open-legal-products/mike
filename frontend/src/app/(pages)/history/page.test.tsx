@@ -314,18 +314,18 @@ describe("HistoryPage", () => {
     expect(mockedDownloadUserExport).toHaveBeenCalledWith("export-1");
   });
 
-  it("alerts and stops when the export job fails", async () => {
+  it("shows a warning popup and stops when the export job fails", async () => {
     const user = userEvent.setup();
-    const alerted = vi
-      .spyOn(window, "alert")
-      .mockImplementation(() => undefined);
     mockedGetUserExportStatus.mockResolvedValue({ status: "failed" });
 
     render(<HistoryPage />);
     await screen.findByText("Alex Lawyer");
     await user.click(screen.getByRole("button", { name: "Export history" }));
 
-    await waitFor(() => expect(alerted).toHaveBeenCalledWith("Export failed."));
+    expect(await screen.findByText("Export failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("Your history could not be exported. Please try again."),
+    ).toBeInTheDocument();
     expect(mockedDownloadUserExport).not.toHaveBeenCalled();
     // The button returns to its idle state instead of spinning forever.
     expect(

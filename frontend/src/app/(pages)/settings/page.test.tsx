@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
     updateEmail: vi.fn(),
     updateDisplayName: vi.fn(),
     updateOrganisation: vi.fn(),
+    deleteAccount: vi.fn(),
     passwordSet: false,
     profile: {
         displayName: "Alex",
@@ -46,7 +47,7 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
 }));
 
 vi.mock("@/app/lib/mikeApi", () => ({
-    deleteAccount: vi.fn(),
+    deleteAccount: state.deleteAccount,
     isMfaRequiredError: vi.fn(() => false),
 }));
 
@@ -63,6 +64,8 @@ describe("SettingsPage Google email changes", () => {
         state.updateDisplayName.mockResolvedValue(true);
         state.updateOrganisation.mockReset();
         state.updateOrganisation.mockResolvedValue(true);
+        state.deleteAccount.mockReset();
+        state.deleteAccount.mockResolvedValue(undefined);
         state.updateEmail.mockResolvedValue({
             ...state.user,
             email: "alex@example.com",
@@ -195,5 +198,25 @@ describe("SettingsPage Google email changes", () => {
             expect(state.updateDisplayName).toHaveBeenCalledWith(""),
         );
         expect(screen.queryByText("Name is required.")).not.toBeInTheDocument();
+    });
+
+    it("shows a warning popup when account deletion fails", async () => {
+        state.deleteAccount.mockRejectedValue(new Error("delete failed"));
+        const user = userEvent.setup();
+        render(<SettingsPage />);
+
+        await user.click(
+            screen.getByRole("button", { name: "Delete account" }),
+        );
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+
+        expect(
+            await screen.findByText("Account deletion failed"),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Your account could not be deleted. Please try again.",
+            ),
+        ).toBeInTheDocument();
     });
 });

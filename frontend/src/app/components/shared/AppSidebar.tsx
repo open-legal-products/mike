@@ -37,6 +37,7 @@ import { ProjectSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { listProjectSummaries } from "@/app/lib/mikeApi";
 import type { Project } from "@/app/components/shared/types";
 import { cn } from "@/app/lib/utils";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
     LIQUID_GLASS_FLOAT_CLASS,
     LIQUID_GLASS_SELECTED_CLASS,
@@ -79,6 +80,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const { profile } = useUserProfile();
     const { chats, loadingMoreChats, loadMoreChats, setCurrentChatId } =
         useChatHistoryContext();
+    const [signOutWarningOpen, setSignOutWarningOpen] = useState(false);
     const router = useRouter();
     const pathname = usePathname();
     const routeChatId = useMemo(() => {
@@ -662,11 +664,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             setIsDropdownOpen(false);
                                             void signOut()
                                                 .then(() => router.push("/"))
-                                                .catch(() => {
-                                                    window.alert(
-                                                        "Unable to sign out. Please try again.",
-                                                    );
-                                                });
+                                                .catch(() =>
+                                                    setSignOutWarningOpen(true),
+                                                );
                                         }}
                                         className={cn(
                                             "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm text-gray-700",
@@ -682,6 +682,12 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     )}
                 </div>
             </div>
+            <WarningPopup
+                open={signOutWarningOpen}
+                title="Sign out failed"
+                message="Unable to sign out. Please try again."
+                onClose={() => setSignOutWarningOpen(false)}
+            />
         </>
     );
 }

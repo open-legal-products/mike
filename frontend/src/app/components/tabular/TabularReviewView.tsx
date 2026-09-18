@@ -157,6 +157,7 @@ export function TRView({ reviewId, projectId }: Props) {
     const [dropUploadWarning, setDropUploadWarning] = useState<string | null>(
         null,
     );
+    const [projectLoadWarning, setProjectLoadWarning] = useState(false);
     const searchParams = useSearchParams();
     const initialChatParamRef = useRef<string | null>(searchParams.get("chat"));
     const [chatOpen, setChatOpen] = useState(!!initialChatParamRef.current);
@@ -266,7 +267,9 @@ export function TRView({ reviewId, projectId }: Props) {
                     .then((loaded) => {
                         if (!cancelled) setProject(loaded);
                     })
-                    .catch(() => {}),
+                    .catch(() => {
+                        if (!cancelled) setProjectLoadWarning(true);
+                    }),
             );
         } else {
             fetches.push(
@@ -275,7 +278,9 @@ export function TRView({ reviewId, projectId }: Props) {
                         if (!cancelled) setAvailableProjects(loaded);
                     })
                     .catch(() => {
-                        if (!cancelled) setAvailableProjects([]);
+                        if (!cancelled) {
+                            setAvailableProjects([]);
+                        }
                     }),
             );
         }
@@ -1869,6 +1874,13 @@ export function TRView({ reviewId, projectId }: Props) {
                 open={dropUploadWarning !== null}
                 onClose={() => setDropUploadWarning(null)}
                 message={dropUploadWarning}
+            />
+
+            <WarningPopup
+                open={projectLoadWarning}
+                title="Project unavailable"
+                message="The project for this tabular review could not be loaded. Please try again."
+                onClose={() => setProjectLoadWarning(false)}
             />
 
             <ApiKeyMissingPopup

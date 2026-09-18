@@ -84,9 +84,6 @@ describe("privacy-data async exports", () => {
     });
 
     it("surfaces a failed build instead of downloading anything", async () => {
-        const alertSpy = vi
-            .spyOn(window, "alert")
-            .mockImplementation(() => {});
         mockedStart.mockResolvedValue({ export_id: "job-9" });
         mockedStatus.mockResolvedValue({ status: "failed" });
 
@@ -96,7 +93,10 @@ describe("privacy-data async exports", () => {
         });
         await userEvent.click(exportButtons[0]);
 
-        await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+        expect(await screen.findByText("Action failed")).toBeInTheDocument();
+        expect(
+            screen.getByText("Failed to export chats. Please try again."),
+        ).toBeInTheDocument();
         expect(mockedStart).toHaveBeenCalledWith("chats");
         expect(mockedDownload).not.toHaveBeenCalled();
     });

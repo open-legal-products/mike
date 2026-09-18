@@ -161,8 +161,9 @@ Deployments must therefore run `backend/src/index.ts`
 without starting its worker.
 
 Model-provider keys and the CourtListener token can be configured globally in
-`backend/.env` or per user under **Settings > API Keys**. When a key is
-configured globally, its matching field is read-only.
+`backend/.env` or per user under **Settings > API Keys**. A personal key takes
+precedence over the matching globally configured key; removing the personal
+key restores the global key as the fallback.
 
 ## Authentication email
 

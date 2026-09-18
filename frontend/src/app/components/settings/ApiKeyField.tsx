@@ -6,6 +6,7 @@ import {
   MfaVerificationPopup,
   needsMfaVerification,
 } from "@/app/components/popups/MfaVerificationPopup";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { SettingsTextInput } from "@/app/components/settings/SettingsTextInput";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";
@@ -35,6 +36,7 @@ export function ApiKeyField({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [pendingMfaAction, setPendingMfaAction] = useState<
     "save" | "remove" | null
   >(null);
@@ -59,13 +61,13 @@ export function ApiKeyField({
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       } else {
-        alert(`Failed to save ${label}.`);
+        setWarningMessage(`Failed to save ${label}. Please try again.`);
       }
     } catch (error) {
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("save");
       } else {
-        alert(`Failed to save ${label}.`);
+        setWarningMessage(`Failed to save ${label}. Please try again.`);
       }
     } finally {
       setIsSaving(false);
@@ -80,12 +82,14 @@ export function ApiKeyField({
         return;
       }
       const ok = await onRemove();
-      if (!ok) alert(`Failed to remove ${label}.`);
+      if (!ok) {
+        setWarningMessage(`Failed to remove ${label}. Please try again.`);
+      }
     } catch (error) {
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("remove");
       } else {
-        alert(`Failed to remove ${label}.`);
+        setWarningMessage(`Failed to remove ${label}. Please try again.`);
       }
     } finally {
       setIsSaving(false);
@@ -167,6 +171,12 @@ export function ApiKeyField({
         open={!!pendingMfaAction}
         onCancel={() => setPendingMfaAction(null)}
         onVerified={() => void handleMfaVerified()}
+      />
+      <WarningPopup
+        open={!!warningMessage}
+        title="API key update failed"
+        message={warningMessage}
+        onClose={() => setWarningMessage(null)}
       />
     </>
   );

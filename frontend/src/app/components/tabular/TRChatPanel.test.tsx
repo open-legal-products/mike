@@ -186,6 +186,27 @@ describe("TRChatPanel header", () => {
         expect(screen.getByRole("button", { name: "New chat" })).toBeVisible();
     });
 
+    it("warns when an initial chat cannot be loaded", async () => {
+        vi.mocked(getTabularChatMessages).mockRejectedValue(
+            new Error("network unavailable"),
+        );
+
+        render(
+            <TRChatPanel
+                reviewId="review-1"
+                initialChatId="chat-1"
+                onCitationClick={vi.fn()}
+            />,
+        );
+
+        expect(await screen.findByText("Chat unavailable")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "This chat’s messages could not be loaded. Please try again.",
+            ),
+        ).toBeInTheDocument();
+    });
+
     it("renames the active chat inline and keeps its actions beside New chat", async () => {
         const user = userEvent.setup();
         render(

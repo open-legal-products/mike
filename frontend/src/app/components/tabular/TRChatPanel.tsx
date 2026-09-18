@@ -46,6 +46,7 @@ import { cn } from "@/app/lib/utils";
 import { buildTabularChatHistory } from "@/app/lib/tabularChatHistory";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { subscribeToTabularChatSettingsUpdates } from "@/app/lib/tabularChatSettingsEvents";
+import { WarningPopup } from "../popups/WarningPopup";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -465,6 +466,7 @@ export function TRChatPanel({
     const [isLoadingChats, setIsLoadingChats] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
     const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+    const [messageLoadWarning, setMessageLoadWarning] = useState(false);
     const [minHeight, setMinHeight] = useState("0px");
     const [messagesVisible, setMessagesVisible] = useState(false);
     const [panelWidth, setPanelWidth] = useState(380);
@@ -612,7 +614,7 @@ export function TRChatPanel({
         setIsLoadingMessages(true);
         getTabularChatMessages(reviewId, initialChatId)
             .then((raw) => setMessages(mapTRMessages(raw) as TRMessage[]))
-            .catch(() => {})
+            .catch(() => setMessageLoadWarning(true))
             .finally(() => setIsLoadingMessages(false));
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1732,6 +1734,12 @@ export function TRChatPanel({
                     }
                 />
             </div>
+            <WarningPopup
+                open={messageLoadWarning}
+                title="Chat unavailable"
+                message="This chat’s messages could not be loaded. Please try again."
+                onClose={() => setMessageLoadWarning(false)}
+            />
         </div>
     );
 }

@@ -8,7 +8,6 @@ import {
     type ApiKeyProvider,
     type ApiKeyStatus,
     getUserApiKeyStatus,
-    hasEnvApiKey,
     saveUserApiKey,
 } from "./user.apiKeyStore";
 import { type Db, errorMessage } from "./user.shared";
@@ -19,7 +18,6 @@ export function getApiKeyStatus(db: Db, userId: string) {
 
 export type SaveApiKeyResult =
     | { ok: true; status: ApiKeyStatus }
-    | { ok: false; kind: "env_configured" }
     | { ok: false; kind: "save_failed"; error: unknown };
 
 export async function saveApiKey(
@@ -28,9 +26,6 @@ export async function saveApiKey(
 ): Promise<SaveApiKeyResult> {
     const { userId, provider, apiKey } = params;
     try {
-        if (hasEnvApiKey(provider)) {
-            return { ok: false, kind: "env_configured" };
-        }
         await saveUserApiKey(userId, provider, apiKey, db);
         const status = await getUserApiKeyStatus(userId, db);
         return { ok: true, status };

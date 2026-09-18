@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listProjectSummaries } from "@/app/lib/mikeApi";
 import { AppSidebar } from "./AppSidebar";
 
+const state = vi.hoisted(() => ({
+  signOut: vi.fn(),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
   usePathname: () => "/assistant",
@@ -20,7 +24,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
 vi.mock("@/app/contexts/AuthContext", () => ({
   useAuth: () => ({
     user: { id: "memory-menu-user", email: "alice@example.com" },
-    signOut: vi.fn(),
+    signOut: state.signOut,
   }),
 }));
 
@@ -47,6 +51,7 @@ describe("AppSidebar account dropdown", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listProjectSummaries).mockResolvedValue([]);
+    state.signOut.mockResolvedValue(undefined);
   });
 
   it("keeps memory navigation inside Settings", async () => {
@@ -66,6 +71,20 @@ describe("AppSidebar account dropdown", () => {
     const ide = screen.getByRole("button", { name: "IDE" });
 
     expect(assistant.parentElement?.nextElementSibling).toContainElement(ide);
+  });
+
+  it("shows a warning popup when sign out fails", async () => {
+    state.signOut.mockRejectedValue(new Error("network unavailable"));
+    const user = userEvent.setup();
+    render(<AppSidebar isOpen onToggle={vi.fn()} />);
+
+    await user.click(screen.getByText("Alice").closest("button")!);
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(await screen.findByText("Sign out failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("Unable to sign out. Please try again."),
+    ).toBeInTheDocument();
   });
 
   it.each([

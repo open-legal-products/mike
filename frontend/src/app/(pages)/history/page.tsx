@@ -38,6 +38,7 @@ import {
 } from "@/app/components/ui/dropdown-menu";
 import { LiquidDropdownContent } from "@/app/components/ui/liquid-dropdown";
 import { cn } from "@/app/lib/utils";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 
 const ACTION_LABELS: Record<string, string> = {
   "chat.message": "Chat",
@@ -158,6 +159,7 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportWarningOpen, setExportWarningOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [action, setAction] = useState<string | null>(null);
@@ -246,7 +248,7 @@ export default function HistoryPage() {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch {
-      alert("Export failed.");
+      setExportWarningOpen(true);
     } finally {
       setExporting(false);
     }
@@ -509,6 +511,12 @@ export default function HistoryPage() {
           </TableBody>
         )}
       </TableScrollArea>
+      <WarningPopup
+        open={exportWarningOpen}
+        title="Export failed"
+        message="Your history could not be exported. Please try again."
+        onClose={() => setExportWarningOpen(false)}
+      />
     </div>
   );
 }

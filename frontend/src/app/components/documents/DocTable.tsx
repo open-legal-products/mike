@@ -1284,8 +1284,28 @@ export function DocTable({
             !requireCapability("docs.organize", "move documents", "editor")
         )
             return;
-        setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, folder_id: null } : d)));
-        await operations.moveDocument(docId, null);
+        setDocuments((prev) =>
+            prev.map((document) =>
+                document.id === docId
+                    ? { ...document, folder_id: null }
+                    : document,
+            ),
+        );
+        try {
+            const updated = await operations.moveDocument(docId, null);
+            setDocuments((prev) =>
+                prev.map((document) =>
+                    document.id === updated.id
+                        ? { ...document, ...updated }
+                        : document,
+                ),
+            );
+        } catch {
+            setCollectionActionWarning(
+                "The document could not be removed from its folder. Please try again.",
+            );
+            await operations.refreshCollection().catch(() => undefined);
+        }
     }
 
     async function submitDocumentRename(docId: string) {
@@ -3129,9 +3149,46 @@ export function DocTable({
         );
         if (ids.length === 0) return;
         setSelectedFolderIds(new Set());
-        setDocuments((prev) => prev.map((d) => (ids.includes(d.id) ? { ...d, folder_id: null } : d)));
-        await Promise.all(ids.map((id) => operations.moveDocument(id, null).catch(() => {})));
-    }, [docs, operations, requireCapability, selectedStandaloneDocIds, setDocuments]);
+        setDocuments((prev) =>
+            prev.map((document) =>
+                ids.includes(document.id)
+                    ? { ...document, folder_id: null }
+                    : document,
+            ),
+        );
+        const results = await Promise.allSettled(
+            ids.map((id) => operations.moveDocument(id, null)),
+        );
+        const updatedById = new Map(
+            results.flatMap((result) =>
+                result.status === "fulfilled"
+                    ? [[result.value.id, result.value] as const]
+                    : [],
+            ),
+        );
+        setDocuments((prev) =>
+            prev.map((document) =>
+                updatedById.has(document.id)
+                    ? { ...document, ...updatedById.get(document.id)! }
+                    : document,
+            ),
+        );
+        const failedCount = results.length - updatedById.size;
+        if (failedCount > 0) {
+            setCollectionActionWarning(
+                failedCount === 1
+                    ? "A document could not be removed from its folder. Please try again."
+                    : `${failedCount} documents could not be removed from their folders. Please try again.`,
+            );
+            await operations.refreshCollection().catch(() => undefined);
+        }
+    }, [
+        docs,
+        operations,
+        requireCapability,
+        selectedStandaloneDocIds,
+        setDocuments,
+    ]);
 
     const deleteDocumentIds = useCallback(async (ids: string[]) => {
         const owned = ids.filter((id) => {

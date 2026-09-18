@@ -56,6 +56,8 @@ export default function SettingsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [accountDeleteMfaOpen, setAccountDeleteMfaOpen] = useState(false);
+  const [accountDeleteWarningOpen, setAccountDeleteWarningOpen] =
+    useState(false);
   const requiresPasswordForEmailChange =
     user?.createdWithGoogle === true && profile?.passwordSet !== true;
 
@@ -122,7 +124,7 @@ export default function SettingsPage() {
         return;
       }
       setDeleteConfirm(false);
-      alert("Failed to delete account. Please try again.");
+      setAccountDeleteWarningOpen(true);
     }
   };
 
@@ -407,6 +409,12 @@ export default function SettingsPage() {
         title={emailWarning?.title}
         message={emailWarning?.message}
         onClose={() => setEmailWarning(null)}
+      />
+      <WarningPopup
+        open={accountDeleteWarningOpen}
+        title="Account deletion failed"
+        message="Your account could not be deleted. Please try again."
+        onClose={() => setAccountDeleteWarningOpen(false)}
       />
       <Modal
         open={googleEmailModalOpen}

@@ -153,6 +153,21 @@ describe("NewProjectModal sharing", () => {
         );
     });
 
+    it("warns when organizations cannot be loaded", async () => {
+        vi.mocked(listOrgs).mockRejectedValue(new Error("network unavailable"));
+
+        renderModal();
+
+        expect(
+            await screen.findByText("Organizations unavailable"),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Your organizations could not be loaded. Close this message and try opening the project form again.",
+            ),
+        ).toBeInTheDocument();
+    });
+
   it("creates new projects with memory enabled by default", async () => {
     const user = userEvent.setup({ delay: null });
     renderModal();

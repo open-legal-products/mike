@@ -12,6 +12,7 @@ import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
   MfaVerificationPopup,
   needsMfaVerification,
@@ -84,6 +85,7 @@ export default function PrivacyDataPage() {
   const [isExportingTabularReviews, setIsExportingTabularReviews] =
     useState(false);
   const [isExportingMemory, setIsExportingMemory] = useState(false);
+  const [warningMessage, setWarningMessage] = useState<string | null>(null);
 
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -138,7 +140,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-account");
         return;
       }
-      alert("Failed to export account data. Please try again.");
+      setWarningMessage("Failed to export account data. Please try again.");
     } finally {
       setIsExportingAccount(false);
     }
@@ -162,7 +164,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-chats");
         return;
       }
-      alert("Failed to export chats. Please try again.");
+      setWarningMessage("Failed to export chats. Please try again.");
     } finally {
       setIsExportingChats(false);
     }
@@ -189,7 +191,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-tabular-reviews");
         return;
       }
-      alert("Failed to export tabular reviews. Please try again.");
+      setWarningMessage("Failed to export tabular reviews. Please try again.");
     } finally {
       setIsExportingTabularReviews(false);
     }
@@ -213,7 +215,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-memory");
         return;
       }
-      alert("Failed to export memory. Please try again.");
+      setWarningMessage("Failed to export memory. Please try again.");
     } finally {
       setIsExportingMemory(false);
     }
@@ -253,7 +255,7 @@ export default function PrivacyDataPage() {
         setPendingMfaAction(action);
         return;
       }
-      alert("Failed to delete data. Please try again.");
+      setWarningMessage("Failed to delete data. Please try again.");
     } finally {
       setDeletingAction(null);
     }
@@ -479,6 +481,12 @@ export default function PrivacyDataPage() {
         onVerified={() => void handleMfaVerified()}
         title="Two-factor verification required"
         message="This action is sensitive. Enter a code from your authenticator app to continue."
+      />
+      <WarningPopup
+        open={!!warningMessage}
+        title="Action failed"
+        message={warningMessage}
+        onClose={() => setWarningMessage(null)}
       />
     </div>
   );

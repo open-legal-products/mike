@@ -28,6 +28,7 @@ import {
     type PendingDirectGrant,
     type PendingOrgOverride,
 } from "../modals/CreateAccessStep";
+import { WarningPopup } from "../popups/WarningPopup";
 
 const PERSONAL_WORKSPACE = "__personal__";
 
@@ -54,6 +55,8 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const [organizationLoadWarning, setOrganizationLoadWarning] =
+        useState(false);
     // A project created with only some of its files attached. The modal holds
     // it until the user has read which files are missing.
     const [pendingProject, setPendingProject] = useState<Project | null>(null);
@@ -83,7 +86,9 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
             .then((rows) => {
                 if (!cancelled) setOrgs(rows);
             })
-            .catch(() => {});
+            .catch(() => {
+                if (!cancelled) setOrganizationLoadWarning(true);
+            });
         return () => {
             cancelled = true;
         };
@@ -329,6 +334,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
         setOrgId(PERSONAL_WORKSPACE);
         setMemoryEnabled(true);
         setError("");
+        setOrganizationLoadWarning(false);
     }
 
     function handleClose() {
@@ -538,6 +544,12 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
                 {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
             </form>
+            <WarningPopup
+                open={organizationLoadWarning}
+                title="Organizations unavailable"
+                message="Your organizations could not be loaded. Close this message and try opening the project form again."
+                onClose={() => setOrganizationLoadWarning(false)}
+            />
         </Modal>
     );
 }
