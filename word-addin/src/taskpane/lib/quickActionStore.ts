@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { listQuickActions } from "../api/mikeApi";
 import type { QuickAction } from "../types";
+import { notifyError } from "./notify";
 
 let snapshot: QuickAction[] = [];
 let loadPromise: Promise<void> | null = null;
@@ -30,9 +31,19 @@ function loadQuickActions(): Promise<void> {
       loaded = true;
       emitChange();
     })
-    .catch(() => {
+    .catch((error: unknown) => {
+      // An empty list here is indistinguishable from "you have no quick
+      // actions", so the failure is named rather than mimed.
       snapshot = [];
       emitChange();
+      notifyError(error, {
+        action: "load your quick actions",
+        dedupeKey: "quick-action-store",
+        onRetry: () => {
+          loaded = false;
+          void loadQuickActions();
+        },
+      });
     })
     .finally(() => {
       loadPromise = null;

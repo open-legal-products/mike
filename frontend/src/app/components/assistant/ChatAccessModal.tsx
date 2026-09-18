@@ -11,6 +11,7 @@ import {
     type ContentAccess,
 } from "@/app/lib/mikeApi";
 import { can, roleFrom } from "@/app/lib/permissions";
+import { notifyError } from "@/app/lib/userFacingError";
 import type { Chat } from "@/app/components/shared/types";
 
 interface Props {
@@ -34,6 +35,19 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
         setAccessState({ chatId: chat.id, value: nextAccess });
     }, [chat.id]);
 
+    // Bumped by the "Retry" on a failed load so the effect below refetches.
+    const [accessReloadKey, setAccessReloadKey] = useState(0);
+    const reportAccessFailure = useCallback(
+        (error: unknown, action: string) => {
+            notifyError(error, {
+                action,
+                dedupeKey: `chat-access:${chat.id}`,
+                onRetry: () => setAccessReloadKey((key) => key + 1),
+            });
+        },
+        [chat.id],
+    );
+
     useEffect(() => {
         if (!open || !canManage) return;
         let cancelled = false;
@@ -43,15 +57,20 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                     setAccessState({ chatId: chat.id, value: nextAccess });
                 }
             })
-            .catch(() => {
-                // The people roster remains useful if the management-only
-                // access request fails, and sharing still works: only the
-                // existing grant list is missing, so it stays empty.
+            .catch((error) => {
+                // An empty grant list is indistinguishable from "shared with
+                // nobody", so a failed load has to say that it failed.
+                if (!cancelled) {
+                    reportAccessFailure(
+                        error,
+                        "load who this chat is shared with",
+                    );
+                }
             });
         return () => {
             cancelled = true;
         };
-    }, [canManage, chat.id, open]);
+    }, [accessReloadKey, canManage, chat.id, open, reportAccessFailure]);
 
     return (
         <AccessModal
@@ -84,11 +103,23 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                 canManage,
                 onGrant: async (email, role) => {
                     await grantChatAccess(chat.id, email, role);
-                    await refreshAccess();
+                    // The grant itself succeeded; a failed re-read is its own
+                    // problem and must not be reported as a failed share.
+                    await refreshAccess().catch((error) =>
+                        reportAccessFailure(
+                            error,
+                            "refresh who this chat is shared with",
+                        ),
+                    );
                 },
                 onRevoke: async (email) => {
                     await revokeChatAccess(chat.id, email);
-                    await refreshAccess();
+                    await refreshAccess().catch((error) =>
+                        reportAccessFailure(
+                            error,
+                            "refresh who this chat is shared with",
+                        ),
+                    );
                 },
             }}
         />

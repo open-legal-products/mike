@@ -37,6 +37,7 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     }),
 }));
 import { useAssistantChat } from "./useAssistantChat";
+import { clearToasts, useToasts } from "@/shared/ui/ToastUI";
 
 const fetchMock = vi.fn();
 
@@ -82,6 +83,7 @@ beforeEach(() => {
 afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    clearToasts();
 });
 
 describe("useAssistantChat SSE parsing", () => {
@@ -545,7 +547,7 @@ describe("useAssistantChat SSE parsing", () => {
         ]);
     });
 
-    it("reports a non-ok HTTP response as a message-level error", async () => {
+    it("names a rate limit instead of collapsing it into one line", async () => {
         fetchMock.mockResolvedValue(
             new Response("quota exceeded", { status: 429 }),
         );
@@ -559,8 +561,119 @@ describe("useAssistantChat SSE parsing", () => {
         const assistant = result.current.messages.findLast(
             (m) => m.role === "assistant",
         );
-        expect(assistant?.error).toBe("Sorry, something went wrong.");
+        expect(assistant?.error).toBe(
+            "Too many requests. Wait a moment and try again.",
+        );
         expect(result.current.isResponseLoading).toBe(false);
+    });
+
+    it("raises a retryable notice when the stream dies mid-answer", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
+        fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        fetchMock.mockResolvedValueOnce(
+            sseResponse(['data: {"type":"content_delta","text":"Second go."}\n\n']),
+        );
+        const { result } = renderHook(() => ({
+            chat: useAssistantChat(),
+            toasts: useToasts(),
+        }));
+
+        await act(async () => {
+            await result.current.chat.handleChat(userMessage("why?"));
+        });
+
+        const failed = result.current.chat.messages.findLast(
+            (m) => m.role === "assistant",
+        );
+        expect(failed?.error).toBe(
+            "Mike couldn't reach the server. Check your connection and try again.",
+        );
+        const toast = result.current.toasts[0];
+        expect(toast?.title).toBe("Couldn't get a response");
+        const retry = toast?.actions?.find((a) => a.label === "Retry");
+        expect(retry).toBeDefined();
+
+        await act(async () => {
+            await retry?.onClick();
+        });
+
+        // The retry re-sends the same question, and the failed bubble is
+        // replaced rather than stacked under a second copy of it.
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const resent = JSON.parse(
+            (fetchMock.mock.calls.at(-1)?.[1] as RequestInit).body as string,
+        ) as { messages: { role: string; content: string }[] };
+        expect(resent.messages).toEqual([{ role: "user", content: "why?" }]);
+        expect(
+            result.current.chat.messages.filter((m) => m.role === "user"),
+        ).toHaveLength(1);
+        errorSpy.mockRestore();
+    });
+
+    it("raises a retryable notice when the server sends an error event", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
+        fetchMock.mockResolvedValueOnce(
+            sseResponse([
+                'data: {"type":"error","message":"provider exploded: stack"}\n\n',
+            ]),
+        );
+        fetchMock.mockResolvedValueOnce(
+            sseResponse(['data: {"type":"content_delta","text":"Second go."}\n\n']),
+        );
+        const { result } = renderHook(() => ({
+            chat: useAssistantChat(),
+            toasts: useToasts(),
+        }));
+
+        await act(async () => {
+            await result.current.chat.handleChat(userMessage("why?"));
+        });
+
+        const toast = result.current.toasts[0];
+        expect(toast?.title).toBe("Couldn't get a response");
+        expect(toast?.message).toBe(
+            "Mike couldn't finish this answer. Try again.",
+        );
+        expect(String(toast?.message)).not.toContain("provider exploded");
+        // A server-side failure is one the user cannot fix: support rides along.
+        expect(toast?.supportHref).toMatch(/^mailto:will@mikeoss\.com\?/);
+        const retry = toast?.actions?.find((a) => a.label === "Retry");
+        expect(retry).toBeDefined();
+
+        await act(async () => {
+            await retry?.onClick();
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const answered = result.current.chat.messages.findLast(
+            (m) => m.role === "assistant",
+        );
+        expect(answered?.error).toBeUndefined();
+        expect(
+            result.current.chat.messages.filter((m) => m.role === "user"),
+        ).toHaveLength(1);
+        errorSpy.mockRestore();
+    });
+
+    it("keeps a safe server message verbatim in the retry notice", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
+        fetchMock.mockResolvedValueOnce(
+            sseResponse([
+                'data: {"type":"error","message":"Select a saved model first.","safe_to_display":true}\n\n',
+            ]),
+        );
+        const { result } = renderHook(() => ({
+            chat: useAssistantChat(),
+            toasts: useToasts(),
+        }));
+        await act(async () => {
+            await result.current.chat.handleChat(userMessage("why?"));
+        });
+        expect(result.current.toasts[0]?.message).toBe("Select a saved model first.");
+        errorSpy.mockRestore();
     });
 
     it("does nothing for a whitespace-only user message", async () => {

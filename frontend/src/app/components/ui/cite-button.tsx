@@ -1,6 +1,10 @@
 import React, { useState } from "react";
 import { Check } from "lucide-react";
 import { QuoteIcon } from "@radix-ui/react-icons";
+import { notifyError } from "@/app/lib/userFacingError";
+
+const CLIPBOARD_FAILURE =
+    "Mike couldn't write to the clipboard. Check your browser's clipboard permission, then try again.";
 
 interface CiteButtonProps {
     quoteText: string;
@@ -33,7 +37,13 @@ export function CiteButton({
             setIsCopied(true);
             setTimeout(() => setIsCopied(false), 2000);
         } catch (err) {
-            console.error("Failed to copy citation:", err);
+            // A clipboard refusal is a browser permission the user controls,
+            // so support cannot help and a retry needs a fresh click.
+            notifyError(err, {
+                action: "copy this citation",
+                fallback: CLIPBOARD_FAILURE,
+                support: false,
+            });
         }
     };
 

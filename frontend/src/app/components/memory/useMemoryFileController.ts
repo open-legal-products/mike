@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MikeApiError, type MemoryCurrent } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 import { useMemoryAutosave } from "./useMemoryAutosave";
 
 type Options = {
@@ -162,8 +162,16 @@ export function useMemoryFileController({
         .then((current) => {
           if (!controller.signal.aborted) syncCurrent(current);
         })
-        .catch(() => {
-          // Keep the current file usable. A later poll or load can recover.
+        .catch((cause) => {
+          if (controller.signal.aborted) return;
+          // This poll is the only thing that re-arms itself, so a failure
+          // ends the status refresh: the file would sit on "processing"
+          // forever unless the user hears about it and can reload.
+          notifyError(cause, {
+            action: "check for memory updates",
+            dedupeKey: "memory-file-poll",
+            onRetry: () => void load(),
+          });
         });
     }, 3000);
     return () => {
@@ -175,6 +183,7 @@ export function useMemoryFileController({
     autosave.inFlight,
     conflict,
     dirty,
+    load,
     loadMemory,
     memory,
     mutationBlocked,

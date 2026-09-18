@@ -38,6 +38,7 @@ import type {
   WordChatSubmitOptions,
 } from "../../lib/wordChatTypes";
 import { isModelAvailable, missingModelProvider } from "../../lib/modelCatalog";
+import { notifyError, userMessage } from "../../lib/notify";
 import { loadWithRetry } from "../../lib/composerPreflight";
 import {
   slashCommandQueryFromValue,
@@ -112,6 +113,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     >(null);
     const [keyStatus, setKeyStatus] = useState<ApiKeyStatus | null>(null);
     const [keyStatusLoading, setKeyStatusLoading] = useState(true);
+    // Bumped by the "Retry" on the preflight failure toast to re-run it.
+    const [preflightAttempt, setPreflightAttempt] = useState(0);
     const [openRouterModels, setOpenRouterModels] = useState<string[]>([]);
     const [vercelModels, setVercelModels] = useState<string[]>([]);
     const [openCodeGoModels, setOpenCodeGoModels] = useState<string[]>([]);
@@ -194,13 +197,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useEffect(() => {
       if (!slashCommandsLoading) return;
       let cancelled = false;
-      void listWorkflows("assistant")
-        .then((workflows) => {
-          if (!cancelled) setSlashWorkflows(workflows);
-        })
-        .catch(() => {
-          if (!cancelled) setSlashWorkflows([]);
-        });
+      const load = (): void => {
+        void listWorkflows("assistant")
+          .then((workflows) => {
+            if (!cancelled) setSlashWorkflows(workflows);
+          })
+          .catch((reason: unknown) => {
+            if (cancelled) return;
+            // The user typed "/" and expects a menu. An empty list here is
+            // indistinguishable from "you have no workflows", so say so.
+            setSlashWorkflows([]);
+            notifyError(reason, {
+              action: "load your workflows",
+              dedupeKey: "slash-workflows",
+              page: "Assistant",
+              onRetry: () => {
+                setSlashWorkflows(null);
+              },
+            });
+          });
+      };
+      load();
       return () => {
         cancelled = true;
       };
@@ -224,11 +241,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       // backend still authoritatively rejects models it cannot serve).
       void Promise.all([
         loadWithRetry(getApiKeyStatus, {
-          onFinalFailure: (error) =>
-            console.warn(
-              "[word-addin] API key status unavailable after retry; model availability fails open",
-              error,
-            ),
+          onFinalFailure: (error) => {
+            if (cancelled) return;
+            // Availability fails open (the backend still rejects models it
+            // cannot serve), but the toggle will look wrong until this
+            // succeeds, so the user is told rather than left guessing.
+            notifyError(error, {
+              action: "load your models",
+              dedupeKey: "model-preflight",
+              page: "Assistant",
+              onRetry: () => {
+                setKeyStatusLoading(true);
+                setPreflightAttempt((count) => count + 1);
+              },
+            });
+          },
         }),
         loadWithRetry(getUserProfile, {
           onFinalFailure: (error) =>
@@ -255,7 +282,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       return () => {
         cancelled = true;
       };
-    }, []);
+    }, [preflightAttempt]);
 
     useEffect(() => {
       uploadGenerationRef.current += 1;
@@ -362,9 +389,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           );
         } else {
           setDocumentUploadError(
-            reason instanceof Error
-              ? reason.message
-              : "Documents could not be uploaded. Please try again.",
+            userMessage(reason, {
+              fallback: "Documents could not be uploaded. Try again.",
+            }),
           );
         }
       } finally {
@@ -610,6 +637,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                       setModel(next);
                       modelSelectionSaveRef.current =
                         modelSelectionSaveRef.current
+                          // Remembering the last model is a convenience the
+                          // user never asked for; the choice already applies
+                          // to this chat, so a failed save stays quiet.
                           .catch(() => undefined)
                           .then(() => onModelSelected(next));
                     }}
@@ -625,6 +655,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                       setReasoningLevel(next);
                       modelSelectionSaveRef.current =
                         modelSelectionSaveRef.current
+                          // Same as the model above: a preference, not the
+                          // action the user is waiting on.
                           .catch(() => undefined)
                           .then(() => onReasoningSelected(next));
                     }}

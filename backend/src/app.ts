@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { rateLimitedBody } from "./lib/httpError";
 import { createHash, randomUUID } from "node:crypto";
 import express from "express";
 import cors from "cors";
@@ -66,9 +67,11 @@ function makeLimiter(options: {
     skip: (req) => req.method === "OPTIONS" || options.skip?.(req) === true,
     keyGenerator: options.keyGenerator,
     skipSuccessfulRequests: options.skipSuccessfulRequests,
-    message: {
-      detail: options.message ?? "Too many requests. Please try again later.",
-    },
+    // A machine code lets clients classify the failure without parsing
+    // prose; the detail stays specific to the lane that was exhausted.
+    message: rateLimitedBody(
+      options.message ?? "Too many requests. Please try again later.",
+    ),
   });
 }
 

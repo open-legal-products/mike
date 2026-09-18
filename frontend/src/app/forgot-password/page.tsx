@@ -12,25 +12,65 @@ import {
 } from "@/app/components/auth/authStyles";
 import { requestPasswordReset } from "@/app/lib/authApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
+import {
+    describeError,
+    supportMailtoFor,
+    type UserErrorKind,
+    type UserFacingError,
+} from "@/app/lib/userFacingError";
+
+/**
+ * Failures that mean the request never reached Mike. Telling the user to
+ * check their email after one of these would be a lie, and none of them
+ * depends on whether the address exists, so saying so leaks nothing.
+ */
+const DELIVERY_FAILURE_KINDS: ReadonlySet<UserErrorKind> = new Set([
+    "offline",
+    "network",
+    "timeout",
+    "unavailable",
+    "server",
+    // The 10-per-hour reset limiter and a blocked request both answer before
+    // any address is looked at, so neither says whether the account exists.
+    // Showing "check your email" for them would promise mail nobody sent.
+    "rate_limited",
+    "forbidden",
+]);
 
 export default function ForgotPasswordPage() {
     const [email, setEmail] = useState("");
     const [loading, setLoading] = useState(false);
     const [submitted, setSubmitted] = useState(false);
+    const [error, setError] = useState<UserFacingError | null>(null);
+
+    async function sendResetLink() {
+        setLoading(true);
+        setError(null);
+        try {
+            await requestPasswordReset(email.trim());
+            setSubmitted(true);
+        } catch (caught) {
+            const described = describeError(caught, {
+                action: "send the reset link",
+                fallback:
+                    "Mike couldn't send the reset link. Try again in a moment.",
+            });
+            if (DELIVERY_FAILURE_KINDS.has(described.kind)) {
+                setError(described);
+                return;
+            }
+            // Every other outcome gets the same response for existing and
+            // unknown addresses, so this screen cannot be used to enumerate
+            // Mike accounts.
+            setSubmitted(true);
+        } finally {
+            setLoading(false);
+        }
+    }
 
     async function handleSubmit(event: React.FormEvent) {
         event.preventDefault();
-        setLoading(true);
-        try {
-            await requestPasswordReset(email.trim());
-        } catch {
-            // Keep the response indistinguishable from a successful request.
-        } finally {
-            // Use the same response for existing and unknown addresses so this
-            // screen cannot be used to enumerate Mike accounts.
-            setSubmitted(true);
-            setLoading(false);
-        }
+        await sendResetLink();
     }
 
     return (
@@ -96,6 +136,37 @@ export default function ForgotPasswordPage() {
                                         className={`w-full ${authInputClassName}`}
                                     />
                                 </div>
+                                {error && (
+                                    <div
+                                        role="alert"
+                                        className="rounded bg-red-50 p-3 text-sm text-red-600"
+                                    >
+                                        {error.message}
+                                        {error.retryable && (
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    void sendResetLink()
+                                                }
+                                                disabled={loading}
+                                                className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                                            >
+                                                Retry
+                                            </button>
+                                        )}
+                                        {error.supportable && (
+                                            <a
+                                                href={supportMailtoFor(
+                                                    error,
+                                                    "Failed to request a password reset.",
+                                                )}
+                                                className="ml-2 underline underline-offset-2"
+                                            >
+                                                Contact support
+                                            </a>
+                                        )}
+                                    </div>
+                                )}
                                 <PillButtonUI
                                     type="submit"
                                     tone="black"

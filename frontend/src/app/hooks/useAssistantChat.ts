@@ -8,6 +8,12 @@ import { readSseFrames } from "@/app/lib/sse";
 import { reportError } from "@/app/lib/errorReporting";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { isPanelDocument } from "@/app/components/shared/types";
+import {
+  UserVisibleError,
+  describeError,
+  notifyError,
+  notifyInfo,
+} from "@/app/lib/userFacingError";
 import type {
   AssistantEvent,
   Citation,
@@ -88,11 +94,23 @@ export function useAssistantChat({
   } = useChatHistoryContext();
 
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  // Mirrors `messages` for the async send path: a turn started from a toast
+  // Retry runs long after the render that raised it.
+  const messagesRef = useRef<Message[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [isResponseLoading, setIsResponseLoading] = useState(false);
   const [isLoadingCitations, setIsLoadingCitations] = useState(false);
   const [chatId, setChatId] = useState<string | undefined>(initialChatId);
+  // Mirrors `chatId` for the async send path. A turn started from a toast
+  // Retry runs long after the render that raised it, and the state value
+  // captured by that render is the one from *before* the stream assigned the
+  // chat its id — sending it would create a second chat for the same turn.
+  const chatIdRef = useRef<string | undefined>(initialChatId);
 
   useEffect(() => {
+    chatIdRef.current = initialChatId;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the hook stays mounted while its host switches between existing threads
     setChatId(initialChatId);
   }, [initialChatId]);
@@ -291,29 +309,131 @@ export function useAssistantChat({
     return true;
   };
 
+  type ChatTurnOptions = {
+    displayedDoc?: { filename: string; documentId: string } | null;
+    askInputsResponse?: Extract<
+      AssistantEvent,
+      { type: "ask_inputs_response" }
+    >;
+  };
+
+  /**
+   * Everything a re-send needs, captured when the turn is sent. An error
+   * toast with actions never auto-dismisses, so its Retry can fire minutes
+   * later — by then the hook may be showing a different thread, a newer turn
+   * may own the stream, and the chat may have been given an id. The snapshot
+   * (not the raising render's closure, and not a mutable "last turn") is what
+   * the retry replays, and it is validated against the live hook first.
+   */
+  type TurnSnapshot = {
+    /** The request generation this turn owned; a newer one supersedes it. */
+    turnId: number;
+    /** Project + chat the turn was sent from; updated when the id arrives. */
+    threadKey: string;
+    /** The chat id the turn ended up in, once the stream assigns one. */
+    chatId: string | undefined;
+    message: Message;
+    opts?: ChatTurnOptions;
+    /** Messages on screen when the turn was sent, minus its own answer. */
+    transcriptLength: number;
+    /**
+     * The user bubble this turn answers: normally the message itself, or —
+     * for an ask-inputs continuation, whose answer is rendered as an event
+     * rather than a bubble — the question already on screen.
+     */
+    anchorContent: string;
+  };
+
+  const threadKeyFor = (id: string | undefined) =>
+    `${projectId ?? ""}:${id ?? "new"}`;
+
+  /** The last turn sent, so a failed answer can be re-sent from the toast. */
+  const lastTurnRef = useRef<TurnSnapshot | null>(null);
+
+  const lastUserMessage = (transcript: Message[]): Message | undefined => {
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      if (transcript[i].role === "user") return transcript[i];
+    }
+    return undefined;
+  };
+
+  /**
+   * Re-send one specific turn. Refuses — visibly, but without touching the
+   * transcript or an in-flight stream — when the hook has moved on from the
+   * turn the toast was raised for.
+   */
+  const retryTurn = async (turn: TurnSnapshot): Promise<string | null> => {
+    const transcript = messagesRef.current;
+    const anchor = lastUserMessage(transcript);
+    // The host swaps threads by writing straight through the setters, so the
+    // hook can be showing another chat entirely by the time this fires.
+    if (turn.threadKey !== threadKeyFor(chatIdRef.current)) {
+      notifyInfo(
+        "This chat has changed. Send the message again from the chat it belongs to.",
+      );
+      return null;
+    }
+    if (turn.turnId !== requestGenerationRef.current) {
+      // A newer turn owns the thread. Re-sending would abort a healthy
+      // stream and answer a question the user has already moved past.
+      notifyInfo(
+        "A newer message has replaced this one. Send it again if you still need an answer.",
+      );
+      return null;
+    }
+    if (
+      transcript.length < turn.transcriptLength ||
+      !anchor ||
+      anchor.content !== turn.anchorContent
+    ) {
+      // Same chat id, different transcript: the thread was reloaded or
+      // rewritten under the toast.
+      notifyInfo(
+        "This chat has changed. Send the message again from the chat it belongs to.",
+      );
+      return null;
+    }
+    // Drop the failed assistant bubble before re-sending, or the retry would
+    // stack a second empty turn under it and repeat the user's question in
+    // the request. `messagesRef` is updated here too so `handleChat` reads
+    // the trimmed list without waiting for a React commit.
+    const trimmed = [...transcript];
+    while (
+      trimmed.length > 0 &&
+      trimmed[trimmed.length - 1].role === "assistant"
+    ) {
+      trimmed.pop();
+    }
+    messagesRef.current = trimmed;
+    setMessages(trimmed);
+    return handleChat(turn.message, turn.opts);
+  };
+
+  const retryLastMessage = async (): Promise<string | null> => {
+    const last = lastTurnRef.current;
+    if (!last) return null;
+    return retryTurn(last);
+  };
+
   const handleChat = async (
     message: Message,
-    opts?: {
-      displayedDoc?: { filename: string; documentId: string } | null;
-      askInputsResponse?: Extract<
-        AssistantEvent,
-        { type: "ask_inputs_response" }
-      >;
-    },
+    opts?: ChatTurnOptions,
   ): Promise<string | null> => {
     if (!message.content.trim()) return null;
 
     setIsResponseLoading(true);
 
-    const lastMessage = messages[messages.length - 1];
+    // The committed list, or the one a retry just trimmed.
+    const currentMessages = messagesRef.current;
+    const lastMessage = currentMessages[currentMessages.length - 1];
     const isMessageAlreadyAdded =
       lastMessage &&
       lastMessage.role === "user" &&
       lastMessage.content === message.content;
 
     const apiMessagesForTurn: Message[] = isMessageAlreadyAdded
-      ? messages
-      : [...messages, message];
+      ? currentMessages
+      : [...currentMessages, message];
     const askInputsResponseEvent = opts?.askInputsResponse ?? null;
     const optimisticResponseEvent = askInputsResponseEvent;
     const userInputThinkingEvent = optimisticResponseEvent
@@ -324,7 +444,7 @@ export function useAssistantChat({
       : null;
     const displayMessages: Message[] = optimisticResponseEvent
       ? (() => {
-          const updated = messages.map((item) => ({
+          const updated = currentMessages.map((item) => ({
             ...item,
             events: item.events ? [...item.events] : item.events,
           }));
@@ -368,6 +488,21 @@ export function useAssistantChat({
       : [];
 
     const generation = ++requestGenerationRef.current;
+    const turn: TurnSnapshot = {
+      turnId: generation,
+      threadKey: threadKeyFor(chatIdRef.current),
+      chatId: chatIdRef.current,
+      message,
+      opts,
+      transcriptLength: optimisticResponseEvent
+        ? displayMessages.length
+        : apiMessagesForTurn.length,
+      anchorContent:
+        lastUserMessage(
+          optimisticResponseEvent ? displayMessages : apiMessagesForTurn,
+        )?.content ?? message.content,
+    };
+    lastTurnRef.current = turn;
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -405,7 +540,10 @@ export function useAssistantChat({
         ? streamProjectChat({
             projectId,
             messages: apiMessages,
-            chat_id: chatId,
+            // The live id, never the render-time state this closure captured:
+            // a turn re-sent from a toast must land in the chat the first
+            // attempt created, not open a second one.
+            chat_id: chatIdRef.current,
             model,
             reasoning,
             displayed_doc: displayedDoc
@@ -421,7 +559,7 @@ export function useAssistantChat({
           })
         : streamChat({
             messages: apiMessages,
-            chat_id: chatId,
+            chat_id: chatIdRef.current,
             model,
             reasoning,
             ask_inputs_response: opts?.askInputsResponse,
@@ -433,8 +571,38 @@ export function useAssistantChat({
         return null;
       }
       if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
-        throw new Error(`Chat request failed with status ${response.status}`);
+        // Carry the status so the failure can be classified (429, 5xx), plus
+        // the backend's failure shape: `code` sharpens the classification,
+        // `request_id` is what the support email is worth sending, and a 4xx
+        // `detail` is written for the user. Without a usable detail the
+        // message stays the API client's placeholder form, which
+        // `describeError` knows not to show a user. The body is read once,
+        // and a body that is not JSON is simply dropped.
+        const read = (value: unknown) =>
+          typeof value === "string" && value.trim() ? value.trim() : null;
+        let detail: string | null = null;
+        let code: string | null = null;
+        let requestId = read(response.headers.get("x-request-id"));
+        try {
+          const body = (await response.json()) as Record<string, unknown>;
+          detail = read(body?.detail);
+          code = read(body?.code);
+          requestId = read(body?.request_id) ?? requestId;
+        } catch {
+          await response.body?.cancel().catch(() => {});
+        }
+        throw Object.assign(
+          new Error(
+            response.status < 500 && detail
+              ? detail
+              : `API error: ${response.status}`,
+          ),
+          {
+            status: response.status,
+            ...(code ? { code } : {}),
+            ...(requestId ? { requestId } : {}),
+          },
+        );
       }
 
       // One shared reader (lib/sse.ts) owns the wire format: CRLF, the
@@ -455,6 +623,11 @@ export function useAssistantChat({
               const isNewChatId =
                 streamed !== chatId && streamed !== streamedChatId;
               streamedChatId = streamed;
+              chatIdRef.current = streamed;
+              // Keep this turn's snapshot on the chat it actually landed in,
+              // so its Retry re-sends into that chat instead of creating one.
+              turn.chatId = streamed;
+              turn.threadKey = threadKeyFor(streamed);
               setChatId(streamed);
               setCurrentChatId(streamed);
               if (isNewChatId && onChatCreated) {
@@ -508,6 +681,28 @@ export function useAssistantChat({
                 events: snapshot,
                 error: message,
               }));
+              // The bubble records that this turn failed; the toast is where
+              // the user gets a way back. A server-side failure is one the
+              // user cannot fix, so Contact support rides along with Retry.
+              //
+              // A `safe_to_display` frame is a configuration refusal (no API
+              // key, a model this deployment disallows): re-sending it would
+              // fail identically, so it gets support without a Retry.
+              notifyError(
+                new UserVisibleError(
+                  safeToDisplay
+                    ? message
+                    : "Mike couldn't finish this answer. Try again.",
+                  { kind: "server", retryable: !safeToDisplay },
+                ),
+                {
+                  action: "get a response",
+                  dedupeKey: "assistant-chat",
+                  onRetry: async () => {
+                    await retryTurn(turn);
+                  },
+                },
+              );
               setIsResponseLoading(false);
               setIsLoadingCitations(false);
               continue;
@@ -1341,6 +1536,10 @@ export function useAssistantChat({
               continue;
             }
         } catch (e) {
+          // One unreadable frame out of a stream that is still arriving: the
+          // loop continues and the answer keeps rendering, so there is
+          // nothing for the user to act on. A stream that actually fails
+          // throws out of the loop and is reported below.
           console.warn("[useAssistantChat] failed to handle SSE event:", data, e);
         }
       }
@@ -1389,10 +1588,25 @@ export function useAssistantChat({
         reportError(error, {
           tags: { component: "assistant-chat", project: Boolean(projectId) },
         });
+        // The turn died mid-stream (dropped connection, 5xx, a rate limit).
+        // Say which on the bubble, and raise a toast whose Retry re-sends the
+        // same question — before, the answer just stopped with no way back.
+        const described = describeError(error, {
+          action: "get a response",
+          fallback: "Mike couldn't finish this answer. Try again.",
+        });
         updateLatestAssistantMessage((message) => ({
           ...message,
-          error: "Sorry, something went wrong.",
+          error: described.message,
         }));
+        notifyError(error, {
+          action: "get a response",
+          fallback: "Mike couldn't finish this answer. Try again.",
+          dedupeKey: "assistant-chat",
+          onRetry: async () => {
+            await retryTurn(turn);
+          },
+        });
       }
 
       setIsResponseLoading(false);
@@ -1408,16 +1622,24 @@ export function useAssistantChat({
   const handleNewChat = async (
     message: Message,
     projectId?: string,
+    options?: { onRetry?: () => void | Promise<void> },
   ): Promise<string | null> => {
     if (!message.content.trim()) return null;
 
     setMessages([message]);
     setNewChatMessages([message]);
 
-    const newChatId = await saveChat(projectId);
+    const newChatId = await saveChat(projectId, options);
     if (newChatId) {
+      chatIdRef.current = newChatId;
       setChatId(newChatId);
       setCurrentChatId(newChatId);
+    } else {
+      // The chat was never created, so the optimistic bubble would sit
+      // above a composer whose next send has no chat to land in. Return to
+      // the empty state; the toast's Retry re-runs the caller's submit.
+      setMessages([]);
+      setNewChatMessages([]);
     }
 
     return newChatId;
@@ -1429,11 +1651,13 @@ export function useAssistantChat({
     setIsResponseLoading,
     isLoadingCitations,
     handleChat,
+    retryLastMessage,
     handleNewChat,
     setMessages,
     cancel,
     resetChat: () => {
       cancel();
+      chatIdRef.current = undefined;
       setChatId(undefined);
       setCurrentChatId(null);
       setMessages([]);

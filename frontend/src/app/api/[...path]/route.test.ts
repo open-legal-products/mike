@@ -118,7 +118,24 @@ describe("same-origin API gateway", () => {
 
         expect(response.status).toBe(502);
         await expect(response.json()).resolves.toEqual({
+            code: "upstream_unavailable",
             detail: "The API is temporarily unavailable.",
+        });
+    });
+
+    it("echoes the request id on a 502 so support can trace it", async () => {
+        fetchMock.mockRejectedValue(new Error("connect ECONNREFUSED backend"));
+        const request = new NextRequest("https://app.example.test/api/health", {
+            headers: { "x-request-id": "req-7f3a" },
+        });
+
+        const response = await GET(request, context(["health"]));
+
+        expect(response.status).toBe(502);
+        await expect(response.json()).resolves.toEqual({
+            code: "upstream_unavailable",
+            detail: "The API is temporarily unavailable.",
+            request_id: "req-7f3a",
         });
     });
 
@@ -149,6 +166,7 @@ describe("same-origin API gateway", () => {
         expect(fetchMock).not.toHaveBeenCalled();
         expect(response.status).toBe(502);
         await expect(response.json()).resolves.toEqual({
+            code: "upstream_unavailable",
             detail: "The API is temporarily unavailable.",
         });
         expect(errorSpy).toHaveBeenCalledWith(

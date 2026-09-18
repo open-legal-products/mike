@@ -51,6 +51,9 @@ export function ModelToggle({
       .then((models) => {
         if (!cancelled) setOllamaModels(models);
       })
+      // Local (Ollama) models are an optional extra: when the host is not
+      // running there is simply no "Local" group, and nothing the user asked
+      // for has failed.
       .catch(() => {});
     return () => {
       cancelled = true;

@@ -1,10 +1,16 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { CiteButton } from "./cite-button";
 
 describe("CiteButton", () => {
+    beforeEach(() => {
+        clearToasts();
+    });
+
     afterEach(() => {
+        clearToasts();
         vi.restoreAllMocks();
     });
 
@@ -76,5 +82,26 @@ describe("CiteButton", () => {
 
         expect(writeText).toHaveBeenCalledWith(`"he said 'hi'" (Page 2)`);
         expect(await screen.findByText("Copied")).toBeInTheDocument();
+    });
+
+    it("tells the user when the clipboard refuses the copy", async () => {
+        const user = userEvent.setup();
+        vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(
+            new DOMException("Write permission denied.", "NotAllowedError"),
+        );
+        render(
+            <>
+                <CiteButton quoteText="hello" quoteLabel="Page 2" />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(screen.getByRole("button", { name: /cite/i }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't copy this citation");
+        expect(alert).toHaveTextContent("clipboard permission");
+        expect(alert).not.toHaveTextContent("Write permission denied.");
+        expect(screen.queryByText("Copied")).not.toBeInTheDocument();
     });
 });

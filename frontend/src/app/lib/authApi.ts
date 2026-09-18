@@ -15,12 +15,25 @@ export interface MfaFactor {
 export class AuthApiError extends Error {
     status: number;
     code: string | null;
+    /**
+     * The id the API stamped on this request. Support cannot find an auth
+     * failure in the logs without it, and `describeError` reads it straight
+     * off the error, so it has to be carried here the way `MikeApiError`
+     * carries it.
+     */
+    requestId: string | null;
 
-    constructor(status: number, code: string | null, message: string) {
+    constructor(
+        status: number,
+        code: string | null,
+        message: string,
+        requestId: string | null = null,
+    ) {
         super(message);
         this.name = "AuthApiError";
         this.status = status;
         this.code = code;
+        this.requestId = requestId;
     }
 }
 
@@ -38,6 +51,7 @@ async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
         const body = (await response.json().catch(() => ({}))) as {
             code?: unknown;
             detail?: unknown;
+            request_id?: unknown;
         };
         throw new AuthApiError(
             response.status,
@@ -45,6 +59,11 @@ async function authRequest<T>(path: string, init?: RequestInit): Promise<T> {
             typeof body.detail === "string"
                 ? body.detail
                 : "Authentication could not be completed.",
+            // Mirrors mikeApi.toApiError: the body wins, the header is the
+            // fallback for a response that carried no JSON id.
+            typeof body.request_id === "string" && body.request_id
+                ? body.request_id
+                : response.headers.get("x-request-id"),
         );
     }
     if (response.status === 204) return undefined as T;

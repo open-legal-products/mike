@@ -12,7 +12,6 @@ import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
   MfaVerificationPopup,
   needsMfaVerification,
@@ -28,6 +27,7 @@ import {
   startUserExport,
   type UserExportType,
 } from "@/app/lib/mikeApi";
+import { UserVisibleError, notifyError } from "@/app/lib/userFacingError";
 
 type DeleteDataAction = "chats" | "tabular-reviews" | "projects" | "memory";
 type ExportDataAction =
@@ -71,6 +71,14 @@ const DELETE_DATA_COPY: Record<
   },
 };
 
+/** Imperative, lower case: "Couldn't delete your chats". */
+const DELETE_ACTION_LABELS: Record<DeleteDataAction, string> = {
+  chats: "delete your chats",
+  "tabular-reviews": "delete your tabular reviews",
+  projects: "delete your projects",
+  memory: "delete your memory",
+};
+
 export default function PrivacyDataPage() {
   const { loadChats, setCurrentChatId } = useChatHistoryContext();
   const [pendingDeleteAction, setPendingDeleteAction] =
@@ -85,7 +93,6 @@ export default function PrivacyDataPage() {
   const [isExportingTabularReviews, setIsExportingTabularReviews] =
     useState(false);
   const [isExportingMemory, setIsExportingMemory] = useState(false);
-  const [warningMessage, setWarningMessage] = useState<string | null>(null);
 
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -112,14 +119,22 @@ export default function PrivacyDataPage() {
     for (let i = 0; i < EXPORT_POLL_LIMIT; i++) {
       await new Promise((resolve) => setTimeout(resolve, EXPORT_POLL_MS));
       const status = await getUserExportStatus(export_id);
-      if (status.status === "failed") throw new Error("Export build failed");
+      if (status.status === "failed") {
+        throw new UserVisibleError(
+          "Mike couldn't build the export. Try again, and contact support if it keeps happening.",
+          { retryable: true },
+        );
+      }
       if (status.status === "done") {
         const { blob, filename } = await downloadUserExport(export_id);
         downloadBlob(blob, filename ?? status.filename ?? fallbackFilename);
         return;
       }
     }
-    throw new Error("Export timed out");
+    throw new UserVisibleError(
+      "The export is taking longer than expected. It may still be building, so try again in a few minutes.",
+      { retryable: true },
+    );
   };
 
   const handleExportAccountData = async () => {
@@ -140,7 +155,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-account");
         return;
       }
-      setWarningMessage("Failed to export account data. Please try again.");
+      notifyError(error, {
+        action: "export your account data",
+        onRetry: () => void handleExportAccountData(),
+      });
     } finally {
       setIsExportingAccount(false);
     }
@@ -164,7 +182,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-chats");
         return;
       }
-      setWarningMessage("Failed to export chats. Please try again.");
+      notifyError(error, {
+        action: "export your chats",
+        onRetry: () => void handleExportChatData(),
+      });
     } finally {
       setIsExportingChats(false);
     }
@@ -191,7 +212,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-tabular-reviews");
         return;
       }
-      setWarningMessage("Failed to export tabular reviews. Please try again.");
+      notifyError(error, {
+        action: "export your tabular reviews",
+        onRetry: () => void handleExportTabularReviewsData(),
+      });
     } finally {
       setIsExportingTabularReviews(false);
     }
@@ -215,7 +239,10 @@ export default function PrivacyDataPage() {
         setPendingMfaAction("export-memory");
         return;
       }
-      setWarningMessage("Failed to export memory. Please try again.");
+      notifyError(error, {
+        action: "export your memory",
+        onRetry: () => void handleExportMemoryData(),
+      });
     } finally {
       setIsExportingMemory(false);
     }
@@ -255,7 +282,13 @@ export default function PrivacyDataPage() {
         setPendingMfaAction(action);
         return;
       }
-      setWarningMessage("Failed to delete data. Please try again.");
+      notifyError(error, {
+        action: DELETE_ACTION_LABELS[action],
+        // Re-open the confirmation rather than deleting again from the
+        // toast: this erases data permanently, so it is always the dialog
+        // that starts it.
+        onRetry: () => setPendingDeleteAction(action),
+      });
     } finally {
       setDeletingAction(null);
     }
@@ -481,12 +514,6 @@ export default function PrivacyDataPage() {
         onVerified={() => void handleMfaVerified()}
         title="Two-factor verification required"
         message="This action is sensitive. Enter a code from your authenticator app to continue."
-      />
-      <WarningPopup
-        open={!!warningMessage}
-        title="Action failed"
-        message={warningMessage}
-        onClose={() => setWarningMessage(null)}
       />
     </div>
   );

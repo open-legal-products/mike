@@ -1,5 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+    fireEvent,
+    render,
+    screen,
+    waitFor,
+    within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 const {
     getUserProfile,
@@ -98,6 +105,28 @@ function LastSelectedModel() {
     );
 }
 
+function DisplayNameControl() {
+    const { updateDisplayName } = useUserProfile();
+    return (
+        <button onClick={() => void updateDisplayName("Ada Lovelace")}>
+            Save name
+        </button>
+    );
+}
+
+function ModelPreferenceControl() {
+    const { updateModelPreference } = useUserProfile();
+    return (
+        <button
+            onClick={() =>
+                void updateModelPreference("titleModel", "gpt-5.6-luna")
+            }
+        >
+            Save model preference
+        </button>
+    );
+}
+
 function TabularChatSettings() {
     const { persistChatModelSelection, persistChatReasoningSelection } =
         useUserProfile();
@@ -123,6 +152,7 @@ function TabularChatSettings() {
 }
 
 beforeEach(() => {
+    clearToasts();
     getUserProfile.mockResolvedValue(apiProfile(true));
     updateUserProfile.mockImplementation(
         ({ darkMode = true }: { darkMode?: boolean }) =>
@@ -134,6 +164,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    clearToasts();
     document.documentElement.classList.remove("dark");
     document.documentElement.style.colorScheme = "";
     vi.clearAllMocks();
@@ -261,5 +292,101 @@ describe("UserProfileProvider dark mode", () => {
             reasoningLevel: "low",
         });
         unsubscribe();
+    });
+});
+
+describe("UserProfileProvider failure reporting", () => {
+    it("says why a profile save failed and offers a Retry that re-runs it", async () => {
+        // Every mutator used to swallow its error and return `false`, so a
+        // save that never happened looked identical to one that did.
+        updateUserProfile.mockRejectedValueOnce(
+            Object.assign(new Error("Internal error"), { status: 500 }),
+        );
+        render(
+            <UserProfileProvider>
+                <DisplayNameControl />
+                <ToastViewportUI />
+            </UserProfileProvider>,
+        );
+        await waitFor(() => expect(getUserProfile).toHaveBeenCalled());
+
+        fireEvent.click(screen.getByRole("button", { name: "Save name" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't save your name");
+        expect(alert).toHaveTextContent(
+            "Something went wrong on our side. Try again.",
+        );
+
+        // Retry re-runs the same mutation with the same argument.
+        updateUserProfile.mockClear();
+        fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+        await waitFor(() =>
+            expect(updateUserProfile).toHaveBeenCalledWith({
+                displayName: "Ada Lovelace",
+            }),
+        );
+    });
+
+    it("reports a model preference that was not saved", async () => {
+        // The model preferences page had no failure path of its own: the
+        // dropdown snapped back with no explanation.
+        updateUserProfile.mockRejectedValueOnce(
+            Object.assign(new Error("Internal error"), { status: 500 }),
+        );
+        render(
+            <UserProfileProvider>
+                <ModelPreferenceControl />
+                <ToastViewportUI />
+            </UserProfileProvider>,
+        );
+        await waitFor(() => expect(getUserProfile).toHaveBeenCalled());
+
+        fireEvent.click(
+            screen.getByRole("button", { name: "Save model preference" }),
+        );
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't save your model preference");
+
+        updateUserProfile.mockClear();
+        fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+        await waitFor(() =>
+            expect(updateUserProfile).toHaveBeenCalledWith({
+                titleModel: "gpt-5.6-luna",
+            }),
+        );
+    });
+
+    it("reports a chat model selection that was not persisted", async () => {
+        updateLastSelectedChatSettings.mockRejectedValueOnce(
+            new TypeError("Failed to fetch"),
+        );
+        render(
+            <UserProfileProvider>
+                <LastSelectedModel />
+                <ToastViewportUI />
+            </UserProfileProvider>,
+        );
+        await waitFor(() => expect(screen.getByText("none")).toBeVisible());
+
+        fireEvent.click(screen.getByRole("button", { name: "Select model" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't save your model selection");
+    });
+
+    it("says the profile could not be loaded instead of showing the fallback silently", async () => {
+        // Both the first call and its one retry fail.
+        getUserProfile.mockRejectedValue(new TypeError("Failed to fetch"));
+        render(
+            <UserProfileProvider>
+                <DisplayNameControl />
+                <ToastViewportUI />
+            </UserProfileProvider>,
+        );
+
+        const alert = await screen.findByRole("alert", {}, { timeout: 4000 });
+        expect(alert).toHaveTextContent("Couldn't load your profile");
     });
 });

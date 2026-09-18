@@ -11,8 +11,9 @@ import {
     type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { cn } from "@/app/lib/utils";
+import { EmptyState } from "@/app/components/ui/empty-state";
 import {
     DropdownMenu,
     DropdownMenuSeparator,
@@ -566,5 +567,50 @@ export function TableEmptyState({
         >
             {children}
         </div>
+    );
+}
+
+/**
+ * A table that could not load, with the one way back: "Try again".
+ *
+ * The in-table half of `docs/design-system.md` ("Reporting failures") — a
+ * screen that cannot render says so in place, instead of showing an empty
+ * table that reads as "you have nothing here". Pass the section's own icon
+ * and heading so it still looks like the screen the user asked for.
+ */
+export function TableErrorState({
+    icon,
+    title,
+    message,
+    onRetry,
+    retryLabel = "Try again",
+    className,
+}: {
+    icon?: ReactNode;
+    title: ReactNode;
+    message: ReactNode;
+    onRetry: () => void | Promise<void>;
+    retryLabel?: string;
+    className?: string;
+}) {
+    return (
+        <TableEmptyState className={className}>
+            <EmptyState
+                icon={icon}
+                title={title}
+                description={message}
+                tone="error"
+                action={
+                    <button
+                        type="button"
+                        onClick={() => void onRetry()}
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                    >
+                        <Loader2 className="h-3.5 w-3.5" />
+                        {retryLabel}
+                    </button>
+                }
+            />
+        </TableEmptyState>
     );
 }

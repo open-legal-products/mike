@@ -64,6 +64,61 @@ describe("LoginPage", () => {
         expect(push).toHaveBeenCalledWith("/onboarding/profile");
     });
 
+    it.each([
+        [
+            "a specific GoTrue code",
+            Object.assign(new Error("Invalid login credentials"), {
+                status: 400,
+                code: "invalid_credentials",
+            }),
+            "The email or password is incorrect.",
+        ],
+        [
+            "too many attempts",
+            Object.assign(new Error("Request rate limit reached"), {
+                status: 429,
+            }),
+            "Too many attempts. Wait a moment and try again.",
+        ],
+        [
+            "a dropped connection",
+            new TypeError("Failed to fetch"),
+            "Mike couldn't reach the server. Check your connection and try again.",
+        ],
+    ])("explains %s instead of a generic line", async (_label, thrown, shown) => {
+        login.mockRejectedValue(thrown);
+        const user = userEvent.setup();
+        render(<LoginPage />);
+
+        await user.type(
+            screen.getByRole("textbox", { name: "Email" }),
+            "person@example.com",
+        );
+        await user.type(screen.getByLabelText("Password"), "correct-horse");
+        await user.click(screen.getByRole("button", { name: "Log in" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(shown);
+    });
+
+    it("offers Retry for a failure that may pass on a second attempt", async () => {
+        login.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+        login.mockResolvedValueOnce({ user: { id: "user-1" } });
+        const user = userEvent.setup();
+        render(<LoginPage />);
+
+        await user.type(
+            screen.getByRole("textbox", { name: "Email" }),
+            "person@example.com",
+        );
+        await user.type(screen.getByLabelText("Password"), "correct-horse");
+        await user.click(screen.getByRole("button", { name: "Log in" }));
+
+        await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+        expect(login).toHaveBeenCalledTimes(2);
+        expect(push).toHaveBeenCalledWith("/onboarding/profile");
+    });
+
     it("places Google and SSO after the primary login action", () => {
         render(<LoginPage />);
 

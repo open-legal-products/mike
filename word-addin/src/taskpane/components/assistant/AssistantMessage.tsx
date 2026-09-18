@@ -90,8 +90,14 @@ function persistedEditStatus(
   if (!edit) return undefined;
   if (edit.resolutionStatus) return edit.resolutionStatus;
   if (edit.applyStatus === "proposed") return "validating";
+  // A skipped edit is persisted as applied (the document carries it) but
+  // has no anchor to restore, so it keeps its own card, not "restoring".
+  if (edit.errorCode === "already-applied") return "already-applied";
   if (edit.applyStatus === "applied") return "restoring";
   if (edit.applyStatus === "unmanaged") return "unmanaged";
+  // Checked before the generic "error" fallback below: a reopened pane must
+  // not turn "Mike couldn't confirm this" into "couldn't apply this".
+  if (edit.errorCode === "unverified") return "unverified";
   if (edit.errorCode === "ambiguous") return "ambiguous";
   if (edit.errorCode === "unsearchable") return "unsearchable";
   if (edit.errorCode === "pre-existing-revisions") return "conflicted";

@@ -25,6 +25,12 @@ export interface SharedResource {
 
 export interface AccessControls {
     grants: { email: string; role: AccessAssignmentRole }[];
+    /**
+     * The grant list could not be loaded, so `grants` is not "nobody has
+     * access" — it is "we don't know". The editor says so instead of showing
+     * an empty list the user would read as a fact.
+     */
+    grantsUnavailable?: boolean;
     orgId?: string | null;
     inheritedFromProjectId?: string | null;
     canManage: boolean;
@@ -73,6 +79,9 @@ export function AccessModal({
           ? "organization"
           : "direct";
     const canManage = access.canManage;
+    const grantsError = access.grantsUnavailable
+        ? "The list of people with access couldn't be loaded, so it may be incomplete. Retry from the notification, or reopen this dialog."
+        : null;
     const orgId = access.orgId ?? null;
     const resourceId = resource?.id ?? null;
     const grants = useMemo(() => access.grants, [access.grants]);
@@ -331,7 +340,7 @@ export function AccessModal({
                             accessLoading || loadedRosterKey !== rosterKey
                         }
                         disabled={!canManage || busy}
-                        error={error}
+                        error={error ?? grantsError}
                         onAssign={(member, role) =>
                             changeRole(member, role)
                         }
@@ -363,7 +372,7 @@ export function AccessModal({
                     validateEmail={validateEmail}
                     onRoleChange={changeRole}
                     onRemove={scope === "direct" ? remove : undefined}
-                    error={error}
+                    error={error ?? grantsError}
                 />
             </div>
         </Modal>

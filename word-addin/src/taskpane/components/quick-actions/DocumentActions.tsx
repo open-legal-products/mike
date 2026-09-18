@@ -24,6 +24,7 @@ import {
   ModalTextInput,
 } from "../primitives/ModalForm";
 import { PageTitle } from "../primitives/PageTitle";
+import { notifyError, userMessage } from "../../lib/notify";
 
 interface DocumentActionsProps {
   createOpen: boolean;
@@ -40,6 +41,9 @@ export function DocumentActions({
   );
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [workflowsError, setWorkflowsError] = useState<string | null>(null);
+  // Bumped by the "Retry" on the failure toast; this list has no button of
+  // its own to hang a retry on.
+  const [workflowsAttempt, setWorkflowsAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -60,15 +64,21 @@ export function DocumentActions({
       .catch((reason: unknown) => {
         if (cancelled) return;
         setWorkflowsError(
-          reason instanceof Error
-            ? reason.message
-            : "Could not load assistant workflows.",
+          userMessage(reason, {
+            fallback: "Mike couldn't load your quick actions. Try again.",
+          }),
         );
+        notifyError(reason, {
+          action: "load your quick actions",
+          dedupeKey: "quick-actions",
+          page: "Quick actions",
+          onRetry: () => setWorkflowsAttempt((count) => count + 1),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workflowsAttempt]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -127,9 +137,9 @@ export function DocumentActions({
       setSelectedAction(null);
     } catch (reason) {
       setSaveError(
-        reason instanceof Error
-          ? reason.message
-          : "Failed to save quick action",
+        userMessage(reason, {
+          fallback: "Failed to save quick action",
+        }),
       );
     } finally {
       setSaving(false);
@@ -154,9 +164,9 @@ export function DocumentActions({
       onCreateClose();
     } catch (reason) {
       setCreateError(
-        reason instanceof Error
-          ? reason.message
-          : "Could not create quick action.",
+        userMessage(reason, {
+          fallback: "Could not create quick action.",
+        }),
       );
     } finally {
       setCreating(false);

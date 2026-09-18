@@ -27,7 +27,11 @@ import {
   formatUnsupportedDocumentWarning,
   partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+  UserVisibleError,
+  notifyError,
+  userFacingApiError,
+} from "@/app/lib/userFacingError";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { ConfirmPopup } from "../popups/ConfirmPopup";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
@@ -142,6 +146,13 @@ export const WorkflowAssets = forwardRef<
     );
   }
 
+  function uploadAction(failedCount: number, total: number) {
+    if (failedCount === 1 && total === 1) return "upload this file";
+    return failedCount === total
+      ? `upload ${total} files`
+      : `upload ${failedCount} of ${total} files`;
+  }
+
   async function upload(filesToUpload: File[]) {
     if (uploadInFlightRef.current) {
       appendWarning(
@@ -169,12 +180,36 @@ export const WorkflowAssets = forwardRef<
           : [],
       );
       setFiles((current) => [...current, ...created]);
-      const failedCount = outcomes.length - created.length;
-      if (failedCount > 0) {
-        appendWarning(failedUploadMessage(outcomes));
+      const failedNames = new Set(
+        outcomes
+          .filter((outcome) => outcome.status === "error")
+          .map((outcome) => outcome.filename),
+      );
+      if (failedNames.size > 0) {
+        // One notification for the batch, naming the files that did not make
+        // it, with a retry that re-runs only those.
+        notifyError(
+          new UserVisibleError(failedUploadMessage(outcomes), {
+            retryable: true,
+          }),
+          {
+            action: uploadAction(failedNames.size, supported.length),
+            onRetry: () =>
+              void upload(
+                supported.filter((file) => failedNames.has(file.name)),
+              ),
+          },
+        );
       }
     } catch (caught) {
-      appendWarning(userFacingApiError(caught, "Upload failed."));
+      notifyError(caught, {
+        action: uploadAction(supported.length, supported.length),
+        fallback:
+          supported.length === 1
+            ? `${supported[0]?.name ?? "That file"} could not be uploaded. Try again.`
+            : "Those files could not be uploaded. Try again.",
+        onRetry: () => void upload(supported),
+      });
     } finally {
       uploadInFlightRef.current = false;
       setBusyId(null);
@@ -329,7 +364,12 @@ export const WorkflowAssets = forwardRef<
         }}
       />
       {error && (
-        <p className="mx-4 mb-2 -mt-1 text-xs text-red-600 md:mx-8">{error}</p>
+        <p
+          role="alert"
+          className="mx-4 mb-2 -mt-1 text-xs text-red-600 md:mx-8"
+        >
+          {error}
+        </p>
       )}
       <TableScrollArea
         header={

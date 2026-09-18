@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import {
+    UserVisibleError,
+    notifyError,
+} from "@/app/lib/userFacingError";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, Loader2 } from "lucide-react";
 import {
@@ -27,7 +31,6 @@ import {
     type AccessContact,
 } from "@/app/components/popups/PermissionDeniedPopup";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
@@ -144,9 +147,6 @@ export default function TabularReviewsPage() {
     const [selectionCameFromSelectAll, setSelectionCameFromSelectAll] =
         useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
-    const [bulkDeleteNotice, setBulkDeleteNotice] = useState<string | null>(
-        null,
-    );
     const [deletingReviewIds, setDeletingReviewIds] = useState<Set<string>>(
         () => new Set(),
     );
@@ -358,12 +358,16 @@ export default function TabularReviewsPage() {
         void handleDeleteSelected();
     }
 
+    const retryDeleteSelectedRef = useRef(() => {});
+    useEffect(() => {
+        retryDeleteSelectedRef.current = () => void handleDeleteSelected();
+    });
+
     async function handleDeleteSelected() {
         const ids = [...selectedIds];
         setActionsOpen(false);
         setConfirmDeleteAllOpen(false);
         setSelectionCameFromSelectAll(false);
-        setBulkDeleteNotice(null);
         // Prefer the loaded row's role; select-all-matching can hand back
         // ids that were never paged in, and for those the creator id is the
         // only signal available.
@@ -406,7 +410,30 @@ export default function TabularReviewsPage() {
                 ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
                 : null,
         ].filter((notice): notice is string => notice !== null);
-        if (notices.length > 0) setBulkDeleteNotice(notices.join(" "));
+        if (notices.length > 0) {
+            // A partial failure is still a failure: it belongs in the same
+            // toast stack as every other one, with a retry for the rows that
+            // are still selected, rather than in a popup of its own.
+            notifyError(
+                // "conflict", not "unknown": the skipped rows are a 403 the
+                // user already understands, so this must not be reported to
+                // Sentry or offer "Contact support" (both follow "unknown").
+                new UserVisibleError(notices.join(" "), {
+                    kind: "conflict",
+                    retryable: failedIds.length > 0,
+                }),
+                {
+                    action: "delete those reviews",
+                    // Through the ref, so the retry deletes the rows that are
+                    // selected NOW (the ones that failed) rather than the
+                    // whole original selection this closure captured.
+                    onRetry:
+                        failedIds.length > 0
+                            ? () => retryDeleteSelectedRef.current()
+                            : undefined,
+                },
+            );
+        }
     }
 
     async function handleDeleteReviewRow(review: TabularReview) {
@@ -867,12 +894,6 @@ export default function TabularReviewsPage() {
                         : null
                 }
                 onClose={() => setOwnerOnlyAction(null)}
-            />
-            <WarningPopup
-                open={!!bulkDeleteNotice}
-                title="Some reviews were not deleted"
-                message={bulkDeleteNotice}
-                onClose={() => setBulkDeleteNotice(null)}
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}

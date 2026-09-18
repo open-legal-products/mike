@@ -108,7 +108,9 @@ function PersonalisationForm({
         setSavingField((current) => (current === field ? null : current));
         if (latestSnapshotRef.current !== snapshot) return;
         if (!success) {
-          setError("Unable to save your personalisation settings");
+          // The profile context classified the failure and raised the toast;
+          // this row keeps only the status and its own Retry.
+          setError("Not saved");
           return;
         }
         setSavedField(field);

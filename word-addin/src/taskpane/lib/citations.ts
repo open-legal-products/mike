@@ -36,6 +36,8 @@ export function decodeCitationHref(href: string): string | null {
   try {
     return decodeURIComponent(href.slice(CITATION_HREF_PREFIX.length));
   } catch {
+    // Not a citation link after all (a malformed percent-escape). Parsing,
+    // not failing: the caller renders it as ordinary link text.
     return null;
   }
 }

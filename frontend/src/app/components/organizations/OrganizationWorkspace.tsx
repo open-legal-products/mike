@@ -21,6 +21,7 @@ import {
   TableBody,
   TableCell,
   TableEmptyState,
+  TableErrorState,
   TableFilters,
   TableHeaderCell,
   TableHeaderRow,
@@ -989,6 +990,8 @@ function LoadingRows({ columns }: { columns: string[] }) {
   );
 }
 
+// The shared primitive, dressed for this screen. It stays local only as the
+// place the organization icon and heading are supplied.
 function ErrorState({
   error,
   onRetry,
@@ -997,23 +1000,11 @@ function ErrorState({
   onRetry: () => Promise<void>;
 }) {
   return (
-    <TableEmptyState>
-      <EmptyState
-        icon={<OrganizationSkeuoIcon />}
-        title="Organization"
-        description={error}
-        tone="error"
-        action={
-          <button
-            type="button"
-            onClick={() => void onRetry()}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-          >
-            <Loader2 className="h-3.5 w-3.5" />
-            Try again
-          </button>
-        }
-      />
-    </TableEmptyState>
+    <TableErrorState
+      icon={<OrganizationSkeuoIcon />}
+      title="Organization"
+      message={error}
+      onRetry={onRetry}
+    />
   );
 }

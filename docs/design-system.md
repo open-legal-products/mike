@@ -229,9 +229,69 @@ Compose the material classes through the established primitives and constants:
 | `liquid-surface` | `components/ui` | Web-only shared surface class constants. |
 | `empty-state` | `components/ui` | Icon + display heading + copy + optional action, for "nothing here yet". Wrap in `TableEmptyState` inside a table. |
 | `check-square` | `components/ui` | The selection square used by directory/picker rows. Decorative by default; the row owns the ARIA state. |
+| `ToastUI` | `shared/ui` | Global toast (snackbar) stack. Raise with `showToast`; in the web app prefer `notifyError`/`notifySuccess` from `app/lib/userFacingError.ts`. See "Reporting failures" below. |
+| `TableErrorState` | `components/shared` | "This didn't load" inside a table: icon, heading, the described message and a "Try again" button. |
 
 For a real standalone checkbox use `<input type="checkbox">` with
 `TABLE_CHECKBOX_CLASS` (see `TablePrimitive.tsx`), not `check-square`.
+
+## Reporting failures
+
+Every failure that stops something the user asked for must be shown to them,
+with a concise and accurate message and honest next steps. The layers, from
+the inside out:
+
+1. **Classify once.** `describeError` in `frontend/src/shared/lib/userError.ts`
+   turns any thrown value (a `MikeApiError`, a fetch `TypeError`, an
+   `AbortError`, an Office.js error, a plain string) into
+   `{ kind, title, message, retryable, supportable, requestId }`. Pass
+   `action` in the imperative ("save the document") so the title reads
+   "Couldn't save the document". 4xx `detail` from the backend is written for
+   users and is shown; 5xx bodies and stack text never are.
+2. **Show it in the right place.**
+   - A form field the user is editing: inline text next to the field, using
+     the description's `message`. Add "Contact support" (a link built with
+     `supportMailtoFor`) when `supportable`, and "Retry" when `retryable`.
+   - Anything else (saves, deletes, loads, exports, background refreshes):
+     `notifyError(error, { action, onRetry, dedupeKey })` from
+     `frontend/src/app/lib/userFacingError.ts`. It raises a `ToastUI` error
+     toast with "Retry" (only when the failure is retryable and a closure is
+     given) and "Contact support" (only when the failure is one the user
+     cannot fix), which opens a pre-filled email to `SUPPORT_EMAIL`
+     (`will@mikeoss.com`) carrying the request id, code, page and time.
+   - A whole screen that cannot render: `EmptyState tone="error"`, or
+     `TableErrorState` from `components/shared/TablePrimitive.tsx` inside a
+     table, with a "Try again" action.
+   - A route that threw: `app/error.tsx` and `app/global-error.tsx` offer
+     "Try again" and "Contact support" with the error digest.
+   The Word add-in mounts the same `ToastViewportUI` and uses
+   `word-addin/src/taskpane/lib/notify.ts`, so both clients read the same
+   sentences.
+3. **Revert optimistic state** before notifying, so the screen never shows a
+   change that did not happen — but revert only the item that failed. Use a
+   functional updater (and `restoreOptimisticallyDeletedRows` in
+   `app/lib/optimisticRows.ts` for a removed row) rather than restoring a
+   snapshot of the whole list, and let `onRetry` re-read the current state
+   through a ref: by the time it runs, the request that failed is no longer
+   the last thing that happened.
+4. **Cancellation is not an error.** `notifyError` returns `null` for an
+   `AbortError` and shows nothing.
+5. **Repeats collapse.** Polling and autosave loops pass a `dedupeKey` so a
+   failing loop shows one toast, not one per tick.
+6. **The toast stack protects what must be acted on.** Only three toasts
+   are visible at once; when the stack overflows it drops dismissible
+   notices (info, success, errors with nothing to click) oldest-first and
+   keeps an error that offers "Retry" or "Contact support". Toasts never
+   take focus — that would pull the caret out of what the user is typing —
+   but `focusToast(id)` moves it deliberately for a failure that must be
+   dealt with now.
+7. **Silence needs a reason.** A catch that intentionally shows nothing
+   (cleanup, a local-storage JSON fallback, a body drain) carries a one-line
+   comment saying why.
+
+`WarningPopup` remains for contextual warnings that carry their own action or
+custom content; plain failure strings go through `notifyError`. Never call
+`window.alert`.
 
 ## Choosing: existing primitive, shadcn registry, or a one-off
 

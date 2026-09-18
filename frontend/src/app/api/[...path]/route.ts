@@ -71,8 +71,15 @@ async function proxy(request: NextRequest, context: RouteContext) {
             path: requestPath,
             error: error instanceof Error ? error.message : String(error),
         });
+        // Give the client something it can classify and something support
+        // can trace: a stable code, plus the request id if one rode along.
+        const requestId = request.headers.get("x-request-id");
         return Response.json(
-            { detail: "The API is temporarily unavailable." },
+            {
+                code: "upstream_unavailable",
+                detail: "The API is temporarily unavailable.",
+                ...(requestId ? { request_id: requestId } : {}),
+            },
             { status: 502 },
         );
     }

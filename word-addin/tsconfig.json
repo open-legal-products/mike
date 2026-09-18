@@ -90,6 +90,12 @@
       ],
       "@mike/sentry-event": [
         "../frontend/src/shared/lib/sentryEvent.ts"
+      ],
+      "@mike/toast-ui": [
+        "../frontend/src/shared/ui/ToastUI.tsx"
+      ],
+      "@mike/user-error": [
+        "../frontend/src/shared/lib/userError.ts"
       ]
     },
     "jsx": "react-jsx",

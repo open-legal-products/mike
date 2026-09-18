@@ -26,6 +26,31 @@ export default defineConfig({
                 find: /^@sentry\/nextjs$/,
                 replacement: "@sentry/react",
             },
+            // The Word add-in consumes shared modules through per-file
+            // `@mike/*` aliases (see word-addin/webpack.config.js). Mirror them
+            // so add-in modules under test here resolve the same files.
+            {
+                find: "@mike/sentry-event",
+                replacement: resolvePath("./src/shared/lib/sentryEvent.ts"),
+            },
+            {
+                find: "@mike/user-error",
+                replacement: resolvePath("./src/shared/lib/userError.ts"),
+            },
+            {
+                find: "@mike/toast-ui",
+                replacement: resolvePath("./src/shared/ui/ToastUI.tsx"),
+            },
+            {
+                find: "@mike/secure-uuid",
+                replacement: resolvePath("./src/shared/lib/secureUuid.ts"),
+            },
+            {
+                find: "@mike/upload-session-client",
+                replacement: resolvePath(
+                    "./src/shared/api/uploadSessionClient.ts",
+                ),
+            },
         ],
     },
     test: {
