@@ -75,11 +75,7 @@ export function MemoryUpdateFailedPopup({
         currentFailureId !== sessionDismissedFailureId
       }
       onClose={dismiss}
-      message={
-        <span role="alert">
-          The latest automatic update failed. Existing memory is unchanged.
-        </span>
-      }
+      message="The latest automatic update failed. Existing memory is unchanged."
     />
   );
 }
