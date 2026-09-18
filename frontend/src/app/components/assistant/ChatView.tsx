@@ -64,7 +64,13 @@ interface Props {
             >;
         },
     ) => Promise<string | null>;
+    /** Stop control: aborts the turn in flight. */
     cancel: () => void;
+    /**
+     * Leave the turn in flight running (New chat). The server persists the
+     * finished answer; only `cancel` may cut it short.
+     */
+    detach: () => void;
     /**
      * Whether the caller may write in this chat. The server serves the
      * standing on GET /chat/:id; surfaces that know it must pass it, so a
@@ -79,6 +85,14 @@ interface Props {
      * the standing at mount leave this alone.
      */
     accessResolved?: boolean;
+    /**
+     * Whether this chat's history is still loading. Separate from `canSend`
+     * so the composer can say which of the two is closing it: once the
+     * standing is resolved the composer stays on the page, and a thread switch
+     * (or the wait for a detached answer) reads "still arriving", not
+     * "needs edit access".
+     */
+    chatLoading?: boolean;
     /** Shares document previews with the initial composer before a chat exists. */
     onInitialSubmit?: (message: Message) => void;
 }
@@ -108,8 +122,10 @@ export function ChatView({
     isResponseLoading,
     handleChat,
     cancel,
+    detach,
     canSend,
     accessResolved = true,
+    chatLoading,
     onInitialSubmit,
 }: Props) {
     const router = useRouter();
@@ -677,7 +693,7 @@ export function ChatView({
     }, [panelMounted]);
 
     const handleNewChat = () => {
-        cancel();
+        detach();
         setCurrentChatId(null);
         setNewChatMessages(null);
         router.push("/assistant");
@@ -1009,6 +1025,7 @@ export function ChatView({
                                             messages={messages}
                                             chatKey={chatId}
                                             canSend={canSend}
+                                            chatLoading={chatLoading}
                                             onSubmit={(response, content, files) => {
                                                 void handleChat(
                                                     { role: "user", content, files },
@@ -1020,6 +1037,7 @@ export function ChatView({
                                             <ChatInput
                                                 ref={chatInputRef}
                                                 canSend={canSend}
+                                                chatLoading={chatLoading}
                                                 onSubmit={handleChat}
                                                 onCancel={cancel}
                                                 isLoading={isResponseLoading}

@@ -107,6 +107,96 @@ describe("ChatInput canSend gating", () => {
         ).toBeNull();
     });
 
+    it("can stop a pending response while history is still loading", () => {
+        const onCancel = vi.fn();
+        render(<ChatInput onSubmit={vi.fn()} onCancel={onCancel} isLoading canSend={false} />);
+        const stop = screen.getByRole("button", { name: "Stop response" });
+        expect(stop).toBeEnabled();
+        fireEvent.click(stop);
+        expect(onCancel).toHaveBeenCalledOnce();
+    });
+
+    it("says a response is still arriving rather than blaming permissions", () => {
+        // Returning to a thread whose detached answer is still running closes
+        // the composer, but the reader may write here — only the history is
+        // missing. Blaming edit access would be a lie (see #486).
+        render(
+            <ChatInput
+                onSubmit={vi.fn()}
+                onCancel={vi.fn()}
+                isLoading
+                canSend
+                chatLoading
+            />,
+        );
+
+        expect(
+            screen.getByPlaceholderText("A response is still arriving\u2026"),
+        ).toBeDisabled();
+        expect(
+            screen.queryByPlaceholderText(
+                "Viewing only \u2014 sending needs edit access",
+            ),
+        ).toBeNull();
+        // The turn is stoppable from here even though sending is closed.
+        expect(
+            screen.getByRole("button", { name: "Stop response" }),
+        ).toBeEnabled();
+    });
+
+    it("says the chat is loading when no response is running", () => {
+        render(
+            <ChatInput
+                onSubmit={vi.fn()}
+                onCancel={vi.fn()}
+                isLoading={false}
+                canSend
+                chatLoading
+            />,
+        );
+
+        expect(
+            screen.getByPlaceholderText("Loading this chat\u2026"),
+        ).toBeDisabled();
+    });
+
+    it("keeps the permission copy when the reader may not write", () => {
+        render(
+            <ChatInput
+                onSubmit={vi.fn()}
+                onCancel={vi.fn()}
+                isLoading
+                canSend={false}
+                chatLoading
+            />,
+        );
+
+        expect(
+            screen.getByPlaceholderText(
+                "Viewing only \u2014 sending needs edit access",
+            ),
+        ).toBeDisabled();
+    });
+
+    it("does not submit on Enter while the chat is still loading", () => {
+        const onSubmit = vi.fn();
+        render(
+            <ChatInput
+                onSubmit={onSubmit}
+                onCancel={vi.fn()}
+                isLoading={false}
+                canSend
+                chatLoading
+            />,
+        );
+
+        const textarea = screen.getByRole("combobox");
+        expect(textarea).toBeDisabled();
+        fireEvent.change(textarea, { target: { value: "second question" } });
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(onSubmit).not.toHaveBeenCalled();
+    });
+
     it("does not submit on Enter when canSend is false", () => {
         const onSubmit = renderInput(false);
         const textarea = screen.getByRole("combobox");

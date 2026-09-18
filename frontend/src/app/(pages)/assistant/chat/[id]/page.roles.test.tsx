@@ -29,6 +29,7 @@ vi.mock("@/app/hooks/useAssistantChat", () => ({
         handleChat: vi.fn(),
         setMessages: vi.fn(),
         cancel: vi.fn(),
+        detach: vi.fn(),
     }),
 }));
 vi.mock("@/app/components/assistant/ChatView", () => ({

@@ -130,6 +130,7 @@ function renderView(
     messages: Message[] = [],
     mobileActionsContainer: HTMLElement | null = null,
     onInitialSubmit?: (message: Message) => void,
+    detach = vi.fn(),
 ) {
     render(
         <PageChromeContext.Provider value={{ mobileActionsContainer }}>
@@ -141,10 +142,11 @@ function renderView(
                 isResponseLoading={false}
                 handleChat={vi.fn().mockResolvedValue("chat-1")}
                 cancel={cancel}
+                detach={detach}
             />
         </PageChromeContext.Provider>,
     );
-    return { cancel };
+    return { cancel, detach };
 }
 
 function openActions() {
@@ -172,7 +174,8 @@ beforeEach(() => {
 describe("ChatView header actions", () => {
     it("overlays PageHeader pills and starts a new chat", () => {
         const cancel = vi.fn();
-        renderView(cancel);
+        const detach = vi.fn();
+        renderView(cancel, [], null, undefined, detach);
 
         expect(
             document.querySelector('[data-slot="chat-header-actions"]'),
@@ -183,7 +186,11 @@ describe("ChatView header actions", () => {
 
         fireEvent.click(screen.getByRole("button", { name: "New chat" }));
 
-        expect(cancel).toHaveBeenCalled();
+        // New chat leaves the in-flight answer running (detach); only the
+        // Stop control aborts it, because the backend persists an aborted
+        // stream as a truncated "Cancelled by user." answer.
+        expect(detach).toHaveBeenCalled();
+        expect(cancel).not.toHaveBeenCalled();
         expect(setCurrentChatId).toHaveBeenCalledWith(null);
         expect(setNewChatMessages).toHaveBeenCalledWith(null);
         expect(push).toHaveBeenCalledWith("/assistant");
@@ -281,6 +288,7 @@ it("keeps an initial attachment preview open when the first message arrives", as
                 isResponseLoading={false}
                 handleChat={vi.fn().mockResolvedValue("chat-1")}
                 cancel={vi.fn()}
+                detach={vi.fn()}
                 onInitialSubmit={initial ? initialSubmit : undefined}
             />
         </PageChromeContext.Provider>
@@ -320,6 +328,7 @@ describe("ChatView composer gating", () => {
                 isResponseLoading={false}
                 handleChat={vi.fn().mockResolvedValue("chat-1")}
                 cancel={vi.fn()}
+                detach={vi.fn()}
                 canSend={false}
                 accessResolved={accessResolved}
             />

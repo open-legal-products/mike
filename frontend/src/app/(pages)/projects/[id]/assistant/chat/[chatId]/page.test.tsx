@@ -100,6 +100,7 @@ vi.mock("@/app/components/assistant/ChatInput", () => ({
     ChatInput: ({
         onSubmit,
         canSend,
+        chatLoading,
         chatKey,
         isLoading,
         chatModel,
@@ -108,6 +109,7 @@ vi.mock("@/app/components/assistant/ChatInput", () => ({
     }: {
         onSubmit: (message: Message) => void;
         canSend: boolean;
+        chatLoading?: boolean;
         chatKey: string;
         isLoading: boolean;
         chatModel?: string | null;
@@ -127,10 +129,12 @@ vi.mock("@/app/components/assistant/ChatInput", () => ({
                 Open attached Excel
             </button>
             <button
-                disabled={!canSend || isLoading}
+                disabled={!canSend || !!chatLoading || isLoading}
                 onClick={() =>
                     onSubmit({ role: "user", content: "First question", model: "gpt-5.6-sol", reasoning: "xhigh" })
                 }
+                data-can-send={String(canSend)}
+                data-chat-loading={String(!!chatLoading)}
                 data-chat-key={chatKey}
                 data-chat-model={chatModel}
                 data-chat-reasoning={chatReasoningLevel}
@@ -599,3 +603,164 @@ it.each(["Budget.xlsx", "Budget"])(
         expect(screen.getAllByTestId("excel-viewer")).toHaveLength(1);
     },
 );
+
+describe("leaving a project chat mid-stream", () => {
+    /**
+     * A response body that reports whether the page cancelled its reader.
+     * Cancelling closes the socket, and the backend reads a closed socket as
+     * Stop: it persists a truncated "Cancelled by user." answer.
+     */
+    function controllableStream() {
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const state = { cancelled: false };
+        const encoder = new TextEncoder();
+        const response = new Response(
+            new ReadableStream<Uint8Array>({
+                start(c) {
+                    controller = c;
+                },
+                cancel() {
+                    state.cancelled = true;
+                },
+            }),
+        );
+        return {
+            response,
+            state,
+            send: (frame: string) =>
+                act(() => controller.enqueue(encoder.encode(frame))),
+            close: () => act(() => controller.close()),
+        };
+    }
+
+    const requestSignal = () =>
+        (state.streamProjectChat.mock.calls[0][0] as { signal: AbortSignal })
+            .signal;
+
+    beforeEach(() => {
+        state.chats = [
+            {
+                id: "other",
+                project_id: "p1",
+                title: "Other thread",
+                created_at: "2026-09-14T00:00:00Z",
+            },
+        ];
+        state.getChat.mockResolvedValue({
+            chat: {
+                id: "other",
+                title: "Other thread",
+                user_id: "u1",
+                model: null,
+                reasoning_level: null,
+            },
+            messages: [],
+        });
+    });
+
+    it("switching to another chat detaches the stream instead of aborting it", async () => {
+        const body = controllableStream();
+        state.streamProjectChat.mockResolvedValue(body.response);
+        await renderWorkspace();
+        fireEvent.click(screen.getByRole("button", { name: "Send question" }));
+        await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
+        await body.send('data: {"type":"chat_id","chatId":"created-chat"}\n\n');
+        await body.send('data: {"type":"content_delta","text":"First answer"}\n\n');
+        await waitFor(() => expect(screen.getByText("First answer")).toBeVisible());
+
+        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+        fireEvent.click(
+            (await screen.findAllByRole("menuitem")).find((row) =>
+                row.textContent?.includes("Other thread"),
+            )!,
+        );
+        await waitFor(() =>
+            expect(window.location.pathname).toBe(
+                "/projects/p1/assistant/chat/other",
+            ),
+        );
+
+        // The thread the user left keeps its request: not aborted, reader not
+        // cancelled, so the server finishes and persists the whole answer.
+        expect(requestSignal().aborted).toBe(false);
+        expect(body.state.cancelled).toBe(false);
+        await body.send('data: {"type":"content_delta","text":" and the rest"}\n\n');
+        await body.close();
+        expect(body.state.cancelled).toBe(false);
+        // ...and nothing from it lands in the thread now on screen.
+        expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Cancelled by user/)).not.toBeInTheDocument();
+    });
+
+
+    it("reloads the saved answer when returning before a detached turn finishes", async () => {
+        const body = controllableStream();
+        state.streamProjectChat.mockResolvedValue(body.response);
+        await renderWorkspace();
+        fireEvent.click(screen.getByRole("button", { name: "Send question" }));
+        await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
+        await body.send('data: {"type":"chat_id","chatId":"created-chat"}\n\n');
+        await body.send('data: {"type":"content_delta","text":"First answer"}\n\n');
+        await screen.findByText("First answer");
+        state.chats.push({ id: "created-chat", project_id: "p1", title: "Original thread", created_at: "2026-09-14T00:00:00Z" });
+        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+        fireEvent.click((await screen.findAllByRole("menuitem")).find((row) => row.textContent?.includes("Other thread"))!);
+        await waitFor(() => expect(state.getChat).toHaveBeenCalledWith("other"));
+        await screen.findByRole("button", { name: "Send question" });
+        fireEvent.click(screen.getByRole("button", { name: "Other thread" }));
+        fireEvent.click((await screen.findAllByRole("menuitem")).find((row) => row.textContent?.includes("Original thread"))!);
+        await waitFor(() => expect(window.location.pathname).toBe("/projects/p1/assistant/chat/created-chat"));
+        expect(state.getChat).not.toHaveBeenCalledWith("created-chat");
+        // Persistence happens at the end of the server stream.
+        let finishHistory!: (value: unknown) => void;
+        state.getChat.mockImplementation(() => new Promise((resolve) => { finishHistory = resolve; }));
+        const completedHistory = {
+            chat: { id: "created-chat", title: "New Chat", user_id: "u1", model: null, reasoning_level: null },
+            messages: [
+                { role: "user", content: "First question" },
+                { role: "assistant", content: "", events: [{ type: "content", text: "First answer and the rest" }] },
+            ],
+        };
+        await body.send('data: {"type":"content_delta","text":" and the rest"}\n\n');
+        await body.close();
+        await waitFor(() => expect(state.getChat).toHaveBeenCalledWith("created-chat"));
+        // The two reasons a composer can be closed must stay apart: the reader
+        // may write here, the history is simply still on its way. Folding both
+        // into canSend made the composer claim a missing edit grant. On this
+        // surface #339's `composerReady` gate now keeps the composer off the
+        // page for that whole window -- chatOwnerId, and so canSendChat, is
+        // only known once the chat loads -- so the misleading copy cannot be
+        // reached here at all. ChatInput.canSend.test.tsx pins the message
+        // priority that covers the surfaces which do render through the wait.
+        expect(
+            screen.queryByRole("button", { name: "Send question" }),
+        ).toBeNull();
+        await act(async () => finishHistory(completedHistory));
+        expect(await screen.findByText("First answer and the rest")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Send question" })).toBeEnabled();
+        expect(requestSignal().aborted).toBe(false);
+    });
+    it("starting a new chat detaches the stream instead of aborting it", async () => {
+        const body = controllableStream();
+        state.streamProjectChat.mockResolvedValue(body.response);
+        await renderWorkspace();
+        fireEvent.click(screen.getByRole("button", { name: "Send question" }));
+        await waitFor(() => expect(state.streamProjectChat).toHaveBeenCalled());
+        await body.send('data: {"type":"chat_id","chatId":"created-chat"}\n\n');
+        await body.send('data: {"type":"content_delta","text":"First answer"}\n\n');
+        await waitFor(() => expect(screen.getByText("First answer")).toBeVisible());
+
+        fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+        await waitFor(() =>
+            expect(window.location.pathname).toBe("/projects/p1/assistant/chat"),
+        );
+
+        expect(requestSignal().aborted).toBe(false);
+        expect(body.state.cancelled).toBe(false);
+        await body.send('data: {"type":"content_delta","text":" and the rest"}\n\n');
+        await body.close();
+        expect(body.state.cancelled).toBe(false);
+        expect(screen.queryByText(/First answer/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();
+    });
+});

@@ -94,6 +94,15 @@ interface Props {
      * what the server would refuse for a project viewer.
      */
     canSend?: boolean;
+    /**
+     * Whether this chat's history is still on its way. Kept apart from
+     * `canSend` on purpose: both close the composer, but only one of them is
+     * about permissions, and saying the wrong one is a lie to the reader. The
+     * long case is a detached response (one that outlived the reader leaving
+     * the thread) holding the load open until the server has stored it —
+     * `isLoading` is set too then, and the composer says so.
+     */
+    chatLoading?: boolean;
     hideAddDocButton?: boolean;
     hideWorkflowButton?: boolean;
     projectName?: string;
@@ -110,12 +119,37 @@ interface Props {
     chatKey?: string | null;
 }
 
+/**
+ * What the closed composer tells the reader.
+ *
+ * Order matters. A reader without edit access is told about the grant even
+ * while the thread loads, because that is the reason that will still be true
+ * afterwards. Otherwise a load in progress explains itself — and when a
+ * response is running (a detached one keeps `isLoading` set after the reader
+ * comes back to the thread) it says which one, instead of inventing a
+ * permission problem.
+ */
+function placeholderFor({
+    canSend,
+    chatLoading,
+    isLoading,
+}: {
+    canSend: boolean;
+    chatLoading: boolean;
+    isLoading: boolean;
+}): string {
+    if (!canSend) return "Viewing only — sending needs edit access";
+    if (!chatLoading) return "How can I help?";
+    return isLoading ? "A response is still arriving…" : "Loading this chat…";
+}
+
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     {
         onSubmit,
         onCancel,
         isLoading,
         canSend = true,
+        chatLoading = false,
         hideAddDocButton,
         hideWorkflowButton,
         projectName,
@@ -131,6 +165,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     }: Props,
     ref,
 ) {
+    // Sending needs both a grant and a loaded thread; the placeholder below
+    // names whichever one is missing.
+    const composerOpen = canSend && !chatLoading;
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<Document[]>([]);
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
@@ -542,7 +579,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
 
     const handleSubmit = () => {
         const query = value.trim();
-        if (!canSend || slashCommandsLoading) return;
+        if (!composerOpen || slashCommandsLoading) return;
         const slashWorkflow = slashQuery
             ? exactSlashWorkflow(slashWorkflows ?? [], slashQuery)
             : undefined;
@@ -717,12 +754,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         <textarea
                             ref={textareaRef}
                             rows={1}
-                            disabled={!canSend}
-                            placeholder={
-                                canSend
-                                    ? "How can I help?"
-                                    : "Viewing only — sending needs edit access"
-                            }
+                            disabled={!composerOpen}
+                            placeholder={placeholderFor({
+                                canSend,
+                                chatLoading,
+                                isLoading,
+                            })}
                             value={value}
                             onChange={handleChange}
                             onKeyDown={handleKeyDown}
@@ -749,7 +786,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                         className="flex items-center justify-between p-2.5"
                     >
                         <div className="flex items-center gap-1">
-                            {!hideAddDocButton && canSend && (
+                            {!hideAddDocButton && composerOpen && (
                                 <AddDocButton
                                     onBrowseAll={() => {
                                         setDocSelectorInitialTab("files");
@@ -761,7 +798,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                     hideLabel={compactControls}
                                 />
                             )}
-                            {!hideWorkflowButton && canSend && (
+                            {!hideWorkflowButton && composerOpen && (
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -823,10 +860,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                 )}
                                 onClick={handleActionClick}
                                 disabled={
-                                    !canSend ||
-                                    (!isLoading &&
-                                        (!value.trim() ||
-                                            slashCommandsLoading))
+                                    !isLoading &&
+                                    (!composerOpen ||
+                                        !value.trim() ||
+                                        slashCommandsLoading)
                                 }
                             >
                                 {isLoading ? (
