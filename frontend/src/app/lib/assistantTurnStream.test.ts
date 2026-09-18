@@ -188,6 +188,52 @@ describe("readAssistantTurn", () => {
     turn.finish();
   });
 
+  it("carries a JSON refusal's status, code, request id and 4xx detail", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await expect(
+      readAssistantTurn({
+        open: async () =>
+          Response.json(
+            { detail: "Pick a model first.", code: "model_required", request_id: "req-1" },
+            { status: 400 },
+          ),
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+      }),
+    ).rejects.toMatchObject({
+      message: "Pick a model first.",
+      status: 400,
+      code: "model_required",
+      requestId: "req-1",
+    });
+    turn.finish();
+  });
+
+  it("never shows a 5xx body's detail, but keeps its code", async () => {
+    const turn = begin();
+    const sink = createTurnEventSink(turn, []);
+    await expect(
+      readAssistantTurn({
+        open: async () =>
+          Response.json(
+            { detail: "pg: relation missing", code: "rate_limited" },
+            { status: 503, headers: { "x-request-id": "req-h" } },
+          ),
+        turn,
+        sink,
+        cursor: createTurnCursor("chat-a"),
+      }),
+    ).rejects.toMatchObject({
+      message: "API error: 503",
+      status: 503,
+      code: "rate_limited",
+      requestId: "req-h",
+    });
+    turn.finish();
+  });
+
   it("rejects a response that is not ok before reading it", async () => {
     const turn = begin();
     const sink = createTurnEventSink(turn, []);
@@ -198,7 +244,7 @@ describe("readAssistantTurn", () => {
         sink,
         cursor: createTurnCursor("chat-a"),
       }),
-    ).rejects.toThrow("Chat request failed with status 409");
+    ).rejects.toMatchObject({ message: "API error: 409", status: 409 });
     turn.finish();
   });
 });
@@ -363,6 +409,10 @@ describe("error frames", () => {
     );
     expect(onRejectedApiKey).toHaveBeenCalledTimes(1);
     expect(onErrorFrame).toHaveBeenCalledTimes(1);
+    expect(onErrorFrame).toHaveBeenCalledWith({
+      message: expect.any(String),
+      safeToDisplay: expect.any(Boolean),
+    });
     expect(turn.turn.loadingCitations).toBe(false);
     expect(turn.turn.assistant.events).toEqual([
       { type: "reasoning", text: "hmm" },
@@ -1568,7 +1618,7 @@ describe("readAssistantTurn connection handling", () => {
         sink,
         cursor: createTurnCursor("chat-a"),
       }),
-    ).rejects.toThrow("Chat request failed with status 500");
+    ).rejects.toMatchObject({ message: "API error: 500", status: 500 });
     turn.finish();
   });
 

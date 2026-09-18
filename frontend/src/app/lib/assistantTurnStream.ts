@@ -40,9 +40,57 @@ export type TurnStreamHooks = {
   onChatId?: (chatId: string, assistantMessageId?: string) => void;
   onChatTitle?: (chatId: string, title: string) => void;
   onRejectedApiKey?: () => void;
-  /** The server sent an `error` frame; the turn is over as far as the model goes. */
-  onErrorFrame?: () => void;
+  /**
+   * The server sent an `error` frame; the turn is over as far as the model
+   * goes. `message` is what the bubble shows; `safeToDisplay` marks a
+   * configuration refusal that a re-send would repeat.
+   */
+  onErrorFrame?: (frame: { message: string; safeToDisplay: boolean }) => void;
 };
+
+/**
+ * The error for a chat request the server refused before streaming. It
+ * carries the status so the failure can be classified (429, 5xx), plus the
+ * backend's failure shape: `code` sharpens the classification, `request_id`
+ * is what a support email is worth sending, and a 4xx `detail` is written
+ * for the user. Without a usable detail the message stays the API client's
+ * placeholder form, which `describeError` knows not to show a user. The body
+ * is read once, and a body that is not JSON is simply dropped.
+ */
+export async function chatRequestError(response: Response): Promise<Error> {
+  const read = (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : null;
+  let detail: string | null = null;
+  let code: string | null = null;
+  let requestId = read(response.headers.get("x-request-id"));
+  // Only a JSON error body is read: anything else (an HTML proxy page, a
+  // stream that never ends) is released unread so the failure still
+  // surfaces promptly.
+  const isJson = /json/i.test(response.headers.get("content-type") ?? "");
+  try {
+    if (!isJson) throw new Error("not a JSON error body");
+    const body = (await response.json()) as Record<string, unknown>;
+    detail = read(body?.detail);
+    code = read(body?.code);
+    requestId = read(body?.request_id) ?? requestId;
+  } catch {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // The connection may already be gone; the status is what matters.
+    }
+  }
+  return Object.assign(
+    new Error(
+      response.status < 500 && detail ? detail : `API error: ${response.status}`,
+    ),
+    {
+      status: response.status,
+      ...(code ? { code } : {}),
+      ...(requestId ? { requestId } : {}),
+    },
+  );
+}
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -387,7 +435,7 @@ export async function consumeAssistantTurnStream(
             error: message,
           }));
           turn.setLoadingCitations(false);
-          hooks.onErrorFrame?.();
+          hooks.onErrorFrame?.({ message, safeToDisplay });
           continue;
         }
 
@@ -1258,10 +1306,7 @@ export async function readAssistantTurn(args: {
   const { turn, sink, cursor, signal, hooks } = args;
   const retries = args.retries ?? 2;
   let response = await args.open();
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => {});
-    throw new Error(`Chat request failed with status ${response.status}`);
-  }
+  if (!response.ok) throw await chatRequestError(response);
   for (let attempt = 0; ; attempt += 1) {
     try {
       await consumeAssistantTurnStream(response, { turn, sink, cursor, signal, hooks });

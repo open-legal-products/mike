@@ -38,14 +38,17 @@ export function knownErrorCodeMessage(
 }
 
 // Passive notification adapter. Recovery actions belong to separately reviewed flows.
-import { describeError, type DescribeErrorOptions, type UserFacingError } from "@/shared/lib/userError";
-import { showToast } from "@/shared/lib/toastStore";
+import { buildSupportMailto, describeError, type DescribeErrorOptions, type UserFacingError } from "@/shared/lib/userError";
+import { showToast, type ToastAction } from "@/shared/lib/toastStore";
 import { isReported, reportError } from "@/app/lib/errorReporting";
 
 export { describeError, UserVisibleError, isAbortError, isNetworkError } from "@/shared/lib/userError";
 
 export interface NotifyErrorOptions extends DescribeErrorOptions {
     dedupeKey?: string;
+    onRetry?: () => void | Promise<void>;
+    actions?: ToastAction[];
+    support?: boolean;
 }
 
 /**
@@ -70,7 +73,23 @@ export function notifyError(error: unknown, options: NotifyErrorOptions = {}): U
     if (!isReported(error) && (described.kind === "unknown" || described.kind === "server")) {
         reportError(error, { tags: { component: "notify", action: options.action } });
     }
-    showToast({ tone: "error", title: described.title, message: described.message, dedupeKey: options.dedupeKey });
+    const actions = [...(options.actions ?? [])];
+    if (described.retryable && options.onRetry) {
+        actions.unshift({ label: "Retry", onClick: options.onRetry });
+    }
+    showToast({
+        tone: "error",
+        title: described.title,
+        message: described.message,
+        dedupeKey: options.dedupeKey,
+        actions: actions.length ? actions : undefined,
+        supportHref: options.support && described.supportable
+            ? buildSupportMailto(described, {
+                page: typeof window === "undefined" ? undefined : window.location.href,
+                product: "web",
+            })
+            : undefined,
+    });
     return described;
 }
 
