@@ -152,6 +152,7 @@ services:
       - ./backend/migrations/20260914_01_document_lifecycle.sql:/document-lifecycle-migration.sql:ro
       - ./backend/migrations/20260915_01_cleanup_drain_and_rollout.sql:/cleanup-drain-migration.sql:ro
       - ./backend/migrations/20260916_01_upload_document_row_created.sql:/upload-document-row-created-migration.sql:ro
+      - ./backend/migrations/20260917_01_playbooks.sql:/playbooks-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -188,6 +189,7 @@ services:
         psql "$$DB" -v ON_ERROR_STOP=1 -f /document-lifecycle-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /cleanup-drain-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /upload-document-row-created-migration.sql;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /playbooks-migration.sql;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;

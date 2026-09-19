@@ -26,6 +26,7 @@ import {
   projectMemoryRouter,
   userMemoryRouter,
 } from "./modules/memory/memory.routes";
+import { playbooksRouter } from "./modules/playbooks/playbooks.routes";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import {
   handleUnhandledError,
@@ -115,6 +116,12 @@ const workflowImportLimiter = makeLimiter({
   windowMs: hours(envInt("RATE_LIMIT_UPLOAD_WINDOW_HOURS", 1)),
   max: envInt("RATE_LIMIT_UPLOAD_MAX", 50),
   message: "Too many workflow imports. Please try again later.",
+});
+
+const playbookImportLimiter = makeLimiter({
+  windowMs: hours(envInt("RATE_LIMIT_UPLOAD_WINDOW_HOURS", 1)),
+  max: envInt("RATE_LIMIT_UPLOAD_MAX", 50),
+  message: "Too many playbook imports. Please try again later.",
 });
 
 const dataDeleteLimiter = makeLimiter({
@@ -244,6 +251,10 @@ app.post("/tabular-review/:reviewId/generate", chatLimiter);
 app.post("/chat/create", chatCreateLimiter);
 app.post("/chat/:chatId/generate-title", chatCreateLimiter);
 app.post("/workflow-addons/:addonId/import", workflowImportLimiter);
+app.post(
+  ["/playbooks/import", "/playbooks/import/upload-url"],
+  playbookImportLimiter,
+);
 const legacyUploadRemoved = (_req: express.Request, res: express.Response) => {
   res.status(410).json({
     code: "upload_session_required",
@@ -305,6 +316,7 @@ app.use("/users", userRouter);
 app.use("/download", downloadsRouter);
 app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);
+app.use("/playbooks", playbooksRouter);
 app.use("/upload-sessions", uploadSessionsRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
