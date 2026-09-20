@@ -5,6 +5,8 @@
 //   GET    /contracts/:id/file      stream the working redline DOCX (or ?variant=original; ?download=1)
 //   POST   /contracts/:id/redline/project           project AI revisions into tracked changes (idempotent)
 //   POST   /contracts/:id/revisions/:rev/accept|reject|edit  resolve a tracked change + feedback row
+//   POST   /contracts/:id/memo                       generate the negotiation memo (janus-tools proxy)
+//   PUT    /contracts/:id/negotiation-points/:pointId  BD status per memo point
 //   POST   /contracts/upload        raw DOCX bytes → extracted text + HTML
 //   POST   /contracts               create a review row and start the async AI review
 //   GET    /contracts/:id/status    poll review processing state
@@ -41,6 +43,7 @@ import {
   createReview,
   deleteReview,
   editRevision,
+  generateNegotiationMemo,
   extractContract,
   getCallerIdentity,
   getReviewDetail,
@@ -53,6 +56,7 @@ import {
   parseFeedbackBody,
   parseFeedbackBulkBody,
   parseMissedClauseBody,
+  parsePointStatusBody,
   parseReviewPatch,
   projectRevisions,
   resolveRevision,
@@ -60,6 +64,7 @@ import {
   saveClauseToLibrary,
   stashUploadedDocx,
   updateReviewMeta,
+  upsertNegotiationPoint,
 } from "./contracts.service";
 
 export const contractsRouter = Router();
@@ -196,6 +201,26 @@ contractsRouter.post("/:id/revisions/:revisionId/:verb", asyncRoute(async (req, 
     return void res.json(result.data);
   }
   res.status(404).json({ detail: "Aksi tidak dikenal." });
+}));
+
+contractsRouter.post("/:id/memo", asyncRoute(async (req, res) => {
+  const result = await generateNegotiationMemo(createServerSupabase(), { reviewId: req.params.id });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.json(result.data);
+}));
+
+contractsRouter.put("/:id/negotiation-points/:pointId", asyncRoute(async (req, res) => {
+  const parsed = parsePointStatusBody(req.body);
+  if (!parsed.ok) return void sendServiceFailure(res, parsed);
+  const result = await upsertNegotiationPoint(createServerSupabase(), {
+    reviewId: req.params.id,
+    pointId: req.params.pointId,
+    userId: res.locals.userId as string,
+    status: parsed.data.status,
+    clientResponse: parsed.data.client_response ?? null,
+  });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.json(result.data);
 }));
 
 contractsRouter.get("/:id/status", asyncRoute(async (req, res) => {

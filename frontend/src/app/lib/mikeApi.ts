@@ -8,6 +8,9 @@ import type { ReviewRow as ContractReviewRow } from "@/app/components/contracts/
 import type {
     ContractReviewDetail,
     ManualCommentRow,
+    NegotiationMemo,
+    NegotiationPointRow,
+    NegotiationStatus,
     ReviewFeedbackRow,
     RevisionEditRow,
 } from "@/app/components/contracts/reviewTypes";
@@ -3258,4 +3261,29 @@ export function getContractDownloadUrl(
     const params = new URLSearchParams({ download: "1" });
     if (variant === "original") params.set("variant", "original");
     return `${API_BASE}/contracts/${encodeURIComponent(reviewId)}/file?${params.toString()}`;
+}
+
+/** Generate (or regenerate) the negotiation memo through the janus-tools proxy. */
+export async function generateContractMemo(
+    reviewId: string,
+): Promise<{ memo: NegotiationMemo; generated_at: string }> {
+    return apiRequest(`/contracts/${encodeURIComponent(reviewId)}/memo`, {
+        method: "POST",
+    });
+}
+
+export async function setNegotiationPointStatus(
+    reviewId: string,
+    pointId: string,
+    status: NegotiationStatus,
+    clientResponse?: string | null,
+): Promise<NegotiationPointRow> {
+    return apiRequest<NegotiationPointRow>(
+        `/contracts/${encodeURIComponent(reviewId)}/negotiation-points/${encodeURIComponent(pointId)}`,
+        {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status, client_response: clientResponse ?? null }),
+        },
+    );
 }

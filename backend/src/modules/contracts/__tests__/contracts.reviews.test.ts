@@ -94,6 +94,7 @@ describe("getReviewDetail", () => {
       { table: "review_feedback", data: [{ id: "f1", finding_type: "red_flag", finding_id: "RF-001", action: "valid" }] },
       { table: "manual_comments", data: [{ id: "c1", comment_text: "note" }] },
       { table: "review_revision_edits", data: [{ id: "e1", revision_id: "REV-001" }] },
+      { table: "negotiation_points", data: [] },
     ]);
     const r = await getReviewDetail(fake.db as unknown as Db, "r1");
     expect(r).toMatchObject({

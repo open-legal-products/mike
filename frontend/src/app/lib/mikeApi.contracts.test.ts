@@ -3,6 +3,7 @@ import {
     MikeApiError,
     createReview,
     deleteContract,
+    generateContractMemo,
     getContract,
     getContractDownloadUrl,
     getContractFileUrl,
@@ -17,6 +18,7 @@ import {
     postContractFeedbackBulk,
     postContractMissedClause,
     saveContractClause,
+    setNegotiationPointStatus,
     uploadContractFile,
 } from "./mikeApi";
 
@@ -246,5 +248,21 @@ describe("contracts API wrappers", () => {
     it("getContractDownloadUrl requests an attachment, optionally the original", () => {
         expect(getContractDownloadUrl("r1")).toBe("/api/contracts/r1/file?download=1");
         expect(getContractDownloadUrl("r1", "original")).toBe("/api/contracts/r1/file?download=1&variant=original");
+    });
+
+    it("memo generation and negotiation point status hit their routes", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse({ memo: { memo_title: "m" }, generated_at: "t" }));
+        const r = await generateContractMemo("r1");
+        expect(r.memo.memo_title).toBe("m");
+        let call = lastFetchCall();
+        expect(call.url).toBe("/api/contracts/r1/memo");
+        expect(call.init.method).toBe("POST");
+
+        fetchMock.mockImplementation(async () => jsonResponse({ id: "p1", status: "agreed" }));
+        await setNegotiationPointStatus("r1", "NEG-MC-001", "agreed");
+        call = lastFetchCall();
+        expect(call.url).toBe("/api/contracts/r1/negotiation-points/NEG-MC-001");
+        expect(call.init.method).toBe("PUT");
+        expect(JSON.parse(call.init.body as string)).toEqual({ status: "agreed", client_response: null });
     });
 });

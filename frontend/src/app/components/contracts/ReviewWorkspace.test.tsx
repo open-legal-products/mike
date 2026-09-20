@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
     postContractFeedback: vi.fn(),
     patchContract: vi.fn(),
     resolveContractRevision: vi.fn(),
+    generateContractMemo: vi.fn(),
+    setNegotiationPointStatus: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -30,6 +32,8 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     postContractFeedback: mocks.postContractFeedback,
     patchContract: mocks.patchContract,
     resolveContractRevision: mocks.resolveContractRevision,
+    generateContractMemo: mocks.generateContractMemo,
+    setNegotiationPointStatus: mocks.setNegotiationPointStatus,
 }));
 
 const DETAIL: ContractReviewDetail = {
@@ -115,6 +119,7 @@ const DETAIL: ContractReviewDetail = {
     feedback: [],
     comments: [],
     revisionEdits: [],
+    negotiationPoints: [],
 };
 
 beforeEach(() => {
@@ -306,5 +311,46 @@ describe("ReviewWorkspace", () => {
         expect(await screen.findByText(/Perubahan diterapkan di dokumen/)).toBeInTheDocument();
         expect(screen.getByText("Diterima")).toBeInTheDocument();
         expect(mocks.postContractFeedback).not.toHaveBeenCalled();
+    });
+
+    it("keeps Negosiasi locked until the C-Level gate generates the memo, then shows it with point statuses", async () => {
+        const memo = {
+            memo_title: "Memo Negosiasi: Markas Daging — PKS",
+            overall_tone_recommendation: "firm" as const,
+            tone_explanation: "Klien perorangan.",
+            opening_statement: "Terima kasih atas waktunya.",
+            must_change: [{ id: "NEG-MC-001", title: "Batas tanggung jawab", clause_reference: "Pasal 9", what_to_ask: "Turunkan ke Rp 10 juta", business_impact: "Risiko", ideal_position: "Rp 10 juta", fallback_position: "Rp 20 juta", talking_script: "Kami mengusulkan...", source_finding_ids: ["REV-001"] }],
+            should_change: [],
+            nice_to_discuss: [],
+            do_not_raise: [],
+            closing_guidance: "Tutup dengan positif.",
+            red_lines: [],
+        };
+        const allDone = ["executive_summary:overall_recommendation", "playbook_rule:liability_cap", "red_flag:RF-001", "revision:REV-001", "missing_clause:MC-0"].map((k, i) => {
+            const [finding_type, finding_id] = k.split(":");
+            return { id: `f${i}`, review_id: "r1", user_id: "u1", finding_type, finding_id, action: "valid", original_severity: null, adjusted_severity: null, original_text: null, edited_text: null, rationale: null, created_at: "" };
+        });
+        mocks.getContract.mockResolvedValue({ ...DETAIL, feedback: allDone });
+        mocks.patchContract.mockResolvedValue({ id: "r1", status: "clevel_reviewed", lifecycle_stage: "clevel_review" });
+        mocks.generateContractMemo.mockResolvedValue({ memo, generated_at: "2026-09-20T12:00:00.000Z" });
+        mocks.setNegotiationPointStatus.mockResolvedValue({ id: "p1", review_id: "r1", point_id: "NEG-MC-001", status: "agreed", client_response: null, updated_by: "u1", updated_at: "" });
+        const user = userEvent.setup();
+
+        render(<ReviewWorkspace reviewId="r1" />);
+        await screen.findByRole("heading", { name: "PKS — Markas Daging" });
+        expect(screen.getByRole("tab", { name: "Negosiasi" })).toBeDisabled();
+        expect(screen.getByTestId("progress-label")).toHaveTextContent("5 dari 5 temuan ditinjau");
+
+        await user.click(screen.getByRole("button", { name: "Tandai Sudah Ditinjau C-Level" }));
+
+        await waitFor(() => expect(mocks.patchContract).toHaveBeenCalledWith("r1", { status: "clevel_reviewed", lifecycle_stage: "clevel_review" }));
+        await waitFor(() => expect(mocks.generateContractMemo).toHaveBeenCalledWith("r1"));
+        expect(await screen.findByText("Memo Negosiasi: Markas Daging — PKS")).toBeInTheDocument();
+        expect(screen.getByText("WAJIB DIUBAH")).toBeInTheDocument();
+        expect(screen.getByText("0 dari 1 poin sudah dibahas")).toBeInTheDocument();
+
+        await user.selectOptions(screen.getByLabelText("Status NEG-MC-001"), "agreed");
+        await waitFor(() => expect(mocks.setNegotiationPointStatus).toHaveBeenCalledWith("r1", "NEG-MC-001", "agreed"));
+        expect(await screen.findByText("1 dari 1 poin sudah dibahas")).toBeInTheDocument();
     });
 });
