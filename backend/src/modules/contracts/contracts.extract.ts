@@ -17,9 +17,9 @@ export type ExtractedContract = {
 };
 
 export async function extractContract(
-  file: { buffer: Buffer; filename: string },
+  file: { buffer: Buffer; filename: unknown },
 ): Promise<ServiceResult<ExtractedContract>> {
-  const filename = file.filename.trim();
+  const filename = typeof file.filename === "string" ? file.filename.trim() : "";
   if (!filename) return failure("validation", "filename is required");
   if (!DOCX_EXT.test(filename)) {
     return failure("validation", "Hanya file DOCX yang diperbolehkan.");

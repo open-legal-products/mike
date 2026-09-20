@@ -49,10 +49,12 @@ contractsRouter.get("/me", asyncRoute(async (_req, res) => {
   res.json(result.data);
 }));
 
+// Query values can arrive as arrays or objects (`?filename[]=`), so only a plain
+// string is accepted; anything else is treated as absent.
 function uploadFilename(req: express.Request): string {
-  const fromQuery = typeof req.query.filename === "string" ? req.query.filename : "";
-  const fromHeader = req.get("x-filename") ?? "";
-  const raw = fromQuery || fromHeader;
+  const fromQuery: unknown = req.query.filename;
+  const fromHeader: unknown = req.get("x-filename");
+  const raw = typeof fromQuery === "string" && fromQuery ? fromQuery : typeof fromHeader === "string" ? fromHeader : "";
   try {
     return decodeURIComponent(raw);
   } catch {
