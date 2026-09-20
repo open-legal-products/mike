@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     getContract: vi.fn(),
     postContractFeedback: vi.fn(),
     patchContract: vi.fn(),
+    resolveContractRevision: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -28,6 +29,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     getContract: mocks.getContract,
     postContractFeedback: mocks.postContractFeedback,
     patchContract: mocks.patchContract,
+    resolveContractRevision: mocks.resolveContractRevision,
 }));
 
 const DETAIL: ContractReviewDetail = {
@@ -41,6 +43,7 @@ const DETAIL: ContractReviewDetail = {
         contract_text: "Logistics Services Agreement",
         contract_html: '<table style="width:100%"><tr><td>English</td><td onclick="x()">Indonesia</td></tr></table>',
         contract_docx_path: null,
+        contract_redline_path: null,
         contract_pdf_path: null,
         project_context: null,
         review_focus: [],
@@ -111,6 +114,7 @@ const DETAIL: ContractReviewDetail = {
     },
     feedback: [],
     comments: [],
+    revisionEdits: [],
 };
 
 beforeEach(() => {
@@ -269,5 +273,38 @@ describe("ReviewWorkspace", () => {
 
         await user.click(screen.getAllByRole("button", { name: /Lihat di dokumen/ })[0]);
         expect(screen.getByTestId("docx-view").getAttribute("data-quote")).toBe("Bagoes Andy Saputro");
+    });
+
+    it("resolves a projected revision through the document and refreshes the viewer", async () => {
+        const editRow = {
+            id: "e1", review_id: "r1", revision_id: "REV-001", change_id: "c1", del_w_id: "7", ins_w_id: "8",
+            deleted_text: "Rp 50.000.000", inserted_text: "Rp 10.000.000", author: "Tinjau (AI Suggestion)",
+            status: "pending" as const, error: null, created_at: "", updated_at: "",
+        };
+        mocks.getContract.mockResolvedValue({
+            ...DETAIL,
+            review: { ...DETAIL.review, contract_docx_path: "contracts/r1/original.docx", contract_redline_path: "contracts/r1/redline.docx" },
+            revisionEdits: [editRow],
+        });
+        mocks.resolveContractRevision.mockResolvedValue({
+            edit: { ...editRow, status: "accepted" },
+            feedback: {
+                id: "f9", review_id: "r1", user_id: "u1", finding_type: "revision", finding_id: "REV-001", action: "accept",
+                original_severity: null, adjusted_severity: null, original_text: "Rp 10.000.000", edited_text: null, rationale: null, created_at: "",
+            },
+        });
+        const user = userEvent.setup();
+
+        render(<ReviewWorkspace reviewId="r1" />);
+        await screen.findByTestId("docx-view");
+        expect(screen.getByText("Perubahan terlacak di dokumen")).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Ekspor/ })).toHaveAttribute("href", "/api/contracts/r1/file?download=1");
+
+        await user.click(screen.getByRole("button", { name: "Terima" }));
+
+        await waitFor(() => expect(mocks.resolveContractRevision).toHaveBeenCalledWith("r1", "REV-001", "accept", { rationale: undefined, edited_text: undefined }));
+        expect(await screen.findByText(/Perubahan diterapkan di dokumen/)).toBeInTheDocument();
+        expect(screen.getByText("Diterima")).toBeInTheDocument();
+        expect(mocks.postContractFeedback).not.toHaveBeenCalled();
     });
 });

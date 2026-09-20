@@ -13,6 +13,7 @@ import { callJanusTool } from "../../lib/janusTools";
 import { buildReviewContextFor } from "./contracts.context";
 import { isStashedDocxKey } from "./contracts.files";
 import type { ManualCommentRow, ReviewDetail, ReviewDetailRow, ReviewFeedbackRow } from "./contracts.types";
+import { projectRevisions, type RevisionEditRow } from "./contracts.redline";
 
 // Narrow list payload — the dashboard never needs contract_text/contract_html/
 // ai_output, which are large. Keep in sync with the columns the dashboard renders.
@@ -207,8 +208,17 @@ export async function runReview(
         risk_level: (ai.risk_level as string | undefined) ?? null,
         recommendation: (ai.overall_recommendation as string | undefined) ?? null,
         status: "ai_reviewed",
+        lifecycle_stage: "ai_review",
       })
       .eq("id", reviewId);
+    // Best effort: turn the AI revisions into tracked changes in the stored DOCX.
+    // Failure here never fails the review; the workspace can re-run it on demand.
+    try {
+      const projected = await projectRevisions(db, { reviewId });
+      if (!projected.ok) console.warn(`[contracts] revision projection skipped for ${reviewId}:`, projected);
+    } catch (e) {
+      console.warn(`[contracts] revision projection crashed for ${reviewId}:`, e);
+    }
   } catch (e) {
     console.error(`[contracts] runReview failed for ${reviewId}:`, e);
     try {
@@ -229,17 +239,20 @@ export async function getReviewDetail(db: Db, reviewId: string): Promise<Service
   if (error) return internalFailure(error);
   if (!review) return failure("not_found", "Tinjauan tidak ditemukan.");
 
-  const [{ data: feedback, error: fbError }, { data: comments, error: cError }] = await Promise.all([
+  const [{ data: feedback, error: fbError }, { data: comments, error: cError }, { data: edits, error: eError }] = await Promise.all([
     db.from("review_feedback").select("*").eq("review_id", reviewId).order("created_at", { ascending: true }),
     db.from("manual_comments").select("*").eq("review_id", reviewId).order("created_at", { ascending: true }),
+    db.from("review_revision_edits").select("*").eq("review_id", reviewId).order("created_at", { ascending: true }),
   ]);
   if (fbError) return internalFailure(fbError);
   if (cError) return internalFailure(cError);
+  if (eError) return internalFailure(eError);
 
   return ok({
     review: review as unknown as ReviewDetailRow,
     feedback: (feedback ?? []) as unknown as ReviewFeedbackRow[],
     comments: (comments ?? []) as unknown as ManualCommentRow[],
+    revisionEdits: (edits ?? []) as unknown as RevisionEditRow[],
   });
 }
 

@@ -93,11 +93,12 @@ describe("getReviewDetail", () => {
       { table: "reviews", data: { id: "r1", title: "PKS — A", ai_output: { risk_level: "HIGH" } } },
       { table: "review_feedback", data: [{ id: "f1", finding_type: "red_flag", finding_id: "RF-001", action: "valid" }] },
       { table: "manual_comments", data: [{ id: "c1", comment_text: "note" }] },
+      { table: "review_revision_edits", data: [{ id: "e1", revision_id: "REV-001" }] },
     ]);
     const r = await getReviewDetail(fake.db as unknown as Db, "r1");
     expect(r).toMatchObject({
       ok: true,
-      data: { review: { id: "r1" }, feedback: [{ finding_id: "RF-001" }], comments: [{ id: "c1" }] },
+      data: { review: { id: "r1" }, feedback: [{ finding_id: "RF-001" }], comments: [{ id: "c1" }], revisionEdits: [{ revision_id: "REV-001" }] },
     });
     expect(fake.calls[1].filters).toContainEqual(["eq", "review_id", "r1"]);
     expect(fake.calls[2].filters).toContainEqual(["eq", "review_id", "r1"]);

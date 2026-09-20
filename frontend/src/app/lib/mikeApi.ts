@@ -9,6 +9,7 @@ import type {
     ContractReviewDetail,
     ManualCommentRow,
     ReviewFeedbackRow,
+    RevisionEditRow,
 } from "@/app/components/contracts/reviewTypes";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import {
@@ -3208,4 +3209,53 @@ export async function patchContract(
             body: JSON.stringify(patch),
         },
     );
+}
+
+export interface ContractRedlineProjection {
+    projected: number;
+    failed: number;
+    skipped: number;
+    edits: RevisionEditRow[];
+}
+
+/** Turn the AI revisions into tracked changes in the stored DOCX (idempotent). */
+export async function projectContractRedline(
+    reviewId: string,
+): Promise<ContractRedlineProjection> {
+    return apiRequest<ContractRedlineProjection>(
+        `/contracts/${encodeURIComponent(reviewId)}/redline/project`,
+        { method: "POST" },
+    );
+}
+
+export interface ContractRevisionResolution {
+    edit: RevisionEditRow;
+    feedback: ReviewFeedbackRow;
+}
+
+/** Terima / Tolak / Ubah a projected revision: rewrites the DOCX and records feedback. */
+export async function resolveContractRevision(
+    reviewId: string,
+    revisionId: string,
+    verb: "accept" | "reject" | "edit",
+    body: { rationale?: string | null; edited_text?: string | null } = {},
+): Promise<ContractRevisionResolution> {
+    return apiRequest<ContractRevisionResolution>(
+        `/contracts/${encodeURIComponent(reviewId)}/revisions/${encodeURIComponent(revisionId)}/${verb}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        },
+    );
+}
+
+/** Download URL for the working redline (or the untouched original). */
+export function getContractDownloadUrl(
+    reviewId: string,
+    variant: "current" | "original" = "current",
+): string {
+    const params = new URLSearchParams({ download: "1" });
+    if (variant === "original") params.set("variant", "original");
+    return `${API_BASE}/contracts/${encodeURIComponent(reviewId)}/file?${params.toString()}`;
 }

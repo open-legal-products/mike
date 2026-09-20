@@ -64,18 +64,31 @@ export async function attachDocxToReview(
 export type ReviewFileSource = { key: string; filename: string; size: number | null };
 
 /** Resolve the streamable original for a review, or not_found when none was persisted. */
-export async function getReviewFileSource(db: Db, reviewId: string): Promise<ServiceResult<ReviewFileSource>> {
+export async function getReviewFileSource(
+  db: Db,
+  reviewId: string,
+  variant: "current" | "original" = "current",
+): Promise<ServiceResult<ReviewFileSource>> {
   const { data, error } = await db
     .from("reviews")
-    .select("contract_docx_path, contract_filename, title")
+    .select("contract_docx_path, contract_redline_path, contract_filename, title")
     .eq("id", reviewId)
     .maybeSingle();
   if (error) return internalFailure(error);
-  const row = data as { contract_docx_path: string | null; contract_filename: string | null; title: string | null } | null;
+  const row = data as {
+    contract_docx_path: string | null;
+    contract_redline_path: string | null;
+    contract_filename: string | null;
+    title: string | null;
+  } | null;
   if (!row) return failure("not_found", "Tinjauan tidak ditemukan.");
-  if (!row.contract_docx_path) return failure("not_found", "Kontrak asli DOCX tidak ditemukan.");
+  // The working redline (when projected) is what the reviewer should see; the
+  // untouched upload is available with variant "original".
+  const key = variant === "original" ? row.contract_docx_path : row.contract_redline_path ?? row.contract_docx_path;
+  if (!key) return failure("not_found", "Kontrak asli DOCX tidak ditemukan.");
   if (!storageEnabled) return failure("unavailable", "Penyimpanan dokumen belum dikonfigurasi.");
-  const meta = await headFile(row.contract_docx_path);
-  const filename = row.contract_filename || `${row.title ?? "kontrak"}.docx`;
-  return ok({ key: row.contract_docx_path, filename, size: meta?.size ?? null });
+  const meta = await headFile(key);
+  const base = (row.contract_filename || `${row.title ?? "kontrak"}.docx`).replace(/\.docx$/i, "");
+  const filename = key === row.contract_redline_path ? `${base} - Redline.docx` : `${base}.docx`;
+  return ok({ key, filename, size: meta?.size ?? null });
 }

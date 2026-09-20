@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   uploadFile: vi.fn(async () => undefined),
   copyFile: vi.fn(async () => undefined),
   deleteFile: vi.fn(async () => undefined),
-  headFile: vi.fn(async () => null),
+  headFile: vi.fn(async (): Promise<{ size: number; etag: string | null; contentType: string | null } | null> => null),
   storageEnabled: true,
 }));
 vi.mock("../../../lib/storage", async (importOriginal) => ({

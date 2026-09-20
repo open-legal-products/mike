@@ -5,7 +5,8 @@ import { Crosshair } from "lucide-react";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { patchContract, postContractFeedback, saveContractClause } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import type { ReviewDetailRow, ReviewFeedbackRow, ReviewOutput } from "./reviewTypes";
+import type { ReviewDetailRow, ReviewFeedbackRow, ReviewOutput, RevisionEditRow } from "./reviewTypes";
+import { RevisionCardActions } from "./RevisionCard";
 import { feedbackKey } from "./reviewTypes";
 import { FeedbackRecorded, FeedbackWidget } from "./FeedbackWidget";
 import {
@@ -105,6 +106,9 @@ export interface DraftFindingsProps {
     onReviewPatched: (patch: Partial<ReviewDetailRow>) => void;
     /** Scroll the document to this finding's quoted text. */
     onLocate?: (text: string) => void;
+    /** Tracked-change rows by revision id (slice 4). */
+    editsByRevision?: Map<string, RevisionEditRow>;
+    onRevisionResolved?: (edit: RevisionEditRow, feedback: ReviewFeedbackRow) => void;
 }
 
 function LocateButton({ text, onLocate }: { text?: string | null; onLocate?: (text: string) => void }) {
@@ -121,7 +125,7 @@ function LocateButton({ text, onLocate }: { text?: string | null; onLocate?: (te
     );
 }
 
-export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, onReviewPatched, onLocate }: DraftFindingsProps) {
+export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, onReviewPatched, onLocate, editsByRevision, onRevisionResolved }: DraftFindingsProps) {
     const reviewId = review.id;
     const fb = (type: string, id: string) => feedbackMap.get(feedbackKey(type, id)) ?? null;
     const playbookEntries = Object.entries(output.playbook_compliance ?? {});
@@ -226,14 +230,15 @@ export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, on
                         {rev.from_clause_library && rev.clause_library_source ? (
                             <p className="mt-2 text-xs text-gray-500">Dari Pustaka Klausul: {rev.clause_library_source}</p>
                         ) : null}
-                        <FeedbackWidget
+                        <RevisionCardActions
                             reviewId={reviewId}
-                            findingType="revision"
-                            findingId={rev.id}
-                            variant="revise"
-                            originalText={rev.suggested_text}
+                            revision={rev}
+                            edit={editsByRevision?.get(rev.id) ?? null}
                             existing={fb("revision", rev.id)}
-                            onSaved={onFeedbackSaved}
+                            onResolved={(edit, feedback) => {
+                                onRevisionResolved?.(edit, feedback);
+                            }}
+                            onFeedbackSaved={onFeedbackSaved}
                         />
                         <div className="mt-2">
                             <SaveClauseButton reviewId={reviewId} title={`${rev.clause} — ${review.client_name ?? ""}`} wording={rev.suggested_text} />

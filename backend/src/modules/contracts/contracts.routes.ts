@@ -2,7 +2,9 @@
 //   GET    /contracts               team-wide review list for the dashboard
 //   GET    /contracts/me            caller identity + admin flag (client-side gating)
 //   GET    /contracts/:id           full review + feedback + comments (workspace)
-//   GET    /contracts/:id/file      stream the original DOCX (when persisted)
+//   GET    /contracts/:id/file      stream the working redline DOCX (or ?variant=original; ?download=1)
+//   POST   /contracts/:id/redline/project           project AI revisions into tracked changes (idempotent)
+//   POST   /contracts/:id/revisions/:rev/accept|reject|edit  resolve a tracked change + feedback row
 //   POST   /contracts/upload        raw DOCX bytes → extracted text + HTML
 //   POST   /contracts               create a review row and start the async AI review
 //   GET    /contracts/:id/status    poll review processing state
@@ -38,6 +40,7 @@ import {
   createMissedClauseSignal,
   createReview,
   deleteReview,
+  editRevision,
   extractContract,
   getCallerIdentity,
   getReviewDetail,
@@ -51,6 +54,8 @@ import {
   parseFeedbackBulkBody,
   parseMissedClauseBody,
   parseReviewPatch,
+  projectRevisions,
+  resolveRevision,
   runReview,
   saveClauseToLibrary,
   stashUploadedDocx,
@@ -138,11 +143,16 @@ contractsRouter.get("/:id", asyncRoute(async (req, res) => {
 }));
 
 contractsRouter.get("/:id/file", asyncRoute(async (req, res) => {
-  const result = await getReviewFileSource(createServerSupabase(), req.params.id);
+  const variant = req.query.variant === "original" ? "original" : "current";
+  const result = await getReviewFileSource(createServerSupabase(), req.params.id, variant);
   if (!result.ok) return void sendServiceFailure(res, result);
   res.setHeader("Content-Type", DOCX_MIME);
   if (result.data.size) res.setHeader("Content-Length", result.data.size);
-  res.setHeader("Content-Disposition", buildContentDisposition("inline", result.data.filename));
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader(
+    "Content-Disposition",
+    buildContentDisposition(req.query.download === "1" ? "attachment" : "inline", result.data.filename),
+  );
   const source = createFileReadStream(result.data.key);
   try {
     await pipeline(source, res);
@@ -151,6 +161,41 @@ contractsRouter.get("/:id/file", asyncRoute(async (req, res) => {
     if (!res.headersSent && !res.destroyed) res.status(500).end();
     else console.error("[contracts] file stream failed", error);
   }
+}));
+
+contractsRouter.post("/:id/redline/project", asyncRoute(async (req, res) => {
+  const result = await projectRevisions(createServerSupabase(), { reviewId: req.params.id });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.json(result.data);
+}));
+
+contractsRouter.post("/:id/revisions/:revisionId/:verb", asyncRoute(async (req, res) => {
+  const { id, revisionId, verb } = req.params;
+  const body = (req.body ?? {}) as { rationale?: unknown; edited_text?: unknown };
+  const rationale = typeof body.rationale === "string" ? body.rationale.trim() : "";
+  const db = createServerSupabase();
+  const userId = res.locals.userId as string;
+  if (verb === "accept" || verb === "reject") {
+    if (verb === "reject" && !rationale) {
+      return void res.status(400).json({ detail: "Alasan wajib diisi untuk tindakan ini." });
+    }
+    const result = await resolveRevision(db, { reviewId: id, revisionId, mode: verb, userId, rationale: rationale || null });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    return void res.json(result.data);
+  }
+  if (verb === "edit") {
+    const editedText = typeof body.edited_text === "string" ? body.edited_text : "";
+    const result = await editRevision(db, {
+      reviewId: id,
+      revisionId,
+      editedText,
+      userId,
+      userEmail: res.locals.userEmail as string | undefined,
+    });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    return void res.json(result.data);
+  }
+  res.status(404).json({ detail: "Aksi tidak dikenal." });
 }));
 
 contractsRouter.get("/:id/status", asyncRoute(async (req, res) => {

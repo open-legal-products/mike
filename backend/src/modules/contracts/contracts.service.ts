@@ -85,3 +85,15 @@ export {
   stashUploadedDocx,
 } from "./contracts.files";
 export type { ReviewFileSource } from "./contracts.files";
+
+export {
+  AI_AUTHOR,
+  cooAuthor,
+  editRevision,
+  listRevisionEdits,
+  projectRevisions,
+  redlineDocxKey,
+  resolveRevision,
+  revisionToEdit,
+} from "./contracts.redline";
+export type { ProjectionSummary, ResolveResult, RevisionEditRow } from "./contracts.redline";

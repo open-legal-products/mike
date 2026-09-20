@@ -4,8 +4,11 @@ import {
     createReview,
     deleteContract,
     getContract,
+    getContractDownloadUrl,
     getContractFileUrl,
     getMe,
+    projectContractRedline,
+    resolveContractRevision,
     getReviewStatus,
     listContracts,
     patchContract,
@@ -221,5 +224,27 @@ describe("contracts API wrappers", () => {
         call = lastFetchCall();
         expect(call.url).toBe("/api/contracts/r1");
         expect(call.init.method).toBe("PATCH");
+    });
+
+    it("redline projection and revision resolution hit their routes", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ projected: 1, failed: 0, skipped: 0, edits: [] }));
+        await projectContractRedline("r1");
+        let call = lastFetchCall();
+        expect(call.url).toBe("/api/contracts/r1/redline/project");
+        expect(call.init.method).toBe("POST");
+
+        fetchMock.mockImplementation(async () => jsonResponse({ edit: { id: "e1" }, feedback: { id: "f1" } }));
+        await resolveContractRevision("r1", "REV-001", "reject", { rationale: "x" });
+        call = lastFetchCall();
+        expect(call.url).toBe("/api/contracts/r1/revisions/REV-001/reject");
+        expect(JSON.parse(call.init.body as string)).toEqual({ rationale: "x" });
+
+        await resolveContractRevision("r1", "REV-001", "accept");
+        expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({});
+    });
+
+    it("getContractDownloadUrl requests an attachment, optionally the original", () => {
+        expect(getContractDownloadUrl("r1")).toBe("/api/contracts/r1/file?download=1");
+        expect(getContractDownloadUrl("r1", "original")).toBe("/api/contracts/r1/file?download=1&variant=original");
     });
 });

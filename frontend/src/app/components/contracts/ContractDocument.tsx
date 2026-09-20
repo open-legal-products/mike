@@ -16,14 +16,17 @@ export interface ContractDocumentProps {
     review: ReviewDetailRow;
     activeQuote: string | null;
     quoteFocusKey: number;
+    /** Bump after the working DOCX changed server-side (accept / reject / edit). */
+    refetchKey?: number;
 }
 
-export function ContractDocument({ review, activeQuote, quoteFocusKey }: ContractDocumentProps) {
+export function ContractDocument({ review, activeQuote, quoteFocusKey, refetchKey }: ContractDocumentProps) {
     if (review.contract_docx_path) {
         return (
             <DocxView
                 documentId={review.id}
                 displayUrl={getContractFileUrl(review.id)}
+                refetchKey={refetchKey}
                 quotes={activeQuote ? [{ quote: activeQuote }] : undefined}
                 quoteFocusKey={quoteFocusKey}
                 rounded={false}

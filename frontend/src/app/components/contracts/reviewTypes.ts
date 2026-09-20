@@ -142,6 +142,7 @@ export interface ReviewDetailRow {
     contract_text: string | null;
     contract_html: string | null;
     contract_docx_path: string | null;
+    contract_redline_path: string | null;
     contract_pdf_path: string | null;
     project_context: string | null;
     review_focus: string[] | null;
@@ -192,10 +193,27 @@ export interface ManualCommentRow {
     updated_at: string | null;
 }
 
+export interface RevisionEditRow {
+    id: string;
+    review_id: string;
+    revision_id: string;
+    change_id: string | null;
+    del_w_id: string | null;
+    ins_w_id: string | null;
+    deleted_text: string | null;
+    inserted_text: string | null;
+    author: string | null;
+    status: "pending" | "accepted" | "rejected";
+    error: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface ContractReviewDetail {
     review: ReviewDetailRow;
     feedback: ReviewFeedbackRow[];
     comments: ManualCommentRow[];
+    revisionEdits: RevisionEditRow[];
 }
 
 /** Feedback rows are keyed `${finding_type}:${finding_id}` everywhere (Janus contract). */

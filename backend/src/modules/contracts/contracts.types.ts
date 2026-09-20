@@ -145,6 +145,7 @@ export interface ReviewDetailRow {
   contract_text: string | null;
   contract_html: string | null;
   contract_docx_path: string | null;
+  contract_redline_path: string | null;
   contract_pdf_path: string | null;
   project_context: string | null;
   review_focus: string[] | null;
@@ -199,4 +200,5 @@ export interface ReviewDetail {
   review: ReviewDetailRow;
   feedback: ReviewFeedbackRow[];
   comments: ManualCommentRow[];
+  revisionEdits: import("./contracts.redline").RevisionEditRow[];
 }

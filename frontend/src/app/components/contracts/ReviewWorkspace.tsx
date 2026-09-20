@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
-import { MikeApiError, getContract, patchContract, type ContractPatch } from "@/app/lib/mikeApi";
+import { Download, FileDiff } from "lucide-react";
+import { MikeApiError, getContract, getContractDownloadUrl, patchContract, projectContractRedline, type ContractPatch } from "@/app/lib/mikeApi";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ContractDocument } from "./ContractDocument";
 import { DraftFindings } from "./DraftFindings";
 import { StatusPill } from "./StatusPill";
-import type { ContractReviewDetail, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput } from "./reviewTypes";
+import type { ContractReviewDetail, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput, RevisionEditRow } from "./reviewTypes";
 import { feedbackKey } from "./reviewTypes";
 import { RISK_DOT } from "./reviewHelpers";
 import { RECOMMENDATION_PILL, RISK_HEADER_LABEL, formatCreatedAt } from "./reviewLabels";
@@ -40,6 +41,9 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
     const { isAuthenticated, authLoading } = useAuth();
     const [state, setState] = useState<LoadState>({ kind: "loading" });
     const [gateBusy, setGateBusy] = useState(false);
+    const [docRefetchKey, setDocRefetchKey] = useState(0);
+    const [projecting, setProjecting] = useState(false);
+    const [projectMessage, setProjectMessage] = useState<string | null>(null);
     const [activeQuote, setActiveQuote] = useState<string | null>(null);
     const [quoteFocusKey, setQuoteFocusKey] = useState(0);
     const locate = useCallback((text: string) => {
@@ -88,6 +92,44 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                 : prev,
         );
     }, []);
+
+    const editsByRevision = useMemo(() => {
+        const map = new Map<string, RevisionEditRow>();
+        for (const e of detail?.revisionEdits ?? []) map.set(e.revision_id, e);
+        return map;
+    }, [detail?.revisionEdits]);
+
+    const onRevisionResolved = useCallback((edit: RevisionEditRow, feedback: ReviewFeedbackRow) => {
+        setState((prev) => {
+            if (prev.kind !== "ready") return prev;
+            const edits = prev.detail.revisionEdits.some((e) => e.id === edit.id)
+                ? prev.detail.revisionEdits.map((e) => (e.id === edit.id ? edit : e))
+                : [...prev.detail.revisionEdits, edit];
+            return { kind: "ready", detail: { ...prev.detail, revisionEdits: edits, feedback: [...prev.detail.feedback, feedback] } };
+        });
+        // The working DOCX changed on the server; make the viewer refetch it.
+        setDocRefetchKey((k) => k + 1);
+    }, []);
+
+    const projectRedline = async () => {
+        if (!review) return;
+        setProjecting(true);
+        setProjectMessage(null);
+        try {
+            const result = await projectContractRedline(review.id);
+            setState((prev) =>
+                prev.kind === "ready"
+                    ? { kind: "ready", detail: { ...prev.detail, revisionEdits: result.edits, review: { ...prev.detail.review, contract_redline_path: result.projected > 0 ? `contracts/${review.id}/redline.docx` : prev.detail.review.contract_redline_path } } }
+                    : prev,
+            );
+            setDocRefetchKey((k) => k + 1);
+            setProjectMessage(`${result.projected} revisi dipetakan ke dokumen${result.failed ? `, ${result.failed} tidak dapat dipetakan` : ""}.`);
+        } catch {
+            setProjectMessage("Gagal memetakan revisi ke dokumen.");
+        } finally {
+            setProjecting(false);
+        }
+    };
 
     const progress = useMemo(() => {
         if (!output) return null;
@@ -158,11 +200,26 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                             </span>
                         ) : null}
                         <StatusPill review={review} onUpdate={onReviewPatched} />
+                        {review.contract_docx_path ? (
+                            <a
+                                href={getContractDownloadUrl(review.id)}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-gray-200 px-3 text-xs font-medium text-gray-800 hover:bg-gray-50"
+                                title={review.contract_redline_path ? "Unduh kontrak redline (DOCX)" : "Unduh kontrak asli (DOCX)"}
+                            >
+                                <Download className="h-3.5 w-3.5" /> Ekspor
+                            </a>
+                        ) : null}
+                        {review.contract_docx_path && (output.revisions.length > editsByRevision.size) ? (
+                            <PillButtonUI tone="white" size="xs" onClick={projectRedline} loading={projecting}>
+                                <FileDiff className="mr-1 h-3 w-3" /> Petakan revisi ke dokumen
+                            </PillButtonUI>
+                        ) : null}
+                        {projectMessage ? <span className="text-xs text-gray-600" role="status">{projectMessage}</span> : null}
                     </div>
 
                     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
                         <div className={review.contract_docx_path ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-y-auto bg-gray-100 p-6"}>
-                            <ContractDocument review={review} activeQuote={activeQuote} quoteFocusKey={quoteFocusKey} />
+                            <ContractDocument review={review} activeQuote={activeQuote} quoteFocusKey={quoteFocusKey} refetchKey={docRefetchKey} />
                         </div>
                         <aside className="flex min-h-0 w-full flex-col border-t border-gray-200 bg-gray-50 lg:w-[440px] lg:border-l lg:border-t-0 xl:w-[500px]">
                             <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-28">
@@ -173,6 +230,8 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                     onFeedbackSaved={onFeedbackSaved}
                                     onReviewPatched={onReviewPatched}
                                     onLocate={locate}
+                                    editsByRevision={editsByRevision}
+                                    onRevisionResolved={onRevisionResolved}
                                 />
                             </div>
                             {progress ? (
