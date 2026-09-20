@@ -66,7 +66,9 @@ contractsRouter.post(
   "/upload",
   express.raw({ type: () => true, limit: CONTRACT_UPLOAD_MAX_BYTES }),
   asyncRoute(async (req, res) => {
-    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    // Copy into a fresh Buffer so downstream code never handles the raw request
+    // body object (which could be an array/string if a different parser ran).
+    const buffer = Buffer.isBuffer(req.body) ? Buffer.from(req.body) : Buffer.alloc(0);
     const result = await extractContract({ buffer, filename: uploadFilename(req) });
     if (!result.ok) return void sendServiceFailure(res, result);
     res.json(result.data);

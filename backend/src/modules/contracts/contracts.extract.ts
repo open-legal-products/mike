@@ -24,8 +24,9 @@ export async function extractContract(
   if (!DOCX_EXT.test(filename)) {
     return failure("validation", "Hanya file DOCX yang diperbolehkan.");
   }
-  if (file.buffer.length === 0) return failure("validation", "file is required");
-  if (file.buffer.length > CONTRACT_UPLOAD_MAX_BYTES) {
+  const size = file.buffer.byteLength;
+  if (size === 0) return failure("validation", "file is required");
+  if (size > CONTRACT_UPLOAD_MAX_BYTES) {
     return failure("validation", "File terlalu besar. Maksimum 25MB.");
   }
 
