@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { Download, FileDiff } from "lucide-react";
@@ -12,7 +12,11 @@ import { ContractDocument } from "./ContractDocument";
 import { DraftFindings } from "./DraftFindings";
 import { StatusPill } from "./StatusPill";
 import { NegotiationTab } from "./NegotiationTab";
-import type { ContractReviewDetail, NegotiationPointRow, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput, RevisionEditRow } from "./reviewTypes";
+import { TabularFindings } from "./TabularFindings";
+import { CommentsTab } from "./CommentsTab";
+import { AddCommentPopover, type SelectionAnchor } from "./AddCommentPopover";
+import { buildAnnotations } from "./findingAnnotations";
+import type { ContractReviewDetail, ManualCommentRow, NegotiationPointRow, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput, RevisionEditRow } from "./reviewTypes";
 import { feedbackKey } from "./reviewTypes";
 import { RISK_DOT } from "./reviewHelpers";
 import { RECOMMENDATION_PILL, RISK_HEADER_LABEL, formatCreatedAt } from "./reviewLabels";
@@ -38,13 +42,21 @@ export function reviewableKeys(output: ReviewOutput): string[] {
 
 const GATE_LOCKED_STATUSES = new Set(["clevel_reviewed", "signed", "archived"]);
 
+type PanelTab = "draft" | "comments" | "table" | "negotiation";
+/** Tabs that show the review-progress footer with the C-Level gate. */
+const GATE_TABS = new Set<PanelTab>(["draft", "table"]);
+const MIN_SELECTION_CHARS = 5;
+
 export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
     const router = useRouter();
     const { isAuthenticated, authLoading } = useAuth();
     const [state, setState] = useState<LoadState>({ kind: "loading" });
     const [gateBusy, setGateBusy] = useState(false);
     const [docRefetchKey, setDocRefetchKey] = useState(0);
-    const [panelTab, setPanelTab] = useState<"draft" | "negotiation">("draft");
+    const [panelTab, setPanelTab] = useState<PanelTab>("draft");
+    const [commentAnchor, setCommentAnchor] = useState<SelectionAnchor | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
+    const docPaneRef = useRef<HTMLDivElement>(null);
     const [memoGenerating, setMemoGenerating] = useState(false);
     const [memoError, setMemoError] = useState<string | null>(null);
     const [projecting, setProjecting] = useState(false);
@@ -89,6 +101,46 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
             prev.kind === "ready" ? { kind: "ready", detail: { ...prev.detail, feedback: [...prev.detail.feedback, row] } } : prev,
         );
     }, []);
+
+    const onFeedbackSavedBulk = useCallback((rows: ReviewFeedbackRow[]) => {
+        setState((prev) =>
+            prev.kind === "ready" ? { kind: "ready", detail: { ...prev.detail, feedback: [...prev.detail.feedback, ...rows] } } : prev,
+        );
+    }, []);
+
+    const onCommentSaved = useCallback((row: ManualCommentRow) => {
+        setState((prev) =>
+            prev.kind === "ready" ? { kind: "ready", detail: { ...prev.detail, comments: [...prev.detail.comments, row] } } : prev,
+        );
+        setNotice(row.parent_comment_id ? "Balasan tersimpan" : "Komentar tersimpan");
+    }, []);
+
+    const onSignalSaved = useCallback(() => {
+        setNotice("Sinyal pelatihan tersimpan. Tinjauan berikutnya untuk klien/jenis dokumen serupa akan memperhatikan pola ini.");
+    }, []);
+
+    // Selecting text in the document pane opens the comment popover (Janus:
+    // "Tinjauan AI" selection → AddCommentPopover). Offsets come from
+    // contract_text so a comment stays anchored across viewer implementations.
+    const handleDocMouseUp = useCallback(() => {
+        const pane = docPaneRef.current;
+        const sel = typeof window !== "undefined" ? window.getSelection() : null;
+        if (!pane || !sel || sel.isCollapsed || sel.rangeCount === 0) return;
+        if (!pane.contains(sel.anchorNode) || !pane.contains(sel.focusNode)) return;
+        const text = sel.toString().trim();
+        if (text.length < MIN_SELECTION_CHARS) return;
+        const rect = sel.getRangeAt(0).getBoundingClientRect();
+        const start = review?.contract_text?.indexOf(text) ?? -1;
+        setCommentAnchor({
+            text,
+            start,
+            end: start >= 0 ? start + text.length : -1,
+            position: {
+                top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - 380)),
+                left: Math.max(8, Math.min(rect.left, window.innerWidth - 336)),
+            },
+        });
+    }, [review?.contract_text]);
 
     const onReviewPatched = useCallback((patch: Partial<ReviewDetailRow> | ContractPatch) => {
         setState((prev) =>
@@ -161,6 +213,12 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
             return { kind: "ready", detail: { ...prev.detail, negotiationPoints: [...rest, row] } };
         });
     }, []);
+
+    const annotations = useMemo(
+        () => (output ? buildAnnotations({ output, comments: detail?.comments ?? [], feedbackMap, contractText: review?.contract_text ?? null }) : []),
+        [output, detail?.comments, feedbackMap, review?.contract_text],
+    );
+    const rootCommentCount = useMemo(() => (detail?.comments ?? []).filter((c) => !c.parent_comment_id).length, [detail?.comments]);
 
     const progress = useMemo(() => {
         if (!output) return null;
@@ -251,7 +309,12 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                     </div>
 
                     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-                        <div className={review.contract_docx_path ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-y-auto bg-gray-100 p-6"}>
+                        <div
+                            ref={docPaneRef}
+                            onMouseUp={handleDocMouseUp}
+                            data-testid="document-pane"
+                            className={review.contract_docx_path ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-y-auto bg-gray-100 p-6"}
+                        >
                             <ContractDocument review={review} activeQuote={activeQuote} quoteFocusKey={quoteFocusKey} refetchKey={docRefetchKey} />
                         </div>
                         <aside className="flex min-h-0 w-full flex-col border-t border-gray-200 bg-gray-50 lg:w-[440px] lg:border-l lg:border-t-0 xl:w-[500px]">
@@ -259,8 +322,10 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                 {(
                                     [
                                         { id: "draft", label: "Draf", disabled: false },
+                                        { id: "comments", label: rootCommentCount ? `Komentar (${rootCommentCount})` : "Komentar", disabled: false },
+                                        { id: "table", label: "Tabel", disabled: false },
                                         { id: "negotiation", label: "Negosiasi", disabled: !review.negotiation_memo && !memoGenerating },
-                                    ] as const
+                                    ] as { id: PanelTab; label: string; disabled: boolean }[]
                                 ).map((tab) => (
                                     <button
                                         key={tab.id}
@@ -276,8 +341,24 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                     </button>
                                 ))}
                             </div>
-                            <div className={panelTab === "negotiation" ? "min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5" : "min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5 pb-28"}>
-                                {panelTab === "negotiation" ? (
+                            {notice ? (
+                                <div className="flex items-start gap-2 border-b border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-800" role="status">
+                                    <span className="flex-1">{notice}</span>
+                                    <button type="button" onClick={() => setNotice(null)} aria-label="Tutup" className="text-emerald-700 hover:text-emerald-900">×</button>
+                                </div>
+                            ) : null}
+                            <div className={GATE_TABS.has(panelTab) ? "min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5 pb-28" : "min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5"}>
+                                {panelTab === "comments" ? (
+                                    <CommentsTab
+                                        reviewId={review.id}
+                                        comments={state.detail.comments}
+                                        contractText={review.contract_text}
+                                        onLocate={locate}
+                                        onCommentSaved={onCommentSaved}
+                                    />
+                                ) : panelTab === "table" ? (
+                                    <TabularFindings reviewId={review.id} annotations={annotations} onLocate={locate} onFeedbackSaved={onFeedbackSavedBulk} />
+                                ) : panelTab === "negotiation" ? (
                                     <NegotiationTab
                                         reviewId={review.id}
                                         clientName={review.client_name}
@@ -302,7 +383,7 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                 />
                                 )}
                             </div>
-                            {progress && panelTab === "draft" ? (
+                            {progress && GATE_TABS.has(panelTab) ? (
                                 <div className="border-t border-gray-200 bg-white px-5 py-3">
                                     <div className="flex items-center justify-between text-xs text-gray-600">
                                         <span data-testid="progress-label">
@@ -332,6 +413,15 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                             ) : null}
                         </aside>
                     </div>
+                    {commentAnchor ? (
+                        <AddCommentPopover
+                            reviewId={review.id}
+                            anchor={commentAnchor}
+                            onClose={() => setCommentAnchor(null)}
+                            onCommentSaved={onCommentSaved}
+                            onSignalSaved={onSignalSaved}
+                        />
+                    ) : null}
                 </>
             )}
         </div>
