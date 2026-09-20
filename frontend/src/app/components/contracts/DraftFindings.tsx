@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { Crosshair } from "lucide-react";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { patchContract, postContractFeedback, saveContractClause } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
@@ -102,9 +103,25 @@ export interface DraftFindingsProps {
     feedbackMap: Map<string, ReviewFeedbackRow>;
     onFeedbackSaved: (row: ReviewFeedbackRow) => void;
     onReviewPatched: (patch: Partial<ReviewDetailRow>) => void;
+    /** Scroll the document to this finding's quoted text. */
+    onLocate?: (text: string) => void;
 }
 
-export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, onReviewPatched }: DraftFindingsProps) {
+function LocateButton({ text, onLocate }: { text?: string | null; onLocate?: (text: string) => void }) {
+    if (!text || !onLocate) return null;
+    return (
+        <button
+            type="button"
+            onClick={() => onLocate(text)}
+            className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900"
+            title="Lihat di dokumen"
+        >
+            <Crosshair className="h-3 w-3" /> Lihat di dokumen
+        </button>
+    );
+}
+
+export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, onReviewPatched, onLocate }: DraftFindingsProps) {
     const reviewId = review.id;
     const fb = (type: string, id: string) => feedbackMap.get(feedbackKey(type, id)) ?? null;
     const playbookEntries = Object.entries(output.playbook_compliance ?? {});
@@ -169,7 +186,10 @@ export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, on
                             </div>
                             <Badge color={SEVERITY_COLOR[flag.severity]}>{flag.severity}</Badge>
                         </div>
-                        <p className="mt-1 text-xs text-gray-500">{flag.clause}{flag.playbook_rule ? ` · ${flag.playbook_rule}` : ""}</p>
+                        <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                            <span>{flag.clause}{flag.playbook_rule ? ` · ${flag.playbook_rule}` : ""}</span>
+                            <LocateButton text={flag.highlight_text} onLocate={onLocate} />
+                        </p>
                         <p className="mt-2 leading-6">{flag.issue}</p>
                         <Field label="Dampak:">{flag.business_impact}</Field>
                         <Field label="Tindakan:">{flag.action}</Field>
@@ -199,6 +219,7 @@ export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, on
                             </div>
                             <Badge color={PRIORITY_COLOR[rev.priority]}>{PRIORITY_LABEL[rev.priority] ?? rev.priority}</Badge>
                         </div>
+                        <div className="mt-1 text-xs"><LocateButton text={rev.highlight_text || rev.original_text} onLocate={onLocate} /></div>
                         <div className="mt-3 rounded-lg bg-red-50 p-3 text-red-900 line-through decoration-red-400">{rev.original_text}</div>
                         <div className="mt-2 rounded-lg bg-emerald-50 p-3 text-emerald-900">{rev.suggested_text}</div>
                         <Field label="Alasan:">{rev.rationale}</Field>
@@ -226,7 +247,10 @@ export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, on
                     <Card key={clr.id} accent="#CA8A04">
                         <span className="mr-2 font-mono text-xs text-gray-400">{clr.id}</span>
                         <span className="font-medium text-gray-900">{clr.question}</span>
-                        <p className="mt-1 text-xs text-gray-500">{clr.clause} · {clr.assign_to}</p>
+                        <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                            <span>{clr.clause} · {clr.assign_to}</span>
+                            <LocateButton text={clr.highlight_text} onLocate={onLocate} />
+                        </p>
                         <FeedbackWidget
                             reviewId={reviewId}
                             findingType="clarification"
@@ -301,7 +325,10 @@ export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, on
                     {output.yellow_flags.map((yf, i) => (
                         <Card key={`YF-${i}`} accent="#D97706">
                             <span className="font-medium text-gray-900">{yf.item}</span>
-                            {yf.clause ? <p className="mt-1 text-xs text-gray-500">{yf.clause}</p> : null}
+                            <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                                {yf.clause ? <span>{yf.clause}</span> : null}
+                                <LocateButton text={yf.highlight_text} onLocate={onLocate} />
+                            </p>
                             <p className="mt-2 leading-6">{yf.note}</p>
                         </Card>
                     ))}
@@ -312,7 +339,10 @@ export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, on
                 <Section title={SECTION_TITLES.positive}>
                     {output.positive_findings.map((pf, i) => (
                         <Card key={`PF-${i}`} accent="#059669">
-                            <p className="text-xs text-gray-500">{pf.clause}</p>
+                            <p className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                                <span>{pf.clause}</span>
+                                <LocateButton text={pf.highlight_text} onLocate={onLocate} />
+                            </p>
                             <p className="mt-1 leading-6">{pf.finding}</p>
                         </Card>
                     ))}

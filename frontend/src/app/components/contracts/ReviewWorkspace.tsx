@@ -6,7 +6,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { MikeApiError, getContract, patchContract, type ContractPatch } from "@/app/lib/mikeApi";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { ContractHtmlView } from "./ContractHtmlView";
+import { ContractDocument } from "./ContractDocument";
 import { DraftFindings } from "./DraftFindings";
 import { StatusPill } from "./StatusPill";
 import type { ContractReviewDetail, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput } from "./reviewTypes";
@@ -40,6 +40,12 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
     const { isAuthenticated, authLoading } = useAuth();
     const [state, setState] = useState<LoadState>({ kind: "loading" });
     const [gateBusy, setGateBusy] = useState(false);
+    const [activeQuote, setActiveQuote] = useState<string | null>(null);
+    const [quoteFocusKey, setQuoteFocusKey] = useState(0);
+    const locate = useCallback((text: string) => {
+        setActiveQuote(text);
+        setQuoteFocusKey((k) => k + 1);
+    }, []);
     const [gateMessage, setGateMessage] = useState<string | null>(null);
 
     useEffect(() => {
@@ -155,8 +161,8 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                     </div>
 
                     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-                        <div className="min-h-0 flex-1 overflow-y-auto bg-gray-100 p-6">
-                            <ContractHtmlView html={review.contract_html} text={review.contract_text} />
+                        <div className={review.contract_docx_path ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-y-auto bg-gray-100 p-6"}>
+                            <ContractDocument review={review} activeQuote={activeQuote} quoteFocusKey={quoteFocusKey} />
                         </div>
                         <aside className="flex min-h-0 w-full flex-col border-t border-gray-200 bg-gray-50 lg:w-[440px] lg:border-l lg:border-t-0 xl:w-[500px]">
                             <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-28">
@@ -166,6 +172,7 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                     feedbackMap={feedbackMap}
                                     onFeedbackSaved={onFeedbackSaved}
                                     onReviewPatched={onReviewPatched}
+                                    onLocate={locate}
                                 />
                             </div>
                             {progress ? (

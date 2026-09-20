@@ -31,6 +31,7 @@ export function NewReviewClient() {
     const [contractText, setContractText] = useState("");
     const [contractHtml, setContractHtml] = useState<string | null>(null);
     const [filename, setFilename] = useState<string | null>(null);
+    const [docxKey, setDocxKey] = useState<string | null>(null);
     const [fileError, setFileError] = useState<string | null>(null);
     const [dragOver, setDragOver] = useState(false);
 
@@ -111,6 +112,7 @@ export function NewReviewClient() {
             setContractText(res.contract_text);
             setContractHtml(res.contract_html);
             setFilename(res.filename);
+            setDocxKey(res.docx_key ?? null);
         } catch (e) {
             setFileError(e instanceof Error ? e.message : "Ekstraksi gagal");
             setFile(null);
@@ -174,6 +176,7 @@ export function NewReviewClient() {
                 contract_text: contractText,
                 contract_html: contractHtml,
                 contract_filename: filename,
+                contract_docx_path: docxKey,
             });
             await pollUntilDone(id);
             stopTimers();
@@ -285,6 +288,7 @@ export function NewReviewClient() {
                                     setContractText("");
                                     setContractHtml(null);
                                     setFilename(null);
+                                    setDocxKey(null);
                                     setFileError(null);
                                 }}
                                 className="ml-2 rounded-md p-1 text-gray-400 hover:bg-gray-100"

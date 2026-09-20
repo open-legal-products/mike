@@ -11,6 +11,7 @@ import type { Db } from "../../lib/supabase";
 import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serviceResult";
 import { callJanusTool } from "../../lib/janusTools";
 import { buildReviewContextFor } from "./contracts.context";
+import { isStashedDocxKey } from "./contracts.files";
 import type { ManualCommentRow, ReviewDetail, ReviewDetailRow, ReviewFeedbackRow } from "./contracts.types";
 
 // Narrow list payload — the dashboard never needs contract_text/contract_html/
@@ -50,6 +51,7 @@ export type CreateReviewInput = {
   review_focus: string[];
   contract_html: string | null;
   contract_filename: string | null;
+  contract_docx_path: string | null;
   title: string;
 };
 
@@ -115,6 +117,8 @@ export function parseCreateReviewBody(body: unknown): ServiceResult<CreateReview
     : [];
   const contractHtml = typeof b.contract_html === "string" ? b.contract_html : null;
   const contractFilename = typeof b.contract_filename === "string" ? b.contract_filename : null;
+  const contractDocxPath = isStashedDocxKey(b.contract_docx_path) ? b.contract_docx_path : null;
+  if (b.contract_docx_path && !contractDocxPath) return failure("validation", "contract_docx_path tidak valid.");
   const title =
     typeof b.title === "string" && b.title.trim() ? b.title.trim() : `${documentType} — ${clientName}`;
 
@@ -129,6 +133,7 @@ export function parseCreateReviewBody(body: unknown): ServiceResult<CreateReview
     review_focus: reviewFocus,
     contract_html: contractHtml,
     contract_filename: contractFilename,
+    contract_docx_path: contractDocxPath,
     title,
   });
 }

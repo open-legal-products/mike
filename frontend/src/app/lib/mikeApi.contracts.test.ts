@@ -4,6 +4,7 @@ import {
     createReview,
     deleteContract,
     getContract,
+    getContractFileUrl,
     getMe,
     getReviewStatus,
     listContracts,
@@ -63,6 +64,10 @@ describe("contracts API wrappers", () => {
 
         expect(detail.review.id).toBe("r 1");
         expect(lastFetchCall().url).toBe("/api/contracts/r%201");
+    });
+
+    it("getContractFileUrl points at the gateway stream", () => {
+        expect(getContractFileUrl("r 1")).toBe("/api/contracts/r%201/file");
     });
 
     it("listContracts hits the team-wide list", async () => {

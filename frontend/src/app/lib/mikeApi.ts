@@ -3021,6 +3021,8 @@ export interface ExtractedContract {
     contract_text: string;
     contract_html: string | null;
     filename: string;
+    /** Stashed original DOCX (present when object storage is configured). */
+    docx_key?: string | null;
 }
 
 /**
@@ -3049,6 +3051,12 @@ export interface CreateReviewInput {
     contract_text: string;
     contract_html: string | null;
     contract_filename: string | null;
+    contract_docx_path?: string | null;
+}
+
+/** Same-origin URL that streams the review's original DOCX through the gateway. */
+export function getContractFileUrl(reviewId: string): string {
+    return `${API_BASE}/contracts/${encodeURIComponent(reviewId)}/file`;
 }
 
 export async function createReview(

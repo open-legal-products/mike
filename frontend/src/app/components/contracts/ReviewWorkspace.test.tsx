@@ -18,6 +18,11 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({ user: { id: "u1" }, isAuthenticated: true, authLoading: false }),
 }));
+vi.mock("@/app/components/shared/views/DocxView", () => ({
+    DocxView: (props: { documentId: string; displayUrl?: string | null; quotes?: { quote: string }[] }) => (
+        <div data-testid="docx-view" data-url={props.displayUrl} data-quote={props.quotes?.[0]?.quote ?? ""} />
+    ),
+}));
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     getContract: mocks.getContract,
@@ -240,5 +245,29 @@ describe("ReviewWorkspace", () => {
             finding_type: "red_flag", finding_id: "RF-001", action: "dismiss", rationale: "Bukan risiko", original_severity: "CRITICAL",
         })));
         expect(await within(card).findByText("Umpan balik tercatat")).toBeInTheDocument();
+    });
+
+    it("renders the DOCX through Mike's viewer when an original is persisted and locates findings in it", async () => {
+        const detailWithDocx = {
+            ...DETAIL,
+            review: {
+                ...DETAIL.review,
+                contract_docx_path: "contracts/r1/original.docx",
+                ai_output: {
+                    ...DETAIL.review.ai_output!,
+                    red_flags: [{ ...DETAIL.review.ai_output!.red_flags[0], highlight_text: "Bagoes Andy Saputro" }],
+                },
+            },
+        };
+        mocks.getContract.mockResolvedValue(detailWithDocx);
+        const user = userEvent.setup();
+
+        render(<ReviewWorkspace reviewId="r1" />);
+        const view = await screen.findByTestId("docx-view");
+        expect(view.getAttribute("data-url")).toBe("/api/contracts/r1/file");
+        expect(screen.queryByTestId("contract-html")).toBeNull();
+
+        await user.click(screen.getAllByRole("button", { name: /Lihat di dokumen/ })[0]);
+        expect(screen.getByTestId("docx-view").getAttribute("data-quote")).toBe("Bagoes Andy Saputro");
     });
 });

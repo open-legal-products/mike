@@ -2,6 +2,7 @@
 //   GET    /contracts               team-wide review list for the dashboard
 //   GET    /contracts/me            caller identity + admin flag (client-side gating)
 //   GET    /contracts/:id           full review + feedback + comments (workspace)
+//   GET    /contracts/:id/file      stream the original DOCX (when persisted)
 //   POST   /contracts/upload        raw DOCX bytes → extracted text + HTML
 //   POST   /contracts               create a review row and start the async AI review
 //   GET    /contracts/:id/status    poll review processing state
@@ -21,12 +22,16 @@
 // object-storage session protocol, and a 25MB in-memory DOCX needs no session.
 
 import express, { Router } from "express";
+import { pipeline } from "node:stream/promises";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
+import { buildContentDisposition, createFileReadStream } from "../../lib/storage";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
   CONTRACT_UPLOAD_MAX_BYTES,
+  DOCX_MIME,
+  attachDocxToReview,
   createComment,
   createFeedback,
   createFeedbackBulk,
@@ -36,6 +41,7 @@ import {
   extractContract,
   getCallerIdentity,
   getReviewDetail,
+  getReviewFileSource,
   getReviewStatus,
   listReviews,
   parseClauseBody,
@@ -47,6 +53,7 @@ import {
   parseReviewPatch,
   runReview,
   saveClauseToLibrary,
+  stashUploadedDocx,
   updateReviewMeta,
 } from "./contracts.service";
 
@@ -90,7 +97,15 @@ contractsRouter.post(
     const buffer = Buffer.isBuffer(req.body) ? Buffer.from(req.body) : Buffer.alloc(0);
     const result = await extractContract({ buffer, filename: uploadFilename(req) });
     if (!result.ok) return void sendServiceFailure(res, result);
-    res.json(result.data);
+    // Keep the original bytes (when storage is configured) so the workspace can
+    // render the real DOCX and project tracked changes onto it.
+    let docx_key: string | null = null;
+    try {
+      docx_key = await stashUploadedDocx(buffer);
+    } catch (e) {
+      console.warn("[contracts] could not stash uploaded DOCX; continuing in HTML-only mode", e);
+    }
+    res.json({ ...result.data, docx_key });
   }),
 );
 
@@ -101,6 +116,11 @@ contractsRouter.post("/", asyncRoute(async (req, res) => {
   const db = createServerSupabase();
   const created = await createReview(db, { userId: res.locals.userId as string, input: parsed.data });
   if (!created.ok) return void sendServiceFailure(res, created);
+
+  if (parsed.data.contract_docx_path) {
+    const attached = await attachDocxToReview(db, { reviewId: created.data.id, stashedKey: parsed.data.contract_docx_path });
+    if (!attached.ok) console.warn(`[contracts] could not attach DOCX to ${created.data.id}:`, attached);
+  }
 
   // Detached: the AI review runs ~30-60s. runReview handles its own errors and
   // flips the row to "failed"; .catch is a backstop against a crashed promise.
@@ -115,6 +135,22 @@ contractsRouter.get("/:id", asyncRoute(async (req, res) => {
   const result = await getReviewDetail(createServerSupabase(), req.params.id);
   if (!result.ok) return void sendServiceFailure(res, result);
   res.json(result.data);
+}));
+
+contractsRouter.get("/:id/file", asyncRoute(async (req, res) => {
+  const result = await getReviewFileSource(createServerSupabase(), req.params.id);
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.setHeader("Content-Type", DOCX_MIME);
+  if (result.data.size) res.setHeader("Content-Length", result.data.size);
+  res.setHeader("Content-Disposition", buildContentDisposition("inline", result.data.filename));
+  const source = createFileReadStream(result.data.key);
+  try {
+    await pipeline(source, res);
+  } catch (error) {
+    source.destroy();
+    if (!res.headersSent && !res.destroyed) res.status(500).end();
+    else console.error("[contracts] file stream failed", error);
+  }
 }));
 
 contractsRouter.get("/:id/status", asyncRoute(async (req, res) => {

@@ -75,3 +75,13 @@ export {
   updateReviewMeta,
 } from "./contracts.feedback";
 export type { ClauseInput, CommentInput, FeedbackAction, FeedbackInput, MissedClauseInput, ReviewPatch } from "./contracts.feedback";
+
+export {
+  DOCX_MIME,
+  attachDocxToReview,
+  getReviewFileSource,
+  isStashedDocxKey,
+  originalDocxKey,
+  stashUploadedDocx,
+} from "./contracts.files";
+export type { ReviewFileSource } from "./contracts.files";
