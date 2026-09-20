@@ -276,7 +276,7 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                     </button>
                                 ))}
                             </div>
-                            <div className={panelTab === "negotiation" ? "min-h-0 flex-1 overflow-y-auto p-5" : "min-h-0 flex-1 overflow-y-auto p-5 pb-28"}>
+                            <div className={panelTab === "negotiation" ? "min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5" : "min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-5 pb-28"}>
                                 {panelTab === "negotiation" ? (
                                     <NegotiationTab
                                         reviewId={review.id}

@@ -97,13 +97,18 @@ function PointCard({
     const [expanded, setExpanded] = useState(true);
     return (
         <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm" style={{ borderLeft: `3px solid ${accent}` }}>
-            <div className="flex items-start justify-between gap-3">
-                <button type="button" onClick={() => setExpanded(!expanded)} className="flex flex-1 items-center gap-2 text-left">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+                <button type="button" onClick={() => setExpanded(!expanded)} className="flex min-w-0 flex-1 basis-48 items-center gap-2 text-left">
                     {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
-                    <span className="font-medium text-gray-900">{point.title}</span>
+                    <span className="min-w-0 break-words font-medium text-gray-900">{point.title}</span>
                 </button>
-                <div className="flex shrink-0 items-center gap-2">
-                    <span className="rounded-full border border-gray-200 px-2 py-0.5 text-[11px] text-gray-600">{point.clause_reference}</span>
+                <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+                    <span
+                        title={point.clause_reference}
+                        className="max-w-56 truncate rounded-full border border-gray-200 px-2 py-0.5 text-[11px] text-gray-600"
+                    >
+                        {point.clause_reference}
+                    </span>
                     <select
                         aria-label={`Status ${point.id}`}
                         value={status}
