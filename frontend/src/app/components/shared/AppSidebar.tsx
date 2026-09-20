@@ -47,8 +47,8 @@ import {
 
 const NAV_ITEMS = [
     { href: "/assistant", label: "Assistant", icon: ChatSkeuoIcon },
-    { href: "/contracts", label: "Contracts", icon: FileCheck2 },
     { href: "/ide", label: "IDE", icon: IdeSkeuoIcon },
+    { href: "/contracts", label: "Contracts", icon: FileCheck2 },
     { href: "/projects", label: "Projects", icon: FolderSkeuoIcon },
     { href: "/library", label: "Library", icon: LibrarySkeuoIcon },
     {
