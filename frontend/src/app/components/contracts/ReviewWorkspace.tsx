@@ -4,13 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { Download, FileDiff } from "lucide-react";
-import { MikeApiError, getContract, getContractDownloadUrl, patchContract, projectContractRedline, type ContractPatch } from "@/app/lib/mikeApi";
+import { MikeApiError, generateContractMemo, getContract, getContractDownloadUrl, patchContract, projectContractRedline, type ContractPatch } from "@/app/lib/mikeApi";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ContractDocument } from "./ContractDocument";
 import { DraftFindings } from "./DraftFindings";
 import { StatusPill } from "./StatusPill";
-import type { ContractReviewDetail, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput, RevisionEditRow } from "./reviewTypes";
+import { NegotiationTab } from "./NegotiationTab";
+import type { ContractReviewDetail, NegotiationPointRow, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput, RevisionEditRow } from "./reviewTypes";
 import { feedbackKey } from "./reviewTypes";
 import { RISK_DOT } from "./reviewHelpers";
 import { RECOMMENDATION_PILL, RISK_HEADER_LABEL, formatCreatedAt } from "./reviewLabels";
@@ -42,6 +44,9 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
     const [state, setState] = useState<LoadState>({ kind: "loading" });
     const [gateBusy, setGateBusy] = useState(false);
     const [docRefetchKey, setDocRefetchKey] = useState(0);
+    const [panelTab, setPanelTab] = useState<"draft" | "negotiation">("draft");
+    const [memoGenerating, setMemoGenerating] = useState(false);
+    const [memoError, setMemoError] = useState<string | null>(null);
     const [projecting, setProjecting] = useState(false);
     const [projectMessage, setProjectMessage] = useState<string | null>(null);
     const [activeQuote, setActiveQuote] = useState<string | null>(null);
@@ -131,6 +136,32 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
         }
     };
 
+    const generateMemo = useCallback(async (reviewId: string) => {
+        setMemoGenerating(true);
+        setMemoError(null);
+        setPanelTab("negotiation");
+        try {
+            const result = await generateContractMemo(reviewId);
+            setState((prev) =>
+                prev.kind === "ready"
+                    ? { kind: "ready", detail: { ...prev.detail, review: { ...prev.detail.review, negotiation_memo: result.memo, negotiation_memo_generated_at: result.generated_at } } }
+                    : prev,
+            );
+        } catch (e) {
+            setMemoError(userFacingApiError(e, "Gagal membuat memo negosiasi"));
+        } finally {
+            setMemoGenerating(false);
+        }
+    }, []);
+
+    const onPointSaved = useCallback((row: NegotiationPointRow) => {
+        setState((prev) => {
+            if (prev.kind !== "ready") return prev;
+            const rest = prev.detail.negotiationPoints.filter((p) => p.point_id !== row.point_id);
+            return { kind: "ready", detail: { ...prev.detail, negotiationPoints: [...rest, row] } };
+        });
+    }, []);
+
     const progress = useMemo(() => {
         if (!output) return null;
         const keys = reviewableKeys(output);
@@ -150,6 +181,8 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
             const saved = await patchContract(review.id, { status: "clevel_reviewed", lifecycle_stage: "clevel_review" });
             onReviewPatched(saved);
             setGateMessage("Status diperbarui ke Ditinjau C-Level");
+            // Janus: the hand-off to BD starts here — the memo is generated right away.
+            void generateMemo(review.id);
         } catch {
             setGateMessage("Gagal memperbarui status. Coba lagi.");
         } finally {
@@ -222,7 +255,41 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                             <ContractDocument review={review} activeQuote={activeQuote} quoteFocusKey={quoteFocusKey} refetchKey={docRefetchKey} />
                         </div>
                         <aside className="flex min-h-0 w-full flex-col border-t border-gray-200 bg-gray-50 lg:w-[440px] lg:border-l lg:border-t-0 xl:w-[500px]">
-                            <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-28">
+                            <div className="flex items-center gap-1 border-b border-gray-200 bg-white px-3 pt-2" role="tablist">
+                                {(
+                                    [
+                                        { id: "draft", label: "Draf", disabled: false },
+                                        { id: "negotiation", label: "Negosiasi", disabled: !review.negotiation_memo && !memoGenerating },
+                                    ] as const
+                                ).map((tab) => (
+                                    <button
+                                        key={tab.id}
+                                        type="button"
+                                        role="tab"
+                                        aria-selected={panelTab === tab.id}
+                                        disabled={tab.disabled}
+                                        onClick={() => setPanelTab(tab.id)}
+                                        className={`-mb-px border-b-2 px-3 py-2 text-sm ${panelTab === tab.id ? "border-gray-900 font-medium text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"} disabled:cursor-not-allowed disabled:opacity-40`}
+                                        title={tab.disabled ? "Memo negosiasi belum tersedia" : undefined}
+                                    >
+                                        {tab.label}
+                                    </button>
+                                ))}
+                            </div>
+                            <div className={panelTab === "negotiation" ? "min-h-0 flex-1 overflow-y-auto p-5" : "min-h-0 flex-1 overflow-y-auto p-5 pb-28"}>
+                                {panelTab === "negotiation" ? (
+                                    <NegotiationTab
+                                        reviewId={review.id}
+                                        clientName={review.client_name}
+                                        memo={review.negotiation_memo}
+                                        generatedAt={review.negotiation_memo_generated_at}
+                                        generating={memoGenerating}
+                                        error={memoError}
+                                        points={state.detail.negotiationPoints}
+                                        onRegenerate={() => void generateMemo(review.id)}
+                                        onPointSaved={onPointSaved}
+                                    />
+                                ) : (
                                 <DraftFindings
                                     review={review}
                                     output={output}
@@ -233,8 +300,9 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                     editsByRevision={editsByRevision}
                                     onRevisionResolved={onRevisionResolved}
                                 />
+                                )}
                             </div>
-                            {progress ? (
+                            {progress && panelTab === "draft" ? (
                                 <div className="border-t border-gray-200 bg-white px-5 py-3">
                                     <div className="flex items-center justify-between text-xs text-gray-600">
                                         <span data-testid="progress-label">

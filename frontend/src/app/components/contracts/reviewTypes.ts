@@ -209,11 +209,24 @@ export interface RevisionEditRow {
     updated_at: string;
 }
 
+export type NegotiationStatus = "pending" | "agreed" | "rejected" | "escalated";
+
+export interface NegotiationPointRow {
+    id: string;
+    review_id: string;
+    point_id: string;
+    status: NegotiationStatus;
+    client_response: string | null;
+    updated_by: string | null;
+    updated_at: string;
+}
+
 export interface ContractReviewDetail {
     review: ReviewDetailRow;
     feedback: ReviewFeedbackRow[];
     comments: ManualCommentRow[];
     revisionEdits: RevisionEditRow[];
+    negotiationPoints: NegotiationPointRow[];
 }
 
 /** Feedback rows are keyed `${finding_type}:${finding_id}` everywhere (Janus contract). */

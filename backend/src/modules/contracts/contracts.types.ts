@@ -201,4 +201,5 @@ export interface ReviewDetail {
   feedback: ReviewFeedbackRow[];
   comments: ManualCommentRow[];
   revisionEdits: import("./contracts.redline").RevisionEditRow[];
+  negotiationPoints: import("./contracts.memo").NegotiationPointRow[];
 }
