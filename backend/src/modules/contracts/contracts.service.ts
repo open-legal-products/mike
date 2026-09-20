@@ -51,3 +51,27 @@ export type {
   SectionRisk,
   YellowFlag,
 } from "./contracts.types";
+
+export {
+  COMMENT_TYPES,
+  FEEDBACK_ACTIONS,
+  LIFECYCLE_STAGES,
+  MISSED_CATEGORIES,
+  RECOMMENDATIONS,
+  REVIEW_STATUSES,
+  createComment,
+  createFeedback,
+  createFeedbackBulk,
+  createMissedClauseSignal,
+  displayNameFromEmail,
+  parseClauseBody,
+  parseCommentBody,
+  parseFeedbackBody,
+  parseFeedbackBulkBody,
+  parseMissedClauseBody,
+  parseReviewPatch,
+  saveClauseToLibrary,
+  statusForStage,
+  updateReviewMeta,
+} from "./contracts.feedback";
+export type { ClauseInput, CommentInput, FeedbackAction, FeedbackInput, MissedClauseInput, ReviewPatch } from "./contracts.feedback";

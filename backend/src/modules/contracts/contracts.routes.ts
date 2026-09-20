@@ -6,6 +6,11 @@
 //   POST   /contracts               create a review row and start the async AI review
 //   GET    /contracts/:id/status    poll review processing state
 //   DELETE /contracts/:id           admin only
+//   PATCH  /contracts/:id           status / lifecycle_stage (+status sync) / dates / COO override
+//   POST   /contracts/:id/feedback  one review_feedback row (the moat); /feedback/bulk for many
+//   POST   /contracts/:id/comments  manual comment or reply (parent_comment_id)
+//   POST   /contracts/:id/missed-clause  "AI melewatkan klausul ini" training signal
+//   POST   /contracts/:id/clauses   save an approved wording to clause_library
 //
 // Handlers parse the request, call contracts.service, and map ServiceResults
 // onto status codes. Never query the database here.
@@ -22,6 +27,10 @@ import { createServerSupabase } from "../../lib/supabase";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
   CONTRACT_UPLOAD_MAX_BYTES,
+  createComment,
+  createFeedback,
+  createFeedbackBulk,
+  createMissedClauseSignal,
   createReview,
   deleteReview,
   extractContract,
@@ -29,8 +38,16 @@ import {
   getReviewDetail,
   getReviewStatus,
   listReviews,
+  parseClauseBody,
+  parseCommentBody,
   parseCreateReviewBody,
+  parseFeedbackBody,
+  parseFeedbackBulkBody,
+  parseMissedClauseBody,
+  parseReviewPatch,
   runReview,
+  saveClauseToLibrary,
+  updateReviewMeta,
 } from "./contracts.service";
 
 export const contractsRouter = Router();
@@ -104,6 +121,75 @@ contractsRouter.get("/:id/status", asyncRoute(async (req, res) => {
   const result = await getReviewStatus(createServerSupabase(), req.params.id);
   if (!result.ok) return void sendServiceFailure(res, result);
   res.json(result.data);
+}));
+
+contractsRouter.patch("/:id", asyncRoute(async (req, res) => {
+  const parsed = parseReviewPatch(req.body);
+  if (!parsed.ok) return void sendServiceFailure(res, parsed);
+  const result = await updateReviewMeta(createServerSupabase(), { reviewId: req.params.id, patch: parsed.data });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.json(result.data);
+}));
+
+contractsRouter.post("/:id/feedback", asyncRoute(async (req, res) => {
+  const parsed = parseFeedbackBody(req.body);
+  if (!parsed.ok) return void sendServiceFailure(res, parsed);
+  const result = await createFeedback(createServerSupabase(), {
+    reviewId: req.params.id,
+    userId: res.locals.userId as string,
+    input: parsed.data,
+  });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.status(201).json(result.data);
+}));
+
+contractsRouter.post("/:id/feedback/bulk", asyncRoute(async (req, res) => {
+  const parsed = parseFeedbackBulkBody(req.body);
+  if (!parsed.ok) return void sendServiceFailure(res, parsed);
+  const result = await createFeedbackBulk(createServerSupabase(), {
+    reviewId: req.params.id,
+    userId: res.locals.userId as string,
+    inputs: parsed.data,
+  });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.status(201).json(result.data);
+}));
+
+contractsRouter.post("/:id/comments", asyncRoute(async (req, res) => {
+  const parsed = parseCommentBody(req.body);
+  if (!parsed.ok) return void sendServiceFailure(res, parsed);
+  const result = await createComment(createServerSupabase(), {
+    reviewId: req.params.id,
+    userId: res.locals.userId as string,
+    userEmail: res.locals.userEmail as string | undefined,
+    input: parsed.data,
+  });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.status(201).json(result.data);
+}));
+
+contractsRouter.post("/:id/missed-clause", asyncRoute(async (req, res) => {
+  const parsed = parseMissedClauseBody(req.body);
+  if (!parsed.ok) return void sendServiceFailure(res, parsed);
+  const result = await createMissedClauseSignal(createServerSupabase(), {
+    reviewId: req.params.id,
+    userId: res.locals.userId as string,
+    input: parsed.data,
+  });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.status(201).json(result.data);
+}));
+
+contractsRouter.post("/:id/clauses", asyncRoute(async (req, res) => {
+  const parsed = parseClauseBody(req.body);
+  if (!parsed.ok) return void sendServiceFailure(res, parsed);
+  const result = await saveClauseToLibrary(createServerSupabase(), {
+    reviewId: req.params.id,
+    userId: res.locals.userId as string,
+    input: parsed.data,
+  });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.status(201).json(result.data);
 }));
 
 contractsRouter.delete("/:id", asyncRoute(async (req, res) => {
