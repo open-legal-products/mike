@@ -7,6 +7,12 @@ import {
     getMe,
     getReviewStatus,
     listContracts,
+    patchContract,
+    postContractComment,
+    postContractFeedback,
+    postContractFeedbackBulk,
+    postContractMissedClause,
+    saveContractClause,
     uploadContractFile,
 } from "./mikeApi";
 
@@ -162,5 +168,53 @@ describe("contracts API wrappers", () => {
 
         expect(status.status).toBe("ai_reviewed");
         expect(lastFetchCall().url).toBe("/api/contracts/r9/status");
+    });
+
+    it("postContractFeedback posts one Janus-shaped row", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ id: "f1" }, { status: 201 }));
+        const input = { finding_type: "red_flag", finding_id: "RF-001", action: "valid", original_severity: "HIGH" };
+
+        const row = await postContractFeedback("r1", input);
+
+        expect(row).toEqual({ id: "f1" });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/contracts/r1/feedback");
+        expect(init.method).toBe("POST");
+        expect(JSON.parse(init.body as string)).toEqual(input);
+    });
+
+    it("postContractFeedbackBulk wraps the items", async () => {
+        fetchMock.mockResolvedValue(jsonResponse([], { status: 201 }));
+
+        await postContractFeedbackBulk("r1", [{ finding_type: "revision", finding_id: "REV-001", action: "accept" }]);
+
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/contracts/r1/feedback/bulk");
+        expect(JSON.parse(init.body as string)).toEqual({ items: [{ finding_type: "revision", finding_id: "REV-001", action: "accept" }] });
+    });
+
+    it("postContractComment and postContractMissedClause hit their routes", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ id: "c1" }, { status: 201 }));
+        await postContractComment("r1", { comment_type: "note", comment_text: "x" });
+        expect(lastFetchCall().url).toBe("/api/contracts/r1/comments");
+
+        fetchMock.mockResolvedValue(jsonResponse({ id: "m1" }, { status: 201 }));
+        await postContractMissedClause("r1", { highlight_text: "t", suggested_category: "red_flag", user_note: "n" });
+        expect(lastFetchCall().url).toBe("/api/contracts/r1/missed-clause");
+    });
+
+    it("saveContractClause and patchContract send their bodies", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ id: "cl1" }, { status: 201 }));
+        await saveContractClause("r1", { title: "t", wording: "w" });
+        let call = lastFetchCall();
+        expect(call.url).toBe("/api/contracts/r1/clauses");
+        expect(JSON.parse(call.init.body as string)).toEqual({ title: "t", wording: "w" });
+
+        fetchMock.mockResolvedValue(jsonResponse({ id: "r1", status: "clevel_reviewed" }));
+        const patched = await patchContract("r1", { status: "clevel_reviewed" });
+        expect(patched.status).toBe("clevel_reviewed");
+        call = lastFetchCall();
+        expect(call.url).toBe("/api/contracts/r1");
+        expect(call.init.method).toBe("PATCH");
     });
 });

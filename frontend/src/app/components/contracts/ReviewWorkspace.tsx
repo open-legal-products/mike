@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
-import { MikeApiError, getContract } from "@/app/lib/mikeApi";
+import { MikeApiError, getContract, patchContract, type ContractPatch } from "@/app/lib/mikeApi";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ContractHtmlView } from "./ContractHtmlView";
 import { DraftFindings } from "./DraftFindings";
-import type { ContractReviewDetail } from "./reviewTypes";
+import { StatusPill } from "./StatusPill";
+import type { ContractReviewDetail, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput } from "./reviewTypes";
+import { feedbackKey } from "./reviewTypes";
 import { RISK_DOT } from "./reviewHelpers";
 import { RECOMMENDATION_PILL, RISK_HEADER_LABEL, formatCreatedAt } from "./reviewLabels";
 
@@ -17,10 +20,27 @@ type LoadState =
     | { kind: "error"; message: string }
     | { kind: "ready"; detail: ContractReviewDetail };
 
+/** Feedback keys that count toward "reviewed": one per finding the Draf view asks about. */
+export function reviewableKeys(output: ReviewOutput): string[] {
+    return [
+        feedbackKey("executive_summary", "overall_recommendation"),
+        ...Object.keys(output.playbook_compliance ?? {}).map((slug) => feedbackKey("playbook_rule", slug)),
+        ...output.red_flags.map((f) => feedbackKey("red_flag", f.id)),
+        ...output.revisions.map((r) => feedbackKey("revision", r.id)),
+        ...output.clarifications.map((c) => feedbackKey("clarification", c.id)),
+        ...output.financial_review.map((_, i) => feedbackKey("financial", `FIN-${i}`)),
+        ...output.missing_clauses.map((_, i) => feedbackKey("missing_clause", `MC-${i}`)),
+    ];
+}
+
+const GATE_LOCKED_STATUSES = new Set(["clevel_reviewed", "signed", "archived"]);
+
 export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
     const router = useRouter();
     const { isAuthenticated, authLoading } = useAuth();
     const [state, setState] = useState<LoadState>({ kind: "loading" });
+    const [gateBusy, setGateBusy] = useState(false);
+    const [gateMessage, setGateMessage] = useState<string | null>(null);
 
     useEffect(() => {
         if (authLoading || !isAuthenticated) return;
@@ -31,19 +51,64 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
             })
             .catch((error: unknown) => {
                 if (cancelled) return;
-                if (error instanceof MikeApiError && error.status === 404) {
-                    setState({ kind: "not_found" });
-                } else {
-                    setState({ kind: "error", message: "Tinjauan tidak dapat dimuat. Coba lagi." });
-                }
+                if (error instanceof MikeApiError && error.status === 404) setState({ kind: "not_found" });
+                else setState({ kind: "error", message: "Tinjauan tidak dapat dimuat. Coba lagi." });
             });
         return () => {
             cancelled = true;
         };
     }, [authLoading, isAuthenticated, reviewId]);
 
-    const review = state.kind === "ready" ? state.detail.review : null;
+    const detail = state.kind === "ready" ? state.detail : null;
+    const review = detail?.review ?? null;
     const output = review?.ai_output ?? null;
+
+    const feedbackMap = useMemo(() => {
+        const map = new Map<string, ReviewFeedbackRow>();
+        for (const row of detail?.feedback ?? []) map.set(feedbackKey(row.finding_type, row.finding_id), row);
+        return map;
+    }, [detail?.feedback]);
+
+    const onFeedbackSaved = useCallback((row: ReviewFeedbackRow) => {
+        setState((prev) =>
+            prev.kind === "ready" ? { kind: "ready", detail: { ...prev.detail, feedback: [...prev.detail.feedback, row] } } : prev,
+        );
+    }, []);
+
+    const onReviewPatched = useCallback((patch: Partial<ReviewDetailRow> | ContractPatch) => {
+        setState((prev) =>
+            prev.kind === "ready"
+                ? { kind: "ready", detail: { ...prev.detail, review: { ...prev.detail.review, ...(patch as Partial<ReviewDetailRow>) } } }
+                : prev,
+        );
+    }, []);
+
+    const progress = useMemo(() => {
+        if (!output) return null;
+        const keys = reviewableKeys(output);
+        const reviewed = keys.filter((k) => feedbackMap.has(k)).length;
+        return { total: keys.length, reviewed, percent: keys.length ? Math.round((reviewed / keys.length) * 100) : 0 };
+    }, [output, feedbackMap]);
+
+    const allReviewed = Boolean(progress && progress.total > 0 && progress.reviewed >= progress.total);
+    const gateLocked = Boolean(review?.status && GATE_LOCKED_STATUSES.has(review.status));
+    const alreadyReviewed = review?.status === "clevel_reviewed" || review?.status === "signed";
+
+    const markCLevelReviewed = async () => {
+        if (!review) return;
+        setGateBusy(true);
+        setGateMessage(null);
+        try {
+            const saved = await patchContract(review.id, { status: "clevel_reviewed", lifecycle_stage: "clevel_review" });
+            onReviewPatched(saved);
+            setGateMessage("Status diperbarui ke Ditinjau C-Level");
+        } catch {
+            setGateMessage("Gagal memperbarui status. Coba lagi.");
+        } finally {
+            setGateBusy(false);
+        }
+    };
+
     const recommendation = review?.coo_recommendation_override ?? output?.overall_recommendation ?? null;
 
     return (
@@ -53,9 +118,7 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                 loading={state.kind === "loading"}
                 breadcrumbs={[
                     { label: "Contracts", onClick: () => router.push("/contracts"), title: "Kembali ke Tinjauan Kontrak" },
-                    state.kind === "loading"
-                        ? { loading: true, skeletonClassName: "w-40" }
-                        : { label: review?.title ?? "Tinjauan" },
+                    state.kind === "loading" ? { loading: true, skeletonClassName: "w-40" } : { label: review?.title ?? "Tinjauan" },
                 ]}
             />
 
@@ -65,7 +128,7 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                 <div className="p-8 text-sm text-gray-500">Tinjauan tidak ditemukan</div>
             ) : state.kind === "error" ? (
                 <div className="p-8 text-sm text-red-600">{state.message}</div>
-            ) : !output ? (
+            ) : !review || !output ? (
                 <div className="p-8 text-sm text-gray-500">
                     {review?.status === "failed" ? "Tinjauan gagal diproses. Unggah ulang kontrak." : "Tinjauan masih diproses..."}
                 </div>
@@ -73,10 +136,10 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                 <>
                     <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 px-6 py-3">
                         <div className="min-w-0 flex-1">
-                            <h1 className="truncate font-serif text-xl font-medium text-gray-900">{review?.title}</h1>
+                            <h1 className="truncate font-serif text-xl font-medium text-gray-900">{review.title}</h1>
                             <p className="mt-0.5 text-xs text-gray-500">
-                                {review?.document_type} · {review?.client_name}
-                                {review?.created_at ? ` · Dibuat ${formatCreatedAt(review.created_at)}` : ""}
+                                {review.document_type} · {review.client_name}
+                                {review.created_at ? ` · Dibuat ${formatCreatedAt(review.created_at)}` : ""}
                             </p>
                         </div>
                         <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-800">
@@ -88,14 +151,51 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                                 {RECOMMENDATION_PILL[recommendation] ?? recommendation}
                             </span>
                         ) : null}
+                        <StatusPill review={review} onUpdate={onReviewPatched} />
                     </div>
 
                     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
                         <div className="min-h-0 flex-1 overflow-y-auto bg-gray-100 p-6">
-                            <ContractHtmlView html={review?.contract_html ?? null} text={review?.contract_text ?? null} />
+                            <ContractHtmlView html={review.contract_html} text={review.contract_text} />
                         </div>
-                        <aside className="min-h-0 w-full overflow-y-auto border-t border-gray-200 bg-gray-50 p-5 lg:w-[440px] lg:border-l lg:border-t-0 xl:w-[500px]">
-                            <DraftFindings output={output} />
+                        <aside className="flex min-h-0 w-full flex-col border-t border-gray-200 bg-gray-50 lg:w-[440px] lg:border-l lg:border-t-0 xl:w-[500px]">
+                            <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-28">
+                                <DraftFindings
+                                    review={review}
+                                    output={output}
+                                    feedbackMap={feedbackMap}
+                                    onFeedbackSaved={onFeedbackSaved}
+                                    onReviewPatched={onReviewPatched}
+                                />
+                            </div>
+                            {progress ? (
+                                <div className="border-t border-gray-200 bg-white px-5 py-3">
+                                    <div className="flex items-center justify-between text-xs text-gray-600">
+                                        <span data-testid="progress-label">
+                                            {progress.reviewed} dari {progress.total} temuan ditinjau
+                                        </span>
+                                        <span>{progress.percent}%</span>
+                                    </div>
+                                    <div className="mt-1.5 h-[3px] w-full rounded bg-gray-200">
+                                        <div
+                                            className="h-[3px] rounded"
+                                            style={{ width: `${progress.percent}%`, background: progress.percent === 100 ? "#16A34A" : "#111827" }}
+                                        />
+                                    </div>
+                                    <div className="mt-3 flex items-center gap-3">
+                                        <PillButtonUI
+                                            tone="black"
+                                            size="sm"
+                                            onClick={markCLevelReviewed}
+                                            disabled={!allReviewed || gateLocked}
+                                            loading={gateBusy}
+                                        >
+                                            {alreadyReviewed ? "Ditinjau C-Level ✓" : "Tandai Sudah Ditinjau C-Level"}
+                                        </PillButtonUI>
+                                        {gateMessage ? <span className="text-xs text-gray-600" role="status">{gateMessage}</span> : null}
+                                    </div>
+                                </div>
+                            ) : null}
                         </aside>
                     </div>
                 </>

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { ReviewWorkspace } from "./ReviewWorkspace";
 import type { ContractReviewDetail } from "./reviewTypes";
@@ -7,6 +8,8 @@ import type { ContractReviewDetail } from "./reviewTypes";
 const mocks = vi.hoisted(() => ({
     push: vi.fn(),
     getContract: vi.fn(),
+    postContractFeedback: vi.fn(),
+    patchContract: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -18,6 +21,8 @@ vi.mock("@/app/contexts/AuthContext", () => ({
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     getContract: mocks.getContract,
+    postContractFeedback: mocks.postContractFeedback,
+    patchContract: mocks.patchContract,
 }));
 
 const DETAIL: ContractReviewDetail = {
@@ -164,5 +169,76 @@ describe("ReviewWorkspace", () => {
         render(<ReviewWorkspace reviewId="r1" />);
 
         await waitFor(() => expect(screen.getByText("Tinjauan masih diproses...")).toBeInTheDocument());
+    });
+
+    it("counts distinct reviewed findings, hides a widget once feedback exists, and gates the C-Level button", async () => {
+        const existing = {
+            id: "f0",
+            review_id: "r1",
+            user_id: "u1",
+            finding_type: "red_flag",
+            finding_id: "RF-001",
+            action: "dismiss",
+            original_severity: "CRITICAL",
+            adjusted_severity: null,
+            original_text: null,
+            edited_text: null,
+            rationale: "Sudah dicek",
+            created_at: "2026-09-20T10:00:00.000Z",
+        };
+        mocks.getContract.mockResolvedValue({ ...DETAIL, feedback: [existing, existing] });
+        mocks.postContractFeedback.mockImplementation(async (_id: string, input: { finding_type: string; finding_id: string; action: string }) => ({
+            ...existing,
+            id: "f-new",
+            finding_type: input.finding_type,
+            finding_id: input.finding_id,
+            action: input.action,
+            rationale: null,
+        }));
+        const user = userEvent.setup();
+
+        render(<ReviewWorkspace reviewId="r1" />);
+        await screen.findByRole("heading", { name: "PKS — Markas Daging" });
+
+        // 1 executive + 1 playbook + 1 red flag + 1 revision + 1 missing clause = 5; duplicates count once.
+        expect(screen.getByTestId("progress-label")).toHaveTextContent("1 dari 5 temuan ditinjau");
+        const rfCard = screen.getByText("Klien Bukan Merupakan Badan Usaha").closest("div.rounded-xl") as HTMLElement;
+        expect(within(rfCard).getByText("Diabaikan")).toBeInTheDocument();
+        expect(within(rfCard).queryByRole("button", { name: /Abaikan/ })).toBeNull();
+        expect(screen.getByRole("button", { name: "Tandai Sudah Ditinjau C-Level" })).toBeDisabled();
+
+        await user.click(screen.getByRole("button", { name: "Terima" }));
+        await waitFor(() => expect(mocks.postContractFeedback).toHaveBeenCalledWith("r1", expect.objectContaining({
+            finding_type: "revision",
+            finding_id: "REV-001",
+            action: "accept",
+            original_text: "Rp 10.000.000",
+            edited_text: null,
+        })));
+        expect(await screen.findByText("Diterima")).toBeInTheDocument();
+        expect(screen.getByTestId("progress-label")).toHaveTextContent("2 dari 5 temuan ditinjau");
+    });
+
+    it("requires a rationale before Abaikan can be saved and posts it", async () => {
+        mocks.getContract.mockResolvedValue(DETAIL);
+        mocks.postContractFeedback.mockResolvedValue({
+            id: "f1", review_id: "r1", user_id: "u1", finding_type: "red_flag", finding_id: "RF-001", action: "dismiss",
+            original_severity: "CRITICAL", adjusted_severity: null, original_text: null, edited_text: null, rationale: "Bukan risiko", created_at: "",
+        });
+        const user = userEvent.setup();
+        render(<ReviewWorkspace reviewId="r1" />);
+        const card = (await screen.findByText("Klien Bukan Merupakan Badan Usaha")).closest("div.rounded-xl") as HTMLElement;
+
+        await user.click(within(card).getByRole("button", { name: /Abaikan/ }));
+        expect(within(card).getByRole("button", { name: /Simpan/ })).toBeDisabled();
+        await user.type(within(card).getByPlaceholderText("Tambahkan alasan..."), "Bukan risiko");
+        const save = within(card).getByRole("button", { name: /Simpan/ });
+        expect(save).toBeEnabled();
+        await user.click(save);
+
+        await waitFor(() => expect(mocks.postContractFeedback).toHaveBeenCalledWith("r1", expect.objectContaining({
+            finding_type: "red_flag", finding_id: "RF-001", action: "dismiss", rationale: "Bukan risiko", original_severity: "CRITICAL",
+        })));
+        expect(await within(card).findByText("Umpan balik tercatat")).toBeInTheDocument();
     });
 });
