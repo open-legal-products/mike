@@ -3,6 +3,7 @@ import {
     MikeApiError,
     createReview,
     deleteContract,
+    getContract,
     getMe,
     getReviewStatus,
     listContracts,
@@ -45,6 +46,17 @@ describe("contracts API wrappers", () => {
         const { url, init } = lastFetchCall();
         expect(url).toBe("/api/contracts/me");
         expect(init.credentials).toBe("include");
+    });
+
+    it("getContract loads the full review with feedback and comments", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ review: { id: "r 1" }, feedback: [], comments: [] }),
+        );
+
+        const detail = await getContract("r 1");
+
+        expect(detail.review.id).toBe("r 1");
+        expect(lastFetchCall().url).toBe("/api/contracts/r%201");
     });
 
     it("listContracts hits the team-wide list", async () => {

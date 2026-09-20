@@ -4,6 +4,7 @@ import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
 import {
   deleteReview,
   extractContract,
+  getReviewDetail,
   getReviewStatus,
   isReviewOutput,
   parseCreateReviewBody,
@@ -76,5 +77,29 @@ describe("deleteReview", () => {
     const r = await deleteReview(fake.db as unknown as Db, { userId: "u1", reviewId: "r1" });
     expect(r).toMatchObject({ ok: true });
     expect(fake.calls[1].filters).toEqual([["eq", "id", "r1"]]);
+  });
+});
+
+describe("getReviewDetail", () => {
+  it("maps a missing review to not_found without loading feedback or comments", async () => {
+    const fake = scriptedDb([{ table: "reviews", data: null }]);
+    const r = await getReviewDetail(fake.db as unknown as Db, "missing");
+    expect(r).toMatchObject({ ok: false, kind: "not_found" });
+    expect(fake.calls.map((c) => c.table)).toEqual(["reviews"]);
+  });
+
+  it("returns the row with its feedback and comments scoped to the review", async () => {
+    const fake = scriptedDb([
+      { table: "reviews", data: { id: "r1", title: "PKS — A", ai_output: { risk_level: "HIGH" } } },
+      { table: "review_feedback", data: [{ id: "f1", finding_type: "red_flag", finding_id: "RF-001", action: "valid" }] },
+      { table: "manual_comments", data: [{ id: "c1", comment_text: "note" }] },
+    ]);
+    const r = await getReviewDetail(fake.db as unknown as Db, "r1");
+    expect(r).toMatchObject({
+      ok: true,
+      data: { review: { id: "r1" }, feedback: [{ finding_id: "RF-001" }], comments: [{ id: "c1" }] },
+    });
+    expect(fake.calls[1].filters).toContainEqual(["eq", "review_id", "r1"]);
+    expect(fake.calls[2].filters).toContainEqual(["eq", "review_id", "r1"]);
   });
 });

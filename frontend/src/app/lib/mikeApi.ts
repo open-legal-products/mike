@@ -5,6 +5,7 @@
 
 import { isPanelDocument } from "@/app/components/shared/types";
 import type { ReviewRow as ContractReviewRow } from "@/app/components/contracts/reviewHelpers";
+import type { ContractReviewDetail } from "@/app/components/contracts/reviewTypes";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import {
     UploadBatchError,
@@ -2998,6 +2999,12 @@ export async function getMe(): Promise<MeInfo> {
 
 export async function listContracts(): Promise<ContractReviewRow[]> {
     return apiRequest<ContractReviewRow[]>("/contracts");
+}
+
+export async function getContract(id: string): Promise<ContractReviewDetail> {
+    return apiRequest<ContractReviewDetail>(
+        `/contracts/${encodeURIComponent(id)}`,
+    );
 }
 
 export async function deleteContract(id: string): Promise<void> {

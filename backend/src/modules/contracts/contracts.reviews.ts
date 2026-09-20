@@ -11,6 +11,7 @@ import type { Db } from "../../lib/supabase";
 import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serviceResult";
 import { callJanusTool } from "../../lib/janusTools";
 import { buildReviewContextFor } from "./contracts.context";
+import type { ManualCommentRow, ReviewDetail, ReviewDetailRow, ReviewFeedbackRow } from "./contracts.types";
 
 // Narrow list payload — the dashboard never needs contract_text/contract_html/
 // ai_output, which are large. Keep in sync with the columns the dashboard renders.
@@ -211,6 +212,30 @@ export async function runReview(
       console.error(`[contracts] failed to mark ${reviewId} failed:`, e2);
     }
   }
+}
+
+/**
+ * Everything the workspace page needs in one round trip: the full review row
+ * (contract text/HTML + ai_output), every feedback row, and every manual
+ * comment (replies included; the client groups them by parent_comment_id).
+ */
+export async function getReviewDetail(db: Db, reviewId: string): Promise<ServiceResult<ReviewDetail>> {
+  const { data: review, error } = await db.from("reviews").select("*").eq("id", reviewId).maybeSingle();
+  if (error) return internalFailure(error);
+  if (!review) return failure("not_found", "Tinjauan tidak ditemukan.");
+
+  const [{ data: feedback, error: fbError }, { data: comments, error: cError }] = await Promise.all([
+    db.from("review_feedback").select("*").eq("review_id", reviewId).order("created_at", { ascending: true }),
+    db.from("manual_comments").select("*").eq("review_id", reviewId).order("created_at", { ascending: true }),
+  ]);
+  if (fbError) return internalFailure(fbError);
+  if (cError) return internalFailure(cError);
+
+  return ok({
+    review: review as unknown as ReviewDetailRow,
+    feedback: (feedback ?? []) as unknown as ReviewFeedbackRow[],
+    comments: (comments ?? []) as unknown as ManualCommentRow[],
+  });
 }
 
 export async function getReviewStatus(db: Db, reviewId: string): Promise<ServiceResult<ReviewStatus>> {

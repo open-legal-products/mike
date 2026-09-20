@@ -1,6 +1,7 @@
 // HTTP layer for the contracts module (Janus contract review inside Mike):
 //   GET    /contracts               team-wide review list for the dashboard
 //   GET    /contracts/me            caller identity + admin flag (client-side gating)
+//   GET    /contracts/:id           full review + feedback + comments (workspace)
 //   POST   /contracts/upload        raw DOCX bytes → extracted text + HTML
 //   POST   /contracts               create a review row and start the async AI review
 //   GET    /contracts/:id/status    poll review processing state
@@ -25,6 +26,7 @@ import {
   deleteReview,
   extractContract,
   getCallerIdentity,
+  getReviewDetail,
   getReviewStatus,
   listReviews,
   parseCreateReviewBody,
@@ -90,6 +92,12 @@ contractsRouter.post("/", asyncRoute(async (req, res) => {
   );
 
   res.status(201).json(created.data);
+}));
+
+contractsRouter.get("/:id", asyncRoute(async (req, res) => {
+  const result = await getReviewDetail(createServerSupabase(), req.params.id);
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.json(result.data);
 }));
 
 contractsRouter.get("/:id/status", asyncRoute(async (req, res) => {

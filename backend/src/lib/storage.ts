@@ -40,10 +40,14 @@ const CHECKSUM_DEFAULTS = {
   responseChecksumValidation: "WHEN_REQUIRED",
 } as const;
 
+// Cloudflare R2 accepts "auto"; Supabase's S3-compatible endpoint requires the
+// project's real region (e.g. "ap-southeast-1"), so it is configurable.
+const STORAGE_REGION = process.env.R2_REGION?.trim() || "auto";
+
 function getClient(): S3Client {
   if (!cachedClient) {
     cachedClient = new S3Client({
-      region: "auto",
+      region: STORAGE_REGION,
       endpoint: process.env.R2_ENDPOINT_URL!,
       forcePathStyle: true,
       ...CHECKSUM_DEFAULTS,
@@ -63,7 +67,7 @@ function getUploadSigningClient(): S3Client {
     return cachedUploadSigningClient.client;
   }
   const client = new S3Client({
-    region: "auto",
+    region: STORAGE_REGION,
     endpoint,
     forcePathStyle: true,
     ...CHECKSUM_DEFAULTS,
