@@ -4,6 +4,7 @@
  */
 
 import { isPanelDocument } from "@/app/components/shared/types";
+import type { ReviewRow as ContractReviewRow } from "@/app/components/contracts/reviewHelpers";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import {
     UploadBatchError,
@@ -2980,4 +2981,84 @@ export async function deleteWorkflowAsset(
     await apiRequest(`/workflows/${workflowId}/assets/${assetId}`, {
         method: "DELETE",
     });
+}
+
+// ── Contracts (Janus contract review) ────────────────────────────────────────
+// Backend module: backend/src/modules/contracts (mounted at /contracts).
+
+export interface MeInfo {
+    userId: string;
+    email: string | null;
+    isAdmin: boolean;
+}
+
+export async function getMe(): Promise<MeInfo> {
+    return apiRequest<MeInfo>("/contracts/me");
+}
+
+export async function listContracts(): Promise<ContractReviewRow[]> {
+    return apiRequest<ContractReviewRow[]>("/contracts");
+}
+
+export async function deleteContract(id: string): Promise<void> {
+    await apiRequest<void>(`/contracts/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+    });
+}
+
+export interface ExtractedContract {
+    contract_text: string;
+    contract_html: string | null;
+    filename: string;
+}
+
+/**
+ * Sends the DOCX as a raw body (not multipart): the backend reads the bytes
+ * straight into mammoth, and the filename travels in the query string.
+ */
+export async function uploadContractFile(
+    file: File,
+): Promise<ExtractedContract> {
+    return apiRequest<ExtractedContract>(
+        `/contracts/upload?filename=${encodeURIComponent(file.name)}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: file,
+        },
+    );
+}
+
+export interface CreateReviewInput {
+    title?: string;
+    client_name: string;
+    document_type: string;
+    project_context?: string;
+    review_focus: string[];
+    contract_text: string;
+    contract_html: string | null;
+    contract_filename: string | null;
+}
+
+export async function createReview(
+    input: CreateReviewInput,
+): Promise<{ id: string; status: string }> {
+    return apiRequest("/contracts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+    });
+}
+
+export interface ReviewStatus {
+    id: string;
+    status: string;
+    risk_level: string | null;
+    recommendation: string | null;
+}
+
+export async function getReviewStatus(id: string): Promise<ReviewStatus> {
+    return apiRequest<ReviewStatus>(
+        `/contracts/${encodeURIComponent(id)}/status`,
+    );
 }
