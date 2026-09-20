@@ -6,6 +6,7 @@ COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
 COPY packages/contracts /packages/contracts
+COPY packages/pdf-text-order /packages/pdf-text-order
 COPY word-addin/src /word-addin/src
 
 RUN npm run build

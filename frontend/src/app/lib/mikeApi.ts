@@ -4,6 +4,13 @@
  */
 
 import { isPanelDocument } from "@/app/components/shared/types";
+import type { ReviewRow as ContractReviewRow } from "@/app/components/contracts/reviewHelpers";
+import type {
+    ContractReviewDetail,
+    ManualCommentRow,
+    ReviewFeedbackRow,
+    RevisionEditRow,
+} from "@/app/components/contracts/reviewTypes";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import {
     UploadBatchError,
@@ -2980,4 +2987,275 @@ export async function deleteWorkflowAsset(
     await apiRequest(`/workflows/${workflowId}/assets/${assetId}`, {
         method: "DELETE",
     });
+}
+
+// ── Contracts (Janus contract review) ────────────────────────────────────────
+// Backend module: backend/src/modules/contracts (mounted at /contracts).
+
+export interface MeInfo {
+    userId: string;
+    email: string | null;
+    isAdmin: boolean;
+}
+
+export async function getMe(): Promise<MeInfo> {
+    return apiRequest<MeInfo>("/contracts/me");
+}
+
+export async function listContracts(): Promise<ContractReviewRow[]> {
+    return apiRequest<ContractReviewRow[]>("/contracts");
+}
+
+export async function getContract(id: string): Promise<ContractReviewDetail> {
+    return apiRequest<ContractReviewDetail>(
+        `/contracts/${encodeURIComponent(id)}`,
+    );
+}
+
+export async function deleteContract(id: string): Promise<void> {
+    await apiRequest<void>(`/contracts/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+    });
+}
+
+export interface ExtractedContract {
+    contract_text: string;
+    contract_html: string | null;
+    filename: string;
+    /** Stashed original DOCX (present when object storage is configured). */
+    docx_key?: string | null;
+}
+
+/**
+ * Sends the DOCX as a raw body (not multipart): the backend reads the bytes
+ * straight into mammoth, and the filename travels in the query string.
+ */
+export async function uploadContractFile(
+    file: File,
+): Promise<ExtractedContract> {
+    return apiRequest<ExtractedContract>(
+        `/contracts/upload?filename=${encodeURIComponent(file.name)}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: file,
+        },
+    );
+}
+
+export interface CreateReviewInput {
+    title?: string;
+    client_name: string;
+    document_type: string;
+    project_context?: string;
+    review_focus: string[];
+    contract_text: string;
+    contract_html: string | null;
+    contract_filename: string | null;
+    contract_docx_path?: string | null;
+}
+
+/** Same-origin URL that streams the review's original DOCX through the gateway. */
+export function getContractFileUrl(reviewId: string): string {
+    return `${API_BASE}/contracts/${encodeURIComponent(reviewId)}/file`;
+}
+
+export async function createReview(
+    input: CreateReviewInput,
+): Promise<{ id: string; status: string }> {
+    return apiRequest("/contracts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+    });
+}
+
+export interface ReviewStatus {
+    id: string;
+    status: string;
+    risk_level: string | null;
+    recommendation: string | null;
+}
+
+export async function getReviewStatus(id: string): Promise<ReviewStatus> {
+    return apiRequest<ReviewStatus>(
+        `/contracts/${encodeURIComponent(id)}/status`,
+    );
+}
+
+export interface ContractFeedbackInput {
+    finding_type: string;
+    finding_id: string;
+    action: string;
+    original_severity?: string | null;
+    adjusted_severity?: string | null;
+    original_text?: string | null;
+    edited_text?: string | null;
+    rationale?: string | null;
+}
+
+export async function postContractFeedback(
+    reviewId: string,
+    input: ContractFeedbackInput,
+): Promise<ReviewFeedbackRow> {
+    return apiRequest<ReviewFeedbackRow>(
+        `/contracts/${encodeURIComponent(reviewId)}/feedback`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(input),
+        },
+    );
+}
+
+export async function postContractFeedbackBulk(
+    reviewId: string,
+    items: ContractFeedbackInput[],
+): Promise<ReviewFeedbackRow[]> {
+    return apiRequest<ReviewFeedbackRow[]>(
+        `/contracts/${encodeURIComponent(reviewId)}/feedback/bulk`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items }),
+        },
+    );
+}
+
+export interface ContractCommentInput {
+    comment_type: "note" | "revision_suggestion" | "question" | "red_flag";
+    comment_text: string;
+    highlight_text?: string | null;
+    highlight_start?: number | null;
+    highlight_end?: number | null;
+    suggested_text?: string | null;
+    parent_comment_id?: string | null;
+}
+
+export async function postContractComment(
+    reviewId: string,
+    input: ContractCommentInput,
+): Promise<ManualCommentRow> {
+    return apiRequest<ManualCommentRow>(
+        `/contracts/${encodeURIComponent(reviewId)}/comments`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(input),
+        },
+    );
+}
+
+export interface ContractMissedClauseInput {
+    highlight_text: string;
+    highlight_start?: number | null;
+    highlight_end?: number | null;
+    suggested_category:
+        | "red_flag"
+        | "revision"
+        | "clarification"
+        | "missing_clause"
+        | "yellow_flag";
+    user_note: string;
+}
+
+export async function postContractMissedClause(
+    reviewId: string,
+    input: ContractMissedClauseInput,
+): Promise<{ id: string }> {
+    return apiRequest<{ id: string }>(
+        `/contracts/${encodeURIComponent(reviewId)}/missed-clause`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(input),
+        },
+    );
+}
+
+export async function saveContractClause(
+    reviewId: string,
+    input: { title: string; wording: string },
+): Promise<{ id: string }> {
+    return apiRequest<{ id: string }>(
+        `/contracts/${encodeURIComponent(reviewId)}/clauses`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(input),
+        },
+    );
+}
+
+export interface ContractPatch {
+    status?: string;
+    lifecycle_stage?: string;
+    signing_date?: string | null;
+    expiry_date?: string | null;
+    renewal_date?: string | null;
+    coo_recommendation_override?: string | null;
+    coo_override_rationale?: string | null;
+}
+
+export async function patchContract(
+    reviewId: string,
+    patch: ContractPatch,
+): Promise<ContractPatch & { id: string }> {
+    return apiRequest<ContractPatch & { id: string }>(
+        `/contracts/${encodeURIComponent(reviewId)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patch),
+        },
+    );
+}
+
+export interface ContractRedlineProjection {
+    projected: number;
+    failed: number;
+    skipped: number;
+    edits: RevisionEditRow[];
+}
+
+/** Turn the AI revisions into tracked changes in the stored DOCX (idempotent). */
+export async function projectContractRedline(
+    reviewId: string,
+): Promise<ContractRedlineProjection> {
+    return apiRequest<ContractRedlineProjection>(
+        `/contracts/${encodeURIComponent(reviewId)}/redline/project`,
+        { method: "POST" },
+    );
+}
+
+export interface ContractRevisionResolution {
+    edit: RevisionEditRow;
+    feedback: ReviewFeedbackRow;
+}
+
+/** Terima / Tolak / Ubah a projected revision: rewrites the DOCX and records feedback. */
+export async function resolveContractRevision(
+    reviewId: string,
+    revisionId: string,
+    verb: "accept" | "reject" | "edit",
+    body: { rationale?: string | null; edited_text?: string | null } = {},
+): Promise<ContractRevisionResolution> {
+    return apiRequest<ContractRevisionResolution>(
+        `/contracts/${encodeURIComponent(reviewId)}/revisions/${encodeURIComponent(revisionId)}/${verb}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        },
+    );
+}
+
+/** Download URL for the working redline (or the untouched original). */
+export function getContractDownloadUrl(
+    reviewId: string,
+    variant: "current" | "original" = "current",
+): string {
+    const params = new URLSearchParams({ download: "1" });
+    if (variant === "original") params.set("variant", "original");
+    return `${API_BASE}/contracts/${encodeURIComponent(reviewId)}/file?${params.toString()}`;
 }

@@ -11,6 +11,7 @@ COPY backend/package*.json ./
 RUN npm ci
 COPY backend/ ./
 COPY packages/contracts /packages/contracts
+COPY packages/pdf-text-order /packages/pdf-text-order
 RUN npm run build
 
 ENV NODE_ENV=production
