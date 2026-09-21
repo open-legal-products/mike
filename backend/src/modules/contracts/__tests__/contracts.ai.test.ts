@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatFn, ChatRequest, ChatResponse } from "../../../lib/openRouterChat";
 import {
   FALLBACK_MODEL,
+  PLAYBOOK_COMPLIANCE_SLUGS,
   PRIMARY_MODEL,
+  REVIEW_TOOL,
   buildCooDecisions,
   buildMemoUserMessage,
   buildReviewSystemPrompt,
@@ -52,6 +54,14 @@ describe("review prompt", () => {
     expect(prompt).toContain('RULE 1 (CRITICAL) — Liability cap: ≤ 10x biaya. Thresholds: {"max_multiple":10}.');
     expect(prompt).toContain("GP1 (HIGH) — Prefer own template: Flag client templates.");
     expect(prompt).toContain('memanggil function "submit_contract_review"');
+  });
+
+  it("enumerates the compliance slugs in the tool schema (Gemini ignores additionalProperties)", () => {
+    const pc = (REVIEW_TOOL.function.parameters as { properties: Record<string, { properties?: Record<string, unknown>; required?: string[]; additionalProperties?: unknown }> }).properties.playbook_compliance;
+    expect(Object.keys(pc.properties ?? {})).toEqual([...PLAYBOOK_COMPLIANCE_SLUGS]);
+    expect(pc.required).toEqual([...PLAYBOOK_COMPLIANCE_SLUGS]);
+    expect(pc.additionalProperties).toBeUndefined();
+    expect(buildReviewSystemPrompt(RULES)).toContain(PLAYBOOK_COMPLIANCE_SLUGS.join(", "));
   });
 
   it("fills the user message with defaults for absent context", () => {
