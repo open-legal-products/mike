@@ -23,6 +23,7 @@ import { auditRouter } from "./modules/audit/audit.routes";
 import { authRouter } from "./modules/auth/auth.routes";
 import { uploadSessionsRouter } from "./modules/uploads/uploads.routes";
 import { contractsRouter } from "./modules/contracts/contracts.routes";
+import { playbookRouter } from "./modules/playbook/playbook.routes";
 import {
   projectMemoryRouter,
   userMemoryRouter,
@@ -308,6 +309,7 @@ app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);
 app.use("/upload-sessions", uploadSessionsRouter);
 app.use("/contracts", contractsRouter);
+app.use("/playbook", playbookRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

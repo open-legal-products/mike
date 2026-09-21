@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   PanelLeft,
+  BookOpen,
   FileCheck2,
   ChevronsUpDown,
   ChevronDown,
@@ -49,6 +50,7 @@ const NAV_ITEMS = [
     { href: "/assistant", label: "Assistant", icon: ChatSkeuoIcon },
     { href: "/ide", label: "IDE", icon: IdeSkeuoIcon },
     { href: "/contracts", label: "Contracts", icon: FileCheck2 },
+    { href: "/playbook", label: "Playbook", icon: BookOpen },
     { href: "/projects", label: "Projects", icon: FolderSkeuoIcon },
     { href: "/library", label: "Library", icon: LibrarySkeuoIcon },
     {

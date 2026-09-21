@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { RuleRefButton } from "@/app/components/playbook/PlaybookRuleDrawer";
 import { Crosshair } from "lucide-react";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { patchContract, postContractFeedback, saveContractClause } from "@/app/lib/mikeApi";
@@ -191,7 +192,8 @@ export function DraftFindings({ review, output, feedbackMap, onFeedbackSaved, on
                             <Badge color={SEVERITY_COLOR[flag.severity]}>{flag.severity}</Badge>
                         </div>
                         <p className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-500">
-                            <span>{flag.clause}{flag.playbook_rule ? ` · ${flag.playbook_rule}` : ""}</span>
+                            <span>{flag.clause}</span>
+                            {flag.playbook_rule ? <RuleRefButton ruleNumber={flag.playbook_rule} /> : null}
                             <LocateButton text={flag.highlight_text} onLocate={onLocate} />
                         </p>
                         <p className="mt-2 leading-6">{flag.issue}</p>

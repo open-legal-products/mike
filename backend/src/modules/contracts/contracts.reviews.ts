@@ -10,6 +10,7 @@
 import type { Db } from "../../lib/supabase";
 import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serviceResult";
 import { callJanusTool } from "../../lib/janusTools";
+import { listPromptRules } from "../playbook/playbook.service";
 import { buildReviewContextFor } from "./contracts.context";
 import { isStashedDocxKey } from "./contracts.files";
 import type { ManualCommentRow, ReviewDetail, ReviewDetailRow, ReviewFeedbackRow } from "./contracts.types";
@@ -188,7 +189,13 @@ export async function runReview(
   input: Pick<CreateReviewInput, "contract_text" | "client_name" | "document_type" | "project_context" | "review_focus">,
 ): Promise<void> {
   try {
-    const ctx = await buildReviewContextFor(db, input.client_name, input.document_type);
+    // Mike owns the playbook: send the active rules with every review so an
+    // edit on /playbook applies to the next review, no redeploy (Janus parity).
+    const [ctx, playbookRules] = await Promise.all([
+      buildReviewContextFor(db, input.client_name, input.document_type),
+      listPromptRules(db),
+    ]);
+    if (playbookRules.length === 0) throw new Error("Tidak ada aturan playbook aktif; tinjauan dibatalkan.");
     const text = await callJanusTool("run_contract_review", {
       contract_text: input.contract_text,
       client_name: input.client_name,
@@ -197,6 +204,7 @@ export async function runReview(
       review_focus: input.review_focus,
       clause_library_context: ctx.clauseLibraryContext,
       past_feedback_context: ctx.pastFeedbackContext,
+      playbook_rules: playbookRules,
     });
     const ai: unknown = JSON.parse(text);
     if (!isReviewOutput(ai)) {
