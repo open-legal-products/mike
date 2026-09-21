@@ -7,6 +7,15 @@ import { normalizeWithMap } from "./tools/documentOps";
 const PAGE_BREAK_SENTINEL = "[[PAGE_BREAK]]";
 const ELLIPSIS_PATTERN = /\.{3}|…/;
 
+// Cross-page quote fragments should straddle one page boundary, but extracted
+// text may place headers, footers, or footnotes between them. Keep the bound
+// deliberately generous while refusing to join passages from distant pages.
+const MAX_PAGE_BREAK_SPAN_CHARS = 5_000;
+
+// Repeated phrases require trying later occurrences when an early match cannot
+// form a valid chain. Bound that search and fail closed on pathological input.
+const MAX_LOCATE_ATTEMPTS = 64;
+
 // Source-text sentinels returned by readDocumentContent when a document can't
 // be read. Treat these as "no source" so every quote falls back to unverified
 // rather than false-negative matching against the literal error string.
@@ -46,6 +55,63 @@ export function locateQuote(
     locateNormalized(source, quote, {}) ??
     locateNormalized(source, quote, { stripPunctuation: true })
   );
+}
+
+/** Locate a quote at or after `from`, preserving offsets into `source`. */
+function locateQuoteFrom(
+  source: string,
+  quote: string,
+  from: number,
+): QuoteLocation | null {
+  if (from <= 0) return locateQuote(source, quote);
+  if (from >= source.length) return null;
+  const location = locateQuote(source.slice(from), quote);
+  return location
+    ? {
+        start: location.start + from,
+        end: location.end + from,
+        excerpt: location.excerpt,
+      }
+    : null;
+}
+
+/**
+ * Locate segments in document order with a bounded gap. Backtracking lets a
+ * later occurrence of repeated text satisfy the complete chain.
+ */
+function locateSegmentsInOrder(
+  source: string,
+  segments: string[],
+  maxGap: number,
+): QuoteLocation[] | null {
+  let attempts = 0;
+
+  const search = (
+    index: number,
+    from: number,
+    previousEnd: number | null,
+  ): QuoteLocation[] | null => {
+    if (index === segments.length) return [];
+
+    let cursor = from;
+    while (attempts < MAX_LOCATE_ATTEMPTS) {
+      attempts += 1;
+      const location = locateQuoteFrom(source, segments[index], cursor);
+      if (!location) return null;
+      if (previousEnd !== null && location.start - previousEnd > maxGap) {
+        return null;
+      }
+
+      const remaining = search(index + 1, location.end, location.end);
+      if (remaining) return [location, ...remaining];
+
+      cursor = location.start + 1;
+    }
+
+    return null;
+  };
+
+  return search(0, 0, null);
 }
 
 function locateNormalized(
@@ -97,21 +163,23 @@ export function verifyQuoteAgainstSource(
       return { verified: false, needs_correction: false };
     }
 
-    // Enforce document order using the first plain-text fragment of each
-    // segment as a positional anchor.
-    const anchors = segments.map((seg) => {
-      const first = seg.split(ELLIPSIS_PATTERN)[0].trim();
-      return locateQuote(source, first.length > 0 ? first : seg);
-    });
-    if (anchors.some((loc) => !loc)) {
+    // Enforce document order and proximity using the first plain-text fragment
+    // of each segment as a positional anchor. Searching as a chain handles
+    // repeated text by trying later occurrences when necessary.
+    const anchorSegments = segments.map(
+      (segment) =>
+        segment
+          .split(ELLIPSIS_PATTERN)
+          .map((fragment) => fragment.trim())
+          .find((fragment) => /[\p{L}\p{N}]/u.test(fragment)) ?? segment,
+    );
+    const anchors = locateSegmentsInOrder(
+      source,
+      anchorSegments,
+      MAX_PAGE_BREAK_SPAN_CHARS,
+    );
+    if (!anchors) {
       return { verified: false, needs_correction: false };
-    }
-    for (let i = 1; i < anchors.length; i++) {
-      const prev = anchors[i - 1]!;
-      const curr = anchors[i]!;
-      if (curr.start < prev.end) {
-        return { verified: false, needs_correction: false };
-      }
     }
 
     return {
