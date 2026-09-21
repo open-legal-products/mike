@@ -12,7 +12,11 @@
 
 import type { Db } from "../../lib/supabase";
 import { ollamaAuthHeaders as authHeaders } from "../../lib/llm/providers";
-import { isSupportedOpenCodeGoModel } from "../../lib/llm/models";
+import {
+    CLAUDE_CODE_MODELS,
+    isClaudeCodeEnabled,
+    isSupportedOpenCodeGoModel,
+} from "../../lib/llm/models";
 import { configuredEndpointSummaries } from "../../lib/llm/registry";
 import { getUserApiKeys } from "../user/user.service";
 
@@ -110,6 +114,26 @@ export async function listOllamaModels(): Promise<LocalModel[]> {
     } catch {
         return [];
     }
+}
+
+const CLAUDE_CODE_LABELS: Record<string, string> = {
+    "claude-code/opus": "Claude Opus (subscription)",
+    "claude-code/sonnet": "Claude Sonnet (subscription)",
+    "claude-code/haiku": "Claude Haiku (subscription)",
+};
+
+/**
+ * Claude subscription models served by the backend's local Claude Code.
+ * Returns [] unless CLAUDE_CODE_ENABLED is set, so the picker only offers them
+ * when the server can actually run them.
+ */
+export function listClaudeCodeModels(): LocalModel[] {
+    if (!isClaudeCodeEnabled()) return [];
+    return CLAUDE_CODE_MODELS.map((id) => ({
+        id,
+        label: CLAUDE_CODE_LABELS[id] ?? id,
+        group: "Claude Code",
+    }));
 }
 
 /** Secret-free configured endpoint catalog, filtered to models this user can use. */

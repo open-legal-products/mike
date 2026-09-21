@@ -24,6 +24,7 @@ export function isAllowedModelId(
         ALLOWED_MODEL_IDS.has(id) ||
         configuredModelIds.includes(id) ||
         id.startsWith("ollama/") ||
+        id.startsWith("claude-code/") ||
         ROUTER_SLUGS.some((slug) => id.startsWith(`${slug}/`))
     );
 }

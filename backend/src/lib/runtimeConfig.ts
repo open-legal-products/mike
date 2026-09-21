@@ -81,6 +81,41 @@ export function uploadConversionTimeoutMs(
 }
 
 /**
+ * Silence ceiling for one Claude Code turn. This provider drives a local
+ * `claude` subprocess rather than an HTTP stream, so a wedged turn has no
+ * socket to time out and would hold its SSE connection open indefinitely. The
+ * timer measures time since the last output, not total elapsed time, so a long
+ * turn that keeps streaming or calling tools is never cut short. `0` disables
+ * the guard.
+ */
+export function claudeCodeIdleTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.CLAUDE_CODE_IDLE_TIMEOUT_MS?.trim();
+  if (!raw) return 120_000;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 120_000;
+  return parsed === 0 ? 0 : clamp(parsed, 10_000, 30 * 60_000);
+}
+
+/**
+ * Total budget for one Claude Code turn, measured from the first byte sent.
+ * The idle guard above ends a turn that goes quiet; this one ends a turn that
+ * keeps producing output or tool calls but never finishes, which silence alone
+ * cannot catch. It is deliberately generous, because unlike the idle timer it
+ * cannot tell productive work from a loop. `0` disables the guard.
+ */
+export function claudeCodeTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.CLAUDE_CODE_TIMEOUT_MS?.trim();
+  if (!raw) return 10 * 60_000;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 10 * 60_000;
+  return parsed === 0 ? 0 : clamp(parsed, 60_000, 4 * 60 * 60_000);
+}
+
+/**
  * Wall-clock budget for one upload job. Past this point the worker stops
  * renewing its lease so another worker can steal and retry the job.
  */

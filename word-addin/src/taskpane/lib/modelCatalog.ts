@@ -128,6 +128,18 @@ export function openCodeGoModelOptions(models: string[]): ModelOption[] {
   }));
 }
 
+/** Kept in sync with frontend ModelToggle.tsx isKeylessModelGroup. */
+export function isKeylessModelGroup(group: ModelGroup): boolean {
+  return group === "Local" || group === "Claude Code";
+}
+
+/** Kept in sync with frontend ModelToggle.tsx claudeCodeModelOptions. */
+export function claudeCodeModelOptions(
+  models: readonly ModelOption[],
+): ModelOption[] {
+  return models.map((model) => ({ ...model, source: "Claude Code" }));
+}
+
 const ROUTER_VENDOR_GROUPS: Record<string, string> = {
   anthropic: "Anthropic",
   claude: "Anthropic",
@@ -182,6 +194,7 @@ export function isAllowedModelId(id: string): boolean {
   return (
     ALLOWED_MODEL_IDS.has(id) ||
     id.startsWith("ollama/") ||
+    id.startsWith("claude-code/") ||
     ROUTER_SLUGS.some((slug) => id.startsWith(`${slug}/`))
   );
 }
@@ -191,6 +204,8 @@ export function isModelAvailable(
   status: ApiKeyStatus | null,
 ): boolean {
   if (modelId.startsWith("ollama/")) return true;
+  // Claude Code subscription models need no key (and are not "Anthropic").
+  if (modelId.startsWith("claude-code/")) return true;
   // Unknown status (the key-status preflight failed even after a retry) fails
   // OPEN: the backend authoritatively rejects a model it cannot serve, so
   // blocking sends here on a flaky WKWebView request would brick the composer
@@ -200,7 +215,7 @@ export function isModelAvailable(
   if (modelId.startsWith("vercel/")) return !!status.vercel;
   if (modelId.startsWith("opencode-go/")) return !!status["opencode-go"];
   const model = STATIC_MODELS.find((item) => item.id === modelId);
-  if (!model || model.group === "Local") return false;
+  if (!model || isKeylessModelGroup(model.group)) return false;
   if (model.group === "Anthropic") return !!status.claude;
   if (model.group === "Google") return !!status.gemini;
   return !!status.openai;

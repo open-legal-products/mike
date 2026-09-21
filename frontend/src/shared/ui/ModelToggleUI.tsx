@@ -99,6 +99,7 @@ export const MODEL_TOGGLE_GROUPS: readonly ModelToggleGroup[] = [
   "Mistral AI",
   "Configured",
   "Local",
+  "Claude Code",
   "Other providers",
 ];
 

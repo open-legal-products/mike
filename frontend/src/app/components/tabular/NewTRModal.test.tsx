@@ -62,6 +62,10 @@ vi.mock("@/app/hooks/useConfiguredModels", () => ({
     useConfiguredModels: () => [],
 }));
 
+vi.mock("@/app/hooks/useClaudeCodeModels", () => ({
+    useClaudeCodeModels: () => [],
+}));
+
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: vi.fn() }),
 }));

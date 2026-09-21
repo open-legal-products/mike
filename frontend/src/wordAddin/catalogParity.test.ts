@@ -83,6 +83,8 @@ describe("word add-in catalog parity", () => {
             "vercel/openai/gpt-5.4",
             "opencode-go/glm-5",
             "ollama/llama3:8b",
+            "claude-code/opus",
+            "claude-code/haiku",
             "openrouter",
             "opencode-go",
             "",
@@ -156,6 +158,9 @@ describe("word add-in catalog parity", () => {
             "openrouter/openai/gpt-5.4",
             "vercel/openai/gpt-5.4",
             "opencode-go/glm-5",
+            "claude-code/opus",
+            "claude-code/sonnet",
+            "claude-code/haiku",
         ];
         for (const configured of providers) {
             const addinStatus = {

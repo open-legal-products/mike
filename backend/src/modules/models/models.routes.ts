@@ -12,6 +12,7 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
 import {
+    listClaudeCodeModels,
     listOllamaModels,
     listConfiguredModels,
     listOpenCodeGoModels,
@@ -58,6 +59,11 @@ async function sendCatalog(
 modelsRouter.get("/ollama", requireAuth, asyncRoute(async (_req, res) => {
     res.json({ models: await listOllamaModels() });
 }));
+
+// GET /models/claude-code
+modelsRouter.get("/claude-code", requireAuth, (_req, res) => {
+    res.json({ models: listClaudeCodeModels() });
+});
 
 // GET /models/configured
 modelsRouter.get("/configured", requireAuth, asyncRoute(async (_req, res) => {

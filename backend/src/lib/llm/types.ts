@@ -10,7 +10,8 @@ export type Provider =
     | "openrouter"
     | "vercel"
     | "opencode-go"
-    | "ollama";
+    | "ollama"
+    | "claude-code";
 
 export const REASONING_LEVELS = [
     "none",

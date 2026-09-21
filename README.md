@@ -21,6 +21,7 @@ Website: [mikeoss.com](https://mikeoss.com)
 - Verify citations and research US case law with CourtListener
 - Work from Microsoft Word with the beta task-pane add-in
 - Run supported language models locally through Ollama
+- Run Claude on your own Claude Pro/Max subscription through Claude Code
 
 ## Quick start
 
@@ -42,7 +43,8 @@ and local email capture without requiring managed infrastructure.
    ```
 
 3. Add an Anthropic, Gemini, or OpenAI API key to `backend/.env`, unless you
-   plan to use Ollama exclusively.
+   plan to use Ollama exclusively. To use a Claude subscription instead of an
+   API key, follow [Claude subscription models](docs/claude-subscription.md).
 
 4. Start the stack:
 
@@ -74,6 +76,7 @@ authentication behavior, Ollama setup, and first-run guidance.
 - [Local development](docs/local-development.md)
 - [Manual and production deployment](docs/deployment.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Claude subscription models](docs/claude-subscription.md)
 - [CourtListener integration](docs/courtlistener.md)
 - [Microsoft Word add-in](word-addin/README.md)
 - [Tamper-evident exports](docs/tamper-evident-exports.md)

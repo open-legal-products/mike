@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetModelRegistryCache } from "../../../lib/llm/registry";
 import { missingModelApiKey } from "../tabular.shared";
@@ -45,5 +45,20 @@ describe("configured tabular model authentication", () => {
         expect(
             missingModelApiKey("user-key-cloud", { openai: "user-key" }),
         ).toBeNull();
+    });
+});
+
+describe("Claude Code tabular authentication", () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    // missingModelApiKey feeds the "add your API key" popup. A subscription
+    // provider has no key to add, so it must never answer through that path.
+    it("never reports Claude Code as a missing key, enabled or not", () => {
+        vi.stubEnv("CLAUDE_CODE_ENABLED", "true");
+        expect(missingModelApiKey("claude-code/opus", {})).toBeNull();
+        vi.stubEnv("CLAUDE_CODE_ENABLED", "");
+        expect(missingModelApiKey("claude-code/opus", {})).toBeNull();
     });
 });

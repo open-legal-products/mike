@@ -1,6 +1,8 @@
 import {
+    CLAUDE_CODE_LOW_MODELS,
     CLAUDE_LOW_MODELS,
     GEMINI_LOW_MODELS,
+    isClaudeCodeEnabled,
     OPENAI_LOW_MODELS,
     providerForModel,
     normalizeReasoningLevelForModel,
@@ -27,6 +29,14 @@ export const MODEL_REQUIRED_DETAIL =
 
 export const TABULAR_MODEL_REQUIRED_DETAIL =
     "Select a model for this tabular review before running it.";
+
+/**
+ * Claude Code authenticates with the operator's subscription, so when it is
+ * switched off the remedy is a server setting rather than a key the user could
+ * add. Its failures must stay clear of the "add your API key" prompts.
+ */
+export const CLAUDE_CODE_DISABLED_DETAIL =
+    "Claude Code models are disabled on this server. Select another model.";
 
 export const DEFAULT_REASONING_LEVEL: ReasoningLevel = "high";
 
@@ -82,6 +92,8 @@ export function hasApiKeyForModel(
 ): boolean {
     const provider = providerForModel(model);
     if (provider === "ollama") return true;
+    // Keyless, but only while the operator has turned the local CLI on.
+    if (provider === "claude-code") return isClaudeCodeEnabled();
     if (provider === "openai-compatible") {
         const configured = getConfiguredModel(model);
         return (
@@ -139,6 +151,14 @@ export async function resolveEffectiveChatModel(args: {
                 "throw",
             );
             if (!hasApiKeyForModel(model, args.apiKeys)) {
+                if (providerForModel(model) === "claude-code") {
+                    return {
+                        ok: false,
+                        status: 400,
+                        code: "model_unavailable",
+                        detail: CLAUDE_CODE_DISABLED_DETAIL,
+                    };
+                }
                 return {
                     ok: false,
                     status: 422,
@@ -214,6 +234,8 @@ export function titleModelForChat(
             return GEMINI_LOW_MODELS[0];
         case "openai":
             return OPENAI_LOW_MODELS[0];
+        case "claude-code":
+            return CLAUDE_CODE_LOW_MODELS[0];
         case "openrouter":
         case "vercel":
         case "opencode-go":

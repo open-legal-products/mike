@@ -49,6 +49,12 @@ describe("getModelProvider", () => {
         expect(getModelProvider("ollama/some-brand-new-model")).toBe("ollama");
     });
 
+    it("resolves claude-code/ ids to claude-code, never the claude provider", () => {
+        expect(getModelProvider("claude-code/opus")).toBe("claude-code");
+        expect(getModelProvider("claude-code/sonnet")).toBe("claude-code");
+        expect(getModelProvider("claude-code/haiku")).toBe("claude-code");
+    });
+
     it("resolves a provider for every model in SETTINGS_MODELS", () => {
         for (const model of SETTINGS_MODELS) {
             expect(getModelProvider(model.id)).not.toBeNull();
@@ -107,6 +113,13 @@ describe("isModelAvailable", () => {
     it("is true for ollama models even with no keys configured", () => {
         expect(isModelAvailable("ollama/llama3.2", keys({}))).toBe(true);
     });
+
+    it("is true for claude-code models without an Anthropic key", () => {
+        expect(isModelAvailable("claude-code/opus", keys({}))).toBe(true);
+        expect(
+            isModelAvailable("claude-code/haiku", keys({ gemini: true })),
+        ).toBe(true);
+    });
 });
 
 describe("isProviderAvailable", () => {
@@ -129,6 +142,13 @@ describe("isProviderAvailable", () => {
             isProviderAvailable("ollama", {} as unknown as ApiKeyState),
         ).toBe(true);
     });
+
+    it("treats claude-code as always available because a subscription needs no API key", () => {
+        expect(isProviderAvailable("claude-code", keys({}))).toBe(true);
+        expect(
+            isProviderAvailable("claude-code", {} as unknown as ApiKeyState),
+        ).toBe(true);
+    });
 });
 
 describe("providerLabel", () => {
@@ -139,6 +159,7 @@ describe("providerLabel", () => {
         expect(providerLabel("vercel")).toBe("Vercel AI Gateway");
         expect(providerLabel("opencode-go")).toBe("OpenCode Go");
         expect(providerLabel("ollama")).toBe("Local (Ollama)");
+        expect(providerLabel("claude-code")).toBe("Claude Code (subscription)");
         expect(providerLabel("gemini")).toBe("Google (Gemini)");
     });
 });
@@ -151,6 +172,7 @@ describe("modelGroupToProvider", () => {
         expect(modelGroupToProvider("OpenCode Go")).toBe("opencode-go");
         expect(modelGroupToProvider("Vercel AI Gateway")).toBe("vercel");
         expect(modelGroupToProvider("Local")).toBe("ollama");
+        expect(modelGroupToProvider("Claude Code")).toBe("claude-code");
         expect(modelGroupToProvider("Google")).toBe("gemini");
     });
 });

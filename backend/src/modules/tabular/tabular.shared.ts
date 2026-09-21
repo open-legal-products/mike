@@ -5,6 +5,7 @@
 // import them.
 
 import {
+    isClaudeCodeEnabled,
     providerForModel,
     resolveModel,
     type Provider,
@@ -17,7 +18,10 @@ import {
 } from "../../lib/llm/registry";
 import { getUserModelSettings } from "../user/user.service";
 import { resolveRequestedModel } from "../../lib/routerModels";
-import { TABULAR_MODEL_REQUIRED_DETAIL } from "../../lib/modelSelection";
+import {
+    CLAUDE_CODE_DISABLED_DETAIL,
+    TABULAR_MODEL_REQUIRED_DETAIL,
+} from "../../lib/modelSelection";
 import { UserFacingError } from "../../lib/userFacingError";
 import type { Db } from "../../lib/supabase";
 import type { ServiceFailure } from "../../lib/serviceResult";
@@ -111,6 +115,7 @@ function providerLabel(provider: Provider): string {
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
     if (provider === "ollama") return "Local (Ollama)";
+    if (provider === "claude-code") return "Claude Code";
     if (provider === "openai-compatible") return "Configured endpoint";
     return "Gemini";
 }
@@ -127,6 +132,9 @@ export function missingModelApiKey(
 ): MissingApiKey | null {
     const provider = providerForModel(model);
     if (provider === "ollama") return null; // local, no key
+    // Keyless: a disabled Claude Code is reported as an unavailable model
+    // below, not as a key the user could add.
+    if (provider === "claude-code") return null;
     if (provider === "openai-compatible") {
         const configured = getConfiguredModel(model);
         if (!configured) return null;
@@ -214,6 +222,18 @@ export async function validateSelectedModel(
     }
 
     const { api_keys: apiKeys } = await getUserModelSettings(userId, db);
+
+    if (providerForModel(selected) === "claude-code" && !isClaudeCodeEnabled()) {
+        return {
+            ok: false,
+            status: 400,
+            body: {
+                code: "model_unavailable",
+                detail: CLAUDE_CODE_DISABLED_DETAIL,
+            },
+        };
+    }
+
     const missingKey = missingModelApiKey(selected, apiKeys);
     if (missingKey) {
         return {

@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+    CLAUDE_CODE_DISABLED_DETAIL,
     hasApiKeyForModel,
     normalizeOptionalModelPreference,
     resolveEffectiveChatModel,
@@ -87,6 +88,11 @@ describe("resolveEffectiveReasoningLevel", () => {
 describe("resolveEffectiveChatModel", () => {
     const db = {} as Db;
 
+    // Env stubs below must not leak into the sibling cases in this file.
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
     it("uses an explicit request before persisted values", async () => {
         await expect(
             resolveEffectiveChatModel({
@@ -131,6 +137,38 @@ describe("resolveEffectiveChatModel", () => {
             ok: false,
             code: "model_required",
         });
+    });
+
+    // A disabled Claude Code is a server setting, so it must not be reported
+    // as a missing key: that code drives the "add your API key" prompts, and
+    // there is no key for a subscription provider.
+    it("reports a disabled Claude Code model as unavailable, not keyless", async () => {
+        vi.stubEnv("CLAUDE_CODE_ENABLED", "");
+        await expect(
+            resolveEffectiveChatModel({
+                requested: "claude-code/opus",
+                apiKeys: {},
+                userId: "user-1",
+                db,
+            }),
+        ).resolves.toMatchObject({
+            ok: false,
+            status: 400,
+            code: "model_unavailable",
+            detail: CLAUDE_CODE_DISABLED_DETAIL,
+        });
+    });
+
+    it("accepts a Claude Code model with no keys once enabled", async () => {
+        vi.stubEnv("CLAUDE_CODE_ENABLED", "true");
+        await expect(
+            resolveEffectiveChatModel({
+                requested: "claude-code/opus",
+                apiKeys: {},
+                userId: "user-1",
+                db,
+            }),
+        ).resolves.toMatchObject({ ok: true, model: "claude-code/opus" });
     });
 });
 

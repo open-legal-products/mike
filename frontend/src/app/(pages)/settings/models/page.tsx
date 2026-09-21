@@ -18,6 +18,8 @@ import {
   MODELS,
   SETTINGS_MODELS,
   canonicalModelId,
+  claudeCodeModelOptions,
+  isKeylessModelGroup,
   mergeConfiguredModelOptions,
   openCodeGoModelOptions,
   openRouterModelOptions,
@@ -35,6 +37,7 @@ import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { SETTINGS_CONTROL_CLASS } from "@/app/components/settings/SettingsTextInput";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
+import { useClaudeCodeModels } from "@/app/hooks/useClaudeCodeModels";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
 type ModelPreferenceField =
@@ -45,6 +48,7 @@ type ModelPreferenceField =
 export default function ModelPreferencesPage() {
   const { profile, updateModelPreference } = useUserProfile();
   const ollamaModels = useOllamaModels();
+  const claudeCodeOptions = claudeCodeModelOptions(useClaudeCodeModels());
   const configuredModels = useConfiguredModels();
   const [savingField, setSavingField] = useState<ModelPreferenceField | null>(
     null,
@@ -114,6 +118,7 @@ export default function ModelPreferencesPage() {
                 ...selectedVercelOptions,
                 ...selectedOpenCodeGoOptions,
                 ...ollamaModels,
+                ...claudeCodeOptions,
               ])}
               apiKeys={profile?.apiKeys}
               isSaving={savingField === "titleModel"}
@@ -140,6 +145,7 @@ export default function ModelPreferencesPage() {
                 ...selectedVercelOptions,
                 ...selectedOpenCodeGoOptions,
                 ...ollamaModels,
+                ...claudeCodeOptions,
               ])}
               apiKeys={profile?.apiKeys}
               isSaving={savingField === "tabularModel"}
@@ -169,6 +175,7 @@ export default function ModelPreferencesPage() {
                 ...selectedVercelOptions,
                 ...selectedOpenCodeGoOptions,
                 ...ollamaModels,
+                ...claudeCodeOptions,
               ])}
               apiKeys={profile?.apiKeys}
               isSaving={savingField === "memoryCuratorModel"}
@@ -203,7 +210,8 @@ function ModelPreferenceDropdown({
   const [isOpen, setIsOpen] = useState(false);
   const availableOptions = options.filter((model) => {
     if (model.source === "Configured") return true;
-    if (model.group === "Local") return true;
+    // Local (Ollama) and Claude Code are discovered at runtime and keyless.
+    if (isKeylessModelGroup(model.group)) return true;
     return apiKeys ? isModelAvailable(model.id, apiKeys) : false;
   });
   const selected = availableOptions.find((model) => model.id === value);
