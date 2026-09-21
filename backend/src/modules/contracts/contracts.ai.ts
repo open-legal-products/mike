@@ -99,6 +99,34 @@ PAST REVIEW PATTERNS
 ${input.past_feedback_context || "No past reviews for this client."}`;
 }
 
+/** The compliance slugs the prompt asks the model to score, in prompt order. */
+export const PLAYBOOK_COMPLIANCE_SLUGS = [
+  "contract_period",
+  "payment_terms",
+  "liability_scope",
+  "claim_process",
+  "claim_settlement",
+  "liability_cap",
+  "indirect_loss",
+  "termination",
+  "signatory",
+  "late_payment",
+  "ownership_after_settlement",
+  "auto_renewal",
+] as const;
+
+const PLAYBOOK_COMPLIANCE_ITEM = {
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["compliant", "needs_attention", "non_compliant", "not_found"] },
+    assessment: { type: "string" },
+    clause_reference: { type: "string" },
+    clause_text: { type: "string" },
+    playbook_threshold: { type: "string" },
+  },
+  required: ["status", "assessment"],
+};
+
 /** Tool/function schema mirroring ReviewOutput (contracts.types.ts). */
 export const REVIEW_TOOL: ChatTool = {
   type: "function",
@@ -232,18 +260,12 @@ export const REVIEW_TOOL: ChatTool = {
         playbook_compliance: {
           type: "object",
           description:
-            "Object keyed by rule slug (contract_period, payment_terms, liability_scope, claim_process, claim_settlement, liability_cap, indirect_loss, termination, signatory, late_payment, ownership_after_settlement, auto_renewal). Each value has status/assessment/clause_reference/clause_text/playbook_threshold.",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              status: { type: "string", enum: ["compliant", "needs_attention", "non_compliant", "not_found"] },
-              assessment: { type: "string" },
-              clause_reference: { type: "string" },
-              clause_text: { type: "string" },
-              playbook_threshold: { type: "string" },
-            },
-            required: ["status", "assessment"],
-          },
+            "One entry per playbook compliance slug. Each value has status/assessment/clause_reference/clause_text/playbook_threshold.",
+          // Gemini's function-calling schema subset ignores `additionalProperties`
+          // (the Lovable gateway tolerated it; OpenRouter passes the schema
+          // through and the model returned {}), so the slugs are enumerated.
+          properties: Object.fromEntries(PLAYBOOK_COMPLIANCE_SLUGS.map((slug) => [slug, PLAYBOOK_COMPLIANCE_ITEM])),
+          required: [...PLAYBOOK_COMPLIANCE_SLUGS],
         },
       },
       required: [
