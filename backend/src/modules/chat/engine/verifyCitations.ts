@@ -63,13 +63,33 @@ function locateQuoteFrom(
   quote: string,
   from: number,
 ): QuoteLocation | null {
-  if (from <= 0) return locateQuote(source, quote);
   if (from >= source.length) return null;
-  const location = locateQuote(source.slice(from), quote);
+  const offset = Math.max(0, from);
+  const suffix = source.slice(offset);
+  const candidates: QuoteLocation[] = [];
+  const exactIndex = suffix.indexOf(quote);
+  if (exactIndex >= 0) {
+    candidates.push({
+      start: exactIndex,
+      end: exactIndex + quote.length,
+      excerpt: quote,
+    });
+  }
+  const normalized = locateNormalized(suffix, quote, {});
+  if (normalized) candidates.push(normalized);
+  const punctuationTolerant = locateNormalized(suffix, quote, {
+    stripPunctuation: true,
+  });
+  if (punctuationTolerant) candidates.push(punctuationTolerant);
+  const location = candidates.reduce<QuoteLocation | null>(
+    (earliest, candidate) =>
+      !earliest || candidate.start < earliest.start ? candidate : earliest,
+    null,
+  );
   return location
     ? {
-        start: location.start + from,
-        end: location.end + from,
+        start: location.start + offset,
+        end: location.end + offset,
         excerpt: location.excerpt,
       }
     : null;
@@ -163,16 +183,16 @@ export function verifyQuoteAgainstSource(
       return { verified: false, needs_correction: false };
     }
 
-    // Enforce document order and proximity using the first plain-text fragment
-    // of each segment as a positional anchor. Searching as a chain handles
-    // repeated text by trying later occurrences when necessary.
-    const anchorSegments = segments.map(
-      (segment) =>
-        segment
-          .split(ELLIPSIS_PATTERN)
-          .map((fragment) => fragment.trim())
-          .find((fragment) => /[\p{L}\p{N}]/u.test(fragment)) ?? segment,
-    );
+    // Enforce document order and proximity across every plain-text fragment.
+    // Including all ellipsis fragments makes the next page begin after the
+    // preceding page segment's complete matched span, not merely its start.
+    const anchorSegments = segments.flatMap((segment) => {
+      const fragments = segment
+        .split(ELLIPSIS_PATTERN)
+        .map((fragment) => fragment.trim())
+        .filter((fragment) => /[\p{L}\p{N}]/u.test(fragment));
+      return fragments.length > 0 ? fragments : [segment];
+    });
     const anchors = locateSegmentsInOrder(
       source,
       anchorSegments,
