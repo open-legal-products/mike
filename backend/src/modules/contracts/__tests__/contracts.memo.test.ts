@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../lib/supabase";
 import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
 
-const mocks = vi.hoisted(() => ({ callJanusTool: vi.fn() }));
-vi.mock("../../../lib/janusTools", () => ({ callJanusTool: mocks.callJanusTool }));
+const mocks = vi.hoisted(() => ({ generateMemoAi: vi.fn() }));
+vi.mock("../contracts.ai", () => ({ generateMemoAi: mocks.generateMemoAi }));
 
 import { generateNegotiationMemo, isNegotiationMemo, parsePointStatusBody } from "../contracts.service";
 
@@ -12,8 +12,8 @@ const MEMO = { memo_title: "Memo Negosiasi: A — PKS", overall_tone_recommendat
 beforeEach(() => vi.clearAllMocks());
 
 describe("generateNegotiationMemo", () => {
-  it("sends the review, feedback and past memos to run_negotiation_memo and stores the memo", async () => {
-    mocks.callJanusTool.mockResolvedValue(JSON.stringify(MEMO));
+  it("sends the review, feedback and past memos to the memo prompt and stores the memo", async () => {
+    mocks.generateMemoAi.mockResolvedValue(MEMO);
     const fake = scriptedDb([
       { table: "reviews", data: { id: "r1", title: "PKS — A", client_name: "A", document_type: "PKS", ai_output: { revisions: [] } } },
       { table: "review_feedback", data: [{ finding_type: "revision", finding_id: "REV-001", action: "accept", rationale: null, edited_text: null }] },
@@ -24,7 +24,7 @@ describe("generateNegotiationMemo", () => {
     const r = await generateNegotiationMemo(fake.db as unknown as Db, { reviewId: "r1" });
 
     expect(r).toMatchObject({ ok: true, data: { memo: { memo_title: "Memo Negosiasi: A — PKS" } } });
-    expect(mocks.callJanusTool).toHaveBeenCalledWith("run_negotiation_memo", expect.objectContaining({
+    expect(mocks.generateMemoAi).toHaveBeenCalledWith(expect.objectContaining({
       client_name: "A",
       document_type: "PKS",
       feedback: [expect.objectContaining({ finding_id: "REV-001" })],
@@ -37,7 +37,7 @@ describe("generateNegotiationMemo", () => {
     const noOutput = scriptedDb([{ table: "reviews", data: { id: "r1", ai_output: null } }]);
     expect(await generateNegotiationMemo(noOutput.db as unknown as Db, { reviewId: "r1" })).toMatchObject({ ok: false, kind: "conflict" });
 
-    mocks.callJanusTool.mockResolvedValue(JSON.stringify({ error: "boom" }));
+    mocks.generateMemoAi.mockResolvedValue({ error: "boom" });
     const bad = scriptedDb([
       { table: "reviews", data: { id: "r1", client_name: "A", ai_output: { revisions: [] } } },
       { table: "review_feedback", data: [] },

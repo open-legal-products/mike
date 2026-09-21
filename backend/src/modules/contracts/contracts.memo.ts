@@ -6,7 +6,7 @@
 
 import { z } from "zod";
 import type { Db } from "../../lib/supabase";
-import { callJanusTool } from "../../lib/janusTools";
+import { generateMemoAi, type MemoFeedbackRow } from "./contracts.ai";
 import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serviceResult";
 import type { NegotiationMemo, ReviewOutput } from "./contracts.types";
 
@@ -60,22 +60,16 @@ export async function generateNegotiationMemo(
     .slice(0, 3)
     .map((r) => ({ title: r.title ?? "", negotiation_memo: r.negotiation_memo }));
 
-  let text: string;
+  let memo: unknown;
   try {
-    text = await callJanusTool("run_negotiation_memo", {
+    memo = await generateMemoAi({
       title: row.title ?? "Kontrak",
       client_name: row.client_name ?? "",
       document_type: row.document_type ?? "Other",
       ai_output: row.ai_output,
-      feedback: feedback ?? [],
+      feedback: (feedback ?? []) as MemoFeedbackRow[],
       past_memos: pastMemos,
     });
-  } catch (e) {
-    return internalFailure(e);
-  }
-  let memo: unknown;
-  try {
-    memo = JSON.parse(text);
   } catch (e) {
     return internalFailure(e);
   }

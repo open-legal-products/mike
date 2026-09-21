@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
 
 const mocks = vi.hoisted(() => ({
-  callJanusTool: vi.fn(),
+  runContractReviewAi: vi.fn(),
   buildReviewContextFor: vi.fn(),
   listPromptRules: vi.fn(),
   projectRevisions: vi.fn(),
 }));
-vi.mock("../../../lib/janusTools", () => ({ callJanusTool: mocks.callJanusTool }));
+vi.mock("../contracts.ai", () => ({ runContractReviewAi: mocks.runContractReviewAi }));
 vi.mock("../contracts.context", () => ({ buildReviewContextFor: mocks.buildReviewContextFor }));
 vi.mock("../../playbook/playbook.service", () => ({ listPromptRules: mocks.listPromptRules }));
 vi.mock("../contracts.redline", () => ({ projectRevisions: mocks.projectRevisions }));
@@ -42,19 +42,17 @@ describe("runReview", () => {
     mocks.projectRevisions.mockResolvedValue({ ok: true, data: { projected: 0, failed: 0, skipped: 0, edits: [] } });
   });
 
-  it("sends Mike's active playbook with the review and stores the result", async () => {
+  it("builds the prompt from Mike's active playbook and stores the result", async () => {
     mocks.listPromptRules.mockResolvedValue(RULES);
-    mocks.callJanusTool.mockResolvedValue(JSON.stringify(OUTPUT));
+    mocks.runContractReviewAi.mockResolvedValue(OUTPUT);
     const { db, calls } = scriptedDb([{ table: "reviews", op: "update", data: null }]);
 
     await runReview(db, "rev-1", INPUT);
 
-    expect(mocks.callJanusTool).toHaveBeenCalledWith("run_contract_review", expect.objectContaining({
-      contract_text: "PKS...",
-      clause_library_context: "CL",
-      past_feedback_context: "PF",
-      playbook_rules: RULES,
-    }));
+    expect(mocks.runContractReviewAi).toHaveBeenCalledWith({
+      rules: RULES,
+      input: expect.objectContaining({ contract_text: "PKS...", clause_library_context: "CL", past_feedback_context: "PF" }),
+    });
     expect(calls[0].payload).toMatchObject({ status: "ai_reviewed", lifecycle_stage: "ai_review", risk_level: "HIGH" });
     expect(calls[0].filters).toEqual([["eq", "id", "rev-1"]]);
     expect(mocks.projectRevisions).toHaveBeenCalledWith(db, { reviewId: "rev-1" });
@@ -67,7 +65,7 @@ describe("runReview", () => {
 
     await runReview(db, "rev-1", INPUT);
 
-    expect(mocks.callJanusTool).not.toHaveBeenCalled();
+    expect(mocks.runContractReviewAi).not.toHaveBeenCalled();
     expect(calls[0].payload).toEqual({ status: "failed" });
     warn.mockRestore();
   });
