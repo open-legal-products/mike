@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
     resolveContractRevision: vi.fn(),
     generateContractMemo: vi.fn(),
     setNegotiationPointStatus: vi.fn(),
+    postContractFeedbackBulk: vi.fn(),
+    postContractComment: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -34,6 +36,8 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     resolveContractRevision: mocks.resolveContractRevision,
     generateContractMemo: mocks.generateContractMemo,
     setNegotiationPointStatus: mocks.setNegotiationPointStatus,
+    postContractFeedbackBulk: mocks.postContractFeedbackBulk,
+    postContractComment: mocks.postContractComment,
 }));
 
 const DETAIL: ContractReviewDetail = {
@@ -352,5 +356,66 @@ describe("ReviewWorkspace", () => {
         await user.selectOptions(screen.getByLabelText("Status NEG-MC-001"), "agreed");
         await waitFor(() => expect(mocks.setNegotiationPointStatus).toHaveBeenCalledWith("r1", "NEG-MC-001", "agreed"));
         expect(await screen.findByText("1 dari 1 poin sudah dibahas")).toBeInTheDocument();
+    });
+
+    it("lists every finding on the Tabel tab and folds bulk feedback into the progress footer", async () => {
+        const user = userEvent.setup();
+        mocks.getContract.mockResolvedValue(DETAIL);
+        mocks.postContractFeedbackBulk.mockResolvedValue([
+            { id: "f1", review_id: "r1", finding_type: "red_flag", finding_id: "RF-001", action: "valid" },
+            { id: "f2", review_id: "r1", finding_type: "revision", finding_id: "REV-001", action: "accept" },
+        ]);
+        render(<ReviewWorkspace reviewId="r1" />);
+        await screen.findByTestId("progress-label");
+        await user.click(screen.getByRole("tab", { name: "Tabel" }));
+        expect(screen.getByTestId("row-red_flag:RF-001")).toBeInTheDocument();
+        expect(screen.getByTestId("row-revision:REV-001")).toBeInTheDocument();
+        // The gate footer stays visible on Tabel.
+        expect(screen.getByTestId("progress-label")).toHaveTextContent("0 dari 5 temuan ditinjau");
+
+        await user.click(screen.getByLabelText("Pilih semua temuan yang masih bisa ditindaklanjuti"));
+        await user.click(screen.getByRole("button", { name: /Tandai valid/ }));
+        await waitFor(() => expect(screen.getByTestId("progress-label")).toHaveTextContent("2 dari 5 temuan ditinjau"));
+        expect(screen.getByTestId("row-red_flag:RF-001")).toHaveTextContent("Ditinjau");
+    });
+
+    it("opens the comment popover on a document selection and lists the saved comment on Komentar", async () => {
+        const user = userEvent.setup();
+        mocks.getContract.mockResolvedValue(DETAIL);
+        mocks.postContractComment.mockResolvedValue({
+            id: "c1", review_id: "r1", user_id: "u1", user_name: "aditya", comment_type: "question",
+            highlight_text: "Logistics Services", highlight_start: 0, highlight_end: 19,
+            comment_text: "Perlu definisi?", suggested_text: null, parent_comment_id: null, created_at: "2026-09-20T11:00:00Z",
+        });
+        render(<ReviewWorkspace reviewId="r1" />);
+        const pane = await screen.findByTestId("document-pane");
+        const textNode = within(pane).getByText("English").firstChild;
+        const selection = vi.spyOn(window, "getSelection").mockReturnValue({
+            isCollapsed: false,
+            rangeCount: 1,
+            anchorNode: textNode,
+            focusNode: textNode,
+            toString: () => "Logistics Services",
+            getRangeAt: () => ({ getBoundingClientRect: () => ({ bottom: 120, left: 40, top: 100, right: 200 }) }),
+        } as unknown as Selection);
+
+        await user.pointer({ keys: "[MouseLeft>]", target: pane });
+        await user.pointer({ keys: "[/MouseLeft]", target: pane });
+        const dialog = await screen.findByRole("dialog", { name: "Tambah Komentar" });
+        expect(within(dialog).getByText(/Logistics Services/)).toBeInTheDocument();
+
+        await user.selectOptions(within(dialog).getByLabelText("Jenis komentar"), "question");
+        await user.type(within(dialog).getByLabelText("Komentar"), "Perlu definisi?");
+        await user.click(within(dialog).getByRole("button", { name: "Simpan" }));
+        await waitFor(() => expect(mocks.postContractComment).toHaveBeenCalledTimes(1));
+        expect(mocks.postContractComment.mock.calls[0][1]).toEqual(
+            expect.objectContaining({ comment_type: "question", highlight_text: "Logistics Services", highlight_start: 0, highlight_end: 18 }),
+        );
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(screen.getByRole("status")).toHaveTextContent("Komentar tersimpan");
+
+        await user.click(screen.getByRole("tab", { name: "Komentar (1)" }));
+        expect(screen.getByTestId("comment-c1")).toHaveTextContent("Perlu definisi?");
+        selection.mockRestore();
     });
 });
