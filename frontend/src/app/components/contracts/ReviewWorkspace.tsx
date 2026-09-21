@@ -16,6 +16,7 @@ import { TabularFindings } from "./TabularFindings";
 import { CommentsTab } from "./CommentsTab";
 import { AddCommentPopover, type SelectionAnchor } from "./AddCommentPopover";
 import { buildAnnotations } from "./findingAnnotations";
+import { PlaybookDrawerProvider } from "@/app/components/playbook/PlaybookRuleDrawer";
 import type { ContractReviewDetail, ManualCommentRow, NegotiationPointRow, ReviewDetailRow, ReviewFeedbackRow, ReviewOutput, RevisionEditRow } from "./reviewTypes";
 import { feedbackKey } from "./reviewTypes";
 import { RISK_DOT } from "./reviewHelpers";
@@ -251,6 +252,7 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
     const recommendation = review?.coo_recommendation_override ?? output?.overall_recommendation ?? null;
 
     return (
+        <PlaybookDrawerProvider>
         <div className="flex h-full min-h-0 flex-col">
             <PageHeader
                 shrink
@@ -425,5 +427,6 @@ export function ReviewWorkspace({ reviewId }: { reviewId: string }) {
                 </>
             )}
         </div>
+        </PlaybookDrawerProvider>
     );
 }

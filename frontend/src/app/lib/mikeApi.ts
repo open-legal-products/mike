@@ -14,6 +14,7 @@ import type {
     ReviewFeedbackRow,
     RevisionEditRow,
 } from "@/app/components/contracts/reviewTypes";
+import type { PlaybookRule, PlaybookRuleInput, PlaybookRulePatch } from "@/app/components/playbook/playbookTypes";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import {
     UploadBatchError,
@@ -3286,4 +3287,26 @@ export async function setNegotiationPointStatus(
             body: JSON.stringify({ status, client_response: clientResponse ?? null }),
         },
     );
+}
+
+// ── Playbook (backend/src/modules/playbook, mounted at /playbook) ───────────
+
+export async function listPlaybookRules(): Promise<PlaybookRule[]> {
+    return apiRequest<PlaybookRule[]>("/playbook");
+}
+
+export async function createPlaybookRule(input: PlaybookRuleInput): Promise<PlaybookRule> {
+    return apiRequest<PlaybookRule>("/playbook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+    });
+}
+
+export async function updatePlaybookRule(id: string, patch: PlaybookRulePatch): Promise<PlaybookRule> {
+    return apiRequest<PlaybookRule>(`/playbook/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+    });
 }

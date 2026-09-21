@@ -5,6 +5,7 @@ import { AlertTriangle, Check, CheckCircle2, Flag, HelpCircle, MessageSquare, Pe
 import { postContractFeedbackBulk } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { RuleRefButton } from "@/app/components/playbook/PlaybookRuleDrawer";
 import {
     ANNOTATION_TYPE_LABEL,
     SEVERITY_RANK,
@@ -296,7 +297,11 @@ export function TabularFindings({ reviewId, annotations, onLocate, onFeedbackSav
                                         >
                                             {a.summary}
                                         </button>
-                                        {a.playbookRule ? <div className="mt-0.5 text-[11px] text-gray-400">Playbook: {a.playbookRule}</div> : null}
+                                        {a.playbookRule ? (
+                                            <div className="mt-1 flex items-center gap-1 text-[11px] text-gray-400">
+                                                Playbook: <RuleRefButton ruleNumber={a.playbookRule} />
+                                            </div>
+                                        ) : null}
                                     </td>
                                     <td className="px-2 py-2">
                                         {a.severity ? (

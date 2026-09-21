@@ -31,7 +31,7 @@ describe("TabularFindings", () => {
         render(<TabularFindings reviewId="r1" annotations={ROWS} onLocate={vi.fn()} onFeedbackSaved={vi.fn()} />);
         expect(screen.getAllByTestId(/^row-/)).toHaveLength(5);
         expect(screen.getByText(/4 belum ditinjau/)).toBeInTheDocument();
-        expect(screen.getByText("Playbook: RULE 1")).toBeInTheDocument();
+        expect(screen.getByText("RULE 1")).toBeInTheDocument();
 
         await user.click(screen.getByRole("button", { name: "Tanda Bahaya" }));
         expect(screen.getAllByTestId(/^row-/)).toHaveLength(2);
