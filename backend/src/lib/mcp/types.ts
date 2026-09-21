@@ -1,8 +1,27 @@
 export type { Db } from "../supabase";
 
-export type McpTransport = "streamable_http";
+export type { McpConnectorTransport } from "@mike/contracts";
+import type { McpConnectorTransport } from "@mike/contracts";
+
+export type McpTransport = McpConnectorTransport;
 export type McpAuthType = "none" | "bearer" | "oauth";
-export type McpConnectorAuthConfig = {
+
+// Per-user credentials for the managed USPTO connector. Stored encrypted in
+// the connector auth config. Values are never returned by the API; only the
+// boolean status in McpConnectorManagedCredentialStatus leaves the server.
+export type McpManagedCredentials = {
+    usptoApiKey?: string;
+    tsdrApiKey?: string;
+    tmsearchWafToken?: string;
+};
+
+export type McpConnectorManagedCredentialStatus = {
+    usptoApiKey: boolean;
+    tsdrApiKey: boolean;
+    tmsearchWafToken: boolean;
+};
+
+export type McpConnectorAuthConfig = McpManagedCredentials & {
     bearerToken?: string;
     headers?: Record<string, string>;
 };
@@ -11,6 +30,8 @@ export type McpConnectorSummary = {
     id: string;
     name: string;
     transport: McpTransport;
+    /** True only for the managed USPTO process connector. */
+    managed: boolean;
     serverUrl: string;
     authType: McpAuthType;
     enabled: boolean;
@@ -18,6 +39,8 @@ export type McpConnectorSummary = {
     customHeaderKeys: string[];
     oauthConnected: boolean;
     toolPolicy: Record<string, unknown>;
+    /** Which managed USPTO credentials are stored. Values never leave the server. */
+    managedCredentials: McpConnectorManagedCredentialStatus;
     tools: McpToolSummary[];
     toolCount: number;
     createdAt: string;

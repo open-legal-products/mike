@@ -158,6 +158,7 @@ export function validateProfilePayload(body: unknown):
               last_selected_reasoning_level?: string | null;
               legal_research_us?: boolean;
               quick_actions_visible?: boolean;
+              uspto_connector_enabled?: boolean;
               updated_at: string;
           };
           routerModels?: Partial<Record<RouterSlug, string[]>>;
@@ -184,6 +185,7 @@ export function validateProfilePayload(body: unknown):
         "quickActionsVisible",
         "darkMode",
         "projectMemoryDefault",
+        "usptoConnectorEnabled",
         ...ROUTER_SLUGS.map((slug) => ROUTER_PROFILE_FIELDS[slug]),
     ]);
     const invalidField = Object.keys(raw).find(
@@ -212,6 +214,7 @@ export function validateProfilePayload(body: unknown):
         quick_actions_visible?: boolean;
         dark_mode?: boolean;
         project_memory_default?: boolean;
+        uspto_connector_enabled?: boolean;
         updated_at: string;
     } = { updated_at: new Date().toISOString() };
     const routerModels: Partial<Record<RouterSlug, string[]>> = {};
@@ -414,6 +417,16 @@ export function validateProfilePayload(body: unknown):
             };
         }
         update.project_memory_default = raw.projectMemoryDefault;
+    }
+
+    if ("usptoConnectorEnabled" in raw) {
+        if (typeof raw.usptoConnectorEnabled !== "boolean") {
+            return {
+                ok: false,
+                detail: "usptoConnectorEnabled must be a boolean",
+            };
+        }
+        update.uspto_connector_enabled = raw.usptoConnectorEnabled;
     }
 
     return { ok: true, update, routerModels };

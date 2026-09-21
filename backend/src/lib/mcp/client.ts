@@ -12,7 +12,9 @@ import {
     type ConnectorRow,
     type Db,
     type McpConnectorAuthConfig,
+    type McpConnectorManagedCredentialStatus,
     type McpConnectorSummary,
+    type McpManagedCredentials,
     type McpToolSummary,
     type OAuthTokenRow,
     type ToolCacheRow,
@@ -225,6 +227,9 @@ export function toConnectorSummary(
         id: connector.id,
         name: connector.name,
         transport: connector.transport,
+        managed:
+            (connector.tool_policy as { managed?: unknown } | null)?.managed ===
+            "patent_mcp_server",
         serverUrl: connector.server_url,
         authType: connector.auth_type ?? "none",
         enabled: connector.enabled,
@@ -232,6 +237,7 @@ export function toConnectorSummary(
         customHeaderKeys: Object.keys(authConfig.headers ?? {}),
         oauthConnected: !!oauthToken?.encrypted_access_token,
         toolPolicy: connector.tool_policy ?? {},
+        managedCredentials: managedCredentialStatus(authConfig),
         tools: tools.map(toToolSummary),
         toolCount,
         createdAt: connector.created_at,
@@ -330,7 +336,19 @@ export function validateCustomHeaders(
 export function authConfigPatch(config: McpConnectorAuthConfig): Record<string, unknown> {
     const hasBearer = !!config.bearerToken?.trim();
     const hasHeaders = Object.keys(config.headers ?? {}).length > 0;
-    if (!hasBearer && !hasHeaders) {
+    const managedCredentials: McpManagedCredentials = {
+        ...(config.usptoApiKey?.trim()
+            ? { usptoApiKey: config.usptoApiKey.trim() }
+            : {}),
+        ...(config.tsdrApiKey?.trim()
+            ? { tsdrApiKey: config.tsdrApiKey.trim() }
+            : {}),
+        ...(config.tmsearchWafToken?.trim()
+            ? { tmsearchWafToken: config.tmsearchWafToken.trim() }
+            : {}),
+    };
+    const hasManagedCredentials = Object.keys(managedCredentials).length > 0;
+    if (!hasBearer && !hasHeaders && !hasManagedCredentials) {
         return {
             encrypted_auth_config: null,
             auth_config_iv: null,
@@ -340,7 +358,18 @@ export function authConfigPatch(config: McpConnectorAuthConfig): Record<string, 
     return encryptJson({
         ...(hasBearer ? { bearerToken: config.bearerToken?.trim() } : {}),
         ...(hasHeaders ? { headers: config.headers } : {}),
+        ...managedCredentials,
     });
+}
+
+export function managedCredentialStatus(
+    config: McpConnectorAuthConfig,
+): McpConnectorManagedCredentialStatus {
+    return {
+        usptoApiKey: !!config.usptoApiKey?.trim(),
+        tsdrApiKey: !!config.tsdrApiKey?.trim(),
+        tmsearchWafToken: !!config.tmsearchWafToken?.trim(),
+    };
 }
 
 // A shared undici dispatcher whose DNS lookup runs the private-IP guard at the

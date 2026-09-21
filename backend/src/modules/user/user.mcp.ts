@@ -11,11 +11,16 @@ import {
     deleteUserMcpConnector,
     getUserMcpConnector,
     listUserMcpConnectors,
+    MANAGED_CONNECTOR_DELETE_LOCKED,
+    MANAGED_CONNECTOR_SETTINGS_LOCKED,
     McpOAuthRequiredError,
+    PatentRuntimeUnavailableError,
+    provisionPatentMcpConnector,
     refreshUserMcpConnectorTools,
     setUserMcpToolEnabled,
     startUserMcpConnectorOAuth,
     updateUserMcpConnector,
+    UsptoConnectorDisabledError,
 } from "../../lib/mcpConnectors";
 import { type Db, errorMessage } from "./user.shared";
 
@@ -85,7 +90,11 @@ export async function updateMcpConnector(
     userId: string,
     connectorId: string,
     updates: Parameters<typeof updateUserMcpConnector>[2],
-): Promise<{ ok: true; connector: unknown } | { ok: false; error: unknown }> {
+): Promise<
+    | { ok: true; connector: unknown }
+    | { ok: false; kind: "managed_locked"; detail: string }
+    | { ok: false; kind: "failed"; error: unknown }
+> {
     try {
         const connector = await updateUserMcpConnector(
             userId,
@@ -101,7 +110,10 @@ export async function updateMcpConnector(
             connectorId,
             error: detail,
         });
-        return { ok: false, error: err };
+        if (detail === MANAGED_CONNECTOR_SETTINGS_LOCKED) {
+            return { ok: false, kind: "managed_locked", detail };
+        }
+        return { ok: false, kind: "failed", error: err };
     }
 }
 
@@ -109,7 +121,11 @@ export async function deleteMcpConnector(
     db: Db,
     userId: string,
     connectorId: string,
-): Promise<{ ok: true } | { ok: false; error: unknown }> {
+): Promise<
+    | { ok: true }
+    | { ok: false; kind: "managed_locked"; detail: string }
+    | { ok: false; kind: "failed"; error: unknown }
+> {
     try {
         await deleteUserMcpConnector(userId, connectorId, db);
         return { ok: true };
@@ -120,7 +136,55 @@ export async function deleteMcpConnector(
             connectorId,
             error: detail,
         });
-        return { ok: false, error: err };
+        if (detail === MANAGED_CONNECTOR_DELETE_LOCKED) {
+            return { ok: false, kind: "managed_locked", detail };
+        }
+        return { ok: false, kind: "failed", error: err };
+    }
+}
+
+export type ProvisionPatentConnectorResult =
+    | { ok: true; connector: unknown }
+    | { ok: false; kind: "feature_disabled"; code: string; detail: string }
+    | { ok: false; kind: "runtime_unavailable"; code: string; detail: string }
+    | { ok: false; kind: "provisioning_failed"; error: unknown };
+
+export async function provisionPatentConnector(
+    db: Db,
+    userId: string,
+): Promise<ProvisionPatentConnectorResult> {
+    try {
+        const provisioned = await provisionPatentMcpConnector(userId, db);
+        // A failed catalog refresh leaves a retryable connector: the row
+        // stays, and the user can retry from the connector details.
+        const connector = await refreshUserMcpConnectorTools(
+            userId,
+            (provisioned as { id: string }).id,
+            db,
+        );
+        return { ok: true, connector };
+    } catch (err) {
+        console.error("[user/mcp-connectors] patent provision failed", {
+            userId,
+            error: errorMessage(err),
+        });
+        if (err instanceof UsptoConnectorDisabledError) {
+            return {
+                ok: false,
+                kind: "feature_disabled",
+                code: err.code,
+                detail: err.message,
+            };
+        }
+        if (err instanceof PatentRuntimeUnavailableError) {
+            return {
+                ok: false,
+                kind: "runtime_unavailable",
+                code: err.code,
+                detail: err.message,
+            };
+        }
+        return { ok: false, kind: "provisioning_failed", error: err };
     }
 }
 
@@ -167,6 +231,8 @@ export async function startMcpConnectorOAuth(
 export type RefreshMcpToolsResult =
     | { ok: true; connector: unknown }
     | { ok: false; kind: "oauth_required"; code: string }
+    | { ok: false; kind: "feature_disabled"; code: string; detail: string }
+    | { ok: false; kind: "runtime_unavailable"; code: string; detail: string }
     | { ok: false; kind: "refresh_failed"; error: unknown };
 
 export async function refreshMcpConnectorTools(
@@ -192,6 +258,22 @@ export async function refreshMcpConnectorTools(
         });
         if (err instanceof McpOAuthRequiredError) {
             return { ok: false, kind: "oauth_required", code: err.code };
+        }
+        if (err instanceof UsptoConnectorDisabledError) {
+            return {
+                ok: false,
+                kind: "feature_disabled",
+                code: err.code,
+                detail: err.message,
+            };
+        }
+        if (err instanceof PatentRuntimeUnavailableError) {
+            return {
+                ok: false,
+                kind: "runtime_unavailable",
+                code: err.code,
+                detail: err.message,
+            };
         }
         return { ok: false, kind: "refresh_failed", error: err };
     }

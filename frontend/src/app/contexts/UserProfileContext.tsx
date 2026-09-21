@@ -61,6 +61,7 @@ interface UserProfile {
     mfaOnLogin: boolean;
     legalResearchUs: boolean;
     quickActionsVisible: boolean;
+    usptoConnectorEnabled: boolean;
     openRouterModels: string[];
     vercelModels: string[];
     openCodeGoModels: string[];
@@ -103,6 +104,7 @@ interface UserProfileContextType {
     ) => Promise<boolean>;
     updateMfaOnLogin: (enabled: boolean) => Promise<boolean>;
     updateLegalResearchUs: (enabled: boolean) => Promise<boolean>;
+    updateUsptoConnectorEnabled: (enabled: boolean) => Promise<boolean>;
     updateQuickActionsVisible: (visible: boolean) => Promise<boolean>;
     updateOpenRouterModels: (models: string[]) => Promise<boolean>;
     updateVercelModels: (models: string[]) => Promise<boolean>;
@@ -171,6 +173,7 @@ function toProfile(data: ApiUserProfile): UserProfile {
         lastSelectedReasoningLevel:
             profile.lastSelectedReasoningLevel ?? "high",
         mfaOnLogin: profile.mfaOnLogin === true,
+        usptoConnectorEnabled: profile.usptoConnectorEnabled === true,
         projectMemoryDefault: profile.projectMemoryDefault !== false,
         openRouterModels: Array.isArray(profile.openRouterModels)
             ? profile.openRouterModels
@@ -238,6 +241,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 mfaOnLogin: false,
                 legalResearchUs: true,
                 quickActionsVisible: true,
+                usptoConnectorEnabled: false,
                 openRouterModels: [],
                 vercelModels: [],
                 openCodeGoModels: [],
@@ -479,6 +483,24 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         [user],
     );
 
+    const updateUsptoConnectorEnabled = useCallback(
+        async (enabled: boolean): Promise<boolean> => {
+            if (!user) return false;
+            try {
+                const updated = await updateUserProfile({
+                    usptoConnectorEnabled: enabled,
+                });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [user],
+    );
+
     const updateQuickActionsVisible = useCallback(
         async (visible: boolean): Promise<boolean> => {
             if (!user) return false;
@@ -652,6 +674,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             persistChatReasoningSelection,
             updateMfaOnLogin,
             updateLegalResearchUs,
+            updateUsptoConnectorEnabled,
             updateQuickActionsVisible,
             updateOpenRouterModels,
             updateVercelModels,
@@ -676,6 +699,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             persistChatReasoningSelection,
             updateMfaOnLogin,
             updateLegalResearchUs,
+            updateUsptoConnectorEnabled,
             updateQuickActionsVisible,
             updateOpenRouterModels,
             updateVercelModels,

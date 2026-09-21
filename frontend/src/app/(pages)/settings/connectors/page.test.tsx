@@ -7,8 +7,10 @@ import {
     createMcpConnector,
     getMcpConnector,
     listMcpConnectors,
+    provisionPatentMcpConnector,
     refreshMcpConnectorTools,
     startMcpConnectorOAuth,
+    updateMcpConnector,
 } from "@/app/lib/mikeApi";
 import { needsMfaVerification } from "@/app/components/popups/MfaVerificationPopup";
 
@@ -20,11 +22,26 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
         ...actual,
         listMcpConnectors: vi.fn(),
         createMcpConnector: vi.fn(),
+        provisionPatentMcpConnector: vi.fn(),
         refreshMcpConnectorTools: vi.fn(),
         startMcpConnectorOAuth: vi.fn(),
         getMcpConnector: vi.fn(),
+        updateMcpConnector: vi.fn(),
     };
 });
+
+// The page reads the USPTO feature switch from the profile context.
+const profileState = vi.hoisted(() => ({
+    usptoEnabled: false,
+    degraded: false,
+}));
+vi.mock("@/app/contexts/UserProfileContext", () => ({
+    useUserProfile: () => ({
+        profile: { usptoConnectorEnabled: profileState.usptoEnabled },
+        apiKeysDegraded: profileState.degraded,
+        reloadProfile: vi.fn(),
+    }),
+}));
 
 // MFA gate off, and render nothing for the popup itself.
 vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
@@ -39,6 +56,7 @@ function makeSummary(
         id: "connector-1",
         name: "Drive",
         transport: "streamable_http",
+        managed: false,
         serverUrl: "https://drivemcp.googleapis.com/mcp",
         authType: "oauth",
         enabled: true,
@@ -46,6 +64,11 @@ function makeSummary(
         customHeaderKeys: [],
         oauthConnected: false,
         toolPolicy: {},
+        managedCredentials: {
+            usptoApiKey: false,
+            tsdrApiKey: false,
+            tmsearchWafToken: false,
+        },
         tools: [],
         toolCount: 0,
         createdAt: "2026-01-01T00:00:00Z",
@@ -316,5 +339,288 @@ describe("ConnectorsPage operator setup guidance", () => {
         // left behind: nothing will ever navigate it on this path.
         expect(window.open).toHaveBeenCalledTimes(1);
         expect(popupClose).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("ConnectorsPage USPTO preset", () => {
+    const managedSummary = (
+        overrides: Partial<McpConnectorSummary> = {},
+    ): McpConnectorSummary =>
+        makeSummary({
+            id: "patent-1",
+            name: "USPTO Patent & Trademark",
+            transport: "stdio",
+            managed: true,
+            serverUrl: "builtin://patent-mcp-server",
+            authType: "none",
+            ...overrides,
+        });
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        profileState.usptoEnabled = false;
+        profileState.degraded = false;
+        vi.mocked(needsMfaVerification).mockResolvedValue(false);
+        vi.mocked(listMcpConnectors).mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        cleanup();
+    });
+
+    it("hides the USPTO button unless the feature is enabled", async () => {
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+        expect(
+            screen.queryByRole("button", { name: "USPTO" }),
+        ).toBeNull();
+
+        cleanup();
+        profileState.usptoEnabled = true;
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+        expect(screen.getByRole("button", { name: "USPTO" })).toBeTruthy();
+    });
+
+    it("provisions the managed connector and shows it", async () => {
+        profileState.usptoEnabled = true;
+        vi.mocked(provisionPatentMcpConnector).mockResolvedValue(
+            managedSummary(),
+        );
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "USPTO" }));
+            await flushMicrotasks();
+        });
+
+        expect(provisionPatentMcpConnector).toHaveBeenCalledTimes(1);
+        // The connector row appears…
+        expect(screen.getByText("Managed stdio · patent-mcp-server 1.0.0")).toBeTruthy();
+        // …and its details modal opens on the managed view.
+        expect(
+            screen.getByText(
+                "Managed local connector. Mike runs it and controls its endpoint.",
+            ),
+        ).toBeTruthy();
+    });
+
+    it("shows a managed connector without the Delete button or endpoint form", async () => {
+        const connector = managedSummary();
+        vi.mocked(listMcpConnectors).mockResolvedValue([connector]);
+        vi.mocked(getMcpConnector).mockResolvedValue(connector);
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Details" }));
+            await flushMicrotasks();
+        });
+
+        expect(
+            screen.queryByRole("button", { name: /delete connector/i }),
+        ).toBeNull();
+        expect(screen.queryByLabelText("URL endpoint")).toBeNull();
+        expect(screen.queryByLabelText("Bearer token")).toBeNull();
+        expect(
+            screen.getByText(
+                "Managed local connector. Mike runs it and controls its endpoint.",
+            ),
+        ).toBeTruthy();
+        // Tool list controls remain available.
+        expect(screen.getByRole("button", { name: /refresh/i })).toBeTruthy();
+    });
+
+    it("hides the USPTO button when a managed connector already exists", async () => {
+        profileState.usptoEnabled = true;
+        vi.mocked(listMcpConnectors).mockResolvedValue([managedSummary()]);
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        expect(screen.queryByRole("button", { name: "USPTO" })).toBeNull();
+    });
+
+    it("shows the three managed credential inputs with placeholders", async () => {
+        const connector = managedSummary();
+        vi.mocked(listMcpConnectors).mockResolvedValue([connector]);
+        vi.mocked(getMcpConnector).mockResolvedValue(connector);
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Details" }));
+            await flushMicrotasks();
+        });
+
+        expect(screen.getByPlaceholderText("USPTO_API_KEY")).toBeTruthy();
+        expect(screen.getByPlaceholderText("TSDR_API_KEY")).toBeTruthy();
+        expect(screen.getByPlaceholderText("TMSEARCH_WAF_TOKEN")).toBeTruthy();
+    });
+
+    it("renders Saved next to a stored managed credential", async () => {
+        const connector = managedSummary({
+            managedCredentials: {
+                usptoApiKey: true,
+                tsdrApiKey: false,
+                tmsearchWafToken: false,
+            },
+        });
+        vi.mocked(listMcpConnectors).mockResolvedValue([connector]);
+        vi.mocked(getMcpConnector).mockResolvedValue(connector);
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Details" }));
+            await flushMicrotasks();
+        });
+
+        const saved = screen.getAllByText("Saved");
+        expect(saved).toHaveLength(1);
+    });
+
+    it("saves a credential and preserves an untouched saved one", async () => {
+        const connector = managedSummary({
+            managedCredentials: {
+                usptoApiKey: true,
+                tsdrApiKey: false,
+                tmsearchWafToken: false,
+            },
+        });
+        vi.mocked(listMcpConnectors).mockResolvedValue([connector]);
+        vi.mocked(getMcpConnector).mockResolvedValue(connector);
+        vi.mocked(updateMcpConnector).mockResolvedValue(
+            managedSummary({
+                managedCredentials: {
+                    usptoApiKey: true,
+                    tsdrApiKey: true,
+                    tmsearchWafToken: false,
+                },
+            }),
+        );
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Details" }));
+            await flushMicrotasks();
+        });
+
+        fireEvent.change(screen.getByPlaceholderText("TSDR_API_KEY"), {
+            target: { value: "  tsdr-secret  " },
+        });
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Save" }));
+            await flushMicrotasks();
+        });
+
+        // The untouched saved usptoApiKey is omitted, not cleared.
+        expect(vi.mocked(updateMcpConnector)).toHaveBeenCalledWith("patent-1", {
+            usptoCredentials: {
+                tsdrApiKey: "tsdr-secret",
+            },
+        });
+    });
+
+    it("clears a saved credential only after an explicit Clear", async () => {
+        const connector = managedSummary({
+            managedCredentials: {
+                usptoApiKey: true,
+                tsdrApiKey: false,
+                tmsearchWafToken: false,
+            },
+        });
+        vi.mocked(listMcpConnectors).mockResolvedValue([connector]);
+        vi.mocked(getMcpConnector).mockResolvedValue(connector);
+        vi.mocked(updateMcpConnector).mockResolvedValue(
+            managedSummary({
+                managedCredentials: {
+                    usptoApiKey: false,
+                    tsdrApiKey: false,
+                    tmsearchWafToken: false,
+                },
+            }),
+        );
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Details" }));
+            await flushMicrotasks();
+        });
+
+        const clearButtons = screen.getAllByRole("button", { name: "Clear" });
+        expect(clearButtons).toHaveLength(1);
+        fireEvent.click(clearButtons[0]);
+        expect(screen.getByText("Cleared")).toBeTruthy();
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Save" }));
+            await flushMicrotasks();
+        });
+
+        expect(vi.mocked(updateMcpConnector)).toHaveBeenCalledWith("patent-1", {
+            usptoCredentials: {
+                usptoApiKey: null,
+            },
+        });
+    });
+
+    it("hides setup and shows a retry when the profile is degraded", async () => {
+        profileState.usptoEnabled = true;
+        profileState.degraded = true;
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        expect(screen.queryByRole("button", { name: "USPTO" })).toBeNull();
+        expect(screen.getByText(/Could not load settings/)).toBeTruthy();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("maps feature_disabled to the Settings > Features message", async () => {
+        profileState.usptoEnabled = true;
+        vi.mocked(provisionPatentMcpConnector).mockRejectedValue(
+            new MikeApiError({
+                message: "feature disabled",
+                status: 403,
+                code: "feature_disabled",
+            }),
+        );
+        render(<ConnectorsPage />);
+        await act(async () => {
+            await flushMicrotasks();
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "USPTO" }));
+            await flushMicrotasks();
+        });
+
+        expect(
+            screen.getByText(
+                "Turn on USPTO Patent & Trademark in Settings > Features first.",
+            ),
+        ).toBeTruthy();
     });
 });

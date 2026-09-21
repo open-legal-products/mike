@@ -11,6 +11,8 @@ storage instead of the infrastructure bundled with Docker Compose.
 - A Cloudflare R2, MinIO, or other S3-compatible bucket
 - At least one supported model-provider API key, or an accessible Ollama server
 - Optional: a CourtListener API token for case-law tools
+- Optional: `uv` for the USPTO Patent & Trademark connector (native installs
+  only; see [USPTO Patent & Trademark connector](patent-mcp-connector.md))
 - LibreOffice when DOC/DOCX-to-PDF conversion is required
 
 ## Database setup

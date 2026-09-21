@@ -130,6 +130,7 @@ import {
     moveLibraryFolder,
     moveSubfolderToFolder,
     openSourceWorkflow,
+    provisionPatentMcpConnector,
     refreshMcpConnectorTools,
     regenerateTabularCell,
     renameChat,
@@ -2087,6 +2088,12 @@ describe("thin endpoint wrappers", () => {
             call: () => deleteMcpConnector("m1"),
             url: "/user/mcp-connectors/m1",
             method: "DELETE",
+        },
+        {
+            name: "provisionPatentMcpConnector",
+            call: () => provisionPatentMcpConnector(),
+            url: "/user/mcp-connectors/presets/patent",
+            method: "POST",
         },
         {
             name: "refreshMcpConnectorTools",

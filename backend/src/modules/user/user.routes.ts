@@ -46,6 +46,7 @@ import {
     loadUserExportArtifact,
     lookupUserByEmail,
     listMcpConnectors,
+    provisionPatentConnector,
     readBooleanBodyField,
     recordPasswordSet,
     refreshMcpConnectorTools,
@@ -401,6 +402,36 @@ userRouter.patch(
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const body = req.body ?? {};
+        // Credential fields accept a string (set) or null (clear). Reject any
+        // other type here: the service treats null as "clear the saved value",
+        // so a coerced value must never reach it.
+        let usptoCredentials:
+            | Record<string, string | null>
+            | undefined;
+        if ("usptoCredentials" in body && body.usptoCredentials !== undefined) {
+            const raw = body.usptoCredentials;
+            if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+                return void res.status(400).json({
+                    detail: "usptoCredentials must be an object.",
+                });
+            }
+            usptoCredentials = {};
+            for (const key of [
+                "usptoApiKey",
+                "tsdrApiKey",
+                "tmsearchWafToken",
+            ] as const) {
+                const record = raw as Record<string, unknown>;
+                if (!(key in record)) continue;
+                const value = record[key];
+                if (value !== null && typeof value !== "string") {
+                    return void res.status(400).json({
+                        detail: "USPTO credential values must be strings.",
+                    });
+                }
+                usptoCredentials[key] = value;
+            }
+        }
         const result = await updateMcpConnector(
             db,
             userId,
@@ -431,12 +462,16 @@ userRouter.patch(
                                   : {},
                       }
                     : {}),
+                ...(usptoCredentials ? { usptoCredentials } : {}),
             },
         );
-        if (!result.ok)
+        if (!result.ok) {
+            if (result.kind === "managed_locked")
+                return void res.status(400).json({ detail: result.detail });
             return void res.status(400).json({
                 detail: "Connector settings are invalid or the server could not be reached.",
             });
+        }
         res.json(result.connector);
     }),
 );
@@ -454,8 +489,43 @@ userRouter.delete(
             userId,
             req.params.connectorId,
         );
-        if (!result.ok) return void sendInternalError(res, result.error);
+        if (!result.ok) {
+            if (result.kind === "managed_locked")
+                return void res.status(400).json({ detail: result.detail });
+            return void sendInternalError(res, result.error);
+        }
         res.status(204).send();
+    }),
+);
+
+// POST /user/mcp-connectors/presets/patent
+userRouter.post(
+    "/mcp-connectors/presets/patent",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (_req, res) => {
+        const userId = res.locals.userId as string;
+        const db = createServerSupabase();
+        const result = await provisionPatentConnector(db, userId);
+        if (!result.ok) {
+            if (result.kind === "feature_disabled")
+                return void res.status(403).json({
+                    code: result.code,
+                    detail: result.detail,
+                });
+            // 409 like oauth_required: the deployment is not in a state
+            // where setup can finish; the client keys on `code`. A 5xx body
+            // here would be replaced by the opaque internal-error boundary.
+            if (result.kind === "runtime_unavailable")
+                return void res.status(409).json({
+                    code: result.code,
+                    detail: result.detail,
+                });
+            return void res.status(400).json({
+                detail: "The USPTO connector could not be set up.",
+            });
+        }
+        res.status(201).json(result.connector);
     }),
 );
 
@@ -571,6 +641,16 @@ userRouter.post(
                 return void res.status(409).json({
                     code: result.code,
                     detail: "This connector needs to be authorized again.",
+                });
+            if (result.kind === "feature_disabled")
+                return void res.status(403).json({
+                    code: result.code,
+                    detail: result.detail,
+                });
+            if (result.kind === "runtime_unavailable")
+                return void res.status(409).json({
+                    code: result.code,
+                    detail: result.detail,
                 });
             return void res.status(400).json({
                 detail: "Connector tools could not be refreshed.",

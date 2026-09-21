@@ -25,9 +25,15 @@ export type UserProfileRow = {
     quick_actions_visible: boolean | null;
     dark_mode: boolean | null;
     project_memory_default: boolean | null;
+    uspto_connector_enabled?: boolean | null;
 };
 
 const PROFILE_SELECT_NEWEST =
+    "display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas, onboarding_version, password_set_at, message_credits_used, credits_reset_date, tier, title_model, tabular_model, memory_curator_model, last_selected_chat_model, last_selected_reasoning_level, mfa_on_login, legal_research_us, quick_actions_visible, dark_mode, project_memory_default, uspto_connector_enabled";
+
+// PROFILE_SELECT_NEWEST minus uspto_connector_enabled, for databases that
+// have not applied the USPTO connector migration yet. Missing means off.
+const PROFILE_SELECT_NO_USPTO_CONNECTOR =
     "display_name, organisation, jurisdiction, practice_setting, professional_title, practice_areas, onboarding_version, password_set_at, message_credits_used, credits_reset_date, tier, title_model, tabular_model, memory_curator_model, last_selected_chat_model, last_selected_reasoning_level, mfa_on_login, legal_research_us, quick_actions_visible, dark_mode, project_memory_default";
 
 // memory_curator_model and project_memory_default arrive in the same
@@ -105,6 +111,29 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
             : await newestQuery.maybeSingle();
     if (!newest.error) return newest;
     let cascadeError: unknown = newest.error;
+
+    // uspto_connector_enabled's retry tier sits on top: a database missing
+    // only that column keeps every newer column and defaults the feature
+    // switch to off, which matches the column's default.
+    if (isMissingProfileColumn(cascadeError, "uspto_connector_enabled")) {
+        const noUsptoQuery = db
+            .from("user_profiles")
+            .select(PROFILE_SELECT_NO_USPTO_CONNECTOR)
+            .eq("user_id", userId);
+        const noUspto =
+            mode === "single"
+                ? await noUsptoQuery.single()
+                : await noUsptoQuery.maybeSingle();
+        if (!noUspto.error) {
+            if (noUspto.data && typeof noUspto.data === "object") {
+                Object.assign(noUspto.data as Record<string, unknown>, {
+                    uspto_connector_enabled: false,
+                });
+            }
+            return noUspto;
+        }
+        cascadeError = noUspto.error;
+    }
 
     if (
         isMissingProfileColumn(cascadeError, "memory_curator_model") ||

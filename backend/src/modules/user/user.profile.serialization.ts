@@ -58,6 +58,8 @@ export function serializeProfile(
         quickActionsVisible: row.quick_actions_visible !== false,
         darkMode: row.dark_mode === true,
         projectMemoryDefault: row.project_memory_default !== false,
+        // Default-off feature: only an explicit true turns it on.
+        usptoConnectorEnabled: row.uspto_connector_enabled === true,
         ...Object.fromEntries(
             ROUTER_SLUGS.map((slug) => [
                 ROUTER_PROFILE_FIELDS[slug],

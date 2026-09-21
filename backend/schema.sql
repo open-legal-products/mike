@@ -56,6 +56,9 @@ create table if not exists public.user_profiles (
   -- Whether projects this user creates start with shared memory enabled. Any
   -- project owner can still turn a given project's memory on or off later.
   project_memory_default boolean not null default true,
+  -- Per-user switch for the managed USPTO Patent & Trademark connector.
+  -- Default off for new and existing users.
+  uspto_connector_enabled boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -424,8 +427,20 @@ create table if not exists public.user_mcp_connectors (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
+  -- stdio is managed-only: it is allowed solely for the fixed USPTO
+  -- connector identity and never carries auth configuration. The constraint
+  -- name matches the migration so a fresh install and an upgraded deployment
+  -- converge on the same schema.
   transport text not null default 'streamable_http'
-    check (transport in ('streamable_http')),
+    constraint user_mcp_connectors_transport_check
+    check (
+      transport = 'streamable_http'
+      or (
+        transport = 'stdio'
+        and server_url = 'builtin://patent-mcp-server'
+        and auth_type = 'none'
+      )
+    ),
   server_url text not null,
   auth_type text not null default 'none'
     check (auth_type in ('none', 'bearer', 'oauth')),
@@ -440,6 +455,12 @@ create table if not exists public.user_mcp_connectors (
 
 create index if not exists idx_user_mcp_connectors_user
   on public.user_mcp_connectors(user_id);
+
+-- One managed USPTO connector per user; concurrent provisioning collapses
+-- onto a single row.
+create unique index if not exists user_mcp_connectors_managed_patent_uidx
+  on public.user_mcp_connectors (user_id)
+  where transport = 'stdio' and server_url = 'builtin://patent-mcp-server';
 
 alter table public.user_mcp_connectors enable row level security;
 

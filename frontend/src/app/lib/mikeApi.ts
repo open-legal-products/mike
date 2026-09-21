@@ -643,6 +643,7 @@ export interface UserProfile {
     mfaOnLogin: boolean;
     legalResearchUs: boolean;
     quickActionsVisible: boolean;
+    usptoConnectorEnabled: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
     openRouterModels: string[];
@@ -758,6 +759,7 @@ export async function updateUserProfile(payload: {
     lastSelectedReasoningLevel?: NonNullable<Message["reasoning"]>;
     legalResearchUs?: boolean;
     quickActionsVisible?: boolean;
+    usptoConnectorEnabled?: boolean;
     darkMode?: boolean;
     projectMemoryDefault?: boolean;
     openRouterModels?: string[];
@@ -909,7 +911,8 @@ interface McpToolSummary {
 export interface McpConnectorSummary {
     id: string;
     name: string;
-    transport: "streamable_http";
+    transport: "streamable_http" | "stdio";
+    managed: boolean;
     serverUrl: string;
     authType: "none" | "bearer" | "oauth";
     enabled: boolean;
@@ -917,10 +920,22 @@ export interface McpConnectorSummary {
     customHeaderKeys: string[];
     oauthConnected: boolean;
     toolPolicy: Record<string, unknown>;
+    managedCredentials: {
+        usptoApiKey: boolean;
+        tsdrApiKey: boolean;
+        tmsearchWafToken: boolean;
+    };
     tools: McpToolSummary[];
     toolCount: number;
     createdAt: string;
     updatedAt: string;
+}
+
+export async function provisionPatentMcpConnector(): Promise<McpConnectorSummary> {
+    return apiRequest<McpConnectorSummary>(
+        "/user/mcp-connectors/presets/patent",
+        { method: "POST" },
+    );
 }
 
 export async function listMcpConnectors(): Promise<McpConnectorSummary[]> {
@@ -956,6 +971,11 @@ export async function updateMcpConnector(
         enabled?: boolean;
         bearerToken?: string | null;
         headers?: Record<string, string>;
+        usptoCredentials?: {
+            usptoApiKey?: string | null;
+            tsdrApiKey?: string | null;
+            tmsearchWafToken?: string | null;
+        };
     },
 ): Promise<McpConnectorSummary> {
     return apiRequest<McpConnectorSummary>(

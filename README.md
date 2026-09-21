@@ -75,6 +75,7 @@ authentication behavior, Ollama setup, and first-run guidance.
 - [Manual and production deployment](docs/deployment.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [CourtListener integration](docs/courtlistener.md)
+- [USPTO Patent & Trademark connector](docs/patent-mcp-connector.md)
 - [Microsoft Word add-in](word-addin/README.md)
 - [Tamper-evident exports](docs/tamper-evident-exports.md)
 - [Safe local testing](docs/safe-local-testing.md)

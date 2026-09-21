@@ -233,6 +233,15 @@ export type CaseCitationEvent = {
   document: SourceDocument;
 };
 
+/** Transport of a saved MCP connector. stdio is managed-only. */
+export type McpConnectorTransport = "streamable_http" | "stdio";
+
+/** Wire name of the per-user switch for the managed USPTO connector. */
+export type UsptoConnectorFeatureKey = "usptoConnectorEnabled";
+
+/** Managed provider identity recorded in a connector's tool policy. */
+export type ManagedMcpProvider = "patent_mcp_server";
+
 export type McpToolEvent = {
   type: "mcp_tool_call";
   connector_id: string;

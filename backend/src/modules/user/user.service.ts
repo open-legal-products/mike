@@ -65,9 +65,11 @@ export {
     createMcpConnector,
     updateMcpConnector,
     deleteMcpConnector,
+    provisionPatentConnector,
     startMcpConnectorOAuth,
     refreshMcpConnectorTools,
     setMcpToolEnabled,
+    type ProvisionPatentConnectorResult,
     type RefreshMcpToolsResult,
 } from "./user.mcp";
 
