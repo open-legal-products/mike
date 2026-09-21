@@ -32,7 +32,7 @@ const OUTPUT = {
   playbook_compliance: {},
 };
 
-const INPUT = { contract_text: "PKS...", client_name: "Markas Daging", document_type: "PKS", project_context: null, review_focus: [] };
+const INPUT = { contract_text: "PKS...", client_name: "Markas Daging", document_type: "PKS", project_context: "", review_focus: [] as string[] };
 const RULES = [{ rule_number: "RULE 1", title: "Cap", description: "≤ 10x", thresholds: {}, severity: "CRITICAL" }];
 
 describe("runReview", () => {
