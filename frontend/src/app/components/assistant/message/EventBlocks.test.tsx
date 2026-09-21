@@ -2,9 +2,78 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
     AskInputsBlock,
+    ContractReviewBlock,
+    ContractReviewStartBlock,
     CourtListenerBlock,
     DocDownloadBlock,
 } from "./EventBlocks";
+
+describe("ContractReviewStartBlock", () => {
+    it("names the contract being reviewed", () => {
+        render(
+            <ContractReviewStartBlock
+                filename="PKS Markas Daging.docx"
+                isStreaming
+            />,
+        );
+        expect(screen.getByText("Reviewing contract")).toBeInTheDocument();
+        expect(screen.getByText("PKS Markas Daging.docx")).toBeInTheDocument();
+    });
+});
+
+describe("ContractReviewBlock", () => {
+    it("shows the risk badge, the recommendation and the workspace link", () => {
+        render(
+            <ContractReviewBlock
+                title="PKS Markas Daging"
+                status="ai_reviewed"
+                riskLevel="CRITICAL"
+                recommendation="ESCALATE_TO_CEO_COO"
+                workspacePath="/contracts/rev-1"
+            />,
+        );
+        expect(screen.getByText("CRITICAL")).toHaveClass("bg-red-100");
+        expect(screen.getByText("PKS Markas Daging")).toBeInTheDocument();
+        expect(screen.getByText("Escalate to CEO/COO")).toBeInTheDocument();
+        expect(
+            screen.getByRole("link", { name: /Open review workspace/ }),
+        ).toHaveAttribute("href", "/contracts/rev-1");
+    });
+
+    it("shows the failure reason and no link when the review has no row", () => {
+        render(
+            <ContractReviewBlock
+                title="scan"
+                status="failed"
+                riskLevel={null}
+                recommendation={null}
+                workspacePath={null}
+                error="Tidak ada aturan playbook aktif; tinjauan dibatalkan."
+            />,
+        );
+        expect(screen.getByText("Review failed")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Tidak ada aturan playbook aktif; tinjauan dibatalkan.",
+            ),
+        ).toBeInTheDocument();
+        expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    });
+
+    it("falls back to a neutral badge and the raw recommendation for unknown values", () => {
+        render(
+            <ContractReviewBlock
+                title="LOI"
+                status="ai_reviewed"
+                riskLevel="UNKNOWN"
+                recommendation="SOMETHING_ELSE"
+                workspacePath="/contracts/rev-2"
+            />,
+        );
+        expect(screen.getByText("UNKNOWN")).toHaveClass("bg-gray-100");
+        expect(screen.getByText("SOMETHING_ELSE")).toBeInTheDocument();
+    });
+});
 
 describe("DocDownloadBlock", () => {
     it("shows the file icon without a file-type label", () => {

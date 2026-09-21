@@ -59,6 +59,11 @@ import {
   spotlightWorkflow,
 } from "../contextBuilders";
 import {
+  REVIEW_CONTRACT_TOOL_NAME,
+  runContractReviewTool,
+  type ContractReviewEvent,
+} from "./contractReviewTool";
+import {
   cachedCaseOpinionTexts,
   caseCitationEventFromRecord,
   courtlistenerCaseInputFromFetchedCase,
@@ -300,8 +305,10 @@ export async function runToolCalls(
   courtlistenerEvents: CourtlistenerToolEvent[];
   caseCitationEvents: CaseCitationEvent[];
   mcpEvents: McpToolEvent[];
+  contractReviews: ContractReviewEvent[];
 }> {
   const toolResults: unknown[] = [];
+  const contractReviews: ContractReviewEvent[] = [];
   const docsRead: {
     filename: string;
     document_id?: string;
@@ -727,6 +734,22 @@ export async function runToolCalls(
         role: "tool",
         tool_call_id: tc.id,
         content: `${instructions}${assetNotice}`,
+      });
+    } else if (tc.function.name === REVIEW_CONTRACT_TOOL_NAME) {
+      const { content, event } = await runContractReviewTool({
+        args,
+        docStore,
+        docIndex,
+        userId,
+        db,
+        write,
+        nonce,
+      });
+      if (event) contractReviews.push(event);
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
       const colIndices = args.col_indices as number[] | undefined;
@@ -1962,5 +1985,6 @@ export async function runToolCalls(
     courtlistenerEvents,
     caseCitationEvents,
     mcpEvents,
+    contractReviews,
   };
 }

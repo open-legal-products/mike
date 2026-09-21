@@ -24,6 +24,7 @@ export function toolCallLabel(name: string): string {
     if (name === "replicate_document") return "Copying document...";
     if (name === "read_workflow") return "Reading workflow...";
     if (name === "list_workflows") return "Loading workflows...";
+    if (name === "review_contract") return "Reviewing contract...";
     if (name === "list_documents") return "Loading documents...";
     if (name === "courtlistener_search_case_law")
         return "Searching case law...";

@@ -61,6 +61,28 @@ export async function attachDocxToReview(
   return ok({ contract_docx_path: target });
 }
 
+/**
+ * Persist DOCX bytes a caller already holds (the Assistant's review_contract
+ * tool reads the attached chat document) straight to the permanent key.
+ */
+export async function attachDocxBytesToReview(
+  db: Db,
+  args: { reviewId: string; buffer: Buffer },
+): Promise<ServiceResult<{ contract_docx_path: string }>> {
+  if (!storageEnabled) return failure("unavailable", "Penyimpanan dokumen belum dikonfigurasi.");
+  const target = originalDocxKey(args.reviewId);
+  try {
+    const bytes = new ArrayBuffer(args.buffer.byteLength);
+    new Uint8Array(bytes).set(args.buffer);
+    await uploadFile(target, bytes, DOCX_MIME);
+  } catch (e) {
+    return internalFailure(e);
+  }
+  const { error } = await db.from("reviews").update({ contract_docx_path: target }).eq("id", args.reviewId);
+  if (error) return internalFailure(error);
+  return ok({ contract_docx_path: target });
+}
+
 export type ReviewFileSource = { key: string; filename: string; size: number | null };
 
 /** Resolve the streamable original for a review, or not_found when none was persisted. */

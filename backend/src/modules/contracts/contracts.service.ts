@@ -14,7 +14,9 @@ export type { ExtractedContract } from "./contracts.extract";
 export {
   callerIsAdmin,
   createReview,
+  createReviewFromDocx,
   deleteReview,
+  executeReview,
   getCallerIdentity,
   getReviewDetail,
   getReviewStatus,
@@ -22,13 +24,18 @@ export {
   listReviews,
   parseCreateReviewBody,
   runReview,
+  summarizeReviewOutput,
 } from "./contracts.reviews";
 export type {
   CallerIdentity,
+  CreateReviewFromDocxInput,
   CreateReviewInput,
   ReviewListItem,
   ReviewListRow,
+  ReviewRunInput,
+  ReviewRunResult,
   ReviewStatus,
+  ReviewSummary,
 } from "./contracts.reviews";
 export type {
   Clarification,
@@ -78,6 +85,7 @@ export type { ClauseInput, CommentInput, FeedbackAction, FeedbackInput, MissedCl
 
 export {
   DOCX_MIME,
+  attachDocxBytesToReview,
   attachDocxToReview,
   getReviewFileSource,
   isStashedDocxKey,

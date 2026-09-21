@@ -1,4 +1,5 @@
 import { openAssistantSse } from "../../lib/assistantSse";
+import { startSseHeartbeat } from "../../lib/sseHeartbeat";
 // HTTP layer for the chat module.
 //
 // Route handlers parse params/query/body, call the chat.service functions,
@@ -542,6 +543,10 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         }
 
         const stream = openAssistantSse(res);
+        // A long-running tool (review_contract takes 1-2 minutes) produces no
+        // frames while it works; proxies drop a quiet SSE pipe. Same guard as
+        // tabular.generateStream.
+        const stopHeartbeat = startSseHeartbeat(res);
         const write = stream.write;
         const updateReservedAssistantMessage =
             createReservedAssistantMessageUpdater({
@@ -856,6 +861,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 /* ignore */
             }
         } finally {
+            stopHeartbeat();
             stream.finish();
         }
     } finally {

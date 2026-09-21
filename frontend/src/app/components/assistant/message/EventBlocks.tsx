@@ -511,6 +511,114 @@ export function DocDownloadBlock({
     );
 }
 
+const RISK_BADGE_CLASS: Record<string, string> = {
+    CRITICAL: "bg-red-100 text-red-800",
+    HIGH: "bg-orange-100 text-orange-800",
+    MEDIUM: "bg-amber-100 text-amber-800",
+    LOW: "bg-green-100 text-green-800",
+};
+
+const RECOMMENDATION_LABEL: Record<string, string> = {
+    READY_TO_SIGN: "Ready to sign",
+    NEEDS_REVISIONS: "Needs revisions",
+    ESCALATE_TO_CEO_COO: "Escalate to CEO/COO",
+    DO_NOT_SIGN: "Do not sign",
+};
+
+export function ContractReviewStartBlock({
+    filename,
+    showConnector,
+    isStreaming,
+}: {
+    filename: string;
+    showConnector?: boolean;
+    isStreaming?: boolean;
+}) {
+    return (
+        <EventBlock showConnector={showConnector} isStreaming={isStreaming}>
+            <div className="flex min-w-0 items-center gap-1.5">
+                <EventLabel className="shrink-0">Reviewing contract</EventLabel>
+                <FileTypeIcon fileType={filename} className="h-3.5 w-3.5" />
+                <span className="truncate">{filename}</span>
+            </div>
+        </EventBlock>
+    );
+}
+
+/**
+ * Outcome of the review_contract tool. The chat gives the executive read;
+ * triage, feedback, redlines and the memo live in the contracts workspace the
+ * link points to.
+ */
+export function ContractReviewBlock({
+    title,
+    status,
+    riskLevel,
+    recommendation,
+    workspacePath,
+    error,
+    showConnector,
+}: {
+    title: string;
+    status: "ai_reviewed" | "failed";
+    riskLevel: string | null;
+    recommendation: string | null;
+    workspacePath: string | null;
+    error?: string;
+    showConnector?: boolean;
+}) {
+    const failed = status === "failed";
+    const badgeClass = riskLevel
+        ? (RISK_BADGE_CLASS[riskLevel] ?? "bg-gray-100 text-gray-700")
+        : null;
+    return (
+        <EventBlock
+            showConnector={showConnector}
+            dotColor={failed ? "red" : "green"}
+        >
+            <div
+                className={`flex w-full min-w-0 items-center gap-3 px-3 py-2 font-sans ${RESPONSE_GLASS_SURFACE}`}
+                data-testid="contract-review-card"
+            >
+                {failed ? (
+                    <span className="shrink-0 rounded-md bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+                        Review failed
+                    </span>
+                ) : (
+                    riskLevel && (
+                        <span
+                            className={`shrink-0 rounded-md px-2 py-0.5 text-xs font-medium ${badgeClass}`}
+                        >
+                            {riskLevel}
+                        </span>
+                    )
+                )}
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-gray-900">
+                        {title}
+                    </div>
+                    <div className="truncate text-xs text-gray-500">
+                        {failed
+                            ? (error ?? "The review could not be completed.")
+                            : recommendation
+                              ? (RECOMMENDATION_LABEL[recommendation] ??
+                                recommendation)
+                              : "Review stored"}
+                    </div>
+                </div>
+                {workspacePath && (
+                    <a
+                        href={workspacePath}
+                        className="shrink-0 text-xs font-medium text-blue-700 hover:text-blue-900 whitespace-nowrap"
+                    >
+                        Open review workspace →
+                    </a>
+                )}
+            </div>
+        </EventBlock>
+    );
+}
+
 export function WorkflowAppliedBlock({
     title,
     showConnector,

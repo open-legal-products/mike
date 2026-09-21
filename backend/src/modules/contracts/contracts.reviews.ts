@@ -12,8 +12,18 @@ import { failure, internalFailure, ok, type ServiceResult } from "../../lib/serv
 import { listPromptRules } from "../playbook/playbook.service";
 import { runContractReviewAi } from "./contracts.ai";
 import { buildReviewContextFor } from "./contracts.context";
-import { isStashedDocxKey } from "./contracts.files";
-import type { ManualCommentRow, ReviewDetail, ReviewDetailRow, ReviewFeedbackRow } from "./contracts.types";
+import { extractContract } from "./contracts.extract";
+import { attachDocxBytesToReview, isStashedDocxKey } from "./contracts.files";
+import type {
+  ManualCommentRow,
+  MissingClause,
+  PlaybookComplianceItem,
+  RedFlag,
+  ReviewDetail,
+  ReviewDetailRow,
+  ReviewFeedbackRow,
+  ReviewOutput,
+} from "./contracts.types";
 import { projectRevisions, type RevisionEditRow } from "./contracts.redline";
 import type { NegotiationPointRow } from "./contracts.memo";
 
@@ -178,16 +188,29 @@ export function isReviewOutput(value: unknown): value is Record<string, unknown>
   return Boolean(ai.risk_level || ai.overall_recommendation);
 }
 
+export type ReviewRunInput = Pick<
+  CreateReviewInput,
+  "contract_text" | "client_name" | "document_type" | "project_context" | "review_focus"
+>;
+
+export type ReviewRunResult = {
+  review_id: string;
+  risk_level: string | null;
+  recommendation: string | null;
+  ai_output: ReviewOutput;
+};
+
 /**
- * Run the AI review through janus-tools and write the result onto the row.
- * Detached from the HTTP response by the caller; catches its own errors and
- * flips the row to "failed" so the UI never spins forever.
+ * Run the AI review and write the result onto the row. Awaitable: the caller
+ * (a detached HTTP handler or the Assistant's review_contract tool) gets the
+ * outcome back. On any failure the row is flipped to "failed" first so the
+ * workspace never spins forever, then the failure is returned, not thrown.
  */
-export async function runReview(
+export async function executeReview(
   db: Db,
   reviewId: string,
-  input: Pick<CreateReviewInput, "contract_text" | "client_name" | "document_type" | "project_context" | "review_focus">,
-): Promise<void> {
+  input: ReviewRunInput,
+): Promise<ServiceResult<ReviewRunResult>> {
   try {
     // Mike owns the playbook and calls the model directly (OpenRouter): the
     // active rules go into the system prompt on every review, so an edit on
@@ -196,7 +219,9 @@ export async function runReview(
       buildReviewContextFor(db, input.client_name, input.document_type),
       listPromptRules(db),
     ]);
-    if (playbookRules.length === 0) throw new Error("Tidak ada aturan playbook aktif; tinjauan dibatalkan.");
+    if (playbookRules.length === 0) {
+      return await markFailed(db, reviewId, failure("unavailable", "Tidak ada aturan playbook aktif; tinjauan dibatalkan."));
+    }
     const ai: unknown = await runContractReviewAi({
       rules: playbookRules,
       input: {
@@ -210,18 +235,25 @@ export async function runReview(
       },
     });
     if (!isReviewOutput(ai)) {
-      throw new Error(`review AI returned invalid output: ${JSON.stringify(ai).slice(0, 300)}`);
+      return await markFailed(
+        db,
+        reviewId,
+        internalFailure(new Error(`review AI returned invalid output: ${JSON.stringify(ai).slice(0, 300)}`)),
+      );
     }
-    await db
+    const risk_level = (ai.risk_level as string | undefined) ?? null;
+    const recommendation = (ai.overall_recommendation as string | undefined) ?? null;
+    const { error } = await db
       .from("reviews")
       .update({
         ai_output: ai,
-        risk_level: (ai.risk_level as string | undefined) ?? null,
-        recommendation: (ai.overall_recommendation as string | undefined) ?? null,
+        risk_level,
+        recommendation,
         status: "ai_reviewed",
         lifecycle_stage: "ai_review",
       })
       .eq("id", reviewId);
+    if (error) return await markFailed(db, reviewId, internalFailure(error));
     // Best effort: turn the AI revisions into tracked changes in the stored DOCX.
     // Failure here never fails the review; the workspace can re-run it on demand.
     try {
@@ -230,14 +262,154 @@ export async function runReview(
     } catch (e) {
       console.warn(`[contracts] revision projection crashed for ${reviewId}:`, e);
     }
+    return ok({ review_id: reviewId, risk_level, recommendation, ai_output: ai as unknown as ReviewOutput });
   } catch (e) {
-    console.error(`[contracts] runReview failed for ${reviewId}:`, e);
-    try {
-      await db.from("reviews").update({ status: "failed" }).eq("id", reviewId);
-    } catch (e2) {
-      console.error(`[contracts] failed to mark ${reviewId} failed:`, e2);
-    }
+    return await markFailed(db, reviewId, internalFailure(e));
   }
+}
+
+async function markFailed<T>(db: Db, reviewId: string, result: ServiceResult<T>): Promise<ServiceResult<T>> {
+  console.error(`[contracts] review ${reviewId} failed:`, result);
+  try {
+    await db.from("reviews").update({ status: "failed" }).eq("id", reviewId);
+  } catch (e2) {
+    console.error(`[contracts] failed to mark ${reviewId} failed:`, e2);
+  }
+  return result;
+}
+
+/**
+ * Fire-and-forget form of executeReview for the HTTP route, which answers 201
+ * before the ~60-120s review finishes. Never throws.
+ */
+export async function runReview(db: Db, reviewId: string, input: ReviewRunInput): Promise<void> {
+  await executeReview(db, reviewId, input);
+}
+
+export type CreateReviewFromDocxInput = {
+  userId: string;
+  buffer: Buffer;
+  filename: string;
+  client_name: string;
+  document_type: string;
+  project_context: string;
+  review_focus: string[];
+  title?: string | null;
+};
+
+/**
+ * One-call entry for callers that already hold the DOCX bytes (the Assistant's
+ * review_contract tool): extract → insert the `processing` row → persist the
+ * original DOCX. Does NOT run the AI review; follow with executeReview.
+ */
+export async function createReviewFromDocx(
+  db: Db,
+  input: CreateReviewFromDocxInput,
+): Promise<ServiceResult<{ id: string; input: ReviewRunInput }>> {
+  const clientName = input.client_name.trim();
+  if (!clientName) return failure("validation", "client_name wajib diisi.");
+  const extracted = await extractContract({ buffer: input.buffer, filename: input.filename });
+  if (!extracted.ok) return extracted;
+  const documentType = input.document_type.trim() || "Other";
+  const title =
+    input.title?.trim() || extracted.data.filename.replace(/\.(docx|doc)$/i, "") || `${documentType} — ${clientName}`;
+  const reviewInput: CreateReviewInput = {
+    client_name: clientName,
+    contract_text: extracted.data.contract_text,
+    document_type: documentType,
+    project_context: input.project_context,
+    review_focus: input.review_focus,
+    contract_html: extracted.data.contract_html,
+    contract_filename: extracted.data.filename,
+    contract_docx_path: null,
+    title,
+  };
+  const created = await createReview(db, { userId: input.userId, input: reviewInput });
+  if (!created.ok) return created;
+  const attached = await attachDocxBytesToReview(db, { reviewId: created.data.id, buffer: input.buffer });
+  if (!attached.ok) console.warn(`[contracts] could not attach DOCX to ${created.data.id}:`, attached);
+  return ok({
+    id: created.data.id,
+    input: {
+      contract_text: reviewInput.contract_text,
+      client_name: reviewInput.client_name,
+      document_type: reviewInput.document_type,
+      project_context: reviewInput.project_context,
+      review_focus: reviewInput.review_focus,
+    },
+  });
+}
+
+export type ReviewSummary = {
+  risk_level: string | null;
+  overall_recommendation: string | null;
+  executive_summary: string;
+  counts: {
+    red_flags: number;
+    revisions: number;
+    clarifications: number;
+    missing_clauses: number;
+    yellow_flags: number;
+    positive_findings: number;
+  };
+  red_flags: Array<
+    Pick<RedFlag, "id" | "severity" | "clause" | "title" | "action" | "playbook_rule"> & { highlight_text: string | null }
+  >;
+  red_flags_omitted: number;
+  missing_clauses: Array<Pick<MissingClause, "clause_name" | "importance">>;
+  non_compliant_rules: Array<{
+    rule: string;
+    status: PlaybookComplianceItem["status"];
+    clause_reference: string | null;
+    playbook_threshold: string | null;
+  }>;
+};
+
+const SEVERITY_ORDER: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2 };
+
+/**
+ * Compact, model-facing digest of a ReviewOutput. Red flags are ordered by
+ * severity and capped so the tool result stays small; the workspace has the
+ * full picture.
+ */
+export function summarizeReviewOutput(ai: ReviewOutput, opts: { maxFlags?: number } = {}): ReviewSummary {
+  const maxFlags = opts.maxFlags ?? 8;
+  const flags = [...(ai.red_flags ?? [])].sort(
+    (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9),
+  );
+  const compliance = ai.playbook_compliance ?? {};
+  return {
+    risk_level: ai.risk_level ?? null,
+    overall_recommendation: ai.overall_recommendation ?? null,
+    executive_summary: ai.executive_summary ?? "",
+    counts: {
+      red_flags: ai.red_flags?.length ?? 0,
+      revisions: ai.revisions?.length ?? 0,
+      clarifications: ai.clarifications?.length ?? 0,
+      missing_clauses: ai.missing_clauses?.length ?? 0,
+      yellow_flags: ai.yellow_flags?.length ?? 0,
+      positive_findings: ai.positive_findings?.length ?? 0,
+    },
+    red_flags: flags.slice(0, maxFlags).map((f) => ({
+      id: f.id,
+      severity: f.severity,
+      clause: f.clause,
+      title: f.title,
+      action: f.action,
+      playbook_rule: f.playbook_rule,
+      highlight_text: f.highlight_text ?? null,
+    })),
+    red_flags_omitted: Math.max(0, flags.length - maxFlags),
+    missing_clauses: (ai.missing_clauses ?? []).map((m) => ({ clause_name: m.clause_name, importance: m.importance })),
+    non_compliant_rules: Object.entries(compliance)
+      .filter(([, item]) => item && (item.status === "non_compliant" || item.status === "needs_attention"))
+      .map(([rule, item]) => ({
+        rule,
+        status: item.status,
+        clause_reference: item.clause_reference ?? null,
+        playbook_threshold: item.playbook_threshold ?? null,
+      })),
+  };
 }
 
 /**

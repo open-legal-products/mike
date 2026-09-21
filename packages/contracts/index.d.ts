@@ -293,6 +293,19 @@ export type AssistantEvent =
       }[];
     }
   | { type: "workflow_applied"; workflow_id: string; title: string }
+  | { type: "contract_review_start"; filename: string }
+  | {
+      /** Outcome of the review_contract tool; links to the contracts workspace. */
+      type: "contract_review";
+      review_id: string | null;
+      title: string;
+      filename: string;
+      status: "ai_reviewed" | "failed";
+      risk_level: string | null;
+      recommendation: string | null;
+      workspace_path: string | null;
+      error?: string;
+    }
   | {
       type: "doc_edited";
       filename: string;

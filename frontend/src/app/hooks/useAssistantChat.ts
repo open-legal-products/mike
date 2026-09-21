@@ -656,6 +656,51 @@ export function useAssistantChat({
               continue;
             }
 
+            if (data.type === "contract_review_start") {
+              pushEvent({
+                type: "contract_review_start",
+                filename:
+                  typeof data.filename === "string" ? data.filename : "",
+                isStreaming: true,
+              });
+              continue;
+            }
+
+            if (data.type === "contract_review") {
+              const event: Extract<
+                AssistantEvent,
+                { type: "contract_review" }
+              > = {
+                type: "contract_review",
+                review_id:
+                  typeof data.review_id === "string" ? data.review_id : null,
+                title: typeof data.title === "string" ? data.title : "",
+                filename:
+                  typeof data.filename === "string" ? data.filename : "",
+                status: data.status === "failed" ? "failed" : "ai_reviewed",
+                risk_level:
+                  typeof data.risk_level === "string" ? data.risk_level : null,
+                recommendation:
+                  typeof data.recommendation === "string"
+                    ? data.recommendation
+                    : null,
+                workspace_path:
+                  typeof data.workspace_path === "string"
+                    ? data.workspace_path
+                    : null,
+                ...(typeof data.error === "string"
+                  ? { error: data.error }
+                  : {}),
+              };
+              // The card replaces its own "Reviewing contract…" line.
+              const replaced = updateMatchingEvent(
+                (e) => e.type === "contract_review_start" && !!e.isStreaming,
+                () => event,
+              );
+              if (!replaced) pushEvent(event);
+              continue;
+            }
+
             if (data.type === "case_citation") {
               pushEvent({
                 type: "case_citation",

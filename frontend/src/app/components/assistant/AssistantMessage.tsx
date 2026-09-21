@@ -19,6 +19,8 @@ import { CitationsBlock, buildCitationAppendix } from "./message/CitationSources
 import { EditCardsSection } from "./message/EditCardsSection";
 import {
     AskInputsBlock,
+    ContractReviewBlock,
+    ContractReviewStartBlock,
     CourtListenerBlock,
     DocCreatedBlock,
     DocDownloadBlock,
@@ -571,6 +573,30 @@ export function AssistantMessage({
                             ? () => onWorkflowClick(event.workflow_id)
                             : undefined
                     }
+                />
+            );
+        }
+        if (event.type === "contract_review_start") {
+            return (
+                <ContractReviewStartBlock
+                    key={globalIdx}
+                    filename={event.filename}
+                    showConnector={showConnector}
+                    isStreaming={event.isStreaming}
+                />
+            );
+        }
+        if (event.type === "contract_review") {
+            return (
+                <ContractReviewBlock
+                    key={globalIdx}
+                    title={event.title}
+                    status={event.status}
+                    riskLevel={event.risk_level}
+                    recommendation={event.recommendation}
+                    workspacePath={event.workspace_path}
+                    error={event.error}
+                    showConnector={showConnector}
                 />
             );
         }

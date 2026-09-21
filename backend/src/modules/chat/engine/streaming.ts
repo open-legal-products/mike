@@ -33,6 +33,8 @@ import {
   isDocumentMutatingTool,
   withoutDocumentMutatingTools,
 } from "./tools/toolSchemas";
+import { CONTRACT_REVIEW_TOOLS } from "./tools/contractReviewTool";
+import { openRouterConfigured } from "../../../lib/openRouterChat";
 import {
   parseCitationsWithDiagnostics,
   parsePartialCitationObjects,
@@ -284,7 +286,15 @@ export async function runLLMStream(params: {
   const conversationTools = includeAskInputs
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
-  const baseTools = [...conversationTools, ...researchTools, ...WORKFLOW_TOOLS];
+  // The contract review runs on OpenRouter through the contracts module; a
+  // deployment without that key cannot run it, so the model never sees it.
+  const contractTools = openRouterConfigured() ? CONTRACT_REVIEW_TOOLS : [];
+  const baseTools = [
+    ...conversationTools,
+    ...researchTools,
+    ...WORKFLOW_TOOLS,
+    ...contractTools,
+  ];
   const advertisedTools = [
     ...baseTools,
     ...mcpTools,
@@ -585,6 +595,7 @@ export async function runLLMStream(params: {
           courtlistenerEvents,
           caseCitationEvents,
           mcpEvents,
+          contractReviews,
         } = await runToolCalls(
           toolCalls,
           docStore,
@@ -669,6 +680,9 @@ export async function runLLMStream(params: {
           events.push(event);
         }
         for (const event of caseCitationEvents) {
+          events.push(event);
+        }
+        for (const event of contractReviews) {
           events.push(event);
         }
 

@@ -260,6 +260,8 @@ export type AssistantEvent =
       isStreaming?: boolean;
     })
   | WireActivity<"workflow_applied">
+  | (WireActivity<"contract_review_start"> & { isStreaming?: boolean })
+  | WireActivity<"contract_review">
   | (Omit<
       WireActivity<"doc_edited">,
       "version_number" | "annotations" | "error" | "isStreaming"
