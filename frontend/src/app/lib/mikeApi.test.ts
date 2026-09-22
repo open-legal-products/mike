@@ -157,6 +157,7 @@ import {
     stopChatTurn,
     streamProjectChat,
     streamTabularChat,
+    stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
     syncUserPasswordSet,
@@ -1014,6 +1015,32 @@ describe("streamTabularGenerationResume", () => {
         await streamTabularGenerationResume("r1");
 
         expect(lastFetchCall().init.signal).toBeUndefined();
+    });
+
+    it("resumes from a sequence number when the client has already seen frames", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularGenerationResume("r1", undefined, 12);
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/generate/stream?from=12",
+        );
+    });
+});
+
+describe("stopTabularGeneration", () => {
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularGeneration("r1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/generate/stop");
+        expect(init.method).toBe("POST");
     });
 });
 

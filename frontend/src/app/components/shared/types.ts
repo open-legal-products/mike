@@ -882,4 +882,12 @@ export interface TabularReviewDetailOut {
   cells: TabularCell[];
   rows: TabularReviewRow[];
   documents: Document[];
+  /**
+   * A generation the server is running *in this process*: present only while
+   * the backend still holds the run's frames, which is what makes it
+   * attachable (`?from=<seq + 1>`) and stoppable through
+   * `POST /tabular-review/:id/generate/stop`. `review.is_running` is the
+   * weaker database lease, which an async or another replica's run also holds.
+   */
+  active_generation?: { id: string; seq: number } | null;
 }

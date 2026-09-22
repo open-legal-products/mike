@@ -2470,13 +2470,34 @@ export async function streamTabularGeneration(
  * observer that takes no generation lease and enqueues nothing, so resuming a
  * run can never 409 or restart it. Used when a stream drops mid-run and when
  * the view mounts on a review that is already `is_running`.
+ *
+ * `from` is the sequence number to replay from — the last `id:` seen plus one
+ * — so a reconnect picks up where it left off instead of replaying the whole
+ * run. A server with no in-process run ignores it and tails the database.
  */
 export async function streamTabularGenerationResume(
     reviewId: string,
     signal?: AbortSignal,
+    from?: number,
 ): Promise<Response> {
-    return apiFetch(`${API_BASE}/tabular-review/${reviewId}/generate/stream`, {
-        signal: signal ?? undefined,
+    const query = from ? `?from=${from}` : "";
+    return apiFetch(
+        `${API_BASE}/tabular-review/${reviewId}/generate/stream${query}`,
+        { signal: signal ?? undefined },
+    );
+}
+
+/**
+ * Stop a generation the server is running. Closing the SSE socket no longer
+ * cancels anything, so this is the Stop control's only lever. A deployment
+ * whose extraction runs on the queue — or a run owned by another replica —
+ * has nothing in-process to stop and answers 404 `generation_not_found`.
+ */
+export async function stopTabularGeneration(
+    reviewId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest(`/tabular-review/${reviewId}/generate/stop`, {
+        method: "POST",
     });
 }
 

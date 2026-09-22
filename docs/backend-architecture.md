@@ -33,19 +33,34 @@ loops (header flush, LLM stream, stop handling, assistant-message
 persistence) stay in the routes file because stream lifetime *is* an HTTP
 concern. Only their pre-stream preparation and post-stream persistence live in
 the service. `tabular.generateStream.ts` is the single sanctioned exception
-that takes `res` directly, because two routes share its stream; its header
-says so.
+that takes `res` directly, because two routes share its *async* stream; its
+header says so. Its synchronous half takes a `write` function instead — that
+generation is a server-owned run, so the frames belong to the run, not to one
+response.
 
-### Server-owned chat turns
+### Server-owned runs
+
+A *run* (`lib/streamRuns.ts`) is a generation the server owns rather than the
+HTTP response that asked for it. The route registers one, writes frames into
+it, and any number of responses attach: the original request, a reload, a
+second tab. `write` appends to the run's frame buffer and fans out to every
+attached response, `signal` aborts only on an explicit stop, and closing a
+response merely detaches it. Each frame carries an SSE `id:` line with its
+sequence number, which is what a client sends back as `from` when it
+reconnects. A frame written with `{ replay: () => …}` still fans out live but
+is replayed to a late subscriber only while the predicate holds. A run is
+registered under a `key` — what may only have one run at a time — and carries
+an opaque `meta` for the surface that owns it.
+
+Two surfaces use it.
+
+#### Chat turns
 
 The chat and project-chat streams (`POST /chat`, `POST /projects/:id/chat`)
-do not tie the generation to the socket that requested it. The route
-registers a *run* in `lib/assistantTurnRuns.ts` and drives the model through
-it: `attachAssistantTurnSse(res, run)` hands back the same
-`{ signal, write, finish }` the older `openAssistantSse` did, but `write`
-appends to the run's frame buffer and fans out to every attached response,
-`signal` aborts only on an explicit stop, and closing a response merely
-detaches it. Each frame carries an SSE `id:` line with its sequence number.
+register a run per assistant turn through `lib/assistantTurnRuns.ts`, the
+chat-shaped view of the registry (key `chat:<chatId>`, the assistant row id in
+`meta`). `attachAssistantTurnSse(res, run)` hands back the same
+`{ signal, write, finish }` the older `openAssistantSse` did.
 
 - `GET /chat/:chatId/turn/:turnId/stream?from=<seq>` attaches to a run (a
   reload, a second tab, a dropped connection): frames with `seq >= from` are
@@ -61,13 +76,43 @@ detaches it. Each frame carries an SSE `id:` line with its sequence number.
 - A chat has at most one run at a time: a second `POST` while one is
   generating answers `409 turn_in_progress`.
 
+#### Tabular review generation
+
+`POST /tabular-review/:reviewId/generate` on the synchronous path (the
+default; `ASYNC_TABULAR_EXTRACTION=true` uses BullMQ workers instead, whose
+durability comes from the queue) registers a run keyed `review:<reviewId>` as
+soon as it has claimed the generation lease. From then on a closed socket is a
+detach: the extraction keeps filling cells, the lease stays held, and the
+frames wait in the run for whoever attaches next. The pre-lease guards are
+still tied to the request — nothing is claimed yet, so a caller that walks
+away costs nothing.
+
+- `GET /tabular-review/:reviewId/generate/stream?from=<seq>` attaches to the
+  run when this process has one, replaying `cell_update` frames from `from`
+  (replaying them is idempotent) and then tailing. With no in-process run — the
+  async path, another replica, a lease with nothing attached — it falls back
+  to the DB-tailing view it always was. A review *viewer* is refused, as at
+  `POST /generate`.
+- `POST /tabular-review/:reviewId/generate/stop` is the one way to cut a
+  synchronous generation short; closing the socket no longer does it. The
+  stopped cells go back to `pending` and readers get a `cancelled` frame
+  before `[DONE]`. With no in-process run it answers
+  `404 generation_not_found`, which is also what an async-path deployment
+  answers — there the work belongs to the queue.
+- `GET /tabular-review/:reviewId` reports `active_generation`
+  (`{ id, seq }`) while this process is generating. That is the stronger,
+  *stoppable* statement; `review.is_running` (the database lease) stays and is
+  also true for an async or another replica's run.
+- A second `POST /generate` while a run is still streaming answers
+  `409 review_running`, handing back the lease it had just claimed.
+
 Runs live in process memory. A finished run is retained for
 `FINISHED_RUN_RETENTION_MS` (60 s) so a late reconnect still gets the
 terminal frames, and a run that outlives `MAX_RUN_LIFETIME_MS` (30 min) is
 stopped as a safety net. A resume therefore has to reach the replica that is
 generating: run one replica, or route by session, until the buffer is moved
-to shared storage. Word chat (`/word-chat`) and tabular streams still use
-`openAssistantSse`, where a closed socket is still a cancel.
+to shared storage. Word chat (`/word-chat`) still uses `openAssistantSse`,
+where a closed socket is still a cancel.
 
 ### The service contract
 

@@ -28,6 +28,7 @@ import {
     listProjects,
     grantTabularReviewAccess,
     regenerateTabularCell,
+    stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
     updateTabularReview,
@@ -184,6 +185,10 @@ export function TRView({ reviewId, projectId }: Props) {
     const reviewFolderUploadInputRef = useRef<HTMLInputElement>(null);
     const generationAbortRef = useRef<AbortController | null>(null);
     const stopRequestedRef = useRef(false);
+    // The sequence number of the last frame this client has applied. The
+    // server numbers every frame of a run (`id:`), so a dropped connection
+    // resumes from here + 1 instead of replaying the whole grid.
+    const lastFrameIdRef = useRef(0);
     // Only one resume stream may be open at a time — mount, a 202 regenerate
     // and a dropped generate stream can all ask for one.
     const resumeStreamOpenRef = useRef(false);
@@ -240,7 +245,7 @@ export function TRView({ reviewId, projectId }: Props) {
         let cancelled = false;
         const fetches: Promise<unknown>[] = [
             getTabularReview(reviewId).then(
-                ({ review, cells, rows, documents }) => {
+                ({ review, cells, rows, documents, active_generation }) => {
                     if (cancelled) return;
                     setReview(review);
                     setCells(cells);
@@ -249,11 +254,22 @@ export function TRView({ reviewId, projectId }: Props) {
                     setColumns(review.columns_config || []);
                     // A run may still be executing server-side (e.g. after a
                     // refresh, or in another tab) — reattach to it through the
-                    // resumable stream instead of showing a spinner nothing will
-                    // ever resolve. `is_running` is the review's live generation
-                    // lease; cells left "generating" cover a run whose lease has
-                    // lapsed but whose terminal states are still landing.
-                    if (
+                    // resumable stream instead of showing a spinner nothing
+                    // will ever resolve. `active_generation` is a run this
+                    // server owns in process: it can be stopped, so the
+                    // toolbar offers Stop for as long as we are attached.
+                    // `is_running` is only the review's generation lease (an
+                    // async run, or another replica's); cells left
+                    // "generating" cover a run whose lease has lapsed but
+                    // whose terminal states are still landing. Those two can
+                    // be watched, not stopped.
+                    lastFrameIdRef.current = 0;
+                    if (active_generation) {
+                        resumeGenerationStream({ stoppable: true }).catch(
+                            (err) =>
+                                console.error("Generation resume failed", err),
+                        );
+                    } else if (
                         review.is_running ||
                         cells.some((c) => c.status === "generating")
                     ) {
@@ -577,6 +593,10 @@ export function TRView({ reviewId, projectId }: Props) {
     async function consumeGenerationStream(response: Response) {
         for await (const frame of readSseFrames(response, {
             signal: generationAbortRef.current?.signal,
+            onEventId: (id) => {
+                const seq = Number.parseInt(id, 10);
+                if (Number.isFinite(seq)) lastFrameIdRef.current = seq;
+            },
         })) {
             try {
                 const data = frame as Record<string, unknown>;
@@ -625,7 +645,12 @@ export function TRView({ reviewId, projectId }: Props) {
     // owns a controller for its own lifetime and clears it on the way out —
     // it never overwrites a live run's controller, which `handleGenerate`'s
     // `finally` identity-checks.
-    async function resumeGenerationStream() {
+    // `stoppable` marks a run this server still owns in process (the review
+    // detail reported `active_generation`): it can be stopped through the
+    // endpoint, so the toolbar must read Stop — not Run — for as long as we
+    // are attached to it. Only a resume that owns its abort controller owns
+    // that flag; one borrowed by `handleGenerate` leaves the state to it.
+    async function resumeGenerationStream(opts?: { stoppable?: boolean }) {
         if (resumeStreamOpenRef.current) return;
         resumeStreamOpenRef.current = true;
         const ownedAbort = generationAbortRef.current
@@ -633,10 +658,17 @@ export function TRView({ reviewId, projectId }: Props) {
             : new AbortController();
         if (ownedAbort) generationAbortRef.current = ownedAbort;
         const abort = generationAbortRef.current;
+        const ownsToolbar = Boolean(opts?.stoppable && ownedAbort);
+        if (ownsToolbar) {
+            stopRequestedRef.current = false;
+            setStoppingGeneration(false);
+            setGenerating(true);
+        }
         try {
             const response = await streamTabularGenerationResume(
                 reviewId,
                 abort?.signal,
+                lastFrameIdRef.current + 1,
             );
             if (!response.ok) {
                 throw new Error(`Resume failed: ${response.status}`);
@@ -648,6 +680,21 @@ export function TRView({ reviewId, projectId }: Props) {
             resumeStreamOpenRef.current = false;
             if (ownedAbort && generationAbortRef.current === ownedAbort)
                 generationAbortRef.current = null;
+            if (ownsToolbar) {
+                if (stopRequestedRef.current) {
+                    try {
+                        await refreshAfterStoppedGeneration();
+                    } catch (err) {
+                        console.error(
+                            "Failed to refresh the stopped tabular review",
+                            err,
+                        );
+                    }
+                }
+                stopRequestedRef.current = false;
+                setGenerating(false);
+                setStoppingGeneration(false);
+            }
         }
     }
 
@@ -681,6 +728,9 @@ export function TRView({ reviewId, projectId }: Props) {
 
         const generationAbort = new AbortController();
         generationAbortRef.current = generationAbort;
+        // A new run numbers its frames from 1, so a reconnect must not ask to
+        // resume from a previous run's sequence number.
+        lastFrameIdRef.current = 0;
         stopRequestedRef.current = false;
         setStoppingGeneration(false);
         setGenerating(true);
@@ -822,7 +872,12 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    function handleStopGeneration() {
+    // Stop is a request to the server, not a hang-up: the generation is a
+    // server-owned run, so dropping the socket would only detach this tab
+    // while the extraction carried on. The endpoint aborts the run, which
+    // ends the attached stream with `cancelled` + `[DONE]`, and the
+    // `stopRequestedRef` path then refreshes the review.
+    async function handleStopGeneration() {
         if (!generating || stoppingGeneration) return;
         setStoppingGeneration(true);
         setCells((current) =>
@@ -838,7 +893,24 @@ export function TRView({ reviewId, projectId }: Props) {
                 : current,
         );
         stopRequestedRef.current = true;
-        generationAbortRef.current?.abort();
+        try {
+            await stopTabularGeneration(reviewId);
+        } catch (err) {
+            // No run to stop here: a deployment whose extraction runs on the
+            // queue, or a run owned by another replica. Dropping our own
+            // stream is all this tab can do — the same thing Stop meant
+            // before the run registry. Any other failure leaves the run
+            // going, and leaving the toolbar stuck on "Stopping…" would be
+            // worse than detaching, so it ends the same way.
+            if (
+                !(
+                    err instanceof MikeApiError &&
+                    err.code === "generation_not_found"
+                )
+            )
+                console.error("Failed to stop the tabular generation", err);
+            generationAbortRef.current?.abort();
+        }
     }
 
     async function handleAddColumn(newColumns: ColumnConfig[]) {
