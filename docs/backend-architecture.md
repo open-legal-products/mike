@@ -29,12 +29,45 @@ Every directory under `src/modules/` follows the same shape:
 | `__tests__/` | Unit tests for the service functions (fake `db`), colocated with the code. |
 
 Streaming endpoints are the one place HTTP leaks into the module body: SSE
-loops (header flush, LLM stream, client-abort handling, assistant-message
+loops (header flush, LLM stream, stop handling, assistant-message
 persistence) stay in the routes file because stream lifetime *is* an HTTP
 concern. Only their pre-stream preparation and post-stream persistence live in
 the service. `tabular.generateStream.ts` is the single sanctioned exception
 that takes `res` directly, because two routes share its stream; its header
 says so.
+
+### Server-owned chat turns
+
+The chat and project-chat streams (`POST /chat`, `POST /projects/:id/chat`)
+do not tie the generation to the socket that requested it. The route
+registers a *run* in `lib/assistantTurnRuns.ts` and drives the model through
+it: `attachAssistantTurnSse(res, run)` hands back the same
+`{ signal, write, finish }` the older `openAssistantSse` did, but `write`
+appends to the run's frame buffer and fans out to every attached response,
+`signal` aborts only on an explicit stop, and closing a response merely
+detaches it. Each frame carries an SSE `id:` line with its sequence number.
+
+- `GET /chat/:chatId/turn/:turnId/stream?from=<seq>` attaches to a run (a
+  reload, a second tab, a dropped connection): frames with `seq >= from` are
+  replayed, then the live ones follow until the run ends. Visibility on the
+  chat is enough, as it is for reading the transcript.
+- `POST /chat/:chatId/turn/:turnId/stop` is the one way to cut a generation
+  short; it needs the standing that sending does. The route's abort path
+  then persists the partial answer labelled "Cancelled by user." and writes
+  a `cancelled` frame before `[DONE]`, so attached readers learn the outcome.
+- `GET /chat/:chatId` reports `active_turn` (`{ id, seq, assistant_message_id }`)
+  while a run is generating, which is how a freshly loaded client knows to
+  attach rather than treat the hidden reservation row as "no answer".
+- A chat has at most one run at a time: a second `POST` while one is
+  generating answers `409 turn_in_progress`.
+
+Runs live in process memory. A finished run is retained for
+`FINISHED_RUN_RETENTION_MS` (60 s) so a late reconnect still gets the
+terminal frames, and a run that outlives `MAX_RUN_LIFETIME_MS` (30 min) is
+stopped as a safety net. A resume therefore has to reach the replica that is
+generating: run one replica, or route by session, until the buffer is moved
+to shared storage. Word chat (`/word-chat`) and tabular streams still use
+`openAssistantSse`, where a closed socket is still a cancel.
 
 ### The service contract
 

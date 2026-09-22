@@ -1,4 +1,9 @@
-import { openAssistantSse } from "../../lib/assistantSse";
+import {
+    attachAssistantTurnSse,
+    getActiveAssistantTurn,
+    getAssistantTurnRun,
+    startAssistantTurnRun,
+} from "../../lib/assistantTurnRuns";
 // HTTP layer for the chat module.
 //
 // Route handlers parse params/query/body, call the chat.service functions,
@@ -155,7 +160,67 @@ chatRouter.get("/:chatId", requireAuth, asyncRoute(async (req, res) => {
         is_owner: access.isCreator,
         access_role: access.projectRole,
         messages,
+        // A turn still generating into this chat, so a client that has just
+        // loaded (a refresh, a second tab) can attach to it instead of
+        // showing the hidden reservation as "no answer".
+        active_turn: getActiveAssistantTurn(chatId),
     });
+}));
+
+// GET /chat/:chatId/turn/:turnId/stream?from=<seq>
+// Attach to a turn that is (or was, within the retention window) generating
+// into this chat. Frames with a sequence number >= `from` are replayed, then
+// the live ones follow until the turn ends. Visibility is enough to watch,
+// as it is for reading the transcript. Project chats use this too: the turn
+// is keyed by chat, not by the route that started it.
+chatRouter.get("/:chatId/turn/:turnId/stream", requireAuth, asyncRoute(async (req, res) => {
+    const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
+    const { chatId, turnId } = req.params;
+    const db = createServerSupabase();
+    const access = await getAccessibleChat(db, { chatId, userId, userEmail });
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Chat not found" });
+    const run = getAssistantTurnRun(turnId);
+    if (!run || run.chatId !== chatId) {
+        return void res.status(404).json({
+            code: "turn_not_found",
+            detail: "This response is no longer being generated.",
+        });
+    }
+    const rawFrom = Number.parseInt(String(req.query.from ?? "1"), 10);
+    const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 1;
+    attachAssistantTurnSse(res, run, from);
+}));
+
+// POST /chat/:chatId/turn/:turnId/stop
+// The one way to cut a generation short. Closing the SSE socket no longer
+// does it, so the client's Stop control calls this. Stopping needs the same
+// standing as sending: the thread's creator, or content.edit on the project.
+chatRouter.post("/:chatId/turn/:turnId/stop", requireAuth, asyncRoute(async (req, res) => {
+    const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
+    const { chatId, turnId } = req.params;
+    const db = createServerSupabase();
+    const access = await getAccessibleChat(db, { chatId, userId, userEmail });
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Chat not found" });
+    if (!access.isCreator && !can(access.projectRole, "content.edit")) {
+        return void res.status(403).json({
+            code: "chat_write_forbidden",
+            detail: "Only the chat's creator or a project editor can stop this response.",
+        });
+    }
+    const run = getAssistantTurnRun(turnId);
+    if (!run || run.chatId !== chatId) {
+        return void res.status(404).json({
+            code: "turn_not_found",
+            detail: "This response is no longer being generated.",
+        });
+    }
+    if (run.finished) return void res.json({ stopped: false, finished: true });
+    run.stop();
+    res.json({ stopped: true, finished: false });
 }));
 
 // GET /chat/:chatId/people
@@ -545,6 +610,24 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     });
 
     try {
+        // The generation is a server-owned run from here on: it survives the
+        // caller's socket (a refresh, a closed tab) and only the Stop
+        // endpoint aborts it. One run per chat at a time.
+        const run = startAssistantTurnRun({
+            id: assistantMessageId ?? randomUUID(),
+            chatId,
+            userId,
+            assistantMessageId:
+                assistantMessageId ??
+                askInputsResponse?.assistant_message_id ??
+                "",
+        });
+        if (!run) {
+            return void res.status(409).json({
+                code: "turn_in_progress",
+                detail: "A response is already being generated for this chat.",
+            });
+        }
         // Make the advertised identity durable before the response becomes an
         // SSE stream. If this reservation fails, return a normal HTTP error
         // while headers are still mutable; clients must never receive an ID
@@ -563,13 +646,14 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     "[chat/stream] failed to reserve assistant message",
                     reserveError,
                 );
+                run.finish();
                 return void res
                     .status(500)
                     .json({ detail: "Failed to start assistant response" });
             }
         }
 
-        const stream = openAssistantSse(res);
+        const stream = attachAssistantTurnSse(res, run);
         const write = stream.write;
         const updateReservedAssistantMessage =
             createReservedAssistantMessageUpdater({
@@ -585,6 +669,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 `data: ${JSON.stringify({
                     type: "chat_id",
                     chatId,
+                    turnId: run.id,
                     ...(assistantMessageId ? { assistantMessageId } : {}),
                 })}\n\n`,
             );
@@ -788,7 +873,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             write("data: [DONE]\n\n");
         } catch (err) {
             if (isAbortError(err)) {
-                devLog("[chat/stream] client aborted stream", { chatId });
+                devLog("[chat/stream] turn stopped", { chatId });
                 void enqueueChatTurnAudit(
                     db,
                     {
@@ -834,6 +919,11 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         );
                     }
                 }
+                // Readers still attached (Stop came from another tab, or
+                // this one is watching) learn the outcome the same way a
+                // reload would: the stored row ends "Cancelled by user."
+                write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+                write("data: [DONE]\n\n");
                 return;
             }
             console.error("[chat/stream] error:", err);

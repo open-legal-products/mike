@@ -153,6 +153,8 @@ import {
     startMcpConnectorOAuth,
     startUserExport,
     streamChat,
+    streamChatTurn,
+    stopChatTurn,
     streamProjectChat,
     streamTabularChat,
     streamTabularGeneration,
@@ -736,6 +738,35 @@ describe("getChat message mapping", () => {
     });
 });
 
+describe("getChat active turn", () => {
+    const chat: Chat = {
+        id: "c1",
+        project_id: null,
+        user_id: "u1",
+        title: "T",
+        created_at: "2026-01-01",
+    };
+
+    it("passes through the turn the server is still generating", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({
+                chat,
+                messages: [],
+                active_turn: { id: "t1", seq: 4, assistant_message_id: "m9" },
+            }),
+        );
+        const detail = await getChat("c1");
+        expect(detail.active_turn).toEqual({ id: "t1", seq: 4, assistant_message_id: "m9" });
+    });
+
+    it("is null when the server reports none, or predates the field", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [] }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [], active_turn: null }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+    });
+});
+
 describe("mapTRMessages", () => {
     it("maps user and assistant rows including annotations", () => {
         const events: AssistantEvent[] = [{ type: "content", text: "Answer" }];
@@ -857,6 +888,43 @@ describe("streamChat", () => {
 
         expect(response.bodyUsed).toBe(false);
         expect(await readAll(response)).toBe(chunks.join(""));
+    });
+});
+
+describe("streamChatTurn / stopChatTurn (server-owned turns)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+        await streamChatTurn({
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stream?from=7");
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        await streamChatTurn({ chatId: "c1", turnId: "t1" });
+        expect(lastFetchCall().url).toBe("/api/chat/c1/turn/t1/stream?from=1");
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+        await expect(stopChatTurn("c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
     });
 });
 

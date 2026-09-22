@@ -85,6 +85,7 @@ vi.mock("../../lib/mcpConnectors", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+    resetAssistantTurnRunsForTests();
     unexpectedFetch.mockClear();
     streamWithProvider.mockReset();
     vi.stubGlobal("fetch", unexpectedFetch);
@@ -414,6 +415,7 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 });
 
 import { app } from "../../app";
+import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { createServerSupabase } from "../../lib/supabase";
 
 const VALID_BODY = {
@@ -1024,10 +1026,14 @@ describe("POST /chat — streaming endpoint", () => {
                     }),
                 }),
             });
+            // Records carry an SSE `id:` line (the turn's sequence number)
+            // ahead of `data:` now that a client can resume a stream.
             const deltas = second.text
                 .split("\n\n")
-                .filter((line) => line.startsWith("data: {"))
-                .map((line) => JSON.parse(line.slice(6)))
+                .filter((record) => record.includes("data: {"))
+                .map((record) =>
+                    JSON.parse(record.slice(record.indexOf("data: ") + 6)),
+                )
                 .filter((event) => event.type === "content_delta");
             expect(deltas.map((event) => event.text).join("")).toBe(
                 "I will use New York law.",
@@ -3089,5 +3095,216 @@ describe("chat grants, deletion and roster", () => {
             );
             expect(chatWrites("delete")).toEqual([]);
         });
+    });
+});
+
+
+/**
+ * Server-owned turns. The generation is a run registered in
+ * lib/assistantTurnRuns: it survives the requesting socket closing, any
+ * response can attach to it (a reload, a second tab) and replay from a
+ * sequence number, and only the Stop endpoint aborts it.
+ */
+describe("server-owned turns: resume, stop, concurrency", () => {
+    type StreamParams = { write: (s: string) => void; signal?: AbortSignal };
+    const emitFrom = (params: StreamParams) => (frame: object) =>
+        params.write(`data: ${JSON.stringify(frame)}\n\n`);
+    const records = (text: string) =>
+        text.split("\n\n").filter((record) => record.includes("data: "));
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        runLLMStream.mockReset();
+        dbInserts.length = 0;
+        dbUpdates.length = 0;
+        dbRpcCalls.length = 0;
+        // GET /chat/:chatId reads rows through this list.
+        dbControl.assistantMessageRows = [];
+        resetAssistantTurnRunsForTests();
+    });
+
+    /** A generation the test releases by hand. */
+    function heldGeneration() {
+        const held = {
+            release: () => {},
+            started: new Promise<StreamParams>((resolve) => {
+                runLLMStream.mockImplementation(async (params: unknown) => {
+                    const p = params as StreamParams;
+                    resolve(p);
+                    emitFrom(p)({ type: "content_delta", text: "First" });
+                    await new Promise<void>((done) => {
+                        held.release = done;
+                    });
+                    emitFrom(p)({ type: "content_delta", text: " second" });
+                    return {
+                        fullText: "First second",
+                        events: [{ type: "content", text: "First second" }],
+                        citations: [],
+                    };
+                });
+            }),
+        };
+        return held;
+    }
+
+    it("keeps generating after the requesting socket closes, and a reload attaches from where it left off", async () => {
+        const held = heldGeneration();
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY);
+        const firstSettled = first.then(
+            () => "ended",
+            () => "aborted",
+        );
+        const params = await held.started;
+
+        // The refresh: the caller's socket goes away mid-answer.
+        first.abort();
+        expect(await firstSettled).toBe("aborted");
+        expect(params.signal?.aborted).toBe(false);
+
+        // What a reloaded page sees: the transcript plus the live turn.
+        const loaded = await request(app)
+            .get("/chat/chat-1")
+            .set("Authorization", "Bearer test");
+        expect(loaded.status).toBe(200);
+        const turnId = findAssistantReservation()?.value as { id: string };
+        // chat_id (1) and the first delta (2) are out; the generated title
+        // frame lands whenever its mocked call resolves.
+        expect(loaded.body.active_turn).toMatchObject({
+            id: turnId.id,
+            assistant_message_id: turnId.id,
+        });
+        expect(loaded.body.active_turn.seq).toBeGreaterThanOrEqual(2);
+
+        // Attach from the second frame: the replay skips chat_id, then the
+        // live tail arrives once the generation is released.
+        const tail = request(app)
+            .get(`/chat/chat-1/turn/${turnId.id}/stream?from=2`)
+            .set("Authorization", "Bearer test");
+        setTimeout(() => held.release(), 30);
+        const resumed = await tail;
+        expect(resumed.status).toBe(200);
+        expect(resumed.headers["content-type"]).toContain("text/event-stream");
+        const lines = records(resumed.text);
+        expect(lines[0]).toBe('id: 2\ndata: {"type":"content_delta","text":"First"}');
+        const second = lines.findIndex((line) => line.includes('"text":" second"'));
+        expect(second).toBeGreaterThan(0);
+        expect(lines[second]).toMatch(/^id: \d+\ndata: /);
+        expect(resumed.text).toContain("data: [DONE]");
+        expect(resumed.text).not.toContain('"type":"chat_id"');
+
+        // The whole answer was stored: nothing was cancelled.
+        expect(findAssistantUpdate()?.value).toMatchObject({
+            content: [{ type: "content", text: "First second" }],
+        });
+        const after = await request(app)
+            .get("/chat/chat-1")
+            .set("Authorization", "Bearer test");
+        expect(after.body.active_turn).toBeNull();
+    });
+
+    it("refuses a second turn while one is generating into the chat", async () => {
+        const held = heldGeneration();
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send({ ...VALID_BODY, chat_id: "chat-1" });
+        const firstDone = first.then((res) => res);
+        await held.started;
+        const second = await request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send({ ...VALID_BODY, chat_id: "chat-1" });
+        expect(second.status).toBe(409);
+        expect(second.body).toEqual({
+            code: "turn_in_progress",
+            detail: "A response is already being generated for this chat.",
+        });
+        held.release();
+        expect((await firstDone).text).toContain("data: [DONE]");
+        expect(runLLMStream).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops a run through the endpoint: readers see cancelled then [DONE], the partial answer is stored", async () => {
+        const { AssistantStreamAbortError } = await import("../../modules/chat/engine/index.js");
+        const started = new Promise<StreamParams>((resolve) => {
+            runLLMStream.mockImplementation(async (params: unknown) => {
+                const p = params as StreamParams;
+                resolve(p);
+                emitFrom(p)({ type: "content_delta", text: "Partial" });
+                await new Promise<void>((done) =>
+                    p.signal?.addEventListener("abort", () => done(), { once: true }),
+                );
+                throw new AssistantStreamAbortError("Partial", [
+                    { type: "content", text: "Partial" },
+                ]);
+            });
+        });
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY);
+        const firstDone = first.then((res) => res);
+        await started;
+        const turnId = (findAssistantReservation()?.value as { id: string }).id;
+
+        const unknown = await request(app)
+            .post(`/chat/chat-1/turn/not-a-turn/stop`)
+            .set("Authorization", "Bearer test");
+        expect(unknown.status).toBe(404);
+        expect(unknown.body.code).toBe("turn_not_found");
+
+        const stopped = await request(app)
+            .post(`/chat/chat-1/turn/${turnId}/stop`)
+            .set("Authorization", "Bearer test");
+        expect(stopped.status).toBe(200);
+        expect(stopped.body).toEqual({ stopped: true, finished: false });
+
+        const text = (await firstDone).text;
+        expect(text).toContain('"type":"cancelled"');
+        expect(text).toContain("data: [DONE]");
+        expect(findAssistantUpdate()?.value).toMatchObject({
+            content: [
+                { type: "content", text: "Partial" },
+                { type: "content", text: "Cancelled by user." },
+            ],
+        });
+
+        // Stopping again is a no-op that says so; the run is kept briefly
+        // for late readers, and a replay of it ends at once.
+        const again = await request(app)
+            .post(`/chat/chat-1/turn/${turnId}/stop`)
+            .set("Authorization", "Bearer test");
+        expect(again.body).toEqual({ stopped: false, finished: true });
+        const replay = await request(app)
+            .get(`/chat/chat-1/turn/${turnId}/stream`)
+            .set("Authorization", "Bearer test");
+        expect(replay.status).toBe(200);
+        expect(records(replay.text)[0]).toContain('"type":"chat_id"');
+        expect(replay.text).toContain("data: [DONE]");
+    });
+
+    it("answers 404 for a turn that belongs to another chat or is unknown", async () => {
+        const held = heldGeneration();
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY);
+        const firstDone = first.then((res) => res);
+        await held.started;
+        const turnId = (findAssistantReservation()?.value as { id: string }).id;
+        const wrongChat = await request(app)
+            .get(`/chat/chat-2/turn/${turnId}/stream`)
+            .set("Authorization", "Bearer test");
+        expect(wrongChat.status).toBe(404);
+        const unknown = await request(app)
+            .get(`/chat/chat-1/turn/nope/stream`)
+            .set("Authorization", "Bearer test");
+        expect(unknown.status).toBe(404);
+        expect(unknown.body.code).toBe("turn_not_found");
+        held.release();
+        await firstDone;
     });
 });

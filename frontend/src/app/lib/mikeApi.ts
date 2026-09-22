@@ -33,6 +33,7 @@ import type {
     AssistantEvent,
     Chat,
     ChatDetailOut,
+    ActiveAssistantTurn,
     Citation,
     Document,
     Folder,
@@ -83,6 +84,7 @@ interface ServerChatDetailOut {
     is_owner?: boolean;
     access_role?: "owner" | "editor" | "viewer";
     messages: ServerMessage[];
+    active_turn?: ActiveAssistantTurn | null;
 }
 
 export const API_BASE = "/api";
@@ -2071,7 +2073,41 @@ export async function getChat(chatId: string): Promise<ChatDetailOut> {
             access_role: raw.access_role,
         },
         messages,
+        active_turn: raw.active_turn ?? null,
     };
+}
+
+/**
+ * Attach to a turn the server is generating (or has just finished) for this
+ * chat. Frames with a sequence number >= `from` are replayed, then the live
+ * ones follow until the turn ends. `from` is the id of the last frame the
+ * caller saw plus one; 1 means everything.
+ */
+export async function streamChatTurn(payload: {
+    chatId: string;
+    turnId: string;
+    from?: number;
+    signal?: AbortSignal;
+}): Promise<Response> {
+    const { chatId, turnId, from = 1, signal } = payload;
+    return apiFetch(
+        `${API_BASE}/chat/${chatId}/turn/${turnId}/stream?from=${from}`,
+        { headers: { Accept: "text/event-stream" }, signal },
+    );
+}
+
+/**
+ * The one way to cut a generation short. Closing the stream only detaches
+ * this client; the server keeps generating for everyone else.
+ */
+export async function stopChatTurn(
+    chatId: string,
+    turnId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest<{ stopped: boolean; finished: boolean }>(
+        `/chat/${chatId}/turn/${turnId}/stop`,
+        { method: "POST" },
+    );
 }
 
 export async function renameChat(chatId: string, title: string): Promise<void> {

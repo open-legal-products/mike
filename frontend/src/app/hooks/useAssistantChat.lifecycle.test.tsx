@@ -427,3 +427,32 @@ describe("returning to a thread while its answer streams", () => {
         returned.unmount();
     });
 });
+
+
+describe("Stop reaches the server", () => {
+    it("names the turn to the Stop endpoint, then stops reading", async () => {
+        const body = controllableSseResponse();
+        fetchMock.mockResolvedValue(body.response);
+        const { result } = renderHook(() => useAssistantChat({ chatId: "chat-a" }));
+        const { turn } = await startTurn(result.current.handleChat);
+        await body.send('data: {"type":"chat_id","chatId":"chat-a","turnId":"turn-1","assistantMessageId":"answer-1"}\n\n');
+        await body.send('data: {"type":"content_delta","text":"Partial"}\n\n');
+        const streamSignal = signalOfLastRequest();
+
+        await act(async () => {
+            result.current.cancel();
+        });
+        // Closing the socket only detaches now; the server is told to stop.
+        const stop = fetchMock.mock.calls.find(([url]) =>
+            String(url).endsWith("/chat/chat-a/turn/turn-1/stop"),
+        );
+        expect(stop?.[1]).toMatchObject({ method: "POST" });
+        expect(streamSignal.aborted).toBe(true);
+        await body.send(": keep-alive\n\n");
+        await turn;
+        expect(result.current.messages.at(-1)?.events).toEqual([
+            { type: "content", text: "Partial" },
+            { type: "content", text: "Cancelled by user." },
+        ]);
+    });
+});

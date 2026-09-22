@@ -92,9 +92,11 @@ numbers. Size guess: S ≈ an hour, M ≈ an afternoon.
       tolerance (a failed title must never break the chat). (S)
 - [ ] `hooks/useFetchSingleDoc.ts` + `useFetchDocxBytes.ts` — fetch/refresh
       lifecycle with mocked `mikeApi`. (S)
-- [ ] `useAssistantChat` beyond parsing — cancellation (`AbortError` →
-      "Cancelled by user."), `ask_inputs` handling, and the tool-event
-      placeholder lifecycle. (M)
+- [ ] `useAssistantChat` beyond parsing — `ask_inputs` handling and the
+      tool-event placeholder lifecycle. (M) Stop, detach, return-to-thread
+      and resume after a reload are covered by
+      `useAssistantChat.lifecycle.test.tsx`, `assistantTurns.test.ts` and
+      `assistantTurnStream.test.ts`.
 
 Not worth unit testing directly: `lib/supabase.ts` is a thin wrapper around
 `createClient` (better exercised by the e2e suite), and `app/` page components

@@ -858,9 +858,24 @@ export interface WorkflowAddon {
 
 // API helpers
 
+/** A turn still generating into a chat, as served by GET /chat/:id. */
+export interface ActiveAssistantTurn {
+  id: string;
+  /** Frames emitted so far; a client attaches from the next one it needs. */
+  seq: number;
+  /** The assistant row the answer is (or will be) stored in. */
+  assistant_message_id: string;
+}
+
 export interface ChatDetailOut {
   chat: Chat;
   messages: Message[];
+  /**
+   * Set while the server is still generating an answer for this chat. A
+   * client that has just loaded (a refresh, a second tab) attaches to it
+   * instead of treating the hidden reservation as "no answer".
+   */
+  active_turn?: ActiveAssistantTurn | null;
 }
 
 export interface TabularReviewDetailOut {

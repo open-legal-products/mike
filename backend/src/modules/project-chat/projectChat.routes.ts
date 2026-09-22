@@ -1,4 +1,7 @@
-import { openAssistantSse } from "../../lib/assistantSse";
+import {
+    attachAssistantTurnSse,
+    startAssistantTurnRun,
+} from "../../lib/assistantTurnRuns";
 // HTTP layer for the project-chat module.
 //
 // The route handler parses the request body, calls
@@ -149,10 +152,26 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     let memoryTurnScheduled = false;
 
     try {
-        // The same SSE setup the chat and word-chat routes use: headers,
-        // flush, an abort controller wired to the client hanging up, and a
-        // write that drops a line raised after the response has ended.
-        const stream = openAssistantSse(res);
+        // The generation is a server-owned run: it survives the caller's
+        // socket and only the Stop endpoint (POST /chat/:chatId/turn/:turnId/
+        // stop) aborts it. `attachAssistantTurnSse` gives the same
+        // { signal, write, finish } the chat route drives its stream with.
+        const run = startAssistantTurnRun({
+            id: assistantMessageId ?? randomUUID(),
+            chatId,
+            userId,
+            assistantMessageId:
+                assistantMessageId ??
+                askInputsResponse?.assistant_message_id ??
+                "",
+        });
+        if (!run) {
+            return void res.status(409).json({
+                code: "turn_in_progress",
+                detail: "A response is already being generated for this chat.",
+            });
+        }
+        const stream = attachAssistantTurnSse(res, run);
         const write = stream.write;
 
         try {
@@ -160,6 +179,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 `data: ${JSON.stringify({
                     type: "chat_id",
                     chatId,
+                    turnId: run.id,
                     ...(assistantMessageId ? { assistantMessageId } : {}),
                 })}\n\n`,
             );
@@ -327,7 +347,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             write("data: [DONE]\n\n");
         } catch (err) {
             if (isAbortError(err)) {
-                console.log("[project-chat/stream] client aborted stream", {
+                console.log("[project-chat/stream] turn stopped", {
                     chatId,
                 });
                 if (err instanceof AssistantStreamError) {
@@ -365,6 +385,8 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         );
                     }
                 }
+                write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+                write("data: [DONE]\n\n");
                 return;
             }
             console.error("[project-chat/stream] error:", err);
