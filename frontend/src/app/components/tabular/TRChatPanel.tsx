@@ -14,6 +14,8 @@ import { Pencil, Trash2 } from "lucide-react";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
 import {
     streamTabularChat,
+    streamTabularChatTurn,
+    stopTabularChatTurn,
     getTabularChats,
     getTabularChatMessages,
     deleteTabularChat,
@@ -563,6 +565,14 @@ export function TRChatPanel({
     const dripTargetRef = useRef<string>("");
     const dripDisplayLenRef = useRef<number>(0);
     const eventsRef = useRef<AssistantEvent[]>([]);
+    // Where the panel is in the turn the server owns: which thread and run it
+    // is reading, and the sequence number of the last frame it applied. A
+    // reconnect resumes from `lastSeq + 1`; Stop needs `turnId`.
+    const turnCursorRef = useRef<{
+        chatId: string | null;
+        turnId: string | null;
+        lastSeq: number;
+    }>({ chatId: null, turnId: null, lastSeq: 0 });
     const DRIP_CHARS = 8;
 
     // Load existing chats from DB on mount
@@ -708,6 +718,33 @@ export function TRChatPanel({
         setTitleDraft(null);
     }, [currentChatId]);
 
+    // Resume on open. The chat list reports, per thread, the turn this
+    // backend is still generating into it, so a panel that has just loaded —
+    // a refresh, a second tab, or a thread opened from the list while its
+    // answer runs elsewhere — attaches to it instead of showing a transcript
+    // whose last answer is simply missing. The row is cleared as it is
+    // claimed, so a later send into the same thread cannot re-trigger it.
+    const resumeTurnRef = useRef(resumeTurn);
+    useEffect(() => {
+        resumeTurnRef.current = resumeTurn;
+    });
+    useEffect(() => {
+        if (isLoadingChats || isLoadingMessages || isLoading) return;
+        if (!currentChatId) return;
+        const active = chats.find(
+            (chat) => chat.id === currentChatId,
+        )?.active_turn;
+        if (!active) return;
+        setChats((prev) =>
+            prev.map((chat) =>
+                chat.id === currentChatId
+                    ? { ...chat, active_turn: null }
+                    : chat,
+            ),
+        );
+        void resumeTurnRef.current(currentChatId, active.id);
+    }, [chats, currentChatId, isLoadingChats, isLoadingMessages, isLoading]);
+
     // ---- drip ----
 
     function stopDrip() {
@@ -719,11 +756,11 @@ export function TRChatPanel({
 
     // Detach whatever is still streaming from the message list: stop the
     // 16ms drip timer and retire the generation so the in-flight loop stops
-    // writing into a list it no longer owns. Deliberately does NOT abort —
-    // the backend reads a closed socket as a cancellation and persists a
-    // truncated "Cancelled by user." answer, so closing the panel or
-    // switching chats must let the request run to completion. Only
-    // handleCancel (the Stop control) aborts.
+    // writing into a list it no longer owns. Deliberately does NOT abort:
+    // the answer belongs to the server now, so closing the panel or
+    // switching chats simply stops watching it — the turn keeps generating
+    // and is still there to reattach to. Only the Stop control ends it, and
+    // it does so through the stop endpoint rather than by dropping a socket.
     function detachActiveStream() {
         streamGenerationRef.current += 1;
         stopDrip();
@@ -940,7 +977,79 @@ export function TRChatPanel({
     }
 
     function handleCancel() {
-        abortRef.current?.abort();
+        const cursor = turnCursorRef.current;
+        const chatId = cursor.chatId ?? currentChatId;
+        if (!chatId || !cursor.turnId) {
+            // The turn has no server-side identity yet (its `chat_id` frame
+            // has not arrived), so dropping this request is the only lever
+            // there is — and it is still the whole cancellation, because the
+            // server has nothing registered to keep generating.
+            abortRef.current?.abort();
+            return;
+        }
+        // Closing the socket is no longer how Stop works: it would detach
+        // this panel and leave the server answering into the transcript.
+        void stopTabularChatTurn(reviewId, chatId, cursor.turnId).catch(() => {
+            // The server does not know this turn any more (another tab
+            // stopped it, or the process restarted). Dropping our own
+            // connection is all that is left to do.
+            abortRef.current?.abort();
+        });
+    }
+
+    /**
+     * Attach to an answer the server is already generating into `chatId` — a
+     * reload, a second tab, or this thread opened from the list while its
+     * answer runs somewhere else.
+     *
+     * The stored transcript holds the user turn already and gains the
+     * assistant row only once the turn finishes, so the placeholder belongs
+     * after the loaded messages and the replay starts at frame 1. The stream
+     * is opened BEFORE the placeholder is appended: a turn that ended in the
+     * meantime answers 404, and the transcript that has just loaded is then
+     * already complete.
+     */
+    async function resumeTurn(chatId: string, turnId: string) {
+        const controller = new AbortController();
+        const response = await streamTabularChatTurn({
+            reviewId,
+            chatId,
+            turnId,
+            from: 1,
+            signal: controller.signal,
+        }).catch(() => null);
+        if (!response?.ok) {
+            await response?.body?.cancel().catch(() => {});
+            return;
+        }
+
+        detachActiveStream();
+        const gen = streamGenerationRef.current;
+        dripTargetRef.current = "";
+        dripDisplayLenRef.current = 0;
+        eventsRef.current = [];
+        turnCursorRef.current = { chatId, turnId, lastSeq: 0 };
+        setMessages((prev) => [
+            ...prev,
+            {
+                role: "assistant",
+                content: "",
+                events: [],
+                isStreaming: true,
+            },
+        ]);
+        setIsLoading(true);
+        abortRef.current = controller;
+
+        await runTurn({
+            gen,
+            controller,
+            settings: {
+                model: currentChatModel ?? undefined,
+                reasoning: currentChatReasoningLevel ?? undefined,
+            },
+            open: () => Promise.resolve(response),
+        });
     }
 
     async function handleSubmit(message: Message) {
@@ -978,19 +1087,54 @@ export function TRChatPanel({
         const controller = new AbortController();
         abortRef.current = controller;
 
-        try {
-            const response = await streamTabularChat(
-                reviewId,
-                allMessages,
-                currentChatId,
-                controller.signal,
-                { reviewTitle, projectName },
-                message.model,
-                message.reasoning,
-            );
-            for await (const frame of readSseFrames(response, {
-                signal: controller.signal,
-            })) {
+        turnCursorRef.current = { chatId: currentChatId, turnId: null, lastSeq: 0 };
+        await runTurn({
+            gen,
+            controller,
+            settings: { model: message.model, reasoning: message.reasoning },
+            open: () =>
+                streamTabularChat(
+                    reviewId,
+                    allMessages,
+                    currentChatId,
+                    controller.signal,
+                    { reviewTitle, projectName },
+                    message.model,
+                    message.reasoning,
+                ),
+        });
+    }
+
+    // ---- one turn, whichever response is carrying it ----
+
+    /**
+     * Apply one response's frames to this panel's state.
+     *
+     * Both ends of a turn go through here — the POST that starts it and the
+     * GET that reattaches to it — which is why nothing below knows which one
+     * it is reading. The cursor it keeps (the turn's id, and the last `id:`
+     * line applied) is what a reconnect or a Stop needs afterwards.
+     */
+    type TurnSettings = {
+        model: Message["model"];
+        reasoning: Message["reasoning"];
+    };
+
+    async function consumeTurnStream(
+        response: Response,
+        gen: number,
+        signal: AbortSignal,
+        settings: TurnSettings,
+    ) {
+        const { model, reasoning } = settings;
+        const cursor = turnCursorRef.current;
+        for await (const frame of readSseFrames(response, {
+            signal,
+            onEventId: (id) => {
+                const seq = Number.parseInt(id, 10);
+                if (Number.isFinite(seq)) cursor.lastSeq = seq;
+            },
+        })) {
                 // Another chat owns the message list now — stop writing,
                 // but keep draining: breaking out cancels the reader, which
                 // closes the socket and makes the server persist a
@@ -1002,6 +1146,11 @@ export function TRChatPanel({
                 try {
                         if (data.type === "chat_id") {
                             const newId = data.chatId as string;
+                            // What a reconnect needs: which thread this is
+                            // and which run inside it to reattach to.
+                            cursor.chatId = newId;
+                            if (typeof data.turnId === "string")
+                                cursor.turnId = data.turnId;
                             setCurrentChatId(newId);
                             setChats((prev) =>
                                 prev.some((c) => c.id === newId)
@@ -1010,9 +1159,9 @@ export function TRChatPanel({
                                           {
                                               id: newId,
                                               title: null,
-                                              model: message.model ?? null,
+                                              model: model ?? null,
                                               reasoning_level:
-                                                  message.reasoning ?? null,
+                                                  reasoning ?? null,
                                               created_at:
                                                   new Date().toISOString(),
                                               updated_at:
@@ -1021,6 +1170,15 @@ export function TRChatPanel({
                                           ...prev,
                                       ],
                             );
+                            continue;
+                        }
+
+                        if (data.type === "cancelled") {
+                            // Stop was pressed — in this panel or another
+                            // tab. The server has already stored the partial
+                            // answer and [DONE] follows immediately, so all
+                            // that is left is to stop pretending to think.
+                            clearStreamingPlaceholders();
                             continue;
                         }
 
@@ -1472,7 +1630,9 @@ export function TRChatPanel({
                         if (data.type === "error") {
                             if (data.code === "invalid_api_key") {
                                 setRejectedApiKey({
-                                    provider: getModelProvider(message.model),
+                                    provider: model
+                                        ? getModelProvider(model)
+                                        : null,
                                 });
                             }
                             clearStreamingPlaceholders();
@@ -1517,8 +1677,89 @@ export function TRChatPanel({
                 } catch (err) {
                     console.warn("[TRChatPanel] failed to handle SSE event:", data, err);
                 }
-            }
+        }
+    }
 
+    /**
+     * Read a turn to its end, rejoining the server's copy of it when the
+     * connection drops.
+     *
+     * A dropped connection is no longer a cancellation — the answer is still
+     * being generated on the server — so it is a transport failure to
+     * recover from, by resuming at the frame after the last one applied. An
+     * abort (the local Stop fallback) is never retried, and neither is a
+     * turn the server no longer knows.
+     */
+    async function readTurn(args: {
+        open: () => Promise<Response>;
+        gen: number;
+        signal: AbortSignal;
+        settings: TurnSettings;
+        retries?: number;
+    }) {
+        const retries = args.retries ?? 2;
+        let response = await args.open();
+        if (!response.ok) {
+            await response.body?.cancel().catch(() => {});
+            throw new Error(
+                `Tabular chat request failed with status ${response.status}`,
+            );
+        }
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                await consumeTurnStream(
+                    response,
+                    args.gen,
+                    args.signal,
+                    args.settings,
+                );
+                return;
+            } catch (error) {
+                const cursor = turnCursorRef.current;
+                if (
+                    (error instanceof Error && error.name === "AbortError") ||
+                    args.signal.aborted ||
+                    !cursor.chatId ||
+                    !cursor.turnId ||
+                    attempt >= retries
+                ) {
+                    throw error;
+                }
+                await new Promise((resolve) =>
+                    setTimeout(resolve, 400 * (attempt + 1)),
+                );
+                if (args.signal.aborted) throw error;
+                const resumed = await streamTabularChatTurn({
+                    reviewId,
+                    chatId: cursor.chatId,
+                    turnId: cursor.turnId,
+                    from: cursor.lastSeq + 1,
+                    signal: args.signal,
+                });
+                if (!resumed.ok) {
+                    await resumed.body?.cancel().catch(() => {});
+                    throw error;
+                }
+                response = resumed;
+            }
+        }
+    }
+
+    /** The shared ending: finalise the message, or report the failure. */
+    async function runTurn(args: {
+        open: () => Promise<Response>;
+        gen: number;
+        controller: AbortController;
+        settings: TurnSettings;
+    }) {
+        const { gen, controller } = args;
+        try {
+            await readTurn({
+                open: args.open,
+                gen,
+                signal: controller.signal,
+                settings: args.settings,
+            });
             if (streamGenerationRef.current !== gen) return;
 
             flushDrip();

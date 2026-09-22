@@ -157,6 +157,8 @@ import {
     stopChatTurn,
     streamProjectChat,
     streamTabularChat,
+    streamTabularChatTurn,
+    stopTabularChatTurn,
     stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
@@ -1025,6 +1027,57 @@ describe("streamTabularGenerationResume", () => {
         expect(lastFetchCall().url).toBe(
             "/api/tabular-review/r1/generate/stream?from=12",
         );
+    });
+});
+
+describe("streamTabularChatTurn / stopTabularChatTurn (server-owned review chat)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+
+        const { url, init } = lastFetchCall();
+        expect(url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=7",
+        );
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+        });
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=1",
+        );
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularChatTurn("r1", "c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/chats/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
     });
 });
 

@@ -2525,6 +2525,41 @@ export async function streamTabularChat(
     });
 }
 
+/**
+ * Attach to a review-chat turn the server is generating (or has just
+ * finished). Frames with a sequence number >= `from` are replayed, then the
+ * live ones follow until the turn ends; `from` is the last frame the caller
+ * saw plus one, and 1 means everything.
+ */
+export async function streamTabularChatTurn(payload: {
+    reviewId: string;
+    chatId: string;
+    turnId: string;
+    from?: number;
+    signal?: AbortSignal;
+}): Promise<Response> {
+    const { reviewId, chatId, turnId, from = 1, signal } = payload;
+    return apiFetch(
+        `${API_BASE}/tabular-review/${reviewId}/chats/${chatId}/turn/${turnId}/stream?from=${from}`,
+        { headers: { Accept: "text/event-stream" }, signal },
+    );
+}
+
+/**
+ * The one way to cut a review-chat answer short. Closing the stream only
+ * detaches this client; the server keeps generating for everyone else.
+ */
+export async function stopTabularChatTurn(
+    reviewId: string,
+    chatId: string,
+    turnId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest<{ stopped: boolean; finished: boolean }>(
+        `/tabular-review/${reviewId}/chats/${chatId}/turn/${turnId}/stop`,
+        { method: "POST" },
+    );
+}
+
 export interface TRCitationAnnotation {
     type: "tabular_citation";
     ref: number;
@@ -2558,6 +2593,13 @@ export interface TRChat {
     reasoning_level: NonNullable<Message["reasoning"]> | null;
     created_at: string;
     updated_at: string;
+    /**
+     * Set while the server is still generating an answer into this thread. A
+     * panel that has just loaded (a refresh, a second tab, a thread opened
+     * from the list while its answer runs elsewhere) attaches to it instead
+     * of showing a transcript whose last answer is simply missing.
+     */
+    active_turn?: ActiveAssistantTurn | null;
 }
 
 const TABULAR_CHAT_SELECTION_PREFIX = "tabular-review-chat:";

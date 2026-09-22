@@ -82,7 +82,10 @@ numbers. Size guess: S ≈ an hour, M ≈ an afternoon.
       cell/flag state transitions; test the state transitions with mocked
       streams the way `useAssistantChat.sse.test.ts` does. Consider extracting
       the duplicated parse loop into a shared lib helper first, which would
-      also pull it under the coverage gate. (M)
+      also pull it under the coverage gate. (M) The server-owned half of both
+      is already covered: `TabularReviewView.generation.test.tsx` and the
+      "server-owned turns" block in `TRChatPanel.test.tsx` (Stop through the
+      endpoint, reconnect with `from`, attach on open).
 - [x] `lib/mikeApi.ts` (rest) — the remaining thin wrappers: folders/library
       moves, workflows share/hide, MCP connectors, document versions. Done as
       a table-driven `it.each` suite of URL/method/body assertions. (M)

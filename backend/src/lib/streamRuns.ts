@@ -69,7 +69,11 @@ export type StreamRun<Meta = Record<string, unknown>> = {
     readonly seq: number;
     readonly finished: boolean;
     readonly stopped: boolean;
-    /** Append one SSE record (`data: ...\n\n`) and fan it out. */
+    /**
+     * Append one SSE record (`data: ...\n\n`) and fan it out. A COMMENT line
+     * (one starting with `:`) is fanned out live but neither buffered nor
+     * numbered — it is a keep-alive, not content.
+     */
     write: (line: string, opts?: StreamRunWriteOptions) => boolean;
     /** The work is over: end every attached response and start the retention clock. */
     finish: () => void;
@@ -155,6 +159,23 @@ export function startStreamRun<Meta = Record<string, unknown>>(args: {
         lifetime: null,
         write(line: string, opts?: StreamRunWriteOptions) {
             if (finished) return false;
+            // SSE COMMENT lines (`: tool-wait`) are not records: they carry
+            // no payload, exist only to stop an intermediary idling the
+            // connection out, and mean nothing to a client that arrives
+            // later. Fan them out live, but never buffer or number them —
+            // otherwise a Word turn waiting on a client tool call would
+            // replay hundreds of comments to a reattaching pane and push
+            // every real frame's sequence number along with them.
+            if (line.startsWith(":")) {
+                for (const subscriber of [...run.subscribers]) {
+                    try {
+                        subscriber.write(line);
+                    } catch {
+                        run.subscribers.delete(subscriber);
+                    }
+                }
+                return true;
+            }
             seq += 1;
             const frame = { seq, line, replay: opts?.replay ?? alwaysReplay };
             run.frames.push(frame);

@@ -194,11 +194,46 @@ export async function listTabularReviewChats(
     return { ok: true, data: (chats ?? []) as ReviewChatSummary[] };
 }
 
+/**
+ * Review-chat READS share one preamble: the caller must be able to see the
+ * review named in the URL, and the chat must actually belong to it. Reading
+ * is collaborative — every member of the review sees every thread in it — so
+ * there is no creator check here, unlike the write gate below.
+ *
+ * Exported because the turn-stream endpoint attaches to a live answer, which
+ * is the same act as reading the transcript it will be stored in.
+ */
+export async function ensureReviewChatReadAccess(
+    db: Db,
+    reviewId: string,
+    chatId: string,
+    userId: string,
+    userEmail: string | null | undefined,
+): Promise<{ ok: true } | ServiceFailure> {
+    const { data: review } = await db
+        .from("tabular_reviews")
+        .select("id, user_id, project_id, org_id")
+        .eq("id", reviewId)
+        .single();
+    if (!review) return failure("not_found", "Review not found");
+    const access = await ensureReviewAccess(review, userId, userEmail, db);
+    if (!access.ok) return failure("not_found", "Review not found");
+
+    const { data: chat, error: chatError } = await db
+        .from("tabular_review_chats")
+        .select("id, review_id")
+        .eq("id", chatId)
+        .single();
+    if (chatError || !chat || chat.review_id !== reviewId)
+        return failure("not_found", "Chat not found");
+    return { ok: true };
+}
+
 // Review-chat writes share one preamble: the caller must be able to access
 // the review named in the URL, and the chat must actually belong to it —
 // previously these two writes checked neither, so any chat id could be hit
 // through any (or a nonexistent) review path.
-async function ensureReviewChatWriteAccess(
+export async function ensureReviewChatWriteAccess(
     db: Db,
     reviewId: string,
     chatId: string,
@@ -406,22 +441,14 @@ export async function listTabularReviewChatMessages(
 ): Promise<TabularResult<Record<string, unknown>[]>> {
     const { reviewId, chatId, userId, userEmail } = args;
 
-    const { data: review } = await db
-        .from("tabular_reviews")
-        .select("id, user_id, project_id, org_id")
-        .eq("id", reviewId)
-        .single();
-    if (!review) return failure("not_found", "Review not found");
-    const access = await ensureReviewAccess(review, userId, userEmail, db);
-    if (!access.ok) return failure("not_found", "Review not found");
-
-    const { data: chat, error: chatError } = await db
-        .from("tabular_review_chats")
-        .select("id, review_id")
-        .eq("id", chatId)
-        .single();
-    if (chatError || !chat || chat.review_id !== reviewId)
-        return failure("not_found", "Chat not found");
+    const gate = await ensureReviewChatReadAccess(
+        db,
+        reviewId,
+        chatId,
+        userId,
+        userEmail,
+    );
+    if (!gate.ok) return gate;
 
     const { data: messages } = await db
         .from("tabular_review_chat_messages")

@@ -6,6 +6,20 @@ import type {
 import type { RedlineEdit } from "./redline";
 
 export type WorkflowAttachment = { id: string; title: string };
+
+/**
+ * Opening a stored chat in the pane. `activeTurnId` is set when the server is
+ * still generating an answer into it — a pane that was closed mid-answer, or
+ * a chat opened from history while its answer runs — and the pane reattaches
+ * to that turn instead of showing a transcript with the answer missing.
+ */
+export type WordChatOpenHandler = (
+  chatId: string,
+  messages: SavedMessage[],
+  model: string | null,
+  reasoningLevel: ReasoningLevel | null,
+  activeTurnId?: string | null,
+) => void;
 export type ReasoningLevel =
   | "none"
   | "low"
@@ -211,6 +225,11 @@ export interface WordAssistantChatController {
     submission: WordChatSubmission,
     options?: WordChatSubmitOptions,
   ) => Promise<void>;
+  /**
+   * Attach to a turn the server is already generating into `chatId`. Used
+   * when a pane reopens on a chat whose answer is still running.
+   */
+  resumeTurn: (args: { chatId: string; turnId: string }) => Promise<void>;
   cancel: () => void;
   dismissRequestError: () => void;
 }

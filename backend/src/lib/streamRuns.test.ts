@@ -134,6 +134,37 @@ describe("stream runs", () => {
         expect(late.chunks).toHaveLength(2);
     });
 
+    it("fans out keep-alive comments live but never buffers or numbers them", () => {
+        const run = start();
+        const watching = fakeResponse();
+        attachStreamRunSse(watching as unknown as Response, run, 1);
+
+        run.write('data: {"type":"client_tool_call"}\n\n');
+        // The adapter writes one of these every few seconds while a Word tool
+        // call is outstanding. They keep an intermediary from idling the
+        // connection out and mean nothing to anyone who was not there.
+        run.write(": tool-wait\n\n");
+        run.write(": tool-wait\n\n");
+        run.write('data: {"type":"content_delta"}\n\n');
+
+        expect(watching.chunks).toEqual([
+            'id: 1\ndata: {"type":"client_tool_call"}\n\n',
+            ": tool-wait\n\n",
+            ": tool-wait\n\n",
+            'id: 2\ndata: {"type":"content_delta"}\n\n',
+        ]);
+        // Two real frames, so two sequence numbers: a comment must not shift
+        // the cursor a reconnecting client sends back as `from`.
+        expect(run.seq).toBe(2);
+
+        const late = fakeResponse();
+        attachStreamRunSse(late as unknown as Response, run, 1);
+        expect(late.chunks).toEqual([
+            'id: 1\ndata: {"type":"client_tool_call"}\n\n',
+            'id: 2\ndata: {"type":"content_delta"}\n\n',
+        ]);
+    });
+
     it("refuses a second concurrent run for the same key, and frees the slot on finish", () => {
         const first = start("run-1");
         expect(

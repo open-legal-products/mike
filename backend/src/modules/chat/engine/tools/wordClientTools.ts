@@ -261,6 +261,21 @@ export function pendingClientToolCallCount(): number {
 }
 
 /**
+ * Is this forwarded call still waiting for the pane's answer?
+ *
+ * A server-owned Word turn replays its buffered frames to a pane that
+ * attaches late, and `client_tool_call` is the one frame that must not be
+ * replayed unconditionally: a call that has already been answered, has timed
+ * out (60 s) or was cancelled is settled, and re-executing it would apply the
+ * same edit a second time. Replaying a call that is still pending is the
+ * point — a pane closed mid-call reopens, executes it, and the tool loop that
+ * has been waiting all along gets its result.
+ */
+export function isClientToolCallPending(callId: string): boolean {
+  return pendingClientToolCalls.has(callId);
+}
+
+/**
  * Register a bridge id and wait for the add-in to POST its result.
  *
  * Resolves with the client's payload; on timeout it resolves with an error

@@ -12,6 +12,14 @@ interface LocalChatRow extends Chat {
   document_id: string;
   owner_id: string;
   updated_at: string;
+  /**
+   * The server-owned turn this chat had in flight when the pane last wrote
+   * to it. A local chat has no server row, so this is the ONLY record a
+   * reopened pane has of an answer that is still being generated; it is
+   * cleared when the turn ends, whatever the outcome. A stale value (the
+   * server restarted, the retention window passed) simply 404s on resume.
+   */
+  active_turn_id?: string | null;
 }
 
 interface LocalMessageRow extends Message {
@@ -211,6 +219,11 @@ export async function saveLocalWordMessage(args: {
   title?: string;
   model?: string;
   reasoningLevel?: import("./wordChatTypes").ReasoningLevel;
+  /**
+   * The turn now running into this chat, or null to clear it. Omitted leaves
+   * whatever is stored, so an ordinary message save never disturbs it.
+   */
+  activeTurnId?: string | null;
 }): Promise<void> {
   const messageId = args.message.id;
   if (!messageId) {
@@ -254,6 +267,10 @@ export async function saveLocalWordMessage(args: {
         args.reasoningLevel ?? existing?.reasoning_level ?? null,
       created_at: existing?.created_at ?? now,
       updated_at: now,
+      active_turn_id:
+        args.activeTurnId !== undefined
+          ? args.activeTurnId
+          : (existing?.active_turn_id ?? null),
     } satisfies LocalChatRow);
     messages.put({
       ...args.message,
@@ -330,6 +347,49 @@ export async function updateLocalWordChatReasoning(args: {
     } satisfies LocalChatRow);
     await transactionDone(transaction);
     notifyWordChatHistoryChanged();
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * Record (or clear) the turn a local chat has in flight.
+ *
+ * Separate from `saveLocalWordMessage` because a turn STARTS before there is
+ * anything to save for the assistant, and ENDS in paths (an error, a stop
+ * with nothing streamed) that write no message either. Missing rows are
+ * ignored: the chat may have been deleted while its answer ran.
+ */
+export async function setLocalWordChatActiveTurn(args: {
+  documentId: string;
+  ownerId: string;
+  chatId: string;
+  activeTurnId: string | null;
+}): Promise<void> {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(CHAT_STORE, "readwrite");
+    const chats = transaction.objectStore(CHAT_STORE);
+    const existing = (await requestResult(chats.get(args.chatId))) as
+      | LocalChatRow
+      | undefined;
+    if (
+      !existing ||
+      existing.document_id !== args.documentId ||
+      existing.owner_id !== args.ownerId
+    ) {
+      transaction.abort();
+      return;
+    }
+    // Deliberately not touching `updated_at`: attaching to an answer is not
+    // activity on the thread, and it must not reorder the history list.
+    chats.put({
+      ...existing,
+      active_turn_id: args.activeTurnId,
+    } satisfies LocalChatRow);
+    await transactionDone(transaction);
+  } catch {
+    // Local bookkeeping: losing it costs a resume, never the answer.
   } finally {
     database.close();
   }

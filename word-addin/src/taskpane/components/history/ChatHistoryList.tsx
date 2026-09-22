@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import type { Message } from "../../types";
 import { Spinner } from "../../../shared/ui/spinner";
 import { getCloudWordChat } from "../../api/mikeApi";
 import { getLocalWordChat } from "../../lib/localWordChats";
@@ -10,18 +9,13 @@ import {
   type PaginatedChatsState,
 } from "../../hooks/usePaginatedChats";
 import { cn } from "../../../shared/lib/utils";
-import type { ReasoningLevel } from "../../lib/wordChatTypes";
+import type { WordChatOpenHandler } from "../../lib/wordChatTypes";
 
 interface ChatHistoryListProps {
   pageSize: number;
   active?: boolean;
   search?: string;
-  onSelect: (
-    chatId: string,
-    messages: Message[],
-    model: string | null,
-    reasoningLevel: ReasoningLevel | null,
-  ) => void;
+  onSelect: WordChatOpenHandler;
   className?: string;
   titleClassName?: string;
   documentId: string;
@@ -149,16 +143,29 @@ export function ChatHistoryListView({
     setLoadingChatId(chatId);
     setOpenError(null);
     try {
+      // A cloud chat is told by the server which turn is still generating; a
+      // local one has nothing server-side to ask, so it carries the id the
+      // pane recorded when the turn started. Either way the pane reattaches
+      // instead of opening a transcript whose last answer is missing.
       const detail =
         storageMode === "cloud"
-          ? await getCloudWordChat(documentId, chatId)
-          : await getLocalWordChat(documentId, ownerId, chatId);
+          ? await getCloudWordChat(documentId, chatId).then((loaded) => ({
+              ...loaded,
+              activeTurnId: loaded.activeTurn?.id ?? null,
+            }))
+          : await getLocalWordChat(documentId, ownerId, chatId).then(
+              (loaded) => ({
+                ...loaded,
+                activeTurnId: loaded.chat.active_turn_id ?? null,
+              }),
+            );
       if (!requestIsCurrent()) return;
       onSelect(
         chatId,
         detail.messages,
         detail.chat.model ?? null,
         detail.chat.reasoning_level ?? null,
+        detail.activeTurnId,
       );
     } catch (reason) {
       if (!requestIsCurrent()) return;

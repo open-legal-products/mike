@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { History, Search } from "lucide-react";
-import type { Message } from "../../types";
 import { LiquidIconButton } from "../primitives/LiquidActionRow";
 import {
   Dropdown,
@@ -10,15 +9,10 @@ import {
 import { ChatHistoryListView } from "./ChatHistoryList";
 import { usePaginatedChats } from "../../hooks/usePaginatedChats";
 import type { WordChatStorageMode } from "../../lib/wordChatSettings";
-import type { ReasoningLevel } from "../../lib/wordChatTypes";
+import type { WordChatOpenHandler } from "../../lib/wordChatTypes";
 
 interface ChatHistoryDropdownProps {
-  onSelect: (
-    chatId: string,
-    messages: Message[],
-    model: string | null,
-    reasoningLevel: ReasoningLevel | null,
-  ) => void;
+  onSelect: WordChatOpenHandler;
   documentId: string;
   storageMode: WordChatStorageMode;
   ownerId: string;
@@ -71,9 +65,9 @@ export function ChatHistoryDropdown({
           pagination={pagination}
           search={search}
           dateStyle="relative"
-          onSelect={(chatId, messages, model, reasoningLevel) => {
+          onSelect={(chatId, messages, model, reasoningLevel, activeTurnId) => {
             setOpen(false);
-            onSelect(chatId, messages, model, reasoningLevel);
+            onSelect(chatId, messages, model, reasoningLevel, activeTurnId);
           }}
           className="mt-1 flex-1"
           titleClassName="font-normal"

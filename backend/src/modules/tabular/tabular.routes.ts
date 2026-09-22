@@ -18,6 +18,13 @@ import {
     getActiveStreamRun,
     startStreamRun,
 } from "../../lib/streamRuns";
+import {
+    attachAssistantTurnSse,
+    getActiveAssistantTurn,
+    getAssistantTurnRun,
+    startAssistantTurnRun,
+} from "../../lib/assistantTurnRuns";
+import { openAssistantSse } from "../../lib/assistantSse";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
@@ -74,6 +81,8 @@ import {
 } from "./tabular.cells";
 import {
     deleteTabularReviewChat,
+    ensureReviewChatReadAccess,
+    ensureReviewChatWriteAccess,
     extractTabularAnnotations,
     listTabularReviewChatMessages,
     listTabularReviewChats,
@@ -731,8 +740,83 @@ tabularRouter.get("/:reviewId/chats", requireAuth, asyncRoute(async (req, res) =
         userEmail: res.locals.userEmail as string | undefined,
     });
     if (!result.ok) return void sendTabularFailure(res, result);
-    res.json(result.data);
+    // Each row carries the turn this process is still generating into it, if
+    // any, so a panel that has just loaded (a refresh, a second tab, a chat
+    // opened from the list while its answer runs elsewhere) attaches instead
+    // of showing a finished-looking transcript with the answer missing. The
+    // messages endpoint keeps its bare array shape: it is the transcript, and
+    // the transcript does not have the running turn in it yet.
+    res.json(
+        result.data.map((chat) => ({
+            ...chat,
+            active_turn: getActiveAssistantTurn(chat.id, "tabular"),
+        })),
+    );
 }));
+
+// GET /tabular-review/:reviewId/chats/:chatId/turn/:turnId/stream?from=<seq>
+// Attach to a turn that is (or was, within the retention window) generating
+// into this review chat. Frames with a sequence number >= `from` are
+// replayed, then the live ones follow until the turn ends. Seeing the review
+// is enough to watch, exactly as it is enough to read the transcript.
+tabularRouter.get(
+    "/:reviewId/chats/:chatId/turn/:turnId/stream",
+    requireAuth,
+    asyncRoute(async (req, res) => {
+        const { reviewId, chatId, turnId } = req.params;
+        const gate = await ensureReviewChatReadAccess(
+            createServerSupabase(),
+            reviewId,
+            chatId,
+            res.locals.userId as string,
+            res.locals.userEmail as string | undefined,
+        );
+        if (!gate.ok) return void sendTabularFailure(res, gate);
+
+        const run = getAssistantTurnRun(turnId, "tabular");
+        if (!run || run.chatId !== chatId) {
+            return void res.status(404).json({
+                code: "turn_not_found",
+                detail: "This response is no longer being generated.",
+            });
+        }
+        const rawFrom = Number.parseInt(String(req.query.from ?? "1"), 10);
+        const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 1;
+        attachAssistantTurnSse(res, run, from);
+    }),
+);
+
+// POST /tabular-review/:reviewId/chats/:chatId/turn/:turnId/stop
+// The one way to cut a review-chat answer short. Closing the SSE socket no
+// longer does it, so the panel's Stop control calls this. Stopping needs the
+// same standing as sending into the thread: review chats are creator-write,
+// so this is the gate PATCH and DELETE use.
+tabularRouter.post(
+    "/:reviewId/chats/:chatId/turn/:turnId/stop",
+    requireAuth,
+    asyncRoute(async (req, res) => {
+        const { reviewId, chatId, turnId } = req.params;
+        const gate = await ensureReviewChatWriteAccess(
+            createServerSupabase(),
+            reviewId,
+            chatId,
+            res.locals.userId as string,
+            res.locals.userEmail as string | undefined,
+        );
+        if (!gate.ok) return void sendTabularFailure(res, gate);
+
+        const run = getAssistantTurnRun(turnId, "tabular");
+        if (!run || run.chatId !== chatId) {
+            return void res.status(404).json({
+                code: "turn_not_found",
+                detail: "This response is no longer being generated.",
+            });
+        }
+        if (run.finished) return void res.json({ stopped: false, finished: true });
+        run.stop();
+        res.json({ stopped: true, finished: false });
+    }),
+);
 
 // DELETE /tabular-review/:reviewId/chats/:chatId — delete a single chat
 tabularRouter.delete(
@@ -869,21 +953,62 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
     // hands it to the curator (`scheduleMemoryConsolidation`).
     let memoryTurnScheduled = false;
     const assistantMessageId = randomUUID();
+    const releaseMemoryFence = async () => {
+        if (!memoryTurn) return;
+        try {
+            await releaseMemoryConversationTurn({
+                db,
+                surface: "tabular",
+                conversationId: chatId as string,
+                turn: memoryTurn,
+            });
+        } catch {
+            console.warn("[memory] tabular activity release failed", {
+                chatId,
+            });
+        }
+    };
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-    const write = (line: string) => res.write(line);
-    const streamAbort = new AbortController();
-    let streamFinished = false;
-    res.on("close", () => {
-        if (!streamFinished) streamAbort.abort();
-    });
+    // The answer is a server-owned run from here on: it survives the caller's
+    // socket (a refresh, a closed panel, a second tab taking over) and only
+    // POST .../turn/:turnId/stop aborts it. A chat may have one at a time.
+    const run = chatId
+        ? startAssistantTurnRun({
+              id: assistantMessageId,
+              chatId,
+              userId,
+              assistantMessageId,
+              surface: "tabular",
+          })
+        : null;
+    if (chatId && !run) {
+        // Refused before the first SSE byte, so the caller gets a status code
+        // rather than an error frame — but the user turn is already stored,
+        // so the fence this request opened has to be handed back here.
+        await releaseMemoryFence();
+        return void res.status(409).json({
+            code: "turn_in_progress",
+            detail: "A response is already being generated for this chat.",
+        });
+    }
 
-    if (chatId) {
-        write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
+    // `prepareTabularChat` is allowed to return no chat id (chat creation was
+    // skipped); there is then no thread to key a run on and nothing that
+    // could ever attach to it, so THAT request alone keeps the old
+    // single-socket contract: closing the socket aborts it.
+    const stream = run
+        ? attachAssistantTurnSse(res, run)
+        : openAssistantSse(res);
+    const write = stream.write;
+
+    if (chatId && run) {
+        write(
+            `data: ${JSON.stringify({
+                type: "chat_id",
+                chatId,
+                turnId: run.id,
+            })}\n\n`,
+        );
     }
 
     try {
@@ -902,7 +1027,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             model: selectedChatModel,
             reasoning: selectedReasoningLevel,
             apiKeys: api_keys,
-            signal: streamAbort.signal,
+            signal: stream.signal,
             conversationId: chatId,
             includeMemory: true,
             memoryProjectId: readableMemoryProjectId,
@@ -974,7 +1099,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         write("data: [DONE]\n\n");
     } catch (err) {
         if (isAbortError(err)) {
-            console.log("[tabular/chat] client aborted stream", { chatId });
+            console.log("[tabular/chat] turn stopped", { chatId });
             if (chatId && err instanceof AssistantStreamError) {
                 const partial = buildCancelledAssistantMessage({
                     fullText: err.fullText,
@@ -997,6 +1122,11 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
                         saveError,
                     );
             }
+            // Readers still attached (Stop came from another tab, or this one
+            // is only watching) learn the outcome the same way a reload
+            // would: the stored row now ends "Cancelled by user."
+            write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+            write("data: [DONE]\n\n");
             return;
         }
         console.error("[tabular/chat] error", err);
@@ -1040,25 +1170,14 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             /* ignore */
         }
     } finally {
-        streamFinished = true;
-        res.end();
+        // Ends every response attached to the run — this one, a reload, a
+        // second tab — and starts its retention window, so a client
+        // reconnecting a moment later still gets the last frames.
+        stream.finish();
         // Whatever ended the stream, the fence must not outlive it: released
         // here unless this turn already handed it to the curator, which owns
         // it from that point on.
-        if (memoryTurn && !memoryTurnScheduled) {
-            try {
-                await releaseMemoryConversationTurn({
-                    db,
-                    surface: "tabular",
-                    conversationId: chatId as string,
-                    turn: memoryTurn,
-                });
-            } catch {
-                console.warn("[memory] tabular activity release failed", {
-                    chatId,
-                });
-            }
-        }
+        if (!memoryTurnScheduled) await releaseMemoryFence();
     }
 }));
 

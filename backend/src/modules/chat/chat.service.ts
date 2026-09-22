@@ -57,6 +57,7 @@ export {
   parseOptionalDocumentContext,
   createReservedAssistantMessageUpdater,
   createWordClientToolsAdapter,
+  isClientToolCallPending,
   reserveAssistantMessage,
   submitClientToolResult,
   ACTIVE_WORD_DOCUMENT_ID,

@@ -63,6 +63,11 @@ interface ChatStreamOpts {
   deferred?: boolean;
   /** Stable chat identity emitted in the leading `chat_id` SSE event. */
   chatId?: string;
+  /**
+   * The server-owned run this turn belongs to, emitted in the same `chat_id`
+   * event. It is what the pane stops and what it reattaches to.
+   */
+  turnId?: string;
   /** Stable assistant-message UUID used to persist Word edit anchors. */
   assistantMessageId?: string;
   /** Emit model-triggered read start/completion frames before answer content. */
@@ -638,10 +643,11 @@ export const test = base.extend<{ addin: Addin }>({
           }
           if (opts?.deferred) await responseGate;
           let body = "";
-          if (opts?.chatId || opts?.assistantMessageId) {
+          if (opts?.chatId || opts?.turnId || opts?.assistantMessageId) {
             body += `data: ${JSON.stringify({
               type: "chat_id",
               ...(opts.chatId ? { chatId: opts.chatId } : {}),
+              ...(opts.turnId ? { turnId: opts.turnId } : {}),
               ...(opts.assistantMessageId
                 ? { assistantMessageId: opts.assistantMessageId }
                 : {}),

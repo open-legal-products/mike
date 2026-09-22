@@ -6,7 +6,9 @@ import {
     getTabularChats,
     getTabularChatMessages,
     renameTabularChat,
+    stopTabularChatTurn,
     streamTabularChat,
+    streamTabularChatTurn,
     type TRChat,
 } from "@/app/lib/mikeApi";
 import { TRChatPanel } from "./TRChatPanel";
@@ -21,10 +23,13 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     deleteTabularChat: vi.fn(),
     renameTabularChat: vi.fn(),
     streamTabularChat: vi.fn(),
+    streamTabularChatTurn: vi.fn(),
+    stopTabularChatTurn: vi.fn(),
 }));
 vi.mock("../assistant/ChatInput", () => ({
     ChatInput: ({
         onSubmit,
+        onCancel,
         canSend = true,
     }: {
         onSubmit: (message: {
@@ -33,22 +38,28 @@ vi.mock("../assistant/ChatInput", () => ({
             model: string;
             reasoning: "medium";
         }) => void;
+        onCancel?: () => void;
         canSend?: boolean;
     }) => (
-        <button
-            type="button"
-            disabled={!canSend}
-            onClick={() =>
-                onSubmit({
-                    role: "user",
-                    content: "Review this table",
-                    model: "claude-opus-4-7",
-                    reasoning: "medium",
-                })
-            }
-        >
-            Send test message
-        </button>
+        <>
+            <button
+                type="button"
+                disabled={!canSend}
+                onClick={() =>
+                    onSubmit({
+                        role: "user",
+                        content: "Review this table",
+                        model: "claude-opus-4-7",
+                        reasoning: "medium",
+                    })
+                }
+            >
+                Send test message
+            </button>
+            <button type="button" onClick={() => onCancel?.()}>
+                Stop test message
+            </button>
+        </>
     ),
 }));
 
@@ -359,5 +370,223 @@ describe("TRChatPanel header", () => {
         );
         expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
         expect(screen.getByRole("button", { name: "New Chat" })).toBeVisible();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// The answer belongs to the server, not to this panel's socket: Stop is an
+// endpoint, a dropped connection is rejoined, and a thread whose answer is
+// already running attaches to it when it opens.
+// ---------------------------------------------------------------------------
+
+/** An SSE response the test feeds by hand. */
+function controlledStream() {
+    let push!: (line: string) => void;
+    let close!: () => void;
+    let fail!: (error: unknown) => void;
+    const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+            const encoder = new TextEncoder();
+            push = (line) => controller.enqueue(encoder.encode(line));
+            close = () => controller.close();
+            fail = (error) => controller.error(error);
+        },
+    });
+    return {
+        response: new Response(body, {
+            headers: { "Content-Type": "text/event-stream" },
+        }),
+        push,
+        close,
+        fail,
+    };
+}
+
+/** jsdom has no scrollTo; the panel scrolls the latest user turn into view. */
+function stubViewportScroll(container: HTMLElement) {
+    const viewport = container.querySelector<HTMLDivElement>(
+        ".tr-chat-message-fades",
+    );
+    if (viewport) viewport.scrollTo = vi.fn();
+}
+
+const sseResponse = (text: string) =>
+    new Response(text, { headers: { "Content-Type": "text/event-stream" } });
+
+describe("TRChatPanel server-owned turns", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.stubGlobal(
+            "ResizeObserver",
+            class {
+                observe() {}
+                disconnect() {}
+            },
+        );
+        vi.mocked(getTabularChats).mockResolvedValue([]);
+        vi.mocked(getTabularChatMessages).mockResolvedValue([]);
+        vi.mocked(stopTabularChatTurn).mockResolvedValue({
+            stopped: true,
+            finished: false,
+        });
+    });
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it("stops through the endpoint instead of dropping the connection", async () => {
+        const stream = controlledStream();
+        let sentSignal: AbortSignal | undefined;
+        vi.mocked(streamTabularChat).mockImplementation(
+            async (_reviewId, _messages, _chatId, signal) => {
+                sentSignal = signal;
+                return stream.response;
+            },
+        );
+        const user = userEvent.setup();
+
+        const { container } = render(
+            <TRChatPanel reviewId="review-1" onCitationClick={vi.fn()} />,
+        );
+        stubViewportScroll(container);
+        await user.click(
+            screen.getByRole("button", { name: "Send test message" }),
+        );
+        act(() => {
+            stream.push(
+                'id: 1\ndata: {"type":"chat_id","chatId":"chat-9","turnId":"turn-9"}\n\n',
+            );
+        });
+        await waitFor(() => expect(sentSignal).toBeDefined());
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        await user.click(
+            screen.getByRole("button", { name: "Stop test message" }),
+        );
+
+        await waitFor(() =>
+            expect(stopTabularChatTurn).toHaveBeenCalledExactlyOnceWith(
+                "review-1",
+                "chat-9",
+                "turn-9",
+            ),
+        );
+        // Dropping the socket would only detach this panel while the server
+        // kept answering into the transcript.
+        expect(sentSignal?.aborted).toBe(false);
+
+        act(() => {
+            stream.push('id: 2\ndata: {"type":"cancelled"}\n\n');
+            stream.push("data: [DONE]\n\n");
+            stream.close();
+        });
+    });
+
+    it("rejoins the turn from the last frame it applied when the connection drops", async () => {
+        const stream = controlledStream();
+        vi.mocked(streamTabularChat).mockResolvedValue(stream.response);
+        vi.mocked(streamTabularChatTurn).mockResolvedValue(
+            sseResponse(
+                'id: 3\ndata: {"type":"content_delta","text":" and the rest"}\n\ndata: [DONE]\n\n',
+            ),
+        );
+        const user = userEvent.setup();
+
+        const { container } = render(
+            <TRChatPanel reviewId="review-1" onCitationClick={vi.fn()} />,
+        );
+        stubViewportScroll(container);
+        await user.click(
+            screen.getByRole("button", { name: "Send test message" }),
+        );
+        act(() => {
+            stream.push(
+                'id: 1\ndata: {"type":"chat_id","chatId":"chat-9","turnId":"turn-9"}\n\n',
+            );
+            stream.push(
+                'id: 2\ndata: {"type":"content_delta","text":"Half an answer"}\n\n',
+            );
+        });
+        await waitFor(() =>
+            expect(screen.getByText(/Half an answer/)).toBeInTheDocument(),
+        );
+
+        act(() => stream.fail(new TypeError("network error")));
+
+        await waitFor(
+            () =>
+                expect(streamTabularChatTurn).toHaveBeenCalledWith({
+                    reviewId: "review-1",
+                    chatId: "chat-9",
+                    turnId: "turn-9",
+                    from: 3,
+                    signal: expect.anything(),
+                }),
+            { timeout: 3_000 },
+        );
+        await waitFor(() =>
+            expect(
+                screen.getByText(/Half an answer and the rest/),
+            ).toBeInTheDocument(),
+        );
+    });
+
+    it("attaches to a thread whose answer is still being generated when it opens", async () => {
+        vi.mocked(getTabularChats).mockResolvedValue([
+            {
+                id: "chat-1",
+                title: "Current draft",
+                created_at: new Date().toISOString(),
+                active_turn: {
+                    id: "turn-7",
+                    seq: 2,
+                    assistant_message_id: "m-7",
+                },
+            },
+        ] as TRChat[]);
+        vi.mocked(getTabularChatMessages).mockResolvedValue([
+            {
+                id: "m-1",
+                chat_id: "chat-1",
+                role: "user",
+                content: "Summarise the table",
+                created_at: new Date().toISOString(),
+            },
+        ] as Awaited<ReturnType<typeof getTabularChatMessages>>);
+        vi.mocked(streamTabularChatTurn).mockResolvedValue(
+            sseResponse(
+                'id: 1\ndata: {"type":"content_delta","text":"Still answering"}\n\ndata: [DONE]\n\n',
+            ),
+        );
+
+        const { container } = render(
+            <TRChatPanel
+                reviewId="review-1"
+                initialChatId="chat-1"
+                onCitationClick={vi.fn()}
+            />,
+        );
+        stubViewportScroll(container);
+
+        await waitFor(() =>
+            expect(streamTabularChatTurn).toHaveBeenCalledExactlyOnceWith({
+                reviewId: "review-1",
+                chatId: "chat-1",
+                turnId: "turn-7",
+                from: 1,
+                signal: expect.anything(),
+            }),
+        );
+        // The stored transcript has the user turn only; the answer arrives as
+        // a streaming placeholder appended after it.
+        expect(
+            await screen.findByText(/Still answering/, undefined, {
+                timeout: 3_000,
+            }),
+        ).toBeInTheDocument();
+        expect(streamTabularChat).not.toHaveBeenCalled();
     });
 });

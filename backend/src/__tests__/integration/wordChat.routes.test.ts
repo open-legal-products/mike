@@ -6,6 +6,9 @@ type QueryResult = { data: unknown; error: QueryError };
 type RecordedQuery = {
   table: string;
   filters: { column: string; value: unknown }[];
+  /** Which write produced `payload`; a user insert and an assistant update
+   *  both carry a `content`, so the two have to be told apart. */
+  op?: "insert" | "update";
   payload?: unknown;
 };
 
@@ -69,7 +72,6 @@ function makeQuery(table: string) {
   const query: Record<string, unknown> = {};
   const chain = [
     "select",
-    "update",
     "delete",
     "upsert",
     "neq",
@@ -89,6 +91,14 @@ function makeQuery(table: string) {
   ];
   for (const method of chain) query[method] = vi.fn(() => query);
   query.insert = vi.fn((payload: unknown) => {
+    recorded.op = "insert";
+    recorded.payload = payload;
+    return query;
+  });
+  // What a turn WRITES BACK into its reserved assistant row is as much a part
+  // of the contract as what it inserted, and only recording it can show it.
+  query.update = vi.fn((payload: unknown) => {
+    recorded.op = "update";
     recorded.payload = payload;
     return query;
   });
@@ -159,12 +169,18 @@ vi.mock("../../modules/user/user.settings", () => ({
 
 vi.mock("../../middleware/auth", () => ({
   requireAuth: (
-    _req: unknown,
+    req: { headers?: Record<string, unknown> },
     res: { locals: Record<string, unknown> },
     next: () => void,
   ) => {
-    res.locals.userId = "u1";
-    res.locals.userEmail = "u1@test.local";
+    // Default u1; `x-test-user` lets one suite play a second account without
+    // a second app instance.
+    const asUser =
+      typeof req?.headers?.["x-test-user"] === "string"
+        ? (req.headers["x-test-user"] as string)
+        : "u1";
+    res.locals.userId = asUser;
+    res.locals.userEmail = `${asUser}@test.local`;
     next();
   },
   requireMfaIfEnrolled: (_req: unknown, _res: unknown, next: () => void) =>
@@ -620,5 +636,360 @@ describe("POST /word-chat — local storage", () => {
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The answer belongs to the server, not to the task pane's socket: closing
+// the pane detaches, only the stop endpoint cancels, and a pane that reopens
+// attaches and replays — including a client tool call still waiting on it.
+// ---------------------------------------------------------------------------
+describe("server-owned Word turns", () => {
+  type StreamParams = {
+    write: (s: string) => void;
+    signal?: AbortSignal;
+    clientTools?: {
+      execute: (call: {
+        id: string;
+        name: string;
+        arguments: Record<string, unknown>;
+      }) => Promise<{ content: string; events: unknown[] }>;
+    };
+  };
+  const emitFrom = (params: StreamParams) => (frame: object) =>
+    params.write(`data: ${JSON.stringify(frame)}\n\n`);
+  const records = (text: string) =>
+    text.split("\n\n").filter((record) => record.includes("data: "));
+
+  const OTHER_DOCUMENT_ID = "123e4567-e89b-42d3-a456-426614174999";
+
+  const send = (body: Record<string, unknown> = {}) =>
+    request(app)
+      .post("/word-chat")
+      .set(...AUTH)
+      .send({
+        messages: [{ role: "user", content: "Revise this clause" }],
+        document_id: DOCUMENT_ID,
+        document_name: "Contract.docx",
+        storage: "cloud",
+        chat_id: CHAT_ID,
+        model: "gemini-3-flash-preview",
+        ...body,
+      });
+
+  /** A generation the test releases by hand. */
+  function heldGeneration() {
+    const held = {
+      release: () => {},
+      started: new Promise<StreamParams>((resolve) => {
+        runLLMStream.mockImplementation(async (raw: unknown) => {
+          const params = raw as StreamParams;
+          resolve(params);
+          emitFrom(params)({ type: "content_delta", text: "First" });
+          await new Promise<void>((done) => {
+            held.release = done;
+          });
+          emitFrom(params)({ type: "content_delta", text: " second" });
+          return {
+            events: [{ type: "content", text: "First second" }],
+            citations: [],
+          };
+        });
+      }),
+    };
+    return held;
+  }
+
+  const assistantUpdate = () =>
+    recordedQueries.find(
+      ({ table, op }) => table === "word_chat_messages" && op === "update",
+    )?.payload as { content?: unknown } | undefined;
+
+  const detail = () =>
+    request(app)
+      .get(`/word-chat/${CHAT_ID}?document_id=${DOCUMENT_ID}`)
+      .set(...AUTH);
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    recordedQueries.length = 0;
+    resetDbState();
+    dbState.chatDetail = {
+      data: {
+        id: CHAT_ID,
+        title: null,
+        user_id: "u1",
+        word_document_id: "word-document-row-1",
+      },
+      error: null,
+    };
+    const { resetAssistantTurnRunsForTests } = await import(
+      "../../lib/assistantTurnRuns.js"
+    );
+    resetAssistantTurnRunsForTests();
+  });
+
+  it("keeps generating after the pane's socket closes, and a reopen attaches from where it left off", async () => {
+    const held = heldGeneration();
+    const first = send();
+    const firstSettled = first.then(
+      () => "ended",
+      () => "aborted",
+    );
+    const params = await held.started;
+
+    // The pane closes (Word reloads it, the user hides it, the link drops).
+    first.abort();
+    expect(await firstSettled).toBe("aborted");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(params.signal?.aborted).toBe(false);
+
+    // What a reopened pane sees: the transcript plus the live turn. The
+    // reserved assistant row is filtered out of `messages`, so the answer is
+    // only there as `active_turn`.
+    const loaded = await detail();
+    expect(loaded.status).toBe(200);
+    const turnId = loaded.body.active_turn.id as string;
+    expect(loaded.body.active_turn.assistant_message_id).toBe(turnId);
+    expect(loaded.body.active_turn.seq).toBeGreaterThanOrEqual(2);
+    expect(loaded.body.messages).toEqual([]);
+
+    const tail = request(app)
+      .get(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stream?document_id=${DOCUMENT_ID}&from=2`,
+      )
+      .set(...AUTH);
+    setTimeout(() => held.release(), 30);
+    const resumed = await tail;
+    expect(resumed.status).toBe(200);
+    expect(resumed.headers["content-type"]).toContain("text/event-stream");
+    const lines = records(resumed.text);
+    expect(lines[0]).toBe(
+      'id: 2\ndata: {"type":"content_delta","text":"First"}',
+    );
+    expect(resumed.text).toContain('"text":" second"');
+    expect(resumed.text).toContain("data: [DONE]");
+    expect(resumed.text).not.toContain('"type":"chat_id"');
+    expect(resumed.text).not.toContain('"type":"cancelled"');
+
+    // The whole answer was stored; nothing was cancelled.
+    expect(assistantUpdate()).toMatchObject({
+      content: [{ type: "content", text: "First second" }],
+    });
+    expect((await detail()).body.active_turn).toBeNull();
+  });
+
+  it("stops a turn through the endpoint: readers see cancelled then [DONE], the partial answer is stored", async () => {
+    const { AssistantStreamAbortError } = await import(
+      "../../modules/chat/engine/index.js"
+    );
+    const started = new Promise<StreamParams>((resolve) => {
+      runLLMStream.mockImplementation(async (raw: unknown) => {
+        const params = raw as StreamParams;
+        resolve(params);
+        emitFrom(params)({ type: "content_delta", text: "Partial" });
+        await new Promise<void>((done) =>
+          params.signal?.addEventListener("abort", () => done(), {
+            once: true,
+          }),
+        );
+        throw new AssistantStreamAbortError("Partial", [
+          { type: "content", text: "Partial" },
+        ]);
+      });
+    });
+    const first = send();
+    const firstDone = first.then((res) => res);
+    const params = await started;
+    const turnId = (await detail()).body.active_turn.id as string;
+
+    const stopped = await request(app)
+      .post(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`,
+      )
+      .set(...AUTH);
+    expect(stopped.status).toBe(200);
+    expect(stopped.body).toEqual({ stopped: true, finished: false });
+    expect(params.signal?.aborted).toBe(true);
+
+    const text = (await firstDone).text;
+    expect(text).toContain(`"turnId":"${turnId}"`);
+    expect(text).toContain('"type":"cancelled"');
+    expect(text).toContain("data: [DONE]");
+    expect(assistantUpdate()).toMatchObject({
+      content: [
+        { type: "content", text: "Partial" },
+        { type: "content", text: "Cancelled by user." },
+      ],
+    });
+
+    const again = await request(app)
+      .post(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`,
+      )
+      .set(...AUTH);
+    expect(again.body).toEqual({ stopped: false, finished: true });
+  });
+
+  it("refuses a second turn while one is generating into the chat", async () => {
+    const held = heldGeneration();
+    const first = send();
+    const firstDone = first.then((res) => res);
+    await held.started;
+
+    const second = await send();
+    expect(second.status).toBe(409);
+    expect(second.body).toEqual({
+      code: "turn_in_progress",
+      detail: "A response is already being generated for this chat.",
+    });
+
+    held.release();
+    expect((await firstDone).text).toContain("data: [DONE]");
+    expect(runLLMStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 404 for another user, another document, and an unknown turn", async () => {
+    const held = heldGeneration();
+    const first = send();
+    const firstDone = first.then((res) => res);
+    await held.started;
+    const turnId = (await detail()).body.active_turn.id as string;
+
+    // A local Word chat has no server row to authorise against, so the run
+    // itself is the authority: whose it is, and which document it belongs to.
+    const foreign = await request(app)
+      .get(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stream?document_id=${DOCUMENT_ID}`,
+      )
+      .set(...AUTH)
+      .set("x-test-user", "u2");
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.code).toBe("turn_not_found");
+
+    const otherDocument = await request(app)
+      .post(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${OTHER_DOCUMENT_ID}`,
+      )
+      .set(...AUTH);
+    expect(otherDocument.status).toBe(404);
+
+    const unknown = await request(app)
+      .get(
+        `/word-chat/${CHAT_ID}/turn/not-a-turn/stream?document_id=${DOCUMENT_ID}`,
+      )
+      .set(...AUTH);
+    expect(unknown.status).toBe(404);
+
+    held.release();
+    await firstDone;
+  });
+
+  it("owns a LOCAL chat's turn too, authorising the resume from the run alone", async () => {
+    const held = heldGeneration();
+    // `storage: "local"` is the user asking that this conversation NOT be
+    // kept server-side: nothing is persisted, so there is no row a resume
+    // could be authorised against — only the run.
+    const first = send({ storage: "local" });
+    const firstSettled = first.then(
+      () => "ended",
+      () => "aborted",
+    );
+    const params = await held.started;
+    expect(
+      (params as unknown as { conversationId?: string | null }).conversationId,
+    ).toBeNull();
+    const turnId = (await detail()).body.active_turn.id as string;
+
+    first.abort();
+    expect(await firstSettled).toBe("aborted");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(params.signal?.aborted).toBe(false);
+
+    // Take the chat row away entirely: the stream endpoint must not look at
+    // one, or a local chat could never reattach.
+    dbState.chatDetail = { data: null, error: null };
+    const tail = request(app)
+      .get(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stream?document_id=${DOCUMENT_ID}&from=1`,
+      )
+      .set(...AUTH);
+    setTimeout(() => held.release(), 30);
+    const resumed = await tail;
+    expect(resumed.status).toBe(200);
+    expect(resumed.text).toContain('"text":"First"');
+    expect(resumed.text).toContain('"text":" second"');
+    expect(resumed.text).toContain("data: [DONE]");
+    // Nothing was written to the transcript, local meaning local. (The
+    // detail read above is this suite's way of learning the turn id; the
+    // pane learns it from the `chat_id` frame.)
+    expect(
+      recordedQueries.some(
+        ({ table, op }) => table === "word_chat_messages" && op !== undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it("replays a client tool call that is still pending, but not one that has settled", async () => {
+    let forwarded!: Promise<unknown>;
+    const started = new Promise<StreamParams>((resolve) => {
+      runLLMStream.mockImplementation(async (raw: unknown) => {
+        const params = raw as StreamParams;
+        forwarded = params.clientTools!.execute({
+          id: "tool-1",
+          name: "read_active_document",
+          arguments: {},
+        });
+        resolve(params);
+        await forwarded;
+        return {
+          events: [{ type: "content", text: "Read it" }],
+          citations: [],
+        };
+      });
+    });
+    const first = send({ client_tools: true });
+    const firstDone = first.then((res) => res);
+    await started;
+    const turnId = (await detail()).body.active_turn.id as string;
+
+    // A pane that reattaches while the call is OUTSTANDING is handed it
+    // again — that is how a pane closed mid-call can still answer it.
+    // `.end()`, not `await`: superagent only dispatches when the request is
+    // consumed, and this one has to be ATTACHED before the call settles —
+    // that is the whole point of the assertion below.
+    const attachRequest = request(app)
+      .get(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stream?document_id=${DOCUMENT_ID}&from=1`,
+      )
+      .set(...AUTH);
+    const attached = new Promise<{ text: string }>((resolve, reject) => {
+      attachRequest.end((error, res) => (error ? reject(error) : resolve(res)));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await request(app)
+      .post(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`,
+      )
+      .set(...AUTH);
+
+    const pendingReplay = await attached;
+    expect(pendingReplay.text).toContain('"type":"client_tool_call"');
+    await firstDone;
+
+    // The stop settled the call. Attaching again — the run is retained for a
+    // late reader — must NOT hand it out a second time: executing it twice
+    // would read (or edit) the document twice.
+    const settledReplay = await request(app)
+      .get(
+        `/word-chat/${CHAT_ID}/turn/${turnId}/stream?document_id=${DOCUMENT_ID}&from=1`,
+      )
+      .set(...AUTH);
+    expect(settledReplay.status).toBe(200);
+    expect(settledReplay.text).toContain('"type":"chat_id"');
+    expect(settledReplay.text).not.toContain('"type":"client_tool_call"');
+    // The keep-alive comments the adapter wrote while the call was
+    // outstanding were never buffered, so they cannot be replayed either.
+    expect(settledReplay.text).not.toContain("tool-wait");
   });
 });

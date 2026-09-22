@@ -52,14 +52,19 @@ is replayed to a late subscriber only while the predicate holds. A run is
 registered under a `key` — what may only have one run at a time — and carries
 an opaque `meta` for the surface that owns it.
 
-Two surfaces use it.
+An SSE **comment** line (`: tool-wait`) written through `write` fans out live
+but is never buffered or numbered: it is a keep-alive, so replaying it to a
+late subscriber would be noise and would move every real frame's sequence
+number.
+
+Every streaming surface uses it.
 
 #### Chat turns
 
 The chat and project-chat streams (`POST /chat`, `POST /projects/:id/chat`)
 register a run per assistant turn through `lib/assistantTurnRuns.ts`, the
-chat-shaped view of the registry (key `chat:<chatId>`, the assistant row id in
-`meta`). `attachAssistantTurnSse(res, run)` hands back the same
+chat-shaped view of the registry (key `<surface>:<chatId>`, the assistant row
+id in `meta`). `attachAssistantTurnSse(res, run)` hands back the same
 `{ signal, write, finish }` the older `openAssistantSse` did.
 
 - `GET /chat/:chatId/turn/:turnId/stream?from=<seq>` attaches to a run (a
@@ -75,6 +80,27 @@ chat-shaped view of the registry (key `chat:<chatId>`, the assistant row id in
   attach rather than treat the hidden reservation row as "no answer".
 - A chat has at most one run at a time: a second `POST` while one is
   generating answers `409 turn_in_progress`.
+
+#### Tabular review chat
+
+`POST /tabular-review/:reviewId/chat` registers the same kind of run under the
+`tabular` surface (key `tabular:<chatId>`), so the two surfaces cannot collide
+on a shared id and a lookup by turn id is scoped to the surface that asked.
+The endpoints mirror chat's, with the tabular access model: seeing the review
+is enough to attach, and stopping needs what writing the thread needs (review
+chats are creator-write).
+
+- `GET /tabular-review/:reviewId/chats/:chatId/turn/:turnId/stream?from=<seq>`
+- `POST /tabular-review/:reviewId/chats/:chatId/turn/:turnId/stop`
+- `GET /tabular-review/:reviewId/chats` reports `active_turn` per row, which
+  is how a panel that has just loaded knows to attach. The messages endpoint
+  keeps its bare array: it is the transcript, and the running turn is not in
+  it yet.
+- A second `POST /chat` into the same thread answers `409 turn_in_progress`.
+
+`prepareTabularChat` is allowed to return no chat id, and a request with no
+thread to key a run on keeps the old single-socket contract — nothing could
+ever attach to it.
 
 #### Tabular review generation
 
@@ -106,13 +132,47 @@ away costs nothing.
 - A second `POST /generate` while a run is still streaming answers
   `409 review_running`, handing back the lease it had just claimed.
 
+#### Word chat
+
+`POST /word-chat` registers a run under the `word` surface. `chatId` always
+exists by then — a cloud row's id, or the UUID `prepareWordChatStream` mints
+for `storage: "local"` — so every Word turn is keyed and resumable, local
+ones included.
+
+- `GET /word-chat/:chatId/turn/:turnId/stream?document_id=<uuid>&from=<seq>`
+- `POST /word-chat/:chatId/turn/:turnId/stop?document_id=<uuid>`
+- `GET /word-chat/:chatId` reports `active_turn`. Note that it filters the
+  reserved (still-empty) assistant row out of `messages`, so a turn in flight
+  is visible ONLY as `active_turn` and a reattaching pane appends its own
+  placeholder.
+- A second `POST /word-chat` into the same chat answers
+  `409 turn_in_progress`.
+
+Both endpoints authorise **from the run**: `run.userId` must be the caller and
+the run's `clientDocumentId` must be the `document_id` presented, otherwise
+`404 turn_not_found`. A local chat is never persisted, so there is no row to
+authorise against — and a cloud chat's row says nothing about which run is
+live either.
+
+Client tool calls need two things of the registry, both in `streamRuns.ts`:
+the adapter's `: tool-wait` keep-alives are comments, so they fan out live and
+are never buffered or numbered; and a `client_tool_call` frame is written with
+`{ replay: () => isClientToolCallPending(callId) }`, so a pane that reattaches
+while the call is outstanding is handed it and can answer the tool loop that
+is still waiting, while a call that has been answered, timed out (60 s) or
+cancelled is never replayed. Two panes attached at once would both execute a
+replayed call; the first result settles the bridge and the second is dropped
+by `submitClientToolResult`, but the document work has already happened twice.
+
 Runs live in process memory. A finished run is retained for
 `FINISHED_RUN_RETENTION_MS` (60 s) so a late reconnect still gets the
 terminal frames, and a run that outlives `MAX_RUN_LIFETIME_MS` (30 min) is
 stopped as a safety net. A resume therefore has to reach the replica that is
 generating: run one replica, or route by session, until the buffer is moved
-to shared storage. Word chat (`/word-chat`) still uses `openAssistantSse`,
-where a closed socket is still a cancel.
+to shared storage. `lib/assistantSse.ts` (`openAssistantSse`) survives only
+for the one case that cannot be a run: a tabular review chat whose
+preparation produced no chat id, so there is no key to register under and
+nothing that could ever attach.
 
 ### The service contract
 
