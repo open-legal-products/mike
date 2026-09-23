@@ -12,6 +12,11 @@
 // lib/authSession and lib/authHandoff because middleware/auth depends on them.
 
 import { z } from "zod";
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_TOO_LONG_DETAIL,
+} from "./auth.messages";
 import type { Session, SupabaseClient, User } from "@supabase/supabase-js";
 import { consumeAuthHandoff, issueAuthHandoff } from "../../lib/authHandoff";
 
@@ -20,9 +25,44 @@ import { consumeAuthHandoff, issueAuthHandoff } from "../../lib/authHandoff";
 // ---------------------------------------------------------------------------
 
 export const emailSchema = z.string().trim().email().max(320);
+
+/**
+ * The 72 is bcrypt's limit on its INPUT IN BYTES, not in characters. A
+ * `.max(72)` here counts UTF-16 code units, so a 60-character passphrase
+ * with accents or an emoji passes this check and is then rejected by
+ * GoTrue — the failure a user cannot explain. The clients count the same
+ * bytes (`isPasswordTooLong` in frontend/src/app/components/auth/
+ * passwordPolicy.ts), so both sides agree on which passwords are legal.
+ *
+ * The character cap that remains is only a work bound: anything that hits
+ * it is over the byte limit too, and gets the same sentence.
+ */
+const PASSWORD_CHARACTER_GUARD = 1024;
+
+function passwordField(minimumCharacters: number) {
+  return z
+    .string()
+    .min(minimumCharacters)
+    .max(PASSWORD_CHARACTER_GUARD)
+    .superRefine((value, ctx) => {
+      if (Buffer.byteLength(value, "utf8") <= PASSWORD_MAX_LENGTH) return;
+      ctx.addIssue({
+        code: "too_big",
+        origin: "string",
+        maximum: PASSWORD_MAX_LENGTH,
+        inclusive: true,
+        message: PASSWORD_TOO_LONG_DETAIL,
+      });
+    });
+}
+
 export const credentialsSchema = z.object({
   email: emailSchema,
-  password: z.string().min(1).max(4096),
+  password: passwordField(1),
+});
+/** Sign-up applies the length policy; login accepts whatever was set. */
+export const signupSchema = credentialsSchema.extend({
+  password: passwordField(PASSWORD_MIN_LENGTH),
 });
 export const handoffRequestIdSchema = z
   .string()
@@ -44,7 +84,7 @@ export const handoffSchema = z.object({
   requestId: handoffRequestIdSchema,
 });
 export const passwordSchema = z.object({
-  password: z.string().min(8).max(4096),
+  password: passwordField(PASSWORD_MIN_LENGTH),
   signOut: z.boolean().optional(),
 });
 export const factorSchema = z.object({ factorId: z.string().uuid() });

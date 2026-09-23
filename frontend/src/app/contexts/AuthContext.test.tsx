@@ -2,6 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "./AuthContext";
 import { AUTH_SESSION_INVALIDATED_EVENT } from "@/app/lib/authEvents";
+import {
+    ToastViewportUI,
+    clearToasts,
+    showToast,
+} from "@/shared/ui/ToastUI";
 
 const {
     clearLegacyBrowserAuthStorage,
@@ -138,5 +143,38 @@ describe("AuthProvider", () => {
         await waitFor(() =>
             expect(screen.getByTestId("user")).toHaveTextContent("signed-out"),
         );
+    });
+
+    it("clears leftover toasts when the user signs out", async () => {
+        getAuthSession.mockResolvedValue(user);
+        logout.mockResolvedValue(undefined);
+
+        render(
+            <AuthProvider>
+                <Consumer />
+                <ToastViewportUI />
+            </AuthProvider>,
+        );
+        await waitFor(() =>
+            expect(screen.getByTestId("user")).toHaveTextContent(user.email),
+        );
+
+        // A failure raised while signed in, still on screen: its "Retry"
+        // would now run as nobody, over the login form.
+        showToast({
+            tone: "error",
+            title: "Couldn't save the document",
+            message: "Try again.",
+            actions: [{ label: "Retry", onClick: () => {} }],
+        });
+        expect(await screen.findByRole("alert")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+        await waitFor(() =>
+            expect(screen.getByTestId("user")).toHaveTextContent("signed-out"),
+        );
+        await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+        clearToasts();
     });
 });

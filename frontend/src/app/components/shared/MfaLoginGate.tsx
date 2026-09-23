@@ -50,6 +50,10 @@ export function MfaLoginGate({ children }: { children: ReactNode }) {
                 if (cancelled) return;
                 setGateState(required ? "required" : "verified");
             } catch {
+                // Fail closed: if the assurance check can't be reached we
+                // assume verification is still owed. The verify page runs the
+                // same call and reports the real failure there, so this stays
+                // silent rather than raising a second notice for one outage.
                 if (!cancelled) setGateState("required");
             }
         }
@@ -124,11 +128,22 @@ function safeNextPath(value: string | null) {
 }
 
 export function markMfaVerifiedForGate() {
-    window.sessionStorage.setItem(MFA_VERIFIED_AT_KEY, String(Date.now()));
+    try {
+        window.sessionStorage.setItem(MFA_VERIFIED_AT_KEY, String(Date.now()));
+    } catch {
+        // Storage is blocked (private mode, locked-down browser). The grace
+        // window is only an optimisation: without it the gate re-checks with
+        // the server, which is correct, just slower.
+    }
 }
 
 function hasRecentMfaVerification() {
-    const raw = window.sessionStorage.getItem(MFA_VERIFIED_AT_KEY);
+    let raw: string | null = null;
+    try {
+        raw = window.sessionStorage.getItem(MFA_VERIFIED_AT_KEY);
+    } catch {
+        // Same as above: no grace window, so fall through to a server check.
+    }
     const verifiedAt = raw ? Number.parseInt(raw, 10) : 0;
     return (
         Number.isFinite(verifiedAt) &&

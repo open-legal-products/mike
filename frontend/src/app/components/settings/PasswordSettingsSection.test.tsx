@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+    fireEvent,
+    render,
+    screen,
+    waitFor,
+    within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PasswordSettingsSection } from "./PasswordSettingsSection";
@@ -91,6 +97,75 @@ describe("PasswordSettingsSection", () => {
             expect(state.requestPasswordReset).toHaveBeenCalledWith(
                 "alex@example.com",
             ),
+        );
+    });
+
+    async function openAndSubmit(password: string) {
+        const user = userEvent.setup();
+        render(<PasswordSettingsSection />);
+        await user.click(screen.getByRole("button", { name: "Set password" }));
+        const dialog = screen.getByRole("dialog", { name: "Set password" });
+        // Set the value in one event: typing character by character into a
+        // controlled field inside the modal's focus trap is needlessly slow.
+        fireEvent.change(within(dialog).getByLabelText("Password"), {
+            target: { value: password },
+        });
+        fireEvent.change(within(dialog).getByLabelText("Confirm password"), {
+            target: { value: password },
+        });
+        await user.click(
+            within(dialog).getByRole("button", { name: "Set password" }),
+        );
+        return dialog;
+    }
+
+    it("uses Mike's password policy rather than the provider's wording", async () => {
+        state.setPassword.mockRejectedValue(
+            Object.assign(new Error("Password should be at least 6 characters"), {
+                status: 422,
+                code: "weak_password",
+            }),
+        );
+
+        const dialog = await openAndSubmit("securepass1");
+
+        await waitFor(() =>
+            expect(within(dialog).getByRole("alert")).toHaveTextContent(
+                "Choose a stronger password: at least 10 characters, mixing letters, numbers, and symbols.",
+            ),
+        );
+        expect(
+            screen.queryByText(/at least 6 characters/),
+        ).not.toBeInTheDocument();
+    });
+
+    it("refuses a password past bcrypt's limit before calling the API", async () => {
+        const dialog = await openAndSubmit("x".repeat(73));
+
+        expect(state.setPassword).not.toHaveBeenCalled();
+        expect(within(dialog).getByRole("alert")).toHaveTextContent(
+            "Password must be at most 72 UTF-8 bytes. Accented characters and emoji can use more than one byte.",
+        );
+    });
+
+    it("says the reset email did not go out when the connection drops", async () => {
+        state.passwordSet = true;
+        state.requestPasswordReset.mockRejectedValue(
+            new TypeError("Failed to fetch"),
+        );
+        const user = userEvent.setup();
+        render(<PasswordSettingsSection />);
+
+        await user.click(
+            screen.getByRole("button", { name: "Send reset email" }),
+        );
+
+        await waitFor(() =>
+            expect(
+                screen.getByText(
+                    "Mike couldn't reach the server. Check your connection and try again.",
+                ),
+            ).toBeVisible(),
         );
     });
 });
