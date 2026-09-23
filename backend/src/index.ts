@@ -17,6 +17,7 @@ import {
 } from "./lib/processLifecycle";
 
 const PORT = process.env.PORT ?? 3001;
+const HOST = process.env.HOST?.trim() || undefined;
 
 // Surface a malformed MANIFEST_SIGNING_KEY at boot rather than when someone's
 // first export fails. Unset is a valid choice and means manifests go out
@@ -118,18 +119,24 @@ async function main(): Promise<void> {
   // cost of gating is one round trip of boot latency, never a crash loop.
   await enforceDocumentLifecycleMigration();
 
-  server = listenOrFail(app, PORT, () => {
-    console.log(
-      `Mike backend running on port ${PORT} (workers: ${WORKERS_MODE})`,
-    );
-    if (WORKERS_MODE === "thread") {
-      spawnWorkerThread();
-    } else if (WORKERS_MODE === "inline") {
-      startAllWorkers();
-    }
-    // WORKERS_MODE === "none": a standalone worker process owns background
-    // work (node dist/worker.js).
-  });
+  server = listenOrFail(
+    app,
+    PORT,
+    () => {
+      console.log(
+        `Mike backend running on port ${PORT} (workers: ${WORKERS_MODE})`,
+      );
+      if (WORKERS_MODE === "thread") {
+        spawnWorkerThread();
+      } else if (WORKERS_MODE === "inline") {
+        startAllWorkers();
+      }
+      // WORKERS_MODE === "none": a standalone worker process owns background
+      // work (node dist/worker.js).
+    },
+    undefined,
+    HOST,
+  );
 }
 
 void main();

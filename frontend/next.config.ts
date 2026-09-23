@@ -3,6 +3,13 @@ import { withSentryConfig } from "@sentry/nextjs/config";
 
 const nextConfig: NextConfig = {
     /* config options here */
+    // Standalone output emits a self-contained server (server.js + traced
+    // node_modules) that runs without the repo — the desktop app bundles it
+    // and runs it under Electron's own Node. Opt-in so the Docker image and
+    // dev workflow are untouched.
+    ...(process.env.NEXT_OUTPUT_STANDALONE === "1"
+        ? { output: "standalone" as const }
+        : {}),
     reactCompiler: true,
     typescript: {
         // `next build` type-checks this program instead of tsconfig.json. It

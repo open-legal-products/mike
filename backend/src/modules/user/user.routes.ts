@@ -101,7 +101,7 @@ function mcpOAuthPopupHtml(payload: {
     const message = JSON.stringify({
         type: "mcp_oauth_result",
         ...payload,
-    });
+    }).replace(/</g, "\\u003c");
     return `<!doctype html>
 <html>
   <head>
@@ -136,15 +136,20 @@ function mcpOAuthPopupHtml(payload: {
 </html>`;
 }
 
-function mcpOAuthPopupCsp(nonce: string) {
-    return [
-        "default-src 'none'",
-        `script-src 'nonce-${nonce}'`,
-        "style-src 'unsafe-inline'",
-        "base-uri 'none'",
-        "form-action 'none'",
-        "frame-ancestors 'none'",
-    ].join("; ");
+function mcpOAuthPopupHeaders(nonce: string) {
+    return {
+        "Content-Security-Policy": [
+            "default-src 'none'",
+            `script-src 'nonce-${nonce}'`,
+            "style-src 'unsafe-inline'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+        ].join("; "),
+        // Keep the opener alive across the cross-origin OAuth consent page so
+        // the callback can post its result back to the desktop or browser app.
+        "Cross-Origin-Opener-Policy": "unsafe-none",
+    };
 }
 
 // POST /user/profile
@@ -518,7 +523,7 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
         if (!state || !code)
             throw new Error("OAuth callback is missing state or code.");
         const result = await completeUserMcpConnectorOAuth(state, code, db);
-        res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+        res.set(mcpOAuthPopupHeaders(nonce))
             .type("html")
             .send(
                 mcpOAuthPopupHtml(
@@ -548,7 +553,7 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
                     : undefined,
         });
         res.status(400)
-            .set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+            .set(mcpOAuthPopupHeaders(nonce))
             .type("html")
             .send(
                 mcpOAuthPopupHtml(

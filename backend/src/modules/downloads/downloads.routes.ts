@@ -8,9 +8,37 @@ import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { buildContentDisposition } from "../../lib/storage";
-import { resolveTokenDownload } from "./downloads.service";
+import { sendServiceFailure } from "../../lib/serviceResult";
+import {
+    resolveBlobDownload,
+    resolveTokenDownload,
+    storeBlobUpload,
+} from "./downloads.service";
 
 export const downloadsRouter = Router();
+
+downloadsRouter.get("/signed/:token", asyncRoute(async (req, res) => {
+    const result = await resolveBlobDownload(req.params.token);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Content-Type", result.data.contentType);
+    res.setHeader(
+        "Content-Disposition",
+        buildContentDisposition("attachment", result.data.filename),
+    );
+    res.send(result.data.bytes);
+}));
+
+// Mounted before the JSON parser: a JSON document upload must remain a byte
+// stream rather than being consumed as an API request body.
+export const blobUploadHandler = asyncRoute(async (req, res) => {
+    const result = await storeBlobUpload({
+        token: req.params.token,
+        contentType: String(req.headers["content-type"] ?? ""),
+        body: req,
+    });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.status(200).json({ ok: true });
+});
 
 // GET /download/:token
 downloadsRouter.get("/:token", requireAuth, asyncRoute(async (req, res) => {

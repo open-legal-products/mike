@@ -123,6 +123,19 @@ describe("listenOrFail (MIKE-BACKEND-7 root cause)", () => {
     expect(effects.exit).not.toHaveBeenCalled();
     await new Promise((resolve) => server.close(resolve));
   });
+
+  it("binds only to the requested host for the desktop local stack", async () => {
+    const effects = fakeEffects();
+    const onListening = vi.fn();
+    const server = listenOrFail(express(), 0, onListening, effects, "127.0.0.1");
+    try {
+      await vi.waitFor(() => expect(onListening).toHaveBeenCalledOnce());
+      expect((server.address() as AddressInfo).address).toBe("127.0.0.1");
+      expect(effects.exit).not.toHaveBeenCalled();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
 });
 
 describe("graceful shutdown (MIKE-BACKEND-7)", () => {
