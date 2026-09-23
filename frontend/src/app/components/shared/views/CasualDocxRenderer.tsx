@@ -6,17 +6,20 @@ import "@casualoffice/docs/styles.css";
 import "./CasualDocxRenderer.css";
 import type { DocxRendererProps } from "./DocxRenderer.types";
 
-export default function DocxRenderer({ bytes, onReady, onError }: DocxRendererProps) {
+const embeddedFeatures = { titleBar: false, menuBar: false, statusBar: false, panelRail: false };
+
+export default function DocxRenderer({ bytes, mode, onChange, onSave, onReady, onError }: DocxRendererProps) {
     const host = useRef<HTMLDivElement>(null);
     const editor = useRef<DocxEditorRef>(null);
     const pages = useRef<HTMLElement | null>(null);
     const frame = useRef(0);
+    const exporting = useRef(false);
 
     const fit = useCallback(() => {
         const page = pages.current?.querySelector<HTMLElement>(".layout-page");
         if (!host.current || !page || !page.offsetWidth) return;
-        // The editor reserves an unscaled 1168px for its review sidebar. In a
-        // preview we show redlines on the page, without that editing sidebar.
+        // The editor reserves an unscaled 1168px for its review sidebar. In an
+        // embedded surface we show redlines on the page, without that sidebar.
         const stack = pages.current?.parentElement;
         stack?.classList.add("mike-casual-page-stack");
         let ancestor = stack?.parentElement;
@@ -41,7 +44,16 @@ export default function DocxRenderer({ bytes, onReady, onError }: DocxRendererPr
             }
             if (scroll) {
                 scroll.style.overflowAnchor = "none";
-                onReady({ content, scroll });
+                onReady({ content, scroll, exportDocx: async () => {
+                    exporting.current = true;
+                    try {
+                        const result = await editor.current?.save();
+                        if (!result) throw new Error("DOCX export unavailable");
+                        return result;
+                    } finally {
+                        exporting.current = false;
+                    }
+                } });
             }
         });
     }, [fit, onReady]);
@@ -63,16 +75,20 @@ export default function DocxRenderer({ bytes, onReady, onError }: DocxRendererPr
     }, [fit]);
 
     return (
-        <div ref={host} className="h-full min-h-0" data-docx-renderer="casual">
+        <div ref={host} className="h-full min-h-0" data-docx-renderer="casual" data-docx-mode={mode}>
             <DocxEditor
                 ref={editor}
                 documentBuffer={bytes}
-                readOnly
-                mode="viewing"
-                chrome="none"
+                readOnly={mode === "view"}
+                mode={mode === "edit" ? "editing" : "viewing"}
+                chrome={mode === "edit" ? "embedded" : "none"}
+                features={embeddedFeatures}
+                showPanelRail={false}
                 showRuler={false}
                 showZoomControl={false}
                 onError={onError}
+                onChange={onChange}
+                onSave={(buffer) => { if (!exporting.current) onSave?.(buffer); }}
                 onFontsLoaded={publish}
                 onReady={publish}
                 onRenderedDomContextReady={onRendered}

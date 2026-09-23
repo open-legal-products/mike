@@ -66,11 +66,13 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         versionId,
         refetchKey,
         cacheBytes,
+        mode,
     }: {
         documentId: string;
         versionId?: string | null;
         refetchKey: string;
         cacheBytes: boolean;
+        mode: string;
     }) => {
         const { bytes } = useFetchDocxBytes(
             documentId,
@@ -79,7 +81,7 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
             null,
             cacheBytes,
         );
-        return <Viewer id={documentId} loaded={!!bytes} />;
+        return <div data-testid="docx-mode" data-mode={mode}><Viewer id={documentId} loaded={!!bytes} /></div>;
     },
 }));
 
@@ -125,6 +127,7 @@ function panels(openTabs = tabs, activeTabId = "pdf", docs = documents) {
 it("retains loaded files, zoom, and scroll across tab switches and releases viewers on close", async () => {
     const { rerender } = render(panels());
     await waitFor(() => expect(screen.getAllByText("Loaded")).toHaveLength(3));
+    expect(screen.getByTestId("docx-mode")).toHaveAttribute("data-mode", "edit");
     const viewer = screen.getByTestId("pdf");
     viewer.scrollTop = 340;
     fireEvent.click(screen.getByRole("button", { name: "Zoom 1" }));

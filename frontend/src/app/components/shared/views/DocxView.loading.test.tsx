@@ -5,6 +5,8 @@ import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { DocxRendererProps } from "./DocxRenderer.types";
 import { DocxView } from "./DocxView";
 
+const exportDocx = vi.hoisted(() => vi.fn());
+
 vi.mock("@/app/lib/authEvents", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("@/app/lib/mikeApi", () => ({ getDocumentFileUrl: (id: string) => "/api/document/" + id }));
 vi.mock("./EigenpalDocxRenderer", () => ({
@@ -14,16 +16,17 @@ vi.mock("./CasualDocxRenderer", () => ({
     default: (props: DocxRendererProps) => <MockRenderer {...props} engine="Casual Docs" />,
 }));
 
-function MockRenderer({ bytes, onReady, onError, engine }: DocxRendererProps & { engine: string }) {
+function MockRenderer({ bytes, mode, onChange, onReady, onError, engine }: DocxRendererProps & { engine: string }) {
     const scroll = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const revision = new Uint8Array(bytes)[0];
     useEffect(() => {
         if (revision === 99) onError();
-        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current });
-    }, [onReady, onError, revision]);
+        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current, exportDocx });
+    }, [bytes, onReady, onError, revision]);
     return (
-        <div ref={scroll} data-testid="renderer-scroll">
+        <div ref={scroll} data-testid="renderer-scroll" data-mode={mode}>
+            {mode === "edit" && <div role="toolbar" aria-label="Document formatting"><button onClick={onChange}>Change document</button></div>}
             <div ref={content}>
                 <p>{engine} preview</p><p>Document revision {revision}</p>
                 <p>Payment in thirty days.</p><p>Confidential information.</p>
@@ -36,6 +39,7 @@ function MockRenderer({ bytes, onReady, onError, engine }: DocxRendererProps & {
 
 const originalScrollTo = HTMLElement.prototype.scrollTo;
 beforeEach(() => {
+    exportDocx.mockReset().mockResolvedValue(new Uint8Array([42]).buffer);
     vi.mocked(authenticatedFetch).mockReset();
     vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([1])));
     HTMLElement.prototype.scrollTo = vi.fn(function (this: HTMLElement, options?: ScrollToOptions | number) {
@@ -108,6 +112,56 @@ it("does not show old bytes while switching documents", async () => {
     expect(screen.queryByText("Document revision 1")).toBeNull();
     await act(async () => finish(new Response(new Uint8Array([2]))));
     expect(await screen.findByText("Document revision 2")).toBeVisible();
+});
+
+it("supports edit and view modes without remounting the document", async () => {
+    const { rerender } = render(<DocxView documentId="modes" cacheBytes={false} mode="edit" />);
+    await screen.findByText("EigenPal preview");
+    const surface = screen.getByTestId("renderer-scroll");
+    expect(surface).toHaveAttribute("data-mode", "edit");
+    expect(screen.getByRole("toolbar", { name: "Document formatting" })).toBeVisible();
+    rerender(<DocxView documentId="modes" cacheBytes={false} mode="view" />);
+    expect(surface).toHaveAttribute("data-mode", "view");
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    expect(screen.getByTestId("renderer-scroll")).toBe(surface);
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+});
+
+it("protects unsaved edits when switching renderers", async () => {
+    render(<DocxView documentId="dirty-switch" cacheBytes={false} mode="edit" />);
+    await screen.findByText("EigenPal preview");
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Casual Docs" }));
+    expect(screen.getByRole("dialog", { name: "Discard local edits?" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByText("EigenPal preview")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Casual Docs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard and switch" }));
+    expect(await screen.findByText("Casual Docs preview")).toBeVisible();
+    expect(screen.getByRole("toolbar", { name: "Document formatting" })).toBeVisible();
+});
+
+it("keeps edits after a failed export and downloads the edited bytes on retry", async () => {
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:edited-document");
+    const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    exportDocx.mockRejectedValueOnce(new Error("internal serializer details"));
+    render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} mode="edit" />);
+    await screen.findByText("EigenPal preview");
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download DOCX" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your edits are still open");
+    expect(screen.getByText(/Unsaved local edits/)).toBeVisible();
+    expect(screen.queryByText(/internal serializer/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Download DOCX" }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(createUrl).toHaveBeenCalledWith(expect.any(Blob));
+    expect(click.mock.instances[0]).toHaveAttribute("download", "Agreement.docx");
+    expect(exportDocx).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Unsaved local edits/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    // Cleanup's revoke timeout can run after the test restores its mocks.
+    revokeUrl.mockRestore();
 });
 
 it("re-centers a citation after the engine restores scroll during page paint", async () => {

@@ -9,19 +9,24 @@ import type { DocxRendererProps } from "./DocxRenderer.types";
 // Use packaged, metric-compatible fonts; document text never goes to a conversion service.
 const fonts = packagedFonts();
 
-export default function DocxRenderer({ bytes, onReady, onError }: DocxRendererProps) {
+export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, onReady, onError }: DocxRendererProps) {
     const host = useRef<HTMLDivElement>(null);
     const unsubscribe = useRef<(() => void) | undefined>(undefined);
     const document = useMemo(() => new Uint8Array(bytes), [bytes]);
     useEffect(() => () => unsubscribe.current?.(), []);
     return (
-        <div ref={host} className="h-full min-h-0" data-docx-renderer="eigenpal">
+        <div ref={host} className="h-full min-h-0" data-docx-renderer="eigenpal" data-docx-mode={mode}>
             <DocxEditor
                 document={document}
                 fonts={fonts}
-                mode="view"
-                chrome={false}
-                contextMenu={false}
+                mode={mode}
+                chrome={mode === "edit"}
+                title={filename}
+                onChange={onChange}
+                onSave={mode === "edit" ? onSave : undefined}
+                menu={false}
+                rulers={false}
+                contextMenu={mode === "edit"}
                 className="h-full min-h-0 overflow-auto"
                 zoomMode={{ type: "fit", fit: "pageWidth", minZoom: 0.1, maxZoom: 1 }}
                 onFontError={onError}
@@ -34,7 +39,7 @@ export default function DocxRenderer({ bytes, onReady, onError }: DocxRendererPr
                     }
                     const content = host.current?.querySelector<HTMLElement>(".docx-paginated-surface");
                     const scroll = host.current?.querySelector<HTMLElement>(".docx-editor__scroll-container");
-                    if (content && scroll) onReady({ content, scroll, revealText: (text) => {
+                    if (content && scroll) onReady({ content, scroll, exportDocx: () => editor.save(), revealText: (text) => {
                         const match = editor.findMatches(text)[0];
                         if (!match) return false;
                         editor.selectMatch(match);

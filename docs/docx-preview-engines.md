@@ -6,9 +6,19 @@ component. The selection lasts for the mounted viewer; it is not an account
 setting. Switching engines reuses the fetched bytes and retains the scroll
 offset (the same offset can show different text when pagination differs).
 
-Both adapters are read-only. Existing Mike edit cards still resolve changes
-through the backend and refresh the preview. The integrations do not save or
-round-trip documents through either engine.
+Both adapters support `mode="view"` and `mode="edit"`. The reusable component
+defaults to view-only; the assistant document panel, IDE viewer, and document
+side panel explicitly use edit mode with the native formatting toolbar above
+the scrollable pages. The comparison story can switch between modes without
+remounting the loaded document.
+
+Edits are local to the mounted editor. **Download DOCX** (and the editor's save
+action) exports the edited document; it does not create a Mike version or
+overwrite the server file. Download before closing the viewer or switching
+documents. Switching rendering engines with unsaved edits requires confirmation;
+switching view/edit modes preserves the current document. Reloading the browser
+with unsaved edits triggers its leave-page warning. Existing Mike edit cards
+still resolve changes through the backend and refresh the document.
 
 ## Versions and limitations
 
@@ -20,7 +30,7 @@ round-trip documents through either engine.
 - Casual Docs: `@casualoffice/docs` **1.4.2**. Insertions and deletions render on
   the page. A scoped CSS adapter removes the full editor's fixed-width review
   sidebar reservation and hides its sidebar and accept/reject action bar in
-  this read-only preview. Comment threads are therefore not exposed by this
+  this embedded viewer. Comment threads are therefore not exposed by this
   adapter. It uses its own browser font loading/fallback behavior.
 - Neither adapter implements a comment editor. This comparison does not
   certify either library against the earlier full Word-editor requirements.
@@ -42,7 +52,7 @@ npm run catalog:docx --prefix frontend -- --host 127.0.0.1 --port 6101
 
 Open <http://127.0.0.1:6101/>. The dedicated Ladle story generates a synthetic
 agreement with several fonts, a table, headers, footers, a footnote, and tracked
-changes. It has narrow-panel, citation, edit-highlight, and invalid-file
+changes. It has view/edit, narrow-panel, citation, edit-highlight, and invalid-file
 controls. Its local file picker uses a browser blob URL; it does not upload the
 selected document to Mike. The normal primitive catalog is unchanged.
 
@@ -83,5 +93,6 @@ Next's production build uses the normal app configuration.
   optimistic resolution, panel integration, and import architecture.
 - Headless Chromium using the real adapters: 950px and 400px panels, switching,
   fonts/footnotes, fixed-width tables, highlights after resizing, malformed-file
-  handling, and recovery. These use synthetic files and do not exercise an
+  handling, recovery, typing, toolbar visibility in both modes, and downloading
+  DOCX files whose XML contains the edited text. These use synthetic files and do not exercise an
   authenticated backend session or assert pixel parity with Word.

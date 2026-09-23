@@ -244,6 +244,8 @@ export function DocPanel({
                     />
                 ) : viewType === "docx" ? (
                     <DocxView
+                        mode="edit"
+                        filename={resolvedDocument.title}
                         documentId={documentId}
                         versionId={versionId ?? undefined}
                         rounded={false}

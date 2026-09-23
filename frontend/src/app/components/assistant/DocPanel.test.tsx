@@ -1,6 +1,18 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DocPanel, DocumentTitleRow } from "./DocPanel";
+
+vi.mock("../shared/views/DocxView", () => ({
+    DocxView: ({ mode, filename }: { mode: string; filename: string }) =>
+        <div data-testid="docx-editor" data-mode={mode}>{filename}</div>,
+}));
+
+it("opens assistant DOCX documents in edit mode", () => {
+    render(<DocPanel mode={{ kind: "document" }} document={{
+        document_id: "docx-1", title: "agreement.docx", type: "docx", metadata: [], quotes: [],
+    }} />);
+    expect(screen.getByTestId("docx-editor")).toHaveAttribute("data-mode", "edit");
+});
 
 describe("DocumentTitleRow", () => {
     it("uses the shared compact title row with a file-type icon", () => {

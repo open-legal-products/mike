@@ -10,6 +10,7 @@ export default meta;
 export function CompareRenderers() {
     const [url, setUrl] = useState<string | null>(null);
     const [narrow, setNarrow] = useState(false);
+    const [viewOnly, setViewOnly] = useState(false);
     const [quote, setQuote] = useState(false);
     const [laterQuote, setLaterQuote] = useState(false);
     const [edit, setEdit] = useState(false);
@@ -61,6 +62,7 @@ export function CompareRenderers() {
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
                 <TabPillButtonUI active={narrow} onClick={() => setNarrow(!narrow)}>Narrow panel</TabPillButtonUI>
+                <TabPillButtonUI active={viewOnly} onClick={() => setViewOnly(!viewOnly)}>View only</TabPillButtonUI>
                 <TabPillButtonUI active={quote} onClick={() => setQuote(!quote)}>Highlight citation</TabPillButtonUI>
                 <TabPillButtonUI active={laterQuote} onClick={() => setLaterQuote(!laterQuote)}>Highlight later citation</TabPillButtonUI>
                 <TabPillButtonUI active={edit} onClick={() => setEdit(!edit)}>Highlight edit</TabPillButtonUI>
@@ -79,7 +81,7 @@ export function CompareRenderers() {
             </div>
             <p className="text-sm">{name}</p>
             <div style={{ width: narrow ? 400 : 950, maxWidth: "100%", height: 720 }} className="flex overflow-hidden rounded-lg bg-app-surface">
-                {url && <DocxView documentId={url} displayUrl={url} cacheBytes={false}
+                {url && <DocxView documentId={url} displayUrl={url} cacheBytes={false} filename={name} mode={viewOnly ? "view" : "edit"}
                     quotes={laterQuote ? [{ quote: "Clause 70. Confidential information must be protected by each party." }]
                         : quote ? [{ quote: "Payment is due within thirty days." }] : []}
                     highlightEdit={edit ? { key: "notice", ins_w_id: "8", inserted_text: "sixty", del_w_id: "7", deleted_text: "thirty" } : null} />}
