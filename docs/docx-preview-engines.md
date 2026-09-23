@@ -1,12 +1,12 @@
 # DOCX preview comparison
 
-`DocxView` offers a local **EigenPal / Casual Docs** toggle. The assistant's
+`DocxView` offers a local **EigenPal / Casual Docs / SuperDoc** toggle. The assistant's
 document panel, the IDE document viewer, and document side panels share this
 component. The selection lasts for the mounted viewer; it is not an account
 setting. Switching engines reuses the fetched bytes and retains the scroll
 offset (the same offset can show different text when pagination differs).
 
-Both adapters support view-only and edit modes. A **View / Edit** selector next
+All three adapters support view-only and edit modes. A **View / Edit** selector next
 to the renderer selector lets readers switch without remounting the document.
 `DocxView` accepts `defaultMode` (view-only when omitted); the assistant document
 panel, IDE viewer, and document side panel set `defaultMode="edit"`, showing the
@@ -33,11 +33,21 @@ still resolve changes through the backend and refresh the document.
   sidebar reservation and hides its sidebar and accept/reject action bar in
   this embedded viewer. Comment threads are therefore not exposed by this
   adapter. It uses its own browser font loading/fallback behavior.
-- Neither adapter implements a comment editor. This comparison does not
-  certify either library against the earlier full Word-editor requirements.
+- SuperDoc: `@superdoc/react` **2.12.0**, which pins `superdoc` **2.17.0** and
+  `@superdoc/docx-engine` **0.16.0**. The native toolbar fits the container,
+  pages fit its width, and comments use the inline layout. View-only mode shows
+  tracked-change markup and comments. Mode changes preserve local edits;
+  Cmd/Ctrl+S uses Mike's download action. Document-open telemetry is disabled.
+  **Licensing differs:** the editor is AGPL-3.0, but its required DOCX engine
+  is proprietary. This is not a fully open-source/MIT stack. See the
+  [DOCX Engine license](https://docs.superdoc.dev/resources/docx-engine-license/)
+  before deciding whether to ship this option in a commercial deployment.
+- EigenPal and Casual Docs do not expose a comment editor in these adapters;
+  SuperDoc retains its built-in comment UI. This integration does not
+  certify the libraries against the earlier full Word-editor requirements.
   Missing or substituted fonts can change line breaks and pagination. Test
   representative documents before choosing an engine.
-- During browser testing, both engines compressed a table whose OOXML width
+- During browser testing, EigenPal and Casual Docs compressed a table whose OOXML width
   was `w:type="pct" w:w="100%"`. The default synthetic sample uses explicit
   twip widths so other features remain easy to compare. Percentage-width
   tables should be included in further fidelity testing.
@@ -86,6 +96,15 @@ The comparison's Vite configuration leaves EigenPal's packages out of dependency
 prebundling so its `import.meta.url` font and WASM assets resolve correctly.
 Next's production build uses the normal app configuration.
 
+SuperDoc's default worker paths do not resolve in npm's nested dependency
+layout. `prepare:docx` also copies its three published module workers and
+license notices into the ignored `public/superdoc/0.16.0/` directory. The adapter
+uses the documented `workerUrls` configuration to serve these from Mike's
+origin in both Next and the comparison catalog. The script checks the pinned
+engine version and resolves packages through the React wrapper; upgrades must
+update the worker filenames and adapter URLs together. Do not commit generated
+worker bundles. No collaboration provider is configured.
+
 ## Verification
 
 - Frontend TypeScript and a production Next build.
@@ -97,3 +116,6 @@ Next's production build uses the normal app configuration.
   handling, recovery, typing, toolbar visibility in both modes, and downloading
   DOCX files whose XML contains the edited text. These use synthetic files and do not exercise an
   authenticated backend session or assert pixel parity with Word.
+- SuperDoc additionally checked through the production Next server using a
+  temporary local-only test page (removed afterward): typing, mode preservation,
+  DOCX download, citation jumps, resizing, and malformed-file handling.

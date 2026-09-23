@@ -36,3 +36,6 @@ backend/supabase/*
 
 # Local review artifact; it is a nested repository, not application source.
 /pr-267-analysis-site/
+
+# Copied from installed SuperDoc packages by frontend/scripts/prepare-docx.mjs.
+/frontend/public/superdoc/

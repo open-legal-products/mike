@@ -15,6 +15,9 @@ vi.mock("./EigenpalDocxRenderer", () => ({
 vi.mock("./CasualDocxRenderer", () => ({
     default: (props: DocxRendererProps) => <MockRenderer {...props} engine="Casual Docs" />,
 }));
+vi.mock("./SuperdocDocxRenderer", () => ({
+    default: (props: DocxRendererProps) => <MockRenderer {...props} engine="SuperDoc" />,
+}));
 
 function MockRenderer({ bytes, mode, onChange, onReady, onError, engine }: DocxRendererProps & { engine: string }) {
     const scroll = useRef<HTMLDivElement>(null);
@@ -84,6 +87,10 @@ it("switches engines without fetching again and retains scroll position", async 
     expect(screen.getByRole("button", { name: "Casual Docs" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("renderer-scroll").scrollTop).toBe(240);
     expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "SuperDoc" }));
+    expect(await screen.findByText("SuperDoc preview")).toBeVisible();
+    expect(screen.getByRole("button", { name: "SuperDoc" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("renderer-scroll").scrollTop).toBe(240);
     fireEvent.click(screen.getByRole("button", { name: "EigenPal" }));
     expect(await screen.findByText("EigenPal preview")).toBeVisible();
     expect(authenticatedFetch).toHaveBeenCalledTimes(1);
@@ -114,16 +121,18 @@ it("does not show old bytes while switching documents", async () => {
     expect(await screen.findByText("Document revision 2")).toBeVisible();
 });
 
-it("supports edit and view modes without remounting the document", async () => {
-    const { rerender } = render(<DocxView documentId="modes" cacheBytes={false} defaultMode="edit" />);
+it.each(["EigenPal", "Casual Docs", "SuperDoc"])("supports %s edit and view modes without remounting the document", async (engine) => {
+    const { rerender } = render(<DocxView documentId={`modes-${engine}`} cacheBytes={false} defaultMode="edit" />);
     await screen.findByText("EigenPal preview");
+    fireEvent.click(screen.getByRole("button", { name: engine }));
+    await screen.findByText(`${engine} preview`);
     const surface = screen.getByTestId("renderer-scroll");
     expect(surface).toHaveAttribute("data-mode", "edit");
     expect(screen.getByRole("toolbar", { name: "Document formatting" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     // Parent rerenders do not override the reader's selection.
-    rerender(<DocxView documentId="modes" cacheBytes={false} defaultMode="edit" />);
+    rerender(<DocxView documentId={`modes-${engine}`} cacheBytes={false} defaultMode="edit" />);
     expect(surface).toHaveAttribute("data-mode", "view");
     expect(screen.queryByRole("toolbar")).toBeNull();
     expect(screen.getByRole("button", { name: "View" })).toHaveAttribute("aria-pressed", "true");

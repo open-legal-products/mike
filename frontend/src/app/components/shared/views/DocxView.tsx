@@ -14,7 +14,9 @@ import { docxRevisionElements } from "./docxRevisionElements";
 
 const EigenpalDocxRenderer = lazy(() => import("./EigenpalDocxRenderer"));
 const CasualDocxRenderer = lazy(() => import("./CasualDocxRenderer"));
-type Engine = "eigenpal" | "casual";
+const SuperdocDocxRenderer = lazy(() => import("./SuperdocDocxRenderer"));
+const renderers = { eigenpal: EigenpalDocxRenderer, casual: CasualDocxRenderer, superdoc: SuperdocDocxRenderer };
+type Engine = keyof typeof renderers;
 const RENDER_ERROR = "This document could not be displayed. Please download it to view it.";
 const bufferIds = new WeakMap<ArrayBuffer, number>();
 let nextBufferId = 0;
@@ -108,7 +110,7 @@ function DocxViewContent(props: Props) {
     const dirty = dirtyKey !== null && dirtyKey === renderKey;
     const [readyKey, setReadyKey] = useState<string | null>(null);
     const [failedKey, setFailedKey] = useState<string | null>(null);
-    const DocxRenderer = engine === "eigenpal" ? EigenpalDocxRenderer : CasualDocxRenderer;
+    const DocxRenderer = renderers[engine];
     const surfaceRef = useRef<DocxSurface | null>(null);
     const lastScrollTop = useRef(props.initialScrollTop ?? 0);
     const propsRef = useRef(props);
@@ -202,8 +204,8 @@ function DocxViewContent(props: Props) {
         const observer = new MutationObserver((records) => {
             const repainted = records.some((record) => Array.from(record.addedNodes).some(
                 (node) => node instanceof Element && (
-                    node.matches(".docx-page, .layout-page, .layout-line")
-                    || node.querySelector(".layout-line")
+                    node.matches(".docx-page, .layout-page, .layout-line, .superdoc-page, .superdoc-line")
+                    || node.querySelector(".layout-line, .superdoc-line")
                 ),
             ));
             if (!repainted) return;
@@ -225,10 +227,11 @@ function DocxViewContent(props: Props) {
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
-                <div role="group" aria-label="DOCX rendering engine" className="flex items-center gap-2">
+                <div role="group" aria-label="DOCX rendering engine" className="flex flex-wrap items-center gap-2">
                     <span className="text-xs text-muted-foreground">Renderer</span>
                     <TabPillButtonUI active={engine === "eigenpal"} disabled={downloading} onClick={() => switchEngine("eigenpal")}>EigenPal</TabPillButtonUI>
                     <TabPillButtonUI active={engine === "casual"} disabled={downloading} onClick={() => switchEngine("casual")}>Casual Docs</TabPillButtonUI>
+                    <TabPillButtonUI active={engine === "superdoc"} disabled={downloading} onClick={() => switchEngine("superdoc")}>SuperDoc</TabPillButtonUI>
                 </div>
                 <div role="group" aria-label="DOCX mode" className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">Mode</span>
