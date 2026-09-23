@@ -84,6 +84,10 @@
         border-color: var(--accent);
         transform: translateY(-1px);
       }
+      button:focus-visible, a:focus-visible {
+        outline: 3px solid var(--accent);
+        outline-offset: 4px;
+      }
       .card h2 {
         margin: 0 0 6px;
         font-size: 15px;
@@ -110,23 +114,23 @@
       <h1>Welcome to Mike</h1>
       <p class="sub">Where should Mike run? You can change this any time (⌘⇧,).</p>
       <div class="choices">
-        <button class="card" id="cloud">
-          <h2>Use Mike Cloud</h2>
+        <button type="button" class="card" id="local">
+          <h2>Start on this Mac</h2>
           <p>
-            Sign in at app.mikeoss.com. Fastest way to start — your work syncs
-            wherever you sign in.
+            Your own local workspace. No account or server setup needed.
+            First start takes about a minute.
           </p>
         </button>
-        <button class="card" id="local">
-          <h2>Run everything on this Mac</h2>
+        <button type="button" class="card" id="cloud">
+          <h2>Use Mike Cloud</h2>
           <p>
-            Private, offline-capable. Documents and data never leave this
-            computer. First start takes about a minute.
+            Sign in at app.mikeoss.com. Your work syncs
+            wherever you sign in.
           </p>
         </button>
       </div>
       <p class="foot">
-        Self-hosting Mike? <a id="server">Connect to your own server…</a>
+        Self-hosting Mike? <a id="server" href="#">Connect to your own server…</a>
       </p>
     </main>
     <script>

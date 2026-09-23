@@ -2,25 +2,42 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LoginPage from "./page";
+import { AuthApiError } from "@/app/lib/authApi";
 
-const { login, signup, startGoogleOAuth, refreshSession, replace, push } =
-    vi.hoisted(() => ({
-        login: vi.fn(),
-        signup: vi.fn(),
-        startGoogleOAuth: vi.fn(),
-        refreshSession: vi.fn(),
-        replace: vi.fn(),
-        push: vi.fn(),
-    }));
+const {
+    login,
+    signup,
+    startGoogleOAuth,
+    refreshSession,
+    replace,
+    push,
+    getUserProfile,
+    completeUserOnboarding,
+} = vi.hoisted(() => ({
+    login: vi.fn(),
+    signup: vi.fn(),
+    startGoogleOAuth: vi.fn(),
+    refreshSession: vi.fn(),
+    replace: vi.fn(),
+    push: vi.fn(),
+    getUserProfile: vi.fn(),
+    completeUserOnboarding: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ replace, push }),
 }));
 
-vi.mock("@/app/lib/authApi", () => ({
+vi.mock("@/app/lib/authApi", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/authApi")>()),
     login,
     signup,
     startGoogleOAuth,
+}));
+
+vi.mock("@/app/lib/mikeApi", () => ({
+    getUserProfile,
+    completeUserOnboarding,
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
@@ -45,6 +62,12 @@ describe("LoginPage", () => {
         refreshSession.mockResolvedValue(null);
         replace.mockReset();
         push.mockReset();
+        getUserProfile
+            .mockReset()
+            .mockResolvedValue({ onboardingComplete: true });
+        completeUserOnboarding
+            .mockReset()
+            .mockResolvedValue({ onboardingComplete: true });
     });
 
     it("allows an existing account to submit a password shorter than the new minimum", async () => {
@@ -90,7 +113,7 @@ describe("LoginPage", () => {
         // In a browser and against Mike Cloud this page must be unchanged.
         render(<LoginPage />);
         expect(
-            screen.queryByRole("button", { name: "Continue as guest" }),
+            screen.queryByRole("button", { name: "Continue on this Mac" }),
         ).toBeNull();
     });
 
@@ -107,7 +130,7 @@ describe("LoginPage", () => {
         render(<LoginPage />);
 
         const button = await screen.findByRole("button", {
-            name: "Continue as guest",
+            name: "Continue on this Mac",
         });
         await user.click(button);
 
@@ -119,7 +142,8 @@ describe("LoginPage", () => {
         // The session lives in an httpOnly cookie, so the context must re-read
         // it before the router leaves for a gated route.
         expect(refreshSession).toHaveBeenCalled();
-        expect(push).toHaveBeenCalledWith("/onboarding/profile");
+        expect(push).toHaveBeenCalledWith("/assistant");
+        expect(completeUserOnboarding).not.toHaveBeenCalled();
     });
 
     it("falls back to signup the first time a guest ever clicks", async () => {
@@ -132,7 +156,10 @@ describe("LoginPage", () => {
         };
         // No such account yet: /auth/login 401s, and the local stack
         // autoconfirms the signup that follows.
-        login.mockRejectedValue(new Error("invalid_credentials"));
+        login.mockRejectedValue(
+            new AuthApiError(401, "invalid_credentials", "Invalid credentials"),
+        );
+        getUserProfile.mockResolvedValue({ onboardingComplete: false });
         signup.mockResolvedValue({
             user: { id: "guest-1" },
             requiresEmailConfirmation: false,
@@ -141,7 +168,7 @@ describe("LoginPage", () => {
         render(<LoginPage />);
 
         await user.click(
-            await screen.findByRole("button", { name: "Continue as guest" }),
+            await screen.findByRole("button", { name: "Continue on this Mac" }),
         );
 
         expect(signup).toHaveBeenCalledWith(
@@ -149,6 +176,26 @@ describe("LoginPage", () => {
             "per-install-secret",
             "/onboarding/profile",
         );
-        expect(push).toHaveBeenCalledWith("/onboarding/profile");
+        expect(completeUserOnboarding).toHaveBeenCalledWith();
+        expect(push).toHaveBeenCalledWith("/assistant");
+    });
+
+    it("does not register an account after a network failure", async () => {
+        window.mikeDesktop = {
+            guestCredentials: async () => ({
+                email: "guest@mike.local",
+                password: "secret",
+            }),
+        };
+        login.mockRejectedValue(new TypeError("Failed to fetch"));
+        render(<LoginPage />);
+        await userEvent.click(
+            await screen.findByRole("button", { name: "Continue on this Mac" }),
+        );
+        expect(signup).not.toHaveBeenCalled();
+        expect(push).not.toHaveBeenCalled();
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "Unable to continue as guest",
+        );
     });
 });

@@ -1,5 +1,32 @@
 # Mike for Mac
 
+## Current local entry experience
+
+The self-contained build includes the web app, backend, database, authentication,
+filesystem storage and a validated workflow catalog. Choose **Start on this Mac**,
+then **Continue on this Mac** to open a persistent local workspace without creating
+a cloud account or filling out a practice questionnaire. Optional profile details
+remain in Settings. Cloud and firm-server connections remain available.
+
+This build targets Apple Silicon. All local services bind to loopback; their
+environment excludes shell provider credentials and reporting configuration.
+Cookie-session requests go through the bundled frontend's same-origin API proxy.
+Workflow assets ship with the application, so the initial workspace requires no
+runtime catalog download. Model inference is a separate capability: the base PR
+can connect to Ollama, and the child model-onboarding branch manages the optional
+runtime/model download experience.
+
+Run `npm test --prefix desktop` for portable environment/catalog checks and
+`npm run e2e:local --prefix desktop` for the packaged first-run flow. The local
+guest uses the same authenticated API as other accounts; its random credentials
+remain in this installation. Removing app data removes the workspace.
+
+`dist:local` produces an unsigned developer build. A public drag-to-Applications
+download must use `dist:local:signed` with an Apple Developer certificate and
+notarization credentials; an unsigned build is not a finished consumer release.
+LibreOffice-dependent document conversions still require LibreOffice; chat,
+PDF/text reading and basic workspace operations do not require it.
+
 A native macOS shell around the Mike web app — the same pattern as the Word
 add-in: clients don't re-implement the product, they give the web app a
 first-class home. The shell contributes the parts a browser tab can't:

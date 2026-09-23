@@ -10,6 +10,7 @@ cd "$(dirname "$0")/../.."
 
 test -x desktop/local-stack/bin/pg/bin/postgres || { echo "run local:fetch first"; exit 1; }
 test -f backend/dist/index.js || { echo "run local:build first"; exit 1; }
+test -f backend/dist/workflow-catalog/catalog.json || { echo "run local:build to bundle offline workflows"; exit 1; }
 test -f frontend/.next/standalone/server.js || { echo "run local:build first"; exit 1; }
 
 APP="desktop/local-stack/app"

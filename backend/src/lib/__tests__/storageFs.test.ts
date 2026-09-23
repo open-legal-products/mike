@@ -192,6 +192,7 @@ describe("filesystem storage driver", () => {
     const written = await storage.writeBlobFromStream(
       "uploads/s1/f1.pdf",
       Readable.from([Buffer.from("abc"), Buffer.from("de")]),
+      5,
     );
     expect(written).toBe(5);
     const back = await storage.downloadFile("uploads/s1/f1.pdf");
@@ -199,6 +200,32 @@ describe("filesystem storage driver", () => {
 
     await storage.discardBlob("uploads/s1/f1.pdf");
     expect(await storage.downloadFile("uploads/s1/f1.pdf")).toBeNull();
+  });
+
+  it("rejects an oversized stream before it ends without writing beyond the signed limit", async () => {
+    const storage = await loadFsStorage(root);
+    const { PassThrough } = await import("node:stream");
+    const body = new PassThrough();
+    const writing = storage.writeBlobFromStream("uploads/s1/bounded.pdf", body, 4);
+    body.write(Buffer.from("abc"));
+    body.write(Buffer.from("defgh"));
+
+    // A client need not finish its request for the bound to take effect.
+    // Checking only the final byte count would hang here and write all bytes.
+    await expect(writing).rejects.toBeInstanceOf(storage.BlobUploadSizeError);
+    expect((await fs.stat(path.join(root, "uploads/s1/bounded.pdf"))).size).toBeLessThanOrEqual(4);
+    expect(body.destroyed).toBe(false);
+    body.end();
+  });
+
+  it("does not hang when an upload source disconnects before streaming starts", async () => {
+    const storage = await loadFsStorage(root);
+    const { PassThrough } = await import("node:stream");
+    const body = new PassThrough();
+    body.destroy();
+    await expect(
+      storage.writeBlobFromStream("uploads/s1/aborted.pdf", body, 5),
+    ).rejects.toThrow("Upload aborted");
   });
 
   it("rejects keys that escape the storage root", async () => {

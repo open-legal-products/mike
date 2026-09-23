@@ -19,6 +19,7 @@
     "e2e": "node e2e/app.e2e.mjs",
     "e2e:flows": "node e2e/flows.e2e.mjs",
     "e2e:local": "node e2e/local.e2e.mjs",
+    "test": "node --test src/local/*.test.js",
     "icon": "electron scripts/render-icon.js && bash scripts/make-icns.sh"
   },
   "devDependencies": {

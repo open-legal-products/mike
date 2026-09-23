@@ -1,60 +1,35 @@
-// The local Supabase gateway — a Node port of supabase/gateway.conf.
-//
-// supabase-js in the browser talks to ONE base URL and expects /auth/v1/* and
-// /rest/v1/* under it; this proxy strips those prefixes and forwards to
-// GoTrue and PostgREST on their loopback ports, handling CORS exactly like
-// the nginx config does (allow the calling origin, allow credentials,
-// answer preflights directly).
-//
-// It does one job nginx didn't: apikey substitution. The frontend bundle
-// bakes a PLACEHOLDER anon key (the well-known Supabase demo key — see
-// config.js); the per-install real anon JWT exists only on this machine.
-// Whenever a request carries the placeholder in `apikey` or as a Bearer
-// token, the proxy swaps in the real anon key. Only ever anon-for-anon:
-// nothing that passes through here can escalate to service_role, whose JWT
-// never leaves the backend's environment.
+// Only the backend's Supabase clients use this gateway. The browser uses
+// Mike's same-origin API and HttpOnly cookies, never direct Supabase access.
+// Require per-install keys and reject browser requests so an unrelated
+// website cannot exercise local auth endpoints (including signup).
 
 const http = require("http");
-const { PORTS, PLACEHOLDER_ANON_KEY } = require("./config");
+const { PORTS } = require("./config");
 
-function corsHeaders(req) {
-  return {
-    "Access-Control-Allow-Origin": req.headers.origin || "*",
-    "Access-Control-Allow-Credentials": "true",
-  };
-}
-
-function startGateway({ anonKey }) {
+function startGateway({ anonKey, serviceRoleKey, port = PORTS.gateway, upstreamPorts = PORTS }) {
+  if (!anonKey || !serviceRoleKey) throw new Error("Local gateway requires per-install API keys");
   const routes = [
-    { prefix: "/auth/v1/", port: PORTS.gotrue },
-    { prefix: "/rest/v1/", port: PORTS.postgrest },
+    { prefix: "/auth/v1/", port: upstreamPorts.gotrue },
+    { prefix: "/rest/v1/", port: upstreamPorts.postgrest },
   ];
 
   const server = http.createServer((req, res) => {
+    if (req.headers.origin !== undefined || req.headers["sec-fetch-site"] !== undefined || req.method === "OPTIONS") {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      return void res.end(JSON.stringify({ error: "local gateway requires server access" }));
+    }
+    if (req.headers.apikey !== anonKey && req.headers.apikey !== serviceRoleKey) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      return void res.end(JSON.stringify({ error: "local gateway key required" }));
+    }
     const route = routes.find((r) => req.url.startsWith(r.prefix));
     if (!route) {
       res.writeHead(404, { "Content-Type": "application/json" });
       return void res.end(JSON.stringify({ error: "not found" }));
     }
 
-    if (req.method === "OPTIONS") {
-      res.writeHead(204, {
-        ...corsHeaders(req),
-        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers":
-          req.headers["access-control-request-headers"] || "*",
-        "Access-Control-Max-Age": "86400",
-        "Content-Length": "0",
-      });
-      return void res.end();
-    }
-
     const headers = { ...req.headers };
     delete headers.host;
-    if (headers.apikey === PLACEHOLDER_ANON_KEY) headers.apikey = anonKey;
-    if (headers.authorization === `Bearer ${PLACEHOLDER_ANON_KEY}`) {
-      headers.authorization = `Bearer ${anonKey}`;
-    }
 
     const upstream = http.request(
       {
@@ -65,17 +40,17 @@ function startGateway({ anonKey }) {
         headers,
       },
       (upstreamRes) => {
-        const outHeaders = { ...upstreamRes.headers, ...corsHeaders(req) };
-        // The proxy's CORS answer must win — mirror nginx's
-        // proxy_hide_header by dropping any upstream CORS origin first.
-        delete outHeaders["access-control-allow-origin"];
-        Object.assign(outHeaders, corsHeaders(req));
+        const outHeaders = { ...upstreamRes.headers };
+        for (const key of Object.keys(outHeaders)) {
+          if (key.startsWith("access-control-")) delete outHeaders[key];
+        }
         res.writeHead(upstreamRes.statusCode, outHeaders);
         upstreamRes.pipe(res);
       },
     );
     upstream.on("error", () => {
-      res.writeHead(502, { "Content-Type": "application/json", ...corsHeaders(req) });
+      if (res.headersSent) return res.destroy();
+      res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "local stack upstream unavailable" }));
     });
     req.pipe(upstream);
@@ -83,7 +58,7 @@ function startGateway({ anonKey }) {
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
-    server.listen(PORTS.gateway, "127.0.0.1", () => resolve(server));
+    server.listen(port, "127.0.0.1", () => resolve(server));
   });
 }
 
