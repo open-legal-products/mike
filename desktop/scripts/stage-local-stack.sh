@@ -16,6 +16,7 @@ test -f frontend/.next/standalone/server.js || { echo "run local:build first"; e
 APP="desktop/local-stack/app"
 rm -rf "$APP"
 mkdir -p "$APP/backend" "$APP/frontend"
+node desktop/scripts/stage-source-notices.mjs "$APP" desktop/local-stack/bin/notices
 
 echo "==> backend (dist + prod deps + schema/migrations)"
 cp -R backend/dist "$APP/backend/dist"

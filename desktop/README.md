@@ -39,16 +39,19 @@ first-class home. The shell contributes the parts a browser tab can't:
 - a connection screen when the server is unreachable (⌘⇧, to change servers),
   instead of a Chromium error page
 
-The web app receives **no** privileged APIs — it must behave identically in a
-browser, so the shell can never fork the product.
+The shell's bundled pages can change the connection and start the local stack.
+Those operations are denied to the hosted web app and child frames. The local
+frontend's main frame has one additional read-only bridge: it can obtain this
+installation's generated guest credentials for **Continue on this Mac**. A
+normal browser or a remote deployment receives no local guest credentials.
 
-Out of the box the app points at the hosted service
-(`https://app.mikeoss.com`), so a downloaded build works with nothing else
-installed — open it, log in, done. Self-hosters point it at their own stack
-via the connect screen (⌘⇧,) or the overrides below. The connect screen also
-offers a third mode: **Run locally on this Mac** — the app supervises an
-entire Mike stack on loopback (see "Self-contained local mode" below), no
-Docker, no server, no account anywhere.
+The self-contained build first offers **Start on this Mac** or **Use Mike Cloud**,
+with a link to a firm server. The shell-only build (`npm run dist`) defaults to
+the hosted service at `https://app.mikeoss.com` and requires sign-in there.
+Self-hosters can change the connection through ⌘⇧, or the overrides below.
+Local mode supervises the bundled Mike stack on loopback, without Docker or a
+separately installed server; it creates an authenticated account only inside
+the installation's own database.
 
 ## Shortcuts
 
@@ -91,9 +94,9 @@ differently on purpose:
 
 ## Run (dev)
 
-By default the shell loads the hosted service. To develop against a local
-frontend, start the stack per the repo README and retarget the shell (⌘⇧, or
-`--server-url=`):
+Without fetched local-stack resources or a saved choice, the development shell
+loads the hosted service. To develop against a separate local frontend, start
+the stack per the repo README and retarget the shell (⌘⇧, or `--server-url=`):
 
 ```bash
 cd desktop
@@ -103,10 +106,12 @@ npm start -- --server-url=http://localhost:3000
 
 ### Overrides (automation / e2e)
 
-Server URL precedence: `--server-url=<url>` CLI flag → `MIKE_SERVER_URL` env →
-saved settings (`~/Library/Application Support/Mike/settings.json`) → default
-`https://app.mikeoss.com`. The overrides let e2e retarget the packaged app
-without touching the user's real settings.
+An explicit `--server-url=<url>` CLI flag, or then `MIKE_SERVER_URL`, overrides
+local mode and saved settings. Otherwise `--local` or a saved local choice uses
+the bundled frontend; remote mode uses the saved server URL or
+`https://app.mikeoss.com`. A fresh self-contained installation shows the welcome
+chooser. Settings live in `~/Library/Application Support/Mike/settings.json`;
+tests use an isolated `MIKE_USER_DATA_DIR`.
 
 | Variable                    | Effect                                          |
 | --------------------------- | ----------------------------------------------- |
@@ -140,26 +145,27 @@ npm start -- --server-url=http://localhost:3100
 ## Self-contained local mode
 
 `src/local/supervisor.js` is docker-compose.yml reimplemented as a process
-tree: Postgres 17 → GoTrue (its own auth migrations) → product schema +
-migration ledger → PostgREST → a Node gateway proxy (the nginx
-`gateway.conf` port, plus per-install anon-key injection) → the backend →
-the Next standalone frontend, all loopback-only on fixed ports (42810–42815;
-fixed because the frontend bakes its API origins at build time). The web app
-and backend run byte-identical to the compose stack — only the process
-manager differs.
+tree: Postgres 17 → GoTrue (its own auth migrations) → product schema,
+migration ledger and bundled workflows → PostgREST → a server-only Node gateway
+proxy → the backend → the Next standalone frontend. All services bind to
+loopback on fixed ports (42810–42815). The supervisor supplies service URLs at
+runtime; browser requests use the frontend's same-origin `/api` gateway.
+The product uses the same web application and backend as the compose stack,
+with filesystem storage and explicit local runtime configuration.
 
 Per-install secrets (JWT secret, anon/service keys, DB password, signing
-secrets) are minted on first run into `userData/local/secrets.json`; nothing
-secret ships in the build (the bundle carries only the well-known Supabase
-demo anon key as a placeholder, which the gateway swaps for the real
-per-install key — see `src/local/gateway.js`). Documents are plain files
+secrets and local guest credentials) are minted on first run into
+`userData/local/secrets.json`; no installation secrets ship in the build. The
+Supabase gateway accepts only this installation's anon or service-role API key
+and rejects browser requests. Keys remain in the server processes; no placeholder
+key or Supabase token is baked into frontend JavaScript. Documents are plain files
 under `userData/local/storage` (backend `STORAGE_DRIVER=fs`); downloads use
 expiring HMAC blob-token URLs instead of S3 presigning. Postgres data lives
 in `userData/local/pgdata`; each service logs to `userData/local/logs/`.
 
 ```bash
 npm run local:fetch    # once: postgres + postgrest binaries, gotrue built from source (needs go)
-npm run local:build    # backend tsc + frontend standalone (local URLs baked)
+npm run local:build    # backend tsc + offline workflow bundle + frontend standalone
 npm run start:local    # dev-mode launch straight into local mode
 MIKE_E2E_DEV=1 npm run e2e:local   # fresh-userData first-run e2e, dev mode
 
@@ -169,7 +175,7 @@ npm run e2e:local      # same first-run e2e against the PACKAGED app
 ```
 
 On a first launch with no saved choice, a build that carries the stack shows
-a welcome chooser — **Use Mike Cloud / Run everything on this Mac / connect
+a welcome chooser — **Start on this Mac / Use Mike Cloud / connect
 to your own server** — so local-first needs zero knowledge of shortcuts.
 Any explicit signal (`--server-url=`, `--local`, or a previously saved
 choice) skips the chooser, so automation and returning users never see it.
@@ -180,6 +186,12 @@ LLM calls still need a per-user API key (Settings → API Keys) or a local
 Ollama; docx→pdf renditions activate only if LibreOffice is installed (the
 supervisor auto-detects `/Applications/LibreOffice.app`) — without it the
 product falls back to client-side docx preview, as designed.
+
+`local:fetch` also downloads the upstream license/copyright files for the exact
+PostgreSQL, native packager, PostgREST and GoTrue versions, even when their binaries
+are already cached. `local:stage` verifies and includes those notices alongside
+Mike's root `LICENSE` and `SOURCE.json` with source URLs and the build commit.
+The staged files live in `local-stack/app/` and travel with the application.
 
 ## Signing & notarization (for a distributable release)
 
@@ -265,8 +277,8 @@ So the certificate lives only as encrypted secrets and never on a laptop:
 - Run `npm run dist:signed` and upload the `dmg`/`zip` as release assets.
 
 > The signed path is documented and pre-wired but **can only be exercised with
-> the org's certificate**, so it is not verified in this repo's CI — the unsigned
-> local build and the e2e suites are.
+> the org's certificate**. The unsigned local build and e2e suites have been
+> verified locally; this parent branch does not yet have a desktop CI workflow.
 
 ### Signing the self-contained build (`dist:local:signed`)
 

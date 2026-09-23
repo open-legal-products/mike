@@ -85,6 +85,11 @@ else
   echo "    already present, skipping"
 fi
 
+# Notices are independent of the binary cache, so older cached installations
+# acquire them too. All files come from the exact pinned upstream versions.
+node scripts/fetch-service-notices.mjs "$DEST/notices" \
+  "$PG_NPM_VERSION" "$POSTGREST_VERSION" "$GOTRUE_VERSION"
+
 echo "==> Done:"
 "$DEST/pg/bin/postgres" --version
 "$DEST/postgrest" --version | head -1
