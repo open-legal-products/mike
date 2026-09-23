@@ -18,7 +18,6 @@
 // dylib version-name SYMLINKS are excluded — codesign follows them to the
 // real file, and signing a link twice fails the build.
 
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, lstatSync, writeFileSync, openSync, readSync, closeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +25,10 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.join(here, "..");
 const stack = path.join(desktop, "local-stack");
+for (const required of ["bin/ollama/runtime.json", "bin/gotrue", "app/frontend/server.js", "app/backend/dist/index.js"]) {
+  // A signing command must never accidentally publish a shell-only build.
+  lstatSync(path.join(stack, required));
+}
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -77,6 +80,8 @@ const config = {
   extraResources: [{ from: "local-stack", to: "local-stack", filter: ["**/*"] }],
   mac: {
     ...base.mac,
+    minimumSystemVersion: "14.0.0",
+    target: [{ target: "dmg", arch: ["arm64"] }, { target: "zip", arch: ["arm64"] }],
     // Inside the packaged app, extraResources land in Contents/Resources —
     // electron-builder signs mac.binaries entries at these packaged paths.
     binaries: machos.map((f) => `Contents/Resources/${f}`),

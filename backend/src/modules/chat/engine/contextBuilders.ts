@@ -350,12 +350,13 @@ export function buildMessages(
   includeResearchTools = true,
   nonce?: string,
   systemPromptMode: "append" | "replace" = "append",
+  selectedModel?: string,
 ) {
   const formatted: unknown[] = [];
   let systemContent =
     systemPromptMode === "replace"
       ? (systemPromptExtra?.trim() ?? "")
-      : buildSystemPrompt(includeResearchTools);
+      : buildSystemPrompt(includeResearchTools, selectedModel);
 
   if (systemPromptMode === "append" && systemPromptExtra) {
     systemContent += `\n\n${systemPromptExtra.trim()}`;

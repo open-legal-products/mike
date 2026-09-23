@@ -486,6 +486,8 @@ describe("POST /chat — streaming endpoint", () => {
         );
         const systemPromptExtra = vi.mocked(chatLib.buildMessages).mock
             .calls[0]?.[2] as string;
+        expect(vi.mocked(chatLib.buildMessages).mock.calls[0]?.[6]).toBe("append");
+        expect(vi.mocked(chatLib.buildMessages).mock.calls[0]?.[7]).toBe(runLLMStream.mock.calls[0]?.[0].model);
         expect(systemPromptExtra).toContain("USER PERSONALISATION");
         expect(systemPromptExtra).toContain('"title": "Partner"');
         expect(systemPromptExtra).toContain(

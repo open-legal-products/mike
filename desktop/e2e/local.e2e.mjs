@@ -1,5 +1,6 @@
-// End-to-end proof of SELF-CONTAINED local mode: launch the app with --local
-// and a FRESH userData dir, let the supervisor initdb + boot the whole stack
+// End-to-end proof of SELF-CONTAINED local mode: launch the app with a FRESH
+// userData dir, choose this Mac, inspect optional AI without downloading it,
+// then let the supervisor initdb + boot the whole stack
 // (postgres, gotrue, postgrest, gateway, backend, frontend — no Docker, no
 // network beyond loopback), then drive the real product over CDP: sign up and
 // onboard, create a project, upload a document into the library, download it back
@@ -14,8 +15,7 @@
 // downloader hits (initdb → roles → gotrue migrations → schema.sql → ledger
 // baseline) every single time.
 
-import { chromium } from "playwright-core";
-import { spawn } from "node:child_process";
+import { _electron } from "playwright-core";
 import { mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,18 +73,6 @@ const readDownloadLog = () => {
   }
 };
 
-async function waitForCdp(timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      if (res.ok) return;
-    } catch { /* not up yet */ }
-    await sleep(250);
-  }
-  throw new Error("CDP endpoint never came up — did the app launch?");
-}
-
 const shot = async (page, name) => {
   await page.screenshot({ path: path.join(ARTIFACTS, `${name}.png`) });
   console.log(`  📸 ${name}`);
@@ -93,27 +81,44 @@ const shot = async (page, name) => {
 const args = [
   ...(DEV ? ["."] : []),
   `--remote-debugging-port=${CDP_PORT}`,
-  "--local",
 ];
-const app = spawn(APP_BINARY, args, {
-  stdio: "ignore",
-  detached: false,
-  cwd: DESKTOP,
-  env: {
-    ...process.env,
-    MIKE_DOWNLOAD_DIR: DOWNLOAD_DIR,
-    MIKE_E2E_CAPTURE_EXTERNAL: CAPTURE_FILE,
-    MIKE_E2E_DOWNLOAD_LOG: DOWNLOAD_LOG,
-    MIKE_USER_DATA_DIR: USER_DATA_DIR,
-  },
-});
+let app;
+let page;
+const rendererErrors = [];
 
 try {
-  await waitForCdp();
-  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
-  const context = browser.contexts()[0];
-  const page = context.pages().find((p) => !p.url().startsWith("devtools"));
-  if (!page) throw new Error("no app page found over CDP");
+  app = await _electron.launch({
+    executablePath: APP_BINARY, args, cwd: DESKTOP, timeout: 30_000,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "",
+      MIKE_SERVER_URL: "",
+      MIKE_DOWNLOAD_DIR: DOWNLOAD_DIR,
+      MIKE_E2E_CAPTURE_EXTERNAL: CAPTURE_FILE,
+      MIKE_E2E_DOWNLOAD_LOG: DOWNLOAD_LOG,
+      MIKE_USER_DATA_DIR: USER_DATA_DIR,
+    },
+  });
+  page = await app.firstWindow();
+  page.setDefaultTimeout(20_000);
+  page.on("pageerror", (error) => rendererErrors.push(error.message));
+
+  // Real bundled welcome -> optional AI page, including app.asar URLs and
+  // production preload/main IPC authorization. No --local bypass is used.
+  await page.getByRole("heading", { name: "Welcome to Mike", exact: true }).waitFor();
+  await shot(page, "local-00-welcome");
+  await page.getByRole("button", { name: /Start on this Mac/ }).click();
+  await page.waitForURL((url) => url.pathname.endsWith("/pages/local-model.html"));
+  if (!DEV) assert(page.url().includes("/app.asar/"), "local AI page was not loaded from the packaged app archive");
+  await page.getByRole("heading", { name: "Qwen 3.5 2B", exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelector("#state")?.textContent === "Not downloaded");
+  const downloadModel = page.getByRole("button", { name: "Download local AI · 2.7 GB", exact: true });
+  assert(await downloadModel.isEnabled(), "the supported Mac did not offer the optional 2B download");
+  assert(!existsSync(path.join(USER_DATA_DIR, "local", "local-model.json")), "onboarding installed a model without a download click");
+  assert(!existsSync(path.join(USER_DATA_DIR, "local", "models", "blobs")), "onboarding started downloading model blobs automatically");
+  await shot(page, "local-00-model-optional");
+  await page.getByRole("button", { name: "Continue without local AI", exact: true }).click();
+  console.log("✓ packaged welcome → optional 2B / 2.7 GB page → continue without model; no automatic download");
 
   // 1. First-run boot: the window shows the local-boot progress page while
   //    the supervisor initdbs and starts six services, then lands on the
@@ -241,19 +246,13 @@ try {
   console.log(`✓ downloaded back via blob-token URL: ${path.basename(entry.savePath)}`);
   await shot(page, "local-04-download");
 
-  // 6. Guest mode: from a signed-out /login, "Continue as guest" must land
+  // 6. Guest mode: from a signed-out /login, "Continue on this Mac" must land
   //    in the product with zero typing. Run it twice — the first click hits
   //    the signUp fallback (the guest account doesn't exist yet), the second
   //    proves signInWithPassword against the account the first one created.
   //
-  //    Both clicks push to /onboarding/profile (the guest handler in
-  //    frontend/src/app/login/page.tsx sends every guest to the same place a
-  //    password login goes), and OnboardingGate then decides: round one is a
-  //    brand-new account, so it stays on the wizard and we walk it; round two
-  //    is the SAME account coming back with onboarding already complete, so
-  //    the gate bounces it straight to /assistant and the helper is a no-op.
-  //    That asymmetry is the interesting half of the guest story, which is why
-  //    the same helper runs in both rounds instead of only the first.
+  //    The local guest path completes optional onboarding automatically.
+  //    Retain the helper as a no-op for already-complete accounts.
   for (const round of ["first click (creates the guest account)", "second click (signs into it)"]) {
     // Auth now lives in httpOnly cookies; clearing localStorage does not log out.
     await page.evaluate(async () => {
@@ -282,27 +281,25 @@ try {
     console.log(`✓ guest mode, ${round}: /login → signed-in product`);
   }
   await shot(page, "local-05-guest");
+  assert(rendererErrors.length === 0, "the packaged app renderer raised an error");
+  assert(!existsSync(path.join(USER_DATA_DIR, "local", "models", "blobs")), "continuing without AI downloaded model blobs");
 
   writeFileSync(
     path.join(ARTIFACTS, "local-summary.json"),
     JSON.stringify(
-      { ok: process.exitCode !== 1, EMAIL, PROJECT_NAME, download: entry },
+      { ok: process.exitCode !== 1, EMAIL, PROJECT_NAME, download: entry,
+        optionalModel: "ollama/qwen3.5:2b", modelDownloaded: false, rendererErrors },
       null,
       2,
     ),
   );
-  await browser.close();
   console.log(process.exitCode === 1 ? "LOCAL E2E FAILED" : "LOCAL E2E PASSED");
 } catch (err) {
   fail(err.message);
   try {
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
-    const page = browser.contexts()[0]?.pages()[0];
     if (page) await shot(page, "local-99-failure");
-    await browser.close();
   } catch { /* app already gone */ }
 } finally {
-  app.kill();
-  // Give the supervisor's before-quit shutdown a moment (clean pg stop).
-  await sleep(4_000);
+  // Exercise before-quit so Postgres and every supervised child stop cleanly.
+  if (app) await app.close();
 }

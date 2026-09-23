@@ -34,8 +34,9 @@ const LOCAL_FRONTEND_URL = require("./local/config").FRONTEND_URL;
 const CONNECT_PAGE = path.join(__dirname, "pages", "connect.html");
 const LOCAL_BOOT_PAGE = path.join(__dirname, "pages", "local-boot.html");
 const WELCOME_PAGE = path.join(__dirname, "pages", "welcome.html");
+const LOCAL_MODEL_PAGE = path.join(__dirname, "pages", "local-model.html");
 // Exact bundled file URLs: sibling paths and subframes receive no privileges.
-const shellPageUrls = new Set([CONNECT_PAGE, LOCAL_BOOT_PAGE, WELCOME_PAGE].map((page) => pathToFileURL(page).href));
+const shellPageUrls = new Set([CONNECT_PAGE, LOCAL_BOOT_PAGE, WELCOME_PAGE, LOCAL_MODEL_PAGE].map((page) => pathToFileURL(page).href));
 function isShellPage(url) {
   try {
     const parsed = new URL(url);
@@ -568,17 +569,49 @@ async function showConnectPage(error) {
 // local frontend. Loaded lazily: remote-mode users never pay for the
 // supervisor module.
 let localBootInFlight = null;
+let modelManager = null;
+let quitting = false;
+function localModels() {
+  if (!modelManager) {
+    modelManager = require("./local/model-manager").createModelManager(app, {
+      onStatus: (state) => {
+        // Only the bundled manager UI receives device/download measurements.
+        if (win && !win.webContents.isDestroyed() && isShellPage(win.webContents.getURL())) {
+          win.webContents.send("mike:local-model-status", state);
+          if (state.state === "starting" || state.state === "verifying") {
+            win.webContents.send("mike:local-status", "Starting your local model…");
+          }
+        }
+      },
+    });
+  }
+  return modelManager;
+}
+async function showLocalModelPage() {
+  if (win) await win.loadFile(LOCAL_MODEL_PAGE);
+}
 async function startLocalAndLoad() {
-  if (!win) return;
+  if (!win || quitting) return;
   const { startLocalStack, localStackRunning } = require("./local/supervisor");
-  if (localStackRunning()) return void (await win.loadURL(LOCAL_FRONTEND_URL));
   if (localBootInFlight) return;
   await win.loadFile(LOCAL_BOOT_PAGE);
   localBootInFlight = (async () => {
     try {
-      await startLocalStack(app, (msg) => {
+      // Restore an explicitly installed model; this never downloads weights.
+      const model = await localModels().status();
+      if (quitting || !win) return;
+      // Dock activation during a download resumes setup instead of opening a
+      // workspace whose one-time model initialization would run too early.
+      if (["starting", "downloading", "verifying", "benchmarking"].includes(model.state)) {
+        await showLocalModelPage();
+        return;
+      }
+      if (!localStackRunning()) await startLocalStack(app, (msg) => {
         win?.webContents.send("mike:local-status", msg);
+      }, {
+        modelTag: model.modelId.replace(/^ollama\//, ""),
       });
+      if (quitting || !win) return;
       await win.loadURL(LOCAL_FRONTEND_URL);
     } catch (err) {
       console.error("[mike-desktop] local stack failed", err);
@@ -621,7 +654,66 @@ ipcMain.handle("mike:retry", (event) => {
 ipcMain.handle("mike:start-local", (event) => {
   if (!fromShellPage(event)) return;
   saveSettings({ mode: "local" });
-  return startLocalAndLoad();
+  return showLocalModelPage();
+});
+ipcMain.handle("mike:local-model-status", (event) => {
+  if (fromShellPage(event)) return localModels().status();
+  return null;
+});
+for (const [channel, operation] of [
+  ["mike:install-local-model", "install"],
+  ["mike:cancel-local-model", "cancel"],
+  ["mike:benchmark-local-model", "benchmark"],
+]) {
+  ipcMain.handle(channel, (event) => {
+    if (fromShellPage(event)) return localModels()[operation]();
+    return null;
+  });
+}
+ipcMain.handle("mike:open-local-workspace", async (event) => {
+  if (!fromShellPage(event)) return;
+  saveSettings({ mode: "local" });
+  await startLocalAndLoad();
+});
+ipcMain.handle("mike:ready-local-model", async (event) => {
+  if (!localMode() || !fromMainFrame(event)) return null;
+  try {
+    if (new URL(event.senderFrame.url).origin !== new URL(LOCAL_FRONTEND_URL).origin) return null;
+    const state = await localModels().status();
+    return state.state === "ready" ? state.modelId : null;
+  } catch { return null; }
+});
+ipcMain.handle("mike:export-local-model-brief", async (event) => {
+  if (!fromShellPage(event)) return false;
+  const state = await localModels().status();
+  const choice = await dialog.showSaveDialog(win, {
+    title: "Save a firm deployment brief",
+    defaultPath: "Mike-deployment-brief.md",
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+  });
+  if (choice.canceled || !choice.filePath) return false;
+  // Deliberate allowlist: no filesystem paths, credentials, chats or documents.
+  const report = {
+    model: state.modelName, modelId: state.modelId,
+    license: "Apache-2.0", runtime: "Ollama",
+    memoryGB: state.hardware ? Math.round(state.hardware.memoryBytes / 1024 ** 3) : null,
+    platform: state.hardware?.platform, architecture: state.hardware?.arch,
+    measurement: state.benchmark,
+  };
+  await fs.promises.writeFile(choice.filePath, [
+    "# Mike firm deployment brief", "",
+    "Generated locally. Contains no conversations or documents.", "",
+    "## Current baseline", "", "```json", JSON.stringify(report, null, 2), "```", "",
+    "The synthetic smoke check is not a legal benchmark or evidence of suitability for client work.", "",
+    "## Plan the next step with your team or Mike support", "",
+    "1. List the tasks, users, jurisdictions and turnaround time you need.",
+    "2. Prepare 20–50 approved examples with expected answers, citations and a separate held-out evaluation set.",
+    "3. Compare the base model, improved instructions/retrieval and a larger model on those examples.",
+    "4. Choose firm-owned infrastructure or your own private cloud; specify access controls, backups and support needs.",
+    "5. Consider supervised fine-tuning only after a measured gap remains. Approve the dataset, license, evaluation and rollback plan first.", "",
+    "Free local use remains available. This release does not automatically train on conversations or provision a firm deployment.", "",
+  ].join("\n"), { mode: 0o600 });
+  return true;
 });
 ipcMain.handle("mike:local-available", () => {
   // The connect screen only offers "Run locally" when this build actually
@@ -690,6 +782,10 @@ function buildMenu() {
           accelerator: "Cmd+Shift+,",
           click: () => void showConnectPage(),
         },
+        ...(localStackAvailable() ? [{
+          label: "Local AI…",
+          click: () => void showLocalModelPage(),
+        }] : []),
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -829,10 +925,15 @@ if (!app.requestSingleInstanceLock()) {
     } catch {
       return;
     }
-    if (!supervisor.localStackRunning()) return;
+    if (!supervisor.localStackRunning() && !localBootInFlight && !modelManager) return;
     event.preventDefault();
+    quitting = true;
     stackStopped = true;
-    void supervisor.stopLocalStack().finally(() => app.quit());
+    void (async () => {
+      await modelManager?.stop();
+      await localBootInFlight;
+      await supervisor.stopLocalStack();
+    })().finally(() => app.quit());
   });
 }
 

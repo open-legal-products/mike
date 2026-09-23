@@ -5,6 +5,7 @@ import {
   type AiSdkAdapterConfig,
 } from "./aiSdk";
 import { localModelToleranceMiddleware } from "./localModelMiddleware";
+import { desktopStarterRequestBody, usesDesktopStarterPreset } from "./desktopStarter";
 import {
   isOpenCodeGoChatCompletionsModel,
   isOpenCodeGoMessagesModel,
@@ -344,16 +345,26 @@ async function createProviderAdapter(
   }
 
   const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
+  const baseURL = ollamaBaseUrl();
+  const apiModel = ollamaModelName(model);
   const ollama = createOpenAICompatible({
     name: "ollama",
-    baseURL: ollamaBaseUrl(),
+    baseURL,
     headers: ollamaAuthHeaders(),
+    ...(usesDesktopStarterPreset(apiModel, baseURL)
+      ? {
+          // The managed starter favors a quick first answer. Ollama's
+          // OpenAI compatibility layer maps "none" to native think:false.
+          // Other local, remote and user-selected providers keep their defaults.
+          transformRequestBody: desktopStarterRequestBody,
+        }
+      : {}),
     fetch: aiSdkFetch,
   });
   return {
     provider,
     label: "Ollama",
-    model: ollama(ollamaModelName(model)),
+    model: ollama(apiModel),
     modelId: model,
     supportsReasoning: false,
   };

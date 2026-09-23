@@ -269,7 +269,7 @@ function findSoffice() {
 
 // --- The boot sequence ------------------------------------------------------
 
-async function startLocalStack(app, status = () => {}) {
+async function startLocalStack(app, status = () => {}, { modelTag = "qwen3.5:2b" } = {}) {
   if (running) return { frontendUrl: FRONTEND_URL };
   const paths = stackPaths(app);
   const dirs = dataPaths(app);
@@ -398,7 +398,8 @@ async function startLocalStack(app, status = () => {}) {
         BACKEND_PUBLIC_URL: BACKEND_URL,
         DOWNLOAD_SIGNING_SECRET: secrets.downloadSigningSecret,
         USER_API_KEYS_ENCRYPTION_SECRET: secrets.userApiKeysEncryptionSecret,
-        OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
+        OLLAMA_BASE_URL: "http://127.0.0.1:42816/v1",
+        MIKE_DESKTOP_LOCAL_MODEL: modelTag,
         ...(soffice ? { SOFFICE_BINARY_PATH: soffice } : {}),
       },
     });

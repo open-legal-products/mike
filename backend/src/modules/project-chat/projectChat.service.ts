@@ -492,6 +492,8 @@ export async function prepareProjectChatStream(
             undefined,
             legalResearchUs,
             nonce,
+            "append",
+            selectedModel,
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db);

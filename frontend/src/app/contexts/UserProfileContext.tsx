@@ -7,6 +7,7 @@ import React, {
     useLayoutEffect,
     useMemo,
     useState,
+    useRef,
     ReactNode,
     useCallback,
 } from "react";
@@ -34,6 +35,7 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Message } from "@/app/components/shared/types";
 import { applyDarkMode } from "@/app/lib/theme";
+import { initializeDesktopLocalModel } from "@/app/lib/desktopLocalModel";
 import { publishTabularChatSettingsUpdate } from "@/app/lib/tabularChatSettingsEvents";
 import {
     clearConfiguredModels,
@@ -192,8 +194,36 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     const [loading, setLoading] = useState(true);
     const [apiKeysDegraded, setApiKeysDegraded] = useState(false);
     const userId = user?.id ?? null;
+    const authenticatedUserId = isAuthenticated ? userId : null;
+    const authScope = useRef({ userId: authenticatedUserId });
+    const loadRevision = useRef(0);
+    const selectionRevision = useRef(0);
+    const starterMutation = useRef<{
+        scope: { userId: string | null };
+        promise: Promise<ApiUserProfile>;
+    } | null>(null);
+
+    // A scope object identifies this authenticated session, including signing
+    // out and back into the same account while an older request is pending.
+    useLayoutEffect(() => {
+        if (authScope.current.userId !== authenticatedUserId) {
+            authScope.current = { userId: authenticatedUserId };
+        }
+        const scope = authScope.current;
+        return () => {
+            if (authScope.current === scope) authScope.current = { userId: null };
+        };
+    }, [authenticatedUserId]);
 
     const loadProfile = useCallback(async () => {
+        const scope = authScope.current;
+        if (!scope.userId) return;
+        const revision = ++loadRevision.current;
+        const initialSelectionRevision = selectionRevision.current;
+        const isCurrentLoad = () =>
+            scope === authScope.current && revision === loadRevision.current;
+        const canInitializeStarter = () =>
+            isCurrentLoad() && initialSelectionRevision === selectionRevision.current;
         try {
             let profileData: ApiUserProfile;
             try {
@@ -204,9 +234,44 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 await new Promise((resolve) => setTimeout(resolve, 750));
                 profileData = await getUserProfile();
             }
-            setProfile(toProfile(profileData));
+            if (!isCurrentLoad()) return;
+            // Normalize while this try/catch owns errors. React can defer a
+            // state updater until render, after this async function returns.
+            const loaded = toProfile(profileData);
+            setProfile((current) => {
+                if (!canInitializeStarter() && current) {
+                    return {
+                        ...loaded,
+                        lastSelectedChatModel: current.lastSelectedChatModel,
+                        legalResearchUs: current.legalResearchUs,
+                    };
+                }
+                return loaded;
+            });
             setApiKeysDegraded(false);
+            if (canInitializeStarter()) {
+                const initialized = await initializeDesktopLocalModel(
+                    profileData,
+                    window.mikeDesktop,
+                    async (selection) => {
+                        const pending = starterMutation.current?.scope === scope
+                            ? starterMutation.current
+                            : { scope, promise: updateUserProfile(selection) };
+                        starterMutation.current = pending;
+                        try {
+                            return await pending.promise;
+                        } finally {
+                            if (starterMutation.current === pending) starterMutation.current = null;
+                        }
+                    },
+                    canInitializeStarter,
+                );
+                if (canInitializeStarter() && initialized !== profileData) {
+                    setProfile(toProfile(initialized));
+                }
+            }
         } catch (error) {
+            if (!isCurrentLoad()) return;
             console.warn(
                 "[profile] fetch failed after retry; API key availability is unknown and fails open",
                 error,
@@ -247,7 +312,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 apiKeys: emptyApiKeys(),
             });
         } finally {
-            setLoading(false);
+            if (isCurrentLoad()) setLoading(false);
         }
     }, []);
 
@@ -275,6 +340,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             setProfile(null);
             setLoading(false);
         }
+        return () => { loadRevision.current += 1; };
     }, [isAuthenticated, userId, loadProfile]);
 
     useEffect(() => {
@@ -379,8 +445,17 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
     const persistChatModelSelection = useCallback(
         async (model: string, chatId?: string | null): Promise<boolean> => {
-            if (!user) return false;
+            const scope = authScope.current;
+            if (!user || scope.userId !== user.id) return false;
+            selectionRevision.current += 1;
             try {
+                // If setup has already sent its initial PATCH, finish it
+                // first so an explicit user choice is always the later write.
+                if (starterMutation.current?.scope === scope) {
+                    await starterMutation.current.promise.catch(() => undefined);
+                }
+                if (scope !== authScope.current) return false;
+                let selectionProfile: ApiUserProfile | undefined;
                 if (chatId) {
                     const tabularChat = parseTabularChatSelectionKey(chatId);
                     if (tabularChat) {
@@ -389,6 +464,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                             tabularChat.chatId,
                             model,
                         );
+                        if (scope !== authScope.current) return false;
                         publishTabularChatSettingsUpdate({
                             reviewId: tabularChat.reviewId,
                             chatId: tabularChat.chatId,
@@ -398,15 +474,15 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                         await updateChatModel(chatId, model);
                     }
                 } else {
-                    await updateLastSelectedChatSettings({
+                    selectionProfile = await updateLastSelectedChatSettings({
                         lastSelectedChatModel: model,
                     });
                 }
-                setProfile((current) =>
-                    current
-                        ? { ...current, lastSelectedChatModel: model }
-                        : current,
-                );
+                if (scope !== authScope.current) return false;
+                setProfile((current) => {
+                    const selected = current ?? (selectionProfile ? toProfile(selectionProfile) : null);
+                    return selected ? { ...selected, lastSelectedChatModel: model } : selected;
+                });
                 return true;
             } catch {
                 return false;
@@ -478,11 +554,18 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
     const updateLegalResearchUs = useCallback(
         async (enabled: boolean): Promise<boolean> => {
-            if (!user) return false;
+            const scope = authScope.current;
+            if (!user || scope.userId !== user.id) return false;
+            selectionRevision.current += 1;
             try {
+                if (starterMutation.current?.scope === scope) {
+                    await starterMutation.current.promise.catch(() => undefined);
+                }
+                if (scope !== authScope.current) return false;
                 const updated = await updateUserProfile({
                     legalResearchUs: enabled,
                 });
+                if (scope !== authScope.current) return false;
                 setProfile((prev) =>
                     prev ? { ...prev, ...toProfile(updated) } : null,
                 );
