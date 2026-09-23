@@ -11,6 +11,16 @@ export default defineConfig({
         // Mirror the `@/*` path alias from tsconfig.json so unit tests resolve
         // the same module specifiers the app uses.
         alias: [
+            // Cross-target tests resolve runtime dependencies from this package,
+            // including on CI where word-addin/node_modules is absent.
+            {
+                find: /^react$/,
+                replacement: resolvePath("./node_modules/react/index.js"),
+            },
+            {
+                find: /^@sentry\/react$/,
+                replacement: resolvePath("./node_modules/@sentry/react/build/esm/index.js"),
+            },
             {
                 find: /^@mike\/upload-session-client$/,
                 replacement: resolvePath("./src/shared/api/uploadSessionClient.ts"),
@@ -28,7 +38,36 @@ export default defineConfig({
             // the same client API the app uses.
             {
                 find: /^@sentry\/nextjs$/,
-                replacement: "@sentry/react",
+                replacement: resolvePath("./node_modules/@sentry/react/build/esm/index.js"),
+            },
+            // The Word add-in consumes shared modules through per-file
+            // `@mike/*` aliases (see word-addin/webpack.config.js). Mirror them
+            // so add-in modules under test here resolve the same files.
+            {
+                find: "@mike/sentry-event",
+                replacement: resolvePath("./src/shared/lib/sentryEvent.ts"),
+            },
+            {
+                find: "@mike/user-error",
+                replacement: resolvePath("./src/shared/lib/userError.ts"),
+            },
+            {
+                find: "@mike/toast-store",
+                replacement: resolvePath("./src/shared/lib/toastStore.ts"),
+            },
+            {
+                find: "@mike/toast-ui",
+                replacement: resolvePath("./src/shared/ui/ToastUI.tsx"),
+            },
+            {
+                find: "@mike/secure-uuid",
+                replacement: resolvePath("./src/shared/lib/secureUuid.ts"),
+            },
+            {
+                find: "@mike/upload-session-client",
+                replacement: resolvePath(
+                    "./src/shared/api/uploadSessionClient.ts",
+                ),
             },
         ],
     },
