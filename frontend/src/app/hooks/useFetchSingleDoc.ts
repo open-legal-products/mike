@@ -8,7 +8,7 @@ import { authenticatedFetch } from "@/app/lib/authEvents";
  * /display returns PDF bytes (when the active version has a PDF rendition),
  * raw spreadsheet bytes (xlsx/xlsm/xls — never converted to PDF), or raw DOCX
  * bytes otherwise. Reporting the type lets the caller swap between PdfView
- * (PDF.js), SpreadsheetView (Fortune-sheet), and DocxView (docx-preview).
+ * (PDF.js), SpreadsheetView (Fortune-sheet), and DocxView (DOCX engines).
  */
 export type DocResult =
     | { type: "pdf"; buffer: ArrayBuffer }

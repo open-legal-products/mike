@@ -497,7 +497,7 @@ export function AssistantSidePanel({
             </div>
 
             {/* Tab bodies — all mounted, inactive ones hidden. Each tab
-                preserves its state (scroll, docx-preview render, etc.)
+                preserves its state (scroll, DOCX renderer, etc.)
                 when inactive. */}
             <div className="flex-1 min-h-0 relative">
                 {tabs.map((tab) => {

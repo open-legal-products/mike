@@ -565,31 +565,6 @@
     box-decoration-break: clone;
 }
 
-/* docx-preview tracked-change styling */
-.docx-view-container ins {
-    color: #16a34a;
-    text-decoration: none;
-    background-color: rgba(22, 163, 74, 0.08);
-}
-
-.docx-view-container del {
-    color: #dc2626;
-    text-decoration: line-through;
-    background-color: rgba(220, 38, 38, 0.08);
-}
-
-/* Kill docx-preview's default dark-gray wrapper chrome — let the scroll
-   container's own bg show through. */
-.docx-view-container .docx-wrapper {
-    background: transparent !important;
-    padding: 0 !important;
-}
-
-.docx-view-container .docx-wrapper > section.docx {
-    margin: 0 auto 16px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
 .docx-view-container .docx-edit-flash {
     animation: docxEditFlash 2s ease-out;
     border-radius: 2px;
@@ -601,11 +576,11 @@
     display: none !important;
 }
 
-.docx-view-container ins.docx-edit-kept,
-.docx-view-container del.docx-edit-kept {
+.docx-view-container .docx-edit-kept {
     color: inherit !important;
     background-color: transparent !important;
     text-decoration: none !important;
+    border-bottom: none !important;
 }
 
 @keyframes docxEditFlash {

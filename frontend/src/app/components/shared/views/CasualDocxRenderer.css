@@ -1,0 +1,14 @@
+/* Casual Docs 1.4's full editor reserves room for a review sidebar even with
+   chrome="none". Keep this read-only surface centered at the panel's width. */
+[data-docx-renderer="casual"] .mike-casual-preview-width {
+    min-width: 0 !important;
+}
+
+[data-docx-renderer="casual"] .mike-casual-page-stack {
+    transform: scale(var(--mike-docx-preview-zoom, 1)) !important;
+}
+
+[data-docx-renderer="casual"] .docx-unified-sidebar,
+[data-docx-renderer="casual"] [data-testid="tracked-changes-action-bar"] {
+    display: none !important;
+}
