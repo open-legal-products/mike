@@ -155,8 +155,9 @@ try {
   await createBtn.click();
   await page.getByPlaceholder("Add project name").fill(PROJECT_NAME);
   await page.getByRole("button", { name: "Next", exact: true }).click();
-  const wizard = page.locator("div.fixed.inset-0").last();
-  await wizard
+  await page.getByRole("dialog", { name: "Access", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("dialog", { name: "Add Documents", exact: true })
     .getByRole("button", { name: "Create project", exact: true })
     .click({ timeout: 15_000 });
   await page.getByText(PROJECT_NAME, { exact: false }).first().waitFor({ timeout: 20_000 });
@@ -166,10 +167,11 @@ try {
   // 4. Upload a PDF to the library → exercises the fs storage driver's write
   //    path (multipart to backend → STORAGE_FS_ROOT under userData).
   await page.goto(`${FRONTEND_URL}/library`);
-  const addBtn = page.getByRole("button", { name: "Add Files" });
+  const addBtn = page.getByRole("button", { name: "Upload", exact: true }).first();
   await addBtn.waitFor({ timeout: 15_000 });
   const chooserPromise = page.waitForEvent("filechooser", { timeout: 10_000 });
   await addBtn.click();
+  await page.getByRole("menuitem", { name: "Upload files", exact: true }).click();
   const chooser = await chooserPromise;
   await chooser.setFiles({
     name: DOC_NAME,
@@ -188,7 +190,7 @@ try {
   const storageDeadline = Date.now() + 30_000;
   let stored = [];
   while (Date.now() < storageDeadline) {
-    stored = existsSync(storageRoot) ? walk(storageRoot) : [];
+    stored = existsSync(storageRoot) ? walk(storageRoot).filter((file) => !file.startsWith(path.join(storageRoot, "mike-workflows") + path.sep)) : [];
     if (stored.length > 0) break;
     await sleep(1_000);
   }
@@ -203,12 +205,12 @@ try {
     page
       .locator("div")
       .filter({ hasText: DOC_BASE })
-      .filter({ has: page.getByRole("button", { name: "···" }) })
+      .filter({ has: page.getByRole("button", { name: "Open row actions" }) })
       .last();
   let menuBtn = null;
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    const candidate = rowFor().getByRole("button", { name: "···" }).first();
+    const candidate = rowFor().getByRole("button", { name: "Open row actions" }).first();
     if (await candidate.isVisible().catch(() => false)) {
       menuBtn = candidate;
       break;
@@ -253,9 +255,17 @@ try {
   //    That asymmetry is the interesting half of the guest story, which is why
   //    the same helper runs in both rounds instead of only the first.
   for (const round of ["first click (creates the guest account)", "second click (signs into it)"]) {
-    await page.evaluate(() => localStorage.clear());
+    // Auth now lives in httpOnly cookies; clearing localStorage does not log out.
+    await page.evaluate(async () => {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "local" }),
+      });
+      if (!response.ok) throw new Error("Local logout failed");
+    });
     await page.goto(`${FRONTEND_URL}/login`);
-    const guestBtn = page.getByRole("button", { name: "Continue as guest" });
+    const guestBtn = page.getByRole("button", { name: "Continue on this Mac" });
     await guestBtn.waitFor({ timeout: 15_000 });
     await guestBtn.click();
     await page.waitForURL((url) => !/\/(login|signup)/.test(url.href), {

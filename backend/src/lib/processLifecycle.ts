@@ -45,6 +45,11 @@ export async function failBoot(
 
 interface Listenable {
   listen(port: number | string, callback: (error?: Error) => void): Server;
+  listen(
+    port: number | string,
+    host: string,
+    callback: (error?: Error) => void,
+  ): Server;
 }
 
 /**
@@ -61,14 +66,16 @@ export function listenOrFail(
   port: number | string,
   onListening: () => void,
   effects: LifecycleEffects = processEffects,
+  host?: string,
 ): Server {
-  return app.listen(port, (error) => {
+  const onListen = (error?: Error) => {
     if (error) {
       void failBoot(error, "listen", effects);
       return;
     }
     onListening();
-  });
+  };
+  return host ? app.listen(port, host, onListen) : app.listen(port, onListen);
 }
 
 /**

@@ -27,6 +27,8 @@ const {
 } = require("./config");
 const { loadOrCreateSecrets } = require("./secrets");
 const { startGateway } = require("./gateway");
+const { localEnvironment } = require("./environment");
+const { installBundledWorkflows } = require("./workflows");
 
 const children = []; // [{name, proc}] in boot order
 let gatewayServer = null;
@@ -40,7 +42,7 @@ function log(dirs, name) {
 function spawnService(name, bin, args, { env, cwd, dirs }) {
   const out = log(dirs, name);
   const proc = spawn(bin, args, {
-    env: { ...process.env, ...env },
+    env: localEnvironment(env),
     cwd,
     stdio: ["ignore", out, out],
   });
@@ -169,7 +171,7 @@ function initdbIfNeeded(paths, dirs, secrets, status) {
       path.join(paths.pgBin, "initdb"),
       ["-D", dirs.pgdata, "-U", "postgres", "-E", "UTF8",
        "--auth=scram-sha-256", `--pwfile=${pwfile}`],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: localEnvironment() },
     );
     if (res.status !== 0) {
       throw new Error(`initdb failed: ${(res.stderr || "").slice(0, 2000)}`);
@@ -346,6 +348,12 @@ async function startLocalStack(app, status = () => {}) {
 
     // 3. Product schema
     await applySchema(paths, dirs, secrets, status);
+    status("Preparing local workflows…");
+    await withPg(secrets, (client) => installBundledWorkflows({
+      client,
+      backendDir: paths.backendDir,
+      storageRoot: dirs.storage,
+    }));
 
     // 4. PostgREST
     status("Starting data API…");
@@ -364,7 +372,7 @@ async function startLocalStack(app, status = () => {}) {
       httpOk(`http://127.0.0.1:${PORTS.postgrest}/`, [200, 401]));
 
     // 5. Gateway proxy (in-process)
-    gatewayServer = await startGateway({ anonKey: secrets.anonKey });
+    gatewayServer = await startGateway({ anonKey: secrets.anonKey, serviceRoleKey: secrets.serviceRoleKey });
 
     // 6. Backend — Electron's own binary in Node mode, so no separate
     // runtime ships with the app.
@@ -376,16 +384,21 @@ async function startLocalStack(app, status = () => {}) {
       cwd: paths.backendDir,
       env: {
         ELECTRON_RUN_AS_NODE: "1",
+        // Local HTTP needs non-Secure session cookies, matching local Compose.
+        NODE_ENV: "development",
         PORT: String(PORTS.backend),
+        HOST: "127.0.0.1",
         FRONTEND_URL,
+        API_PUBLIC_URL: `${FRONTEND_URL}/api`,
         SUPABASE_URL: GATEWAY_URL,
+        SUPABASE_PUBLISHABLE_KEY: secrets.anonKey,
         SUPABASE_SECRET_KEY: secrets.serviceRoleKey,
         STORAGE_DRIVER: "fs",
         STORAGE_FS_ROOT: dirs.storage,
         BACKEND_PUBLIC_URL: BACKEND_URL,
         DOWNLOAD_SIGNING_SECRET: secrets.downloadSigningSecret,
         USER_API_KEYS_ENCRYPTION_SECRET: secrets.userApiKeysEncryptionSecret,
-        OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/v1",
+        OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
         ...(soffice ? { SOFFICE_BINARY_PATH: soffice } : {}),
       },
     });
@@ -401,6 +414,7 @@ async function startLocalStack(app, status = () => {}) {
         PORT: String(PORTS.frontend),
         HOSTNAME: "127.0.0.1",
         NODE_ENV: "production",
+        API_BASE_URL: BACKEND_URL,
       },
     });
     await waitFor("frontend", () => httpOk(`${FRONTEND_URL}/login`, [200, 307, 308]));

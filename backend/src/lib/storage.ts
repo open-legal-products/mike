@@ -23,7 +23,7 @@ import { bestEffort } from "./observability/sentry";
 import { createReadStream } from "node:fs";
 import fs, { stat } from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { signBlobToken, signBlobUploadToken } from "./downloadTokens";
 
@@ -630,27 +630,64 @@ export async function getSignedUrl(
  * Stream a request body straight onto disk for the filesystem driver's signed
  * PUT route. Streaming (rather than an express body parser) is what keeps a
  * multi-hundred-megabyte upload from being buffered in the process.
- * Returns the number of bytes written so the caller can enforce the size the
- * capability was signed for.
+ * Rejects before any byte beyond the capability's signed limit reaches disk.
+ * The request remains readable after rejection so the route can return its
+ * validation response instead of resetting the HTTP connection.
  */
+export class BlobUploadSizeError extends Error {
+  constructor() {
+    super("Upload size does not match the link");
+    this.name = "BlobUploadSizeError";
+  }
+}
+
 export async function writeBlobFromStream(
   key: string,
   body: Readable,
+  maxBytes: number,
 ): Promise<number> {
   if (!FS_DRIVER) {
     throw new Error("writeBlobFromStream is only available on the fs driver");
+  }
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new BlobUploadSizeError();
   }
   const target = fsPathFor(key);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const handle = await fs.open(target, "w");
   let written = 0;
-  try {
-    const sink = handle.createWriteStream();
-    body.on("data", (chunk: Buffer) => {
+  const bounded = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      if (chunk.length > maxBytes - written) {
+        callback(new BlobUploadSizeError());
+        return;
+      }
       written += chunk.length;
-    });
-    await pipeline(body, sink);
+      callback(null, chunk);
+    },
+  });
+  const abort = (error: Error) => bounded.destroy(error);
+  const aborted = () => bounded.destroy(new Error("Upload aborted"));
+  const closed = () => {
+    if (!body.readableEnded) aborted();
+  };
+  body.once("error", abort);
+  body.once("aborted", aborted);
+  body.once("close", closed);
+  try {
+    if (body.destroyed) throw new Error("Upload aborted");
+    const sink = handle.createWriteStream();
+    const completed = pipeline(bounded, sink);
+    body.pipe(bounded);
+    await completed;
   } finally {
+    body.unpipe(bounded);
+    body.off("error", abort);
+    body.off("aborted", aborted);
+    body.off("close", closed);
+    // Drain a rejected request without writing it. Keeping the incoming HTTP
+    // stream out of pipeline lets Express send the expected 400 response.
+    if (!body.readableEnded && !body.destroyed) body.resume();
     await handle.close().catch(() => {});
   }
   return written;

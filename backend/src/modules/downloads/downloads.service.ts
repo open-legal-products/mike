@@ -8,6 +8,7 @@
 import type { Db } from "../../lib/supabase";
 import type { Readable } from "node:stream";
 import {
+    BlobUploadSizeError,
     discardBlob,
     downloadFile,
     writeBlobFromStream,
@@ -74,13 +75,16 @@ export async function storeBlobUpload(args: {
         return failure("validation", "Upload content type does not match the link");
     }
     try {
-        const written = await writeBlobFromStream(info.path, args.body);
+        const written = await writeBlobFromStream(info.path, args.body, info.sizeBytes);
         if (written !== info.sizeBytes) {
             await discardBlob(info.path);
             return failure("validation", "Upload size does not match the link");
         }
     } catch (error) {
         await discardBlob(info.path);
+        if (error instanceof BlobUploadSizeError) {
+            return failure("validation", "Upload size does not match the link");
+        }
         return internalFailure(error);
     }
     return ok(undefined);

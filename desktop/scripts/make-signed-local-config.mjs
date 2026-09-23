@@ -19,7 +19,7 @@
 // real file, and signing a link twice fails the build.
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, lstatSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, lstatSync, writeFileSync, openSync, readSync, closeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,9 +39,13 @@ function walk(dir, out = []) {
 
 function isMachO(file) {
   // Mach-O magic: FEEDFACF/CFFAEDFE (64-bit LE/BE) or CAFEBABE (universal).
-  const fd = readFileSync(file, { length: 4 }).subarray(0, 4);
-  if (fd.length < 4) return false;
-  const magic = fd.readUInt32BE(0);
+  const fd = openSync(file, "r");
+  const header = Buffer.alloc(4);
+  let length;
+  try { length = readSync(fd, header, 0, 4, 0); }
+  finally { closeSync(fd); }
+  if (length < 4) return false;
+  const magic = header.readUInt32BE(0);
   return (
     magic === 0xfeedfacf ||
     magic === 0xcffaedfe ||

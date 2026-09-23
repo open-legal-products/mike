@@ -34,11 +34,16 @@ const LOCAL_FRONTEND_URL = require("./local/config").FRONTEND_URL;
 const CONNECT_PAGE = path.join(__dirname, "pages", "connect.html");
 const LOCAL_BOOT_PAGE = path.join(__dirname, "pages", "local-boot.html");
 const WELCOME_PAGE = path.join(__dirname, "pages", "welcome.html");
-// Prefix for the shell's own bundled pages — the only file: URLs the main
-// window is ever allowed to show.
-const SHELL_PAGES_URL_PREFIX = pathToFileURL(
-  path.join(__dirname, "pages"),
-).href;
+// Exact bundled file URLs: sibling paths and subframes receive no privileges.
+const shellPageUrls = new Set([CONNECT_PAGE, LOCAL_BOOT_PAGE, WELCOME_PAGE].map((page) => pathToFileURL(page).href));
+function isShellPage(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    return shellPageUrls.has(parsed.href);
+  } catch { return false; }
+}
 const PING_TIMEOUT_MS = 3_000;
 const PROBE_TIMEOUT_MS = 5_000;
 
@@ -220,7 +225,7 @@ function handleMainWindowNavigation(event, url) {
   // The shell's own bundled pages are the ONLY file: URLs allowed — exempting
   // all of file: would let an OS file dropped outside the chat dropzone
   // navigate the whole app to the local file.
-  if (url.startsWith(SHELL_PAGES_URL_PREFIX)) return;
+  if (isShellPage(url)) return;
   event.preventDefault();
 
   const selfInitiated =
@@ -596,8 +601,9 @@ async function startLocalAndLoad() {
 // window too, so gate every handler on the sender actually being one of the
 // shell's own bundled pages (the connect screen); a request from the loaded
 // product (or an XSS within it) is ignored.
+const fromMainFrame = (event) => Boolean(win && event.sender === win.webContents && event.senderFrame === win.webContents.mainFrame);
 const fromShellPage = (event) =>
-  (event.senderFrame?.url ?? "").startsWith(SHELL_PAGES_URL_PREFIX);
+  fromMainFrame(event) && isShellPage(event.senderFrame?.url ?? "");
 
 ipcMain.handle("mike:get-server-url", () => serverUrl());
 ipcMain.handle("mike:set-server-url", (event, url) => {
@@ -638,7 +644,7 @@ ipcMain.handle("mike:guest-credentials", (event) => {
   // and only to the local frontend itself — a hosted page, or anything a
   // hosted page manages to load in this window, must never be able to pull
   // credentials out of the shell.
-  if (!localMode()) return null;
+  if (!localMode() || !fromMainFrame(event)) return null;
   let senderOrigin;
   try {
     senderOrigin = new URL(event.senderFrame?.url ?? "").origin;
