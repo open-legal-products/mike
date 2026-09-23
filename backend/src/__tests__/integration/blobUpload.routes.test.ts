@@ -27,9 +27,9 @@ async function loadApp() {
   delete process.env.R2_ACCESS_KEY_ID;
   delete process.env.R2_SECRET_ACCESS_KEY;
 
-  const storage = await import("../../lib/storage");
-  const tokens = await import("../../lib/downloadTokens");
-  const { blobUploadHandler } = await import("../../modules/downloads/downloads.routes");
+  const storage = await import("../../lib/storage.js");
+  const tokens = await import("../../lib/downloadTokens.js");
+  const { blobUploadHandler } = await import("../../modules/downloads/downloads.routes.js");
 
   const app = express();
   // Mirrors app.ts on both counts: the PUT sits in its own rate-limit lane, and

@@ -15,7 +15,7 @@ async function loadFsStorage(root: string) {
   delete process.env.R2_ENDPOINT_URL;
   delete process.env.R2_ACCESS_KEY_ID;
   delete process.env.R2_SECRET_ACCESS_KEY;
-  return import("../storage");
+  return import("../storage.js");
 }
 
 let root: string;
@@ -90,7 +90,7 @@ describe("filesystem storage driver", () => {
       /^http:\/\/localhost:3001\/download\/signed\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/,
     );
 
-    const { verifyBlobToken } = await import("../downloadTokens");
+    const { verifyBlobToken } = await import("../downloadTokens.js");
     const token = url!.split("/download/signed/")[1];
     expect(verifyBlobToken(token)).toEqual({
       path: "documents/u1/d1/source.pdf",
@@ -174,7 +174,7 @@ describe("filesystem storage driver", () => {
     );
     const token = url!.split("/").pop()!;
     const { verifyBlobUploadToken, verifyBlobToken } = await import(
-      "../downloadTokens"
+      "../downloadTokens.js"
     );
     expect(verifyBlobUploadToken(token)).toEqual({
       path: "uploads/s1/f1.pdf",
@@ -307,7 +307,7 @@ describe("filesystem storage driver", () => {
 describe("blob tokens", () => {
   it("expired tokens verify as null", async () => {
     await loadFsStorage(root);
-    const { signBlobToken, verifyBlobToken } = await import("../downloadTokens");
+    const { signBlobToken, verifyBlobToken } = await import("../downloadTokens.js");
     const token = signBlobToken("documents/u1/d1/source.pdf", "a.pdf", -5);
     expect(verifyBlobToken(token)).toBeNull();
   });
@@ -315,7 +315,7 @@ describe("blob tokens", () => {
   it("blob and permanent download tokens are not interchangeable", async () => {
     await loadFsStorage(root);
     const { signBlobToken, signDownload, verifyBlobToken, verifyDownload } =
-      await import("../downloadTokens");
+      await import("../downloadTokens.js");
     // A permanent token must not pass the blob verifier (it has no expiry),
     // and a blob token must not pass the permanent verifier — the HMACs are
     // domain-separated so one capability can't be replayed as the other.
