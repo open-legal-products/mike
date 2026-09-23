@@ -84,7 +84,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                     >
                         {viewType === "docx" ? (
                             <DocxView
-                                mode="edit"
+                                defaultMode="edit"
                                 filename={tab.filename}
                                 documentId={tab.documentId}
                                 versionId={versionId}

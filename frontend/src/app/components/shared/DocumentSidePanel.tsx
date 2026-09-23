@@ -547,7 +547,7 @@ export function DocumentSidePanel({
                             />
                         ) : selectedViewType === "docx" ? (
                             <DocxView
-                                mode="edit"
+                                defaultMode="edit"
                                 filename={doc.filename}
                                 key={`${selectedVersionId ?? "current"}:${selectedUploadedAt ?? ""}:${selectedSizeBytes ?? ""}`}
                                 documentId={doc.id}

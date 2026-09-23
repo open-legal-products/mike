@@ -6,11 +6,12 @@ component. The selection lasts for the mounted viewer; it is not an account
 setting. Switching engines reuses the fetched bytes and retains the scroll
 offset (the same offset can show different text when pagination differs).
 
-Both adapters support `mode="view"` and `mode="edit"`. The reusable component
-defaults to view-only; the assistant document panel, IDE viewer, and document
-side panel explicitly use edit mode with the native formatting toolbar above
-the scrollable pages. The comparison story can switch between modes without
-remounting the loaded document.
+Both adapters support view-only and edit modes. A **View / Edit** selector next
+to the renderer selector lets readers switch without remounting the document.
+`DocxView` accepts `defaultMode` (view-only when omitted); the assistant document
+panel, IDE viewer, and document side panel set `defaultMode="edit"`, showing the
+native formatting toolbar above the scrollable pages initially. A reader's mode
+choice lasts until that document viewer is closed or a different document is opened.
 
 Edits are local to the mounted editor. **Download DOCX** (and the editor's save
 action) exports the edited document; it does not create a Mike version or

@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { DocPanel, DocumentTitleRow } from "./DocPanel";
 
 vi.mock("../shared/views/DocxView", () => ({
-    DocxView: ({ mode, filename }: { mode: string; filename: string }) =>
-        <div data-testid="docx-editor" data-mode={mode}>{filename}</div>,
+    DocxView: ({ defaultMode, filename }: { defaultMode: string; filename: string }) =>
+        <div data-testid="docx-editor" data-mode={defaultMode}>{filename}</div>,
 }));
 
 it("opens assistant DOCX documents in edit mode", () => {

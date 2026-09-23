@@ -31,7 +31,8 @@ function bufferId(bytes: ArrayBuffer) {
 
 interface Props {
     documentId: string;
-    mode?: DocxMode;
+    /** Initial mode for each document; the reader can change it in the viewer. */
+    defaultMode?: DocxMode;
     filename?: string;
     versionId?: string | null;
     displayUrl?: string | null;
@@ -96,6 +97,7 @@ function DocxViewContent(props: Props) {
         warning, onWarningDismiss, rounded = true,
     } = props;
     const [engine, setEngine] = useState<Engine>("eigenpal");
+    const [mode, setMode] = useState<DocxMode>(props.defaultMode ?? "view");
     const [pendingEngine, setPendingEngine] = useState<Engine | null>(null);
     const [dirtyKey, setDirtyKey] = useState<string | null>(null);
     const [downloading, setDownloading] = useState(false);
@@ -222,13 +224,20 @@ function DocxViewContent(props: Props) {
     };
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div role="group" aria-label="DOCX rendering engine" className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
-                <span className="text-xs text-muted-foreground">Renderer</span>
-                <TabPillButtonUI active={engine === "eigenpal"} disabled={downloading} onClick={() => switchEngine("eigenpal")}>EigenPal</TabPillButtonUI>
-                <TabPillButtonUI active={engine === "casual"} disabled={downloading} onClick={() => switchEngine("casual")}>Casual Docs</TabPillButtonUI>
-                {(props.mode === "edit" || dirty) && <PillButtonUI tone="white" size="sm" disabled={!!pending || !!message || downloading} onClick={() => void download()}>Download DOCX</PillButtonUI>}
+            <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
+                <div role="group" aria-label="DOCX rendering engine" className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Renderer</span>
+                    <TabPillButtonUI active={engine === "eigenpal"} disabled={downloading} onClick={() => switchEngine("eigenpal")}>EigenPal</TabPillButtonUI>
+                    <TabPillButtonUI active={engine === "casual"} disabled={downloading} onClick={() => switchEngine("casual")}>Casual Docs</TabPillButtonUI>
+                </div>
+                <div role="group" aria-label="DOCX mode" className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Mode</span>
+                    <TabPillButtonUI active={mode === "view"} onClick={() => setMode("view")}>View</TabPillButtonUI>
+                    <TabPillButtonUI active={mode === "edit"} onClick={() => setMode("edit")}>Edit</TabPillButtonUI>
+                </div>
+                {(mode === "edit" || dirty) && <PillButtonUI tone="white" size="sm" disabled={!!pending || !!message || downloading} onClick={() => void download()}>Download DOCX</PillButtonUI>}
                 {engine === "eigenpal" && <span className="text-xs text-muted-foreground">Deleted text is hidden. Use Casual Docs to view redlines.</span>}
-                {(props.mode === "edit" || dirty) && <span className="text-xs text-muted-foreground">{dirty ? "Unsaved local edits. " : ""}Download to keep edits before closing or switching documents.</span>}
+                {(mode === "edit" || dirty) && <span className="text-xs text-muted-foreground">{dirty ? "Unsaved local edits. " : ""}Download to keep edits before closing or switching documents.</span>}
                 {downloadError && <span role="alert" className="text-xs text-destructive">{downloadError}</span>}
             </div>
             <div
@@ -262,7 +271,7 @@ function DocxViewContent(props: Props) {
                     {bytes && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>
                             <Suspense fallback={null}>
-                                <DocxRenderer bytes={bytes} mode={props.mode ?? "view"} filename={props.filename} onChange={onChange} onSave={download} onReady={onReady} onError={onError} />
+                                <DocxRenderer bytes={bytes} mode={mode} filename={props.filename} onChange={onChange} onSave={download} onReady={onReady} onError={onError} />
                             </Suspense>
                         </DocxRenderBoundary>
                     )}

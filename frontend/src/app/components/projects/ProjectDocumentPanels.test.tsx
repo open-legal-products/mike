@@ -66,13 +66,13 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         versionId,
         refetchKey,
         cacheBytes,
-        mode,
+        defaultMode,
     }: {
         documentId: string;
         versionId?: string | null;
         refetchKey: string;
         cacheBytes: boolean;
-        mode: string;
+        defaultMode: string;
     }) => {
         const { bytes } = useFetchDocxBytes(
             documentId,
@@ -81,7 +81,7 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
             null,
             cacheBytes,
         );
-        return <div data-testid="docx-mode" data-mode={mode}><Viewer id={documentId} loaded={!!bytes} /></div>;
+        return <div data-testid="docx-mode" data-mode={defaultMode}><Viewer id={documentId} loaded={!!bytes} /></div>;
     },
 }));
 

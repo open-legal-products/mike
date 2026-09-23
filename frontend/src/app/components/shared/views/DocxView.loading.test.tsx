@@ -115,20 +115,27 @@ it("does not show old bytes while switching documents", async () => {
 });
 
 it("supports edit and view modes without remounting the document", async () => {
-    const { rerender } = render(<DocxView documentId="modes" cacheBytes={false} mode="edit" />);
+    const { rerender } = render(<DocxView documentId="modes" cacheBytes={false} defaultMode="edit" />);
     await screen.findByText("EigenPal preview");
     const surface = screen.getByTestId("renderer-scroll");
     expect(surface).toHaveAttribute("data-mode", "edit");
     expect(screen.getByRole("toolbar", { name: "Document formatting" })).toBeVisible();
-    rerender(<DocxView documentId="modes" cacheBytes={false} mode="view" />);
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    // Parent rerenders do not override the reader's selection.
+    rerender(<DocxView documentId="modes" cacheBytes={false} defaultMode="edit" />);
     expect(surface).toHaveAttribute("data-mode", "view");
     expect(screen.queryByRole("toolbar")).toBeNull();
+    expect(screen.getByRole("button", { name: "View" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/Unsaved local edits/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("toolbar", { name: "Document formatting" })).toBeVisible();
     expect(screen.getByTestId("renderer-scroll")).toBe(surface);
     expect(authenticatedFetch).toHaveBeenCalledTimes(1);
 });
 
 it("protects unsaved edits when switching renderers", async () => {
-    render(<DocxView documentId="dirty-switch" cacheBytes={false} mode="edit" />);
+    render(<DocxView documentId="dirty-switch" cacheBytes={false} defaultMode="edit" />);
     await screen.findByText("EigenPal preview");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "Casual Docs" }));
@@ -146,7 +153,7 @@ it("keeps edits after a failed export and downloads the edited bytes on retry", 
     const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     exportDocx.mockRejectedValueOnce(new Error("internal serializer details"));
-    render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} mode="edit" />);
+    render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} defaultMode="edit" />);
     await screen.findByText("EigenPal preview");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "Download DOCX" }));
