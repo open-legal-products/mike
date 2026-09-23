@@ -46,6 +46,12 @@ changes. It has narrow-panel, citation, edit-highlight, and invalid-file
 controls. Its local file picker uses a browser blob URL; it does not upload the
 selected document to Mike. The normal primitive catalog is unchanged.
 
+After switching to this branch, install its dependencies in the new checkout
+before starting the app. Bun users can run `bun install --frozen-lockfile`, then
+`bun dev`, from `frontend/`. The Bun lockfile is synchronized from the npm
+lockfile; dependencies installed in another worktree do not follow a branch
+switch.
+
 The production app uses the existing authenticated document fetch and shared
 byte cache. Rendering happens in the browser. Only the selected renderer's
 JavaScript is requested initially.
@@ -61,7 +67,8 @@ loader points to the wrong directory. `frontend/scripts/prepare-docx.mjs`
 corrects that one asset URL before dev, production build, and the comparison
 catalog. It is idempotent and deliberately fails if the version or expected
 loader changes. Recheck and remove this workaround when upstream fixes the
-package. Direct bundler invocations must first run `npm run prepare:docx` from
+package. It resolves the converter from Casual Docs so nested dependency layouts
+also work. Direct bundler invocations must first run `npm run prepare:docx` from
 `frontend/`.
 
 The comparison's Vite configuration leaves EigenPal's packages out of dependency
