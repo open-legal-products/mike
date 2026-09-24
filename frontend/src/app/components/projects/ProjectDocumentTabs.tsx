@@ -111,8 +111,8 @@ export function ProjectDocumentTabs({
             role="tablist"
             aria-label="Project documents"
             className={cn(
-                "project-document-tabs flex h-10 min-w-0 shrink-0 items-end gap-1 overflow-x-auto px-1 pt-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
-                tabs.length ? "document-tab-strip" : "bg-app-surface",
+                "project-document-tabs flex h-10 min-w-0 shrink-0 items-center gap-1 overflow-x-auto px-1 py-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+                tabs.length ? "bg-transparent" : "bg-app-surface",
             )}
         >
             {tabs.length === 0 ? (
@@ -265,7 +265,7 @@ export function ProjectDocumentTabs({
                                     }}
                                     data-active={isActive ? "true" : "false"}
                                     className={cn(
-                                        "document-tab group relative flex h-9 min-w-0 max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                                        "document-tab group relative flex h-8 min-w-0 max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-lg pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
                                         isActive ? "z-20" : "z-10",
                                         tabs.length > 1 &&
                                             "cursor-grab active:cursor-grabbing",
@@ -334,7 +334,7 @@ export function ProjectDocumentTabs({
             {tabs.length > 0 && (
                 <div
                     aria-hidden="true"
-                    className="h-9 min-w-4 flex-1"
+                    className="h-8 min-w-4 flex-1"
                     onDragOver={(event) =>
                         dragOver(
                             event,

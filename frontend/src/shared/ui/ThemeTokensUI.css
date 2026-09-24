@@ -86,6 +86,16 @@
     background-color: var(--document-tab-strip-background);
 }
 
+.project-document-tabs {
+    --document-tab-active-background: var(--app-surface-active);
+    --document-tab-inactive-background: transparent;
+}
+
+.project-document-tabs .document-tab::before,
+.project-document-tabs .document-tab::after {
+    display: none;
+}
+
 .document-canvas {
     background-color: var(--document-canvas-background);
 }

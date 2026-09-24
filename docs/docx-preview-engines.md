@@ -4,8 +4,10 @@
 and document side panels. There is no rendering-engine selector or Mike
 View/Edit toggle. EigenPal's native toolbar owns mode switching and remains
 visible in Viewing mode so readers can return to Editing without reopening the
-file. The filename and download rows are omitted; only the formatting toolbar
-sits above the document. Right-click a viewer or assistant document tab for the
+file. EigenPal’s title row is hidden. The IDE viewer adds Mike’s compact file
+title, icon, and Download button above every file type, with the native formatting
+toolbar below for DOCX. IDE tabs have a transparent strip and inactive tabs, with
+a rounded, light-grey active tab. Right-click a viewer or assistant document tab for the
 explorer’s Add to chat, Download, Rename, and Delete file actions. Rename
 edits the tab label in place (Enter or blur to save, Escape to cancel).
 

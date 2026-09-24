@@ -1,6 +1,7 @@
 "use client";
 
-import { memo, type ComponentProps } from "react";
+import { memo, useRef, type ComponentProps } from "react";
+import { DocumentTitleRow } from "@/app/components/shared/DocumentTitleRow";
 import { ProjectWorkspaceTips } from "./ProjectWorkspaceTips";
 import type { CitationQuote, Document } from "@/app/components/shared/types";
 import { DocxView } from "@/app/components/shared/views/DocxView";
@@ -29,7 +30,10 @@ interface Props {
           })
         | null;
     onWarningDismiss: (documentId: string) => void;
-    onDownloadReady?: (documentId: string, download: (() => Promise<void>) | null) => void;
+    onDownloadReady?: (
+        documentId: string,
+        download: (() => Promise<void>) | null,
+    ) => void;
 }
 
 /** Retain loaded bytes and viewer state for exactly the lifetime of an open tab. */
@@ -42,6 +46,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
     onWarningDismiss,
     onDownloadReady,
 }: Props) {
+    const localDownloads = useRef(new Map<string, () => Promise<void>>());
     const documentsById = new Map(documents.map((doc) => [doc.id, doc]));
     return (
         <div className="relative flex-1 min-h-0 overflow-hidden">
@@ -84,9 +89,42 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                             !active && "invisible pointer-events-none",
                         )}
                     >
+                        <DocumentTitleRow
+                            document={{
+                                document_id: tab.documentId,
+                                title: tab.filename,
+                                type: viewType,
+                                version_id: versionId,
+                                version_number:
+                                    !tab.versionId ||
+                                    tab.versionId ===
+                                        document?.current_version_id
+                                        ? (document?.active_version_number ??
+                                          document?.latest_version_number)
+                                        : undefined,
+                                metadata: [],
+                                quotes: [],
+                            }}
+                            isReloading={false}
+                            compactActions={false}
+                            onDownload={() =>
+                                localDownloads.current.get(tab.documentId)?.()
+                            }
+                        />
                         {viewType === "docx" ? (
                             <DocxView
-                                onDownloadReady={(download) => onDownloadReady?.(tab.documentId, download)}
+                                onDownloadReady={(download) => {
+                                    if (download)
+                                        localDownloads.current.set(
+                                            tab.documentId,
+                                            download,
+                                        );
+                                    else
+                                        localDownloads.current.delete(
+                                            tab.documentId,
+                                        );
+                                    onDownloadReady?.(tab.documentId, download);
+                                }}
                                 defaultMode="edit"
                                 filename={tab.filename}
                                 documentId={tab.documentId}

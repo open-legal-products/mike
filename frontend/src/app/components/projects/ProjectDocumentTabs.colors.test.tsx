@@ -38,7 +38,7 @@ beforeAll(async () => {
             onDependency: () => {},
         },
     );
-    const css = postcss.parse(compiler.build(["bg-app-surface"]));
+    const css = postcss.parse(compiler.build(["bg-app-surface", "bg-app-surface-active", "bg-transparent"]));
     // jsdom does not apply cascade layers. These backgrounds have no
     // competing declarations, so flatten layers for its computed styles.
     css.walkAtRules("layer", (rule) => {
@@ -84,7 +84,7 @@ function backgroundColor(element: Element): string {
         if (!value) throw new Error(`Missing color token: ${property}`);
         color = value;
     }
-    return color;
+    return color === "transparent" ? "rgba(0, 0, 0, 0)" : color;
 }
 
 function Harness({ empty = false }: { empty?: boolean }) {
@@ -102,9 +102,7 @@ function Harness({ empty = false }: { empty?: boolean }) {
                 onClose={vi.fn()}
                 onReorder={vi.fn()}
             />
-            <div className="document-tab-strip" data-testid="side-panel-strip">
-                <span className="document-tab" data-testid="side-panel-inactive" />
-            </div>
+            <div className="bg-app-surface-active" data-testid="selected-surface" />
             <div data-testid="docx-view">
                 <DocxView documentId="docx" rounded={false} />
             </div>
@@ -122,7 +120,7 @@ describe("project document tab colors", () => {
         ["dark", "loading"],
         ["dark", "error"],
     ])(
-        "matches side-panel colors in %s mode during %s and preserves the empty header",
+        "uses a highlighted active tab and transparent strip in %s mode during %s, preserving the empty header",
         (theme, state) => {
             document.documentElement.classList.toggle("dark", theme === "dark");
             fetchState.loading = state === "loading";
@@ -141,16 +139,14 @@ describe("project document tab colors", () => {
             expect(canvas).not.toBe("rgba(0, 0, 0, 0)");
             expect(canvas).not.toBe(resting);
             expect(backgroundColor(pdfCanvas)).toBe(canvas);
-            expect(backgroundColor(docxTab)).toBe(resting);
-            const inactive = backgroundColor(screen.getByTestId("side-panel-inactive"));
-            expect(inactive).not.toBe(resting);
+            const selected = backgroundColor(screen.getByTestId("selected-surface"));
+            expect(backgroundColor(docxTab)).toBe(selected);
+            const inactive = "rgba(0, 0, 0, 0)";
             expect(backgroundColor(pdfTab)).toBe(inactive);
-            expect(backgroundColor(screen.getByRole("tablist"))).toBe(
-                backgroundColor(screen.getByTestId("side-panel-strip")),
-            );
+            expect(backgroundColor(screen.getByRole("tablist"))).toBe(inactive);
             fireEvent.click(pdfTab);
             expect(pdfTab).toHaveAttribute("aria-selected", "true");
-            expect(backgroundColor(pdfTab)).toBe(resting);
+            expect(backgroundColor(pdfTab)).toBe(selected);
             expect(backgroundColor(docxTab)).toBe(inactive);
             rerender(<Harness empty />);
             expect(screen.getByText("Document Viewer")).toBeVisible();

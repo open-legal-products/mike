@@ -1,11 +1,6 @@
 "use client";
 
-import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, ExternalLink } from "lucide-react";
-import { getDocumentFile } from "@/app/lib/mikeApi";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { PdfView } from "../shared/views/PdfView";
 import { DocxView } from "../shared/views/DocxView";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
@@ -17,11 +12,12 @@ import { EditCard } from "./EditCard";
 import { expandDocumentQuoteEntry } from "../shared/types";
 import type { Citation, EditAnnotation, PanelDocument } from "../shared/types";
 import { quoteVerificationState } from "./message/citationVerification";
-import { VersionChip } from "@/app/components/shared/VersionChip";
-import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { CaseView } from "./CaseView";
 import { useResolvedPanelDocument } from "./useResolvedPanelDocument";
+import { DocumentTitleRow } from "../shared/DocumentTitleRow";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
+
+export { DocumentTitleRow } from "../shared/DocumentTitleRow";
 
 /**
  * Discriminated-union describing what the panel is showing above the viewer.
@@ -281,229 +277,5 @@ export function DocPanel({
                 )}
             </div>
         </div>
-    );
-}
-
-type ExternalSourceLink = {
-    href: string;
-    label: string;
-    title: string;
-};
-
-export function DocumentTitleRow({
-    document,
-    isReloading,
-    compactActions,
-}: {
-    document: PanelDocument;
-    isReloading: boolean;
-    compactActions: boolean;
-}) {
-    const isFile =
-        document.type === "docx" ||
-        document.type === "pdf" ||
-        document.type === "spreadsheet";
-    const versionNumber = document.version_number;
-
-    return (
-        <div className="px-3 py-2">
-            {/* Centred against the actions: they are taller than the title,
-                so top-aligning left the title floating above them. */}
-            <div className="flex items-center gap-3">
-                <div className="flex min-w-0 flex-1 items-start gap-2">
-                    <span className="mt-0.5 shrink-0">
-                        {document.type === "case" ||
-                        document.type === "legislation" ? (
-                            <Image
-                                src={
-                                    document.type === "case"
-                                        ? "/icons/legal-sources/case-law.svg"
-                                        : "/icons/legal-sources/legislation.svg"
-                                }
-                                alt=""
-                                aria-hidden="true"
-                                width={16}
-                                height={16}
-                                className="h-4 w-4 shrink-0 object-contain"
-                            />
-                        ) : (
-                            <FileTypeIcon
-                                fileType={document.title}
-                                className="h-4 w-4"
-                            />
-                        )}
-                    </span>
-                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                        <h2
-                            className="min-w-0 break-words text-sm font-medium text-gray-800"
-                            title={document.title}
-                        >
-                            {document.title}
-                        </h2>
-                        <VersionChip n={versionNumber} />
-                    </div>
-                </div>
-                <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
-                    {isFile && (
-                        <DownloadButton
-                            documentId={document.document_id}
-                            versionId={document.version_id ?? null}
-                            filename={document.title}
-                            isReloading={isReloading}
-                            compact={compactActions}
-                        />
-                    )}
-                    {(document.actions ?? []).map((action, index) =>
-                        action.type === "download" ? (
-                            <UrlDownloadButton
-                                key={`${action.type}:${action.url}:${index}`}
-                                href={action.url}
-                                compact={compactActions}
-                            />
-                        ) : (
-                            <ExternalSourceLinkButton
-                                key={`${action.type}:${action.url}:${index}`}
-                                link={{
-                                    href: action.url,
-                                    label: action.label,
-                                    title: action.title ?? action.label,
-                                }}
-                                compact={compactActions}
-                            />
-                        ),
-                    )}
-                </div>
-            </div>
-            {document.metadata.length > 0 && (
-                <div className="mt-1 flex w-full flex-wrap items-center gap-x-3 gap-y-1 font-serif text-sm text-gray-600">
-                    {document.metadata.map((item, index) => (
-                        <span key={`${item.label}:${item.value}:${index}`}>
-                            {item.label}: {formatMetadataValue(item)}
-                        </span>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Source actions
-// ---------------------------------------------------------------------------
-
-function formatMetadataValue(item: PanelDocument["metadata"][number]): string {
-    if (item.format !== "date") return item.value;
-    const value = item.value;
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
-        ? new Date(`${value}T00:00:00Z`)
-        : new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return new Intl.DateTimeFormat("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        timeZone: "UTC",
-    }).format(date);
-}
-
-function UrlDownloadButton({
-    href,
-    compact,
-}: {
-    href: string;
-    compact: boolean;
-}) {
-    return (
-        <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            download
-            aria-label="Download"
-            title="Download"
-            className={pillButtonUIClassName({
-                tone: "white",
-                size: compact ? "icon-xs" : "sm",
-            })}
-        >
-            <Download className="h-3.5 w-3.5" />
-            <span className={compact ? "sr-only" : undefined}>Download</span>
-        </a>
-    );
-}
-
-function ExternalSourceLinkButton({
-    link,
-    compact,
-}: {
-    link: ExternalSourceLink;
-    compact: boolean;
-}) {
-    return (
-        <a
-            href={link.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={link.title}
-            title={link.title}
-            className={pillButtonUIClassName({
-                tone: "white",
-                size: compact ? "icon-xs" : "sm",
-            })}
-        >
-            <ExternalLink className="h-3.5 w-3.5" />
-            <span className={compact ? "sr-only" : undefined}>
-                {link.label}
-            </span>
-        </a>
-    );
-}
-
-function DownloadButton({
-    documentId,
-    versionId,
-    filename,
-    isReloading,
-    compact,
-}: {
-    documentId: string;
-    versionId: string | null;
-    filename: string;
-    isReloading?: boolean;
-    compact: boolean;
-}) {
-    const [busy, setBusy] = useState(false);
-
-    const handleClick = async () => {
-        if (busy || isReloading) return;
-        setBusy(true);
-        try {
-            const { blob, filename: resolvedFilename } =
-                await getDocumentFile(documentId, versionId);
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = resolvedFilename || filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-        } finally {
-            setBusy(false);
-        }
-    };
-
-    const spinning = busy || isReloading;
-    return (
-        <PillButtonUI
-            tone="white"
-            size={compact ? "icon-xs" : "sm"}
-            onClick={handleClick}
-            disabled={spinning}
-            loading={spinning}
-        >
-            <Download className="h-3.5 w-3.5" />
-            <span className={compact ? "sr-only" : undefined}>Download</span>
-        </PillButtonUI>
     );
 }
