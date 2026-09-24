@@ -110,7 +110,7 @@ import { can, roleFromLoaded } from "@/app/lib/permissions";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
 import { readDocumentDragPayload } from "@/app/lib/docTableSelection";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 import {
     collectDroppedDocumentUploadEntries,
     documentUploadEntriesFromFiles,
@@ -325,6 +325,13 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const pendingDeleteFolder = folderDeleteDialog.pending;
     const pendingDeleteFolderStatus = folderDeleteDialog.status;
     const folderDeleteDismissTimerRef = useRef<number | null>(null);
+    const moveRetryRef = useRef<{
+        doc: (docId: string, targetFolderId: string | null) => Promise<void>;
+        folder: (
+            folderId: string,
+            targetFolderId: string | null,
+        ) => Promise<void>;
+    }>({ doc: async () => {}, folder: async () => {} });
 
     // Panel widths
     const [panelWidths, setPanelWidths] = useState<WorkspacePanelWidths>({
@@ -1420,6 +1427,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         docId: string,
         targetFolderId: string | null,
     ) => {
+        const previousFolderId =
+            project?.documents?.find((d) => d.id === docId)?.folder_id ?? null;
         setProject((prev) =>
             prev
                 ? {
@@ -1432,13 +1441,41 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                   }
                 : prev,
         );
-        await moveDocumentToFolder(projectId, docId, targetFolderId);
+        try {
+            await moveDocumentToFolder(projectId, docId, targetFolderId);
+        } catch (error) {
+            // Put the document back where it was before saying anything: the
+            // tree must never show a move the server refused. Only the moved
+            // document is restored, so a concurrent change to the rest of the
+            // project survives.
+            setProject((prev) =>
+                prev
+                    ? {
+                          ...prev,
+                          documents: (prev.documents ?? []).map((d) =>
+                              d.id === docId
+                                  ? { ...d, folder_id: previousFolderId }
+                                  : d,
+                          ),
+                      }
+                    : prev,
+            );
+            notifyError(error, {
+                action: "move this document",
+                dedupeKey: `project-move-doc:${docId}`,
+                onRetry: () =>
+                    void moveRetryRef.current.doc(docId, targetFolderId),
+            });
+        }
     };
 
     const handleMoveFolder = async (
         folderId: string,
         targetFolderId: string | null,
     ) => {
+        const previousParentId =
+            project?.folders?.find((f) => f.id === folderId)
+                ?.parent_folder_id ?? null;
         setProject((prev) =>
             prev
                 ? {
@@ -1451,8 +1488,39 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                   }
                 : prev,
         );
-        await moveSubfolderToFolder(projectId, folderId, targetFolderId);
+        try {
+            await moveSubfolderToFolder(projectId, folderId, targetFolderId);
+        } catch (error) {
+            // Revert only the folder that moved, then say so.
+            setProject((prev) =>
+                prev
+                    ? {
+                          ...prev,
+                          folders: (prev.folders ?? []).map((f) =>
+                              f.id === folderId
+                                  ? { ...f, parent_folder_id: previousParentId }
+                                  : f,
+                          ),
+                      }
+                    : prev,
+            );
+            notifyError(error, {
+                action: "move this folder",
+                dedupeKey: `project-move-folder:${folderId}`,
+                onRetry: () =>
+                    void moveRetryRef.current.folder(folderId, targetFolderId),
+            });
+        }
     };
+
+    // "Retry" re-enters the current handlers instead of the closures that
+    // raised the toast, so it moves against the project as it is now.
+    useEffect(() => {
+        moveRetryRef.current = {
+            doc: handleMoveDoc,
+            folder: handleMoveFolder,
+        };
+    });
 
     const handleDeleteDoc = async (docId: string) => {
         try {

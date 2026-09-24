@@ -17,6 +17,7 @@ import {
     listChats,
     renameChat,
 } from "@/app/lib/mikeApi";
+import { notifyError } from "@/app/lib/userFacingError";
 import type { Chat, Message } from "@/app/components/shared/types";
 import type { ProjectRole } from "@/app/lib/permissions";
 import { subscribeAssistantTurns } from "@/app/lib/assistantTurns";
@@ -33,6 +34,7 @@ interface ChatHistoryContextType {
     saveChat: (
         projectId?: string,
         projectRole?: ProjectRole | null,
+        options?: { onRetry?: () => void | Promise<void> },
     ) => Promise<string | null>;
     renameChat: (chatId: string, title: string) => Promise<void>;
     updateChatTitle: (chatId: string, title: string) => void;
@@ -71,6 +73,12 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
     const [newChatMessages, setNewChatMessages] = useState<Message[] | null>(
         null,
     );
+    // "Retry" re-enters the latest loader: a callback cannot reference
+    // itself, and these are re-created as the chat list changes.
+    const retryRef = useRef<{
+        loadChats: () => void;
+        loadMoreChats: () => void;
+    }>({ loadChats: () => {}, loadMoreChats: () => {} });
 
     const loadChats = useCallback(async () => {
         if (!user) {
@@ -85,10 +93,17 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             setChats(sortChatsByActivity(page));
             nextChatCursorRef.current = cursorFor(page.at(-1));
             setHasMoreChats(data.length > INITIAL_CHAT_LIMIT);
-        } catch {
+        } catch (error) {
             setChats([]);
             nextChatCursorRef.current = null;
             setHasMoreChats(false);
+            // An empty sidebar is how "you have no chats" looks, so a failed
+            // load has to say that it failed.
+            notifyError(error, {
+                action: "load your chats",
+                dedupeKey: "chat-history",
+                onRetry: () => retryRef.current.loadChats(),
+            });
         }
     }, [user]);
 
@@ -141,8 +156,12 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
                 ]);
             });
             setHasMoreChats(data.length > CHAT_PAGE_SIZE);
-        } catch {
-            // Preserve the current page and allow another scroll to retry.
+        } catch (error) {
+            notifyError(error, {
+                action: "load more chats",
+                dedupeKey: "chat-history-more",
+                onRetry: () => retryRef.current.loadMoreChats(),
+            });
         } finally {
             loadingMoreChatsRef.current = false;
             setLoadingMoreChats(false);
@@ -158,6 +177,13 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             }),
         [],
     );
+
+  useEffect(() => {
+    retryRef.current = {
+      loadChats: () => void loadChats(),
+      loadMoreChats: () => void loadMoreChats(),
+    };
+  }, [loadChats, loadMoreChats]);
 
     const replaceChatId = useCallback(
         (oldChatId: string, newChatId: string, title?: string) => {
@@ -191,6 +217,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
         async (
             projectId?: string,
             projectRole?: ProjectRole | null,
+            options?: { onRetry?: () => void | Promise<void> },
         ): Promise<string | null> => {
             try {
                 const { id } = await createChat(
@@ -232,7 +259,16 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
                     sortChatsByActivity([newChat, ...(prev ?? [])]),
                 );
                 return id;
-            } catch {
+            } catch (error) {
+                // Callers only see `null`, and the ones that do simply stop —
+                // so this is the last place that can tell the user their
+                // chat was never created. Retry is only offered when the
+                // caller can re-run its whole submit (create + send), since
+                // repeating the create alone would strand an empty chat.
+                notifyError(error, {
+                    action: "start a new chat",
+                    onRetry: options?.onRetry,
+                });
                 return null;
             }
         },

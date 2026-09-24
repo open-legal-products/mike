@@ -20,7 +20,11 @@ export default function AssistantPage() {
     } = useAssistantChat();
 
     async function handleInitialSubmit(message: Message) {
-        const chatId = await handleNewChat(message);
+        const chatId = await handleNewChat(message, undefined, {
+            // A failed create shows a toast; its Retry re-runs this whole
+            // submit so the user does not have to retype the message.
+            onRetry: () => handleInitialSubmit(message),
+        });
         if (chatId) router.push(`/assistant/chat/${chatId}`);
     }
 

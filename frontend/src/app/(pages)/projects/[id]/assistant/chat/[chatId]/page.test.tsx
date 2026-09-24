@@ -5,6 +5,7 @@ import {
     render,
     screen,
     waitFor,
+    within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -14,7 +15,8 @@ import type {
     Message,
 } from "@/app/components/shared/types";
 import ProjectAssistantChatPage from "./page";
-import { getProject } from "@/app/lib/mikeApi";
+import { getProject, moveDocumentToFolder } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 const state = vi.hoisted(() => ({
     attachmentFilename: "Budget.xlsx",
@@ -61,6 +63,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
         .fn()
         .mockImplementation(async () => state.projectChats),
     streamProjectChat: state.streamProjectChat,
+    moveDocumentToFolder: vi.fn(),
 }));
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({
@@ -94,10 +97,26 @@ vi.mock("@/app/components/projects/ProjectExplorer", () => ({
     ProjectExplorer: ({
         documents,
         onDocClick,
+        onMoveDoc,
     }: {
         documents: Document[];
         onDocClick: (doc: Document) => void;
-    }) => <button onClick={() => onDocClick(documents[0])}>Open draft</button>,
+        onMoveDoc?: (
+            docId: string,
+            targetFolderId: string | null,
+        ) => Promise<void>;
+    }) => (
+        <>
+            <button onClick={() => onDocClick(documents[0])}>Open draft</button>
+            <button onClick={() => void onMoveDoc?.("doc1", "folder-1")}>
+                Move draft
+            </button>
+            <span data-testid="draft-folder">
+                {documents.find((doc) => doc.id === "doc1")?.folder_id ??
+                    "root"}
+            </span>
+        </>
+    ),
 }));
 vi.mock("@/app/components/assistant/ChatInput", () => ({
     ChatInput: ({
@@ -227,6 +246,7 @@ async function renderWorkspace(canSend = true, strict = false) {
         const workspace = (
             <Suspense fallback="Loading">
                 <ProjectAssistantChatPage params={params} />
+                <ToastViewportUI />
             </Suspense>
         );
         render(strict ? <StrictMode>{workspace}</StrictMode> : workspace);
@@ -976,5 +996,42 @@ describe("leaving a project chat mid-stream", () => {
         expect(body.state.cancelled).toBe(false);
         expect(screen.queryByText(/First answer/)).not.toBeInTheDocument();
         expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();
+    });
+});
+
+describe("moving project documents", () => {
+    it("puts a document back in its folder and says the move failed", async () => {
+        // The move had no try/catch at all: the document stayed in its new
+        // folder on screen while the server never accepted it, and the
+        // rejection became an unhandled promise.
+        clearToasts();
+        vi.mocked(moveDocumentToFolder).mockRejectedValue(new Error("boom"));
+        await renderWorkspace();
+        expect(screen.getByTestId("draft-folder")).toHaveTextContent("root");
+
+        fireEvent.click(screen.getByRole("button", { name: "Move draft" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't move this document");
+        // Reverted before the toast: only the moved document is restored.
+        expect(screen.getByTestId("draft-folder")).toHaveTextContent("root");
+
+        vi.mocked(moveDocumentToFolder).mockClear();
+        vi.mocked(moveDocumentToFolder).mockResolvedValue(
+            undefined as unknown as Awaited<
+                ReturnType<typeof moveDocumentToFolder>
+            >,
+        );
+        fireEvent.click(
+            within(alert).getByRole("button", { name: "Retry" }),
+        );
+        await waitFor(() =>
+            expect(moveDocumentToFolder).toHaveBeenCalledWith(
+                "p1",
+                "doc1",
+                "folder-1",
+            ),
+        );
+        clearToasts();
     });
 });

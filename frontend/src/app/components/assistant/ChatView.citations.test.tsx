@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat, Citation, Message } from "@/app/components/shared/types";
 import { MikeApiError } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { ChatView } from "./ChatView";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 
@@ -144,18 +145,22 @@ function renderView(overrides: Partial<Chat> = {}) {
                 detach={vi.fn()}
                 canSend
             />
+            <ToastViewportUI />
         </PageChromeContext.Provider>,
     );
 }
 
 beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
         configurable: true,
         value: vi.fn(),
     });
 });
+
+afterEach(clearToasts);
 
 describe("ChatView citation on a chat shared without its documents", () => {
     it("explains a refused document instead of doing nothing", async () => {

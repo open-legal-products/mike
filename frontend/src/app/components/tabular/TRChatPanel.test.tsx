@@ -10,6 +10,7 @@ import {
     type TRChat,
 } from "@/app/lib/mikeApi";
 import { TRChatPanel } from "./TRChatPanel";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: vi.fn() }),
@@ -54,6 +55,7 @@ vi.mock("../assistant/ChatInput", () => ({
 
 describe("TRChatPanel header", () => {
     beforeEach(() => {
+        clearToasts();
         vi.clearAllMocks();
         vi.stubGlobal(
             "ResizeObserver",
@@ -80,6 +82,7 @@ describe("TRChatPanel header", () => {
         vi.mocked(deleteTabularChat).mockResolvedValue(undefined);
     });
     afterEach(() => {
+        clearToasts();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -217,26 +220,6 @@ describe("TRChatPanel header", () => {
         expect(screen.getByRole("button", { name: "New chat" })).toBeVisible();
     });
 
-    it("warns when an initial chat cannot be loaded", async () => {
-        vi.mocked(getTabularChatMessages).mockRejectedValue(
-            new Error("network unavailable"),
-        );
-
-        render(
-            <TRChatPanel
-                reviewId="review-1"
-                initialChatId="chat-1"
-                onCitationClick={vi.fn()}
-            />,
-        );
-
-        expect(await screen.findByText("Chat unavailable")).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "This chat’s messages could not be loaded. Please try again.",
-            ),
-        ).toBeInTheDocument();
-    });
 
     it("opens the rejected-key popup for a tabular chat stream error", async () => {
         vi.mocked(streamTabularChat).mockResolvedValue(
@@ -431,5 +414,141 @@ describe("TRChatPanel header", () => {
         );
         expect(screen.queryByRole("button", { name: "Actions" })).toBeNull();
         expect(screen.getByRole("button", { name: "New Chat" })).toBeVisible();
+    });
+
+    it("puts the chat back and explains when deleting it fails", async () => {
+        const user = userEvent.setup();
+        vi.mocked(deleteTabularChat).mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <TRChatPanel
+                    reviewId="review-1"
+                    initialChatId="chat-1"
+                    onCitationClick={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+        await screen.findByRole("button", { name: "Current draft" });
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't delete this chat");
+        // The optimistic removal is undone: the thread is open again.
+        expect(
+            await screen.findByRole("button", { name: "Current draft" }),
+        ).toBeVisible();
+        expect(
+            within(alert).getByRole("button", { name: "Retry" }),
+        ).toBeVisible();
+    });
+
+    it("does not reopen the deleted thread over one the user opened since", async () => {
+        const user = userEvent.setup();
+        let failDelete!: (error: unknown) => void;
+        vi.mocked(deleteTabularChat).mockReturnValue(
+            new Promise((_resolve, reject) => {
+                failDelete = reject;
+            }),
+        );
+        render(
+            <>
+                <TRChatPanel
+                    reviewId="review-1"
+                    initialChatId="chat-1"
+                    onCitationClick={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+        await screen.findByRole("button", { name: "Current draft" });
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+        // While the delete is in flight the user opens another thread.
+        await user.click(screen.getByRole("button", { name: /New Chat/ }));
+        await user.click(
+            await screen.findByRole("menuitem", { name: /Earlier advice/ }),
+        );
+        await screen.findByRole("button", { name: /Earlier advice/ });
+
+        await act(async () => {
+            failDelete(new Error("boom"));
+            await Promise.resolve();
+        });
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't delete this chat",
+        );
+        // The thread the user is reading stays open...
+        expect(
+            screen.getByRole("button", { name: /Earlier advice/ }),
+        ).toBeVisible();
+        // ...and the chat that failed to delete is back in the history.
+        await user.click(
+            screen.getByRole("button", { name: /Earlier advice/ }),
+        );
+        expect(
+            await screen.findByRole("menuitem", { name: /Current draft/ }),
+        ).toBeVisible();
+    });
+
+    it("restores the old title and explains when renaming fails", async () => {
+        const user = userEvent.setup();
+        vi.mocked(renameTabularChat).mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <TRChatPanel
+                    reviewId="review-1"
+                    initialChatId="chat-1"
+                    onCitationClick={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+        await screen.findByRole("button", { name: "Current draft" });
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+        const input = await screen.findByRole("textbox");
+        await user.clear(input);
+        await user.type(input, "Renamed thread{Enter}");
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't rename this chat");
+        expect(
+            await screen.findByRole("button", { name: "Current draft" }),
+        ).toBeVisible();
+    });
+
+    it("reports a chat history that could not be loaded", async () => {
+        vi.mocked(getTabularChats).mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <TRChatPanel reviewId="review-1" onCitationClick={vi.fn()} />
+                <ToastViewportUI />
+            </>,
+        );
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't load your chat history");
+        expect(
+            within(alert).getByRole("button", { name: "Retry" }),
+        ).toBeVisible();
+    });
+
+    it("reports a transcript that could not be loaded instead of showing an empty chat", async () => {
+        vi.mocked(getTabularChatMessages).mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <TRChatPanel
+                    reviewId="review-1"
+                    initialChatId="chat-1"
+                    onCitationClick={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't load this chat");
     });
 });

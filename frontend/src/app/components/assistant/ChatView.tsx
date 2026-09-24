@@ -43,14 +43,13 @@ import { LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS } from "@/app/components/ui/liqui
 import { HeaderButtonUI, HeaderButtonsUI } from "@/shared/ui/HeaderButtonsUI";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
 import {
     getModelProvider,
     providerLabel,
 } from "@/app/lib/modelAvailability";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, UserVisibleError } from "@/app/lib/userFacingError";
 
 interface Props {
     chatId?: string | null;
@@ -170,10 +169,6 @@ export function ChatView({
          *  citation case, where the documents were simply not shared. */
         title?: string;
         message?: string;
-    } | null>(null);
-    const [actionError, setActionError] = useState<{
-        title: string;
-        message: string;
     } | null>(null);
     const [workflowModalInitialId, setWorkflowModalInitialId] = useState<
         string | undefined
@@ -368,13 +363,12 @@ export function ChatView({
                 });
                 return;
             }
-            setActionError({
-                title: "Document unavailable",
-                message:
-                    status === "denied"
-                        ? "This document is no longer available."
-                        : "This document could not be opened. Please try again.",
-            });
+            notifyError(new UserVisibleError(
+                status === "denied"
+                    ? "This document is no longer available."
+                    : "This document could not be opened. Please try again.",
+                { kind: status === "denied" ? "forbidden" : "unknown", retryable: false },
+            ), { action: "open this document" });
         },
         [activeChat?.project_id, activeChatRole],
     );
@@ -875,12 +869,9 @@ export function ChatView({
         try {
             await renameChat(activeChat.id, title.trim());
         } catch (error) {
-            setActionError({
-                title: "Chat not renamed",
-                message: userFacingApiError(
-                    error,
-                    "The chat could not be renamed. Please try again.",
-                ),
+            notifyError(error, {
+                action: "rename this chat",
+                fallback: "The chat could not be renamed. Try again.",
             });
         }
     };
@@ -898,12 +889,10 @@ export function ChatView({
             await deleteChat(activeChat.id);
             router.push("/assistant");
         } catch (error) {
-            setActionError({
-                title: "Chat not deleted",
-                message: userFacingApiError(
-                    error,
-                    "The chat could not be deleted. Please try again.",
-                ),
+            notifyError(error, {
+                action: "delete this chat",
+                fallback: "The chat could not be deleted. Try again.",
+                onRetry: () => void handleDeleteChat(),
             });
         }
     };
@@ -1243,12 +1232,6 @@ export function ChatView({
                         : "That API key"
                 } was rejected. If it is your own key, check it in Settings; otherwise contact your administrator.`}
                 onClose={() => onDismissInvalidApiKey?.()}
-            />
-            <WarningPopup
-                open={!!actionError}
-                title={actionError?.title ?? "Chat action failed"}
-                message={actionError?.message ?? null}
-                onClose={() => setActionError(null)}
             />
 
             {panelMounted && (

@@ -36,7 +36,11 @@ import {
     ReasoningBlock,
 } from "../assistant/message/EventBlocks";
 import { readSseFrames } from "@/app/lib/sse";
-import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import { UserVisibleError, notifyError, notifyInfo } from "@/app/lib/userFacingError";
+import {
+    LIQUID_GLASS_FLAT_CLASS,
+} from "@/app/components/ui/liquid-surface";
 import { ChatPanelHeader } from "../shared/ChatPanelHeader";
 import { HeaderActionsMenu } from "../shared/HeaderActionsMenu";
 import { cn } from "@/app/lib/utils";
@@ -44,7 +48,6 @@ import { buildTabularChatHistory } from "@/app/lib/tabularChatHistory";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { subscribeToTabularChatSettingsUpdates } from "@/app/lib/tabularChatSettingsEvents";
 import { sortChatsByActivity, touchChatActivity } from "@/app/lib/chatActivity";
-import { WarningPopup } from "../popups/WarningPopup";
 import { ApiKeyMissingPopup } from "../popups/ApiKeyMissingPopup";
 import {
     getModelProvider,
@@ -62,6 +65,12 @@ interface TRMessage {
     events?: AssistantEvent[];
     annotations?: TRCitationAnnotation[];
     isStreaming?: boolean;
+    /**
+     * This turn ended in a failure. Already-streamed text is kept, but the
+     * bubble has to say the answer is unfinished — a half-written answer with
+     * nothing after it reads as a complete one.
+     */
+    error?: string;
 }
 
 function parseCourtlistenerEventCases(value: unknown) {
@@ -404,6 +413,9 @@ function TRAssistantMessage({
                     })}
                 </div>
             )}
+            {msg.error ? (
+                <p className="mt-2 text-xs text-red-600">{msg.error}</p>
+            ) : null}
         </div>
     );
 }
@@ -484,7 +496,6 @@ export function TRChatPanel({
     const [isLoadingChats, setIsLoadingChats] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
     const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-    const [messageLoadWarning, setMessageLoadWarning] = useState(false);
     const [rejectedApiKey, setRejectedApiKey] = useState<{
         provider: ModelProvider | null;
     } | null>(null);
@@ -572,25 +583,36 @@ export function TRChatPanel({
 
     // Load existing chats from DB on mount
     useEffect(() => {
-        getTabularChats(reviewId)
-            .then((loadedChats) => {
-                setChats(sortChatsByActivity(loadedChats));
-                if (!initialChatId) return;
-                const initialChat = loadedChats.find(
-                    (chat) => chat.id === initialChatId,
-                );
-                setCurrentChatModel(initialChat?.model ?? null);
-                setCurrentChatReasoningLevel(
-                    initialChat?.reasoning_level ?? null,
-                );
-            })
-            .catch(() => {
-                if (initialChatId) {
-                    setCurrentChatModel(null);
-                    setCurrentChatReasoningLevel(null);
-                }
-            })
-            .finally(() => setIsLoadingChats(false));
+        const loadChats = () => {
+            setIsLoadingChats(true);
+            getTabularChats(reviewId)
+                .then((loadedChats) => {
+                    setChats(sortChatsByActivity(loadedChats));
+                    if (!initialChatId) return;
+                    const initialChat = loadedChats.find(
+                        (chat) => chat.id === initialChatId,
+                    );
+                    setCurrentChatModel(initialChat?.model ?? null);
+                    setCurrentChatReasoningLevel(
+                        initialChat?.reasoning_level ?? null,
+                    );
+                })
+                .catch((error) => {
+                    if (initialChatId) {
+                        setCurrentChatModel(null);
+                        setCurrentChatReasoningLevel(null);
+                    }
+                    // Without this the chat menu just stays empty and the
+                    // model/reasoning pickers silently fall back to defaults.
+                    notifyError(error, {
+                        action: "load your chat history",
+                        dedupeKey: `tr-chats:${reviewId}`,
+                        onRetry: loadChats,
+                    });
+                })
+                .finally(() => setIsLoadingChats(false));
+        };
+        loadChats();
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps -- initialChatId is the mount-time thread; live chat id changes must not refetch settings
 
     // ChatInput persists through UserProfileContext. Mirror successful saves
@@ -636,10 +658,22 @@ export function TRChatPanel({
     useEffect(() => {
         if (!initialChatId) return;
         setIsLoadingMessages(true);
-        getTabularChatMessages(reviewId, initialChatId)
-            .then((raw) => setMessages(mapTRMessages(raw) as TRMessage[]))
-            .catch(() => setMessageLoadWarning(true))
-            .finally(() => setIsLoadingMessages(false));
+        const loadInitialMessages = () => {
+            setIsLoadingMessages(true);
+            getTabularChatMessages(reviewId, initialChatId)
+                .then((raw) => setMessages(mapTRMessages(raw) as TRMessage[]))
+                .catch((error) => {
+                    // An empty transcript is indistinguishable from a new
+                    // chat, so say the history could not be loaded.
+                    notifyError(error, {
+                        action: "load this chat",
+                        dedupeKey: `tr-chat-messages:${initialChatId}`,
+                        onRetry: loadInitialMessages,
+                    });
+                })
+                .finally(() => setIsLoadingMessages(false));
+        };
+        loadInitialMessages();
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Fill in title once chats list arrives
@@ -900,8 +934,19 @@ export function TRChatPanel({
     }
 
     async function handleDeleteChat(chatId: string) {
+        // Everything the optimistic removal throws away, so a failed delete
+        // can put the thread back instead of losing it from the menu.
+        const snapshot = {
+            chats,
+            currentChatId,
+            currentChatTitle,
+            currentChatModel,
+            currentChatReasoningLevel,
+            messages,
+        };
         setChats((prev) => prev.filter((c) => c.id !== chatId));
-        if (chatId === currentChatId) {
+        const clearedActiveThread = chatId === currentChatId;
+        if (clearedActiveThread) {
             // Same exit as New chat / Load chat: retire the in-flight stream's
             // generation so its late events cannot land in the emptied list.
             detachActiveStream();
@@ -913,14 +958,47 @@ export function TRChatPanel({
             setCurrentChatReasoningLevel(null);
             setMessages([]);
         }
+        // Every thread switch (and every submit) bumps this, so it doubles
+        // as "has the panel moved on since we emptied it?".
+        const clearedGeneration = streamGenerationRef.current;
         try {
             await deleteTabularChat(reviewId, chatId);
-        } catch {
-            /* ignore */
+        } catch (error) {
+            // Put back only the thread that failed to delete: the list is
+            // reloaded, renamed and appended to while this request is in
+            // flight, and restoring the whole snapshot threw that away.
+            setChats((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot.chats, [
+                    chatId,
+                ]),
+            );
+            if (
+                clearedActiveThread &&
+                // Reopen the deleted thread only if the user has not since
+                // opened another, started a new chat or sent a message —
+                // re-seating these messages over that would lose their work.
+                streamGenerationRef.current === clearedGeneration
+            ) {
+                setCurrentChatId(snapshot.currentChatId);
+                setCurrentChatTitle(snapshot.currentChatTitle);
+                setCurrentChatModel(snapshot.currentChatModel);
+                setCurrentChatReasoningLevel(
+                    snapshot.currentChatReasoningLevel,
+                );
+                setMessages(snapshot.messages);
+            }
+            notifyError(error, {
+                action: "delete this chat",
+                onRetry: () => {
+                    void handleDeleteChat(chatId);
+                },
+            });
         }
     }
 
     async function handleRenameChat(chatId: string, title: string) {
+        const previousTitle =
+            chats.find((c) => c.id === chatId)?.title ?? null;
         setChats((prev) =>
             touchChatActivity(
                 prev.map((c) => (c.id === chatId ? { ...c, title } : c)),
@@ -930,8 +1008,19 @@ export function TRChatPanel({
         if (chatId === currentChatId) setCurrentChatTitle(title);
         try {
             await renameTabularChat(reviewId, chatId, title);
-        } catch {
-            /* ignore */
+        } catch (error) {
+            setChats((prev) =>
+                prev.map((c) =>
+                    c.id === chatId ? { ...c, title: previousTitle } : c,
+                ),
+            );
+            if (chatId === currentChatId) setCurrentChatTitle(previousTitle);
+            notifyError(error, {
+                action: "rename this chat",
+                onRetry: () => {
+                    void handleRenameChat(chatId, title);
+                },
+            });
         }
     }
 
@@ -955,8 +1044,15 @@ export function TRChatPanel({
         try {
             const raw = await getTabularChatMessages(reviewId, chatId);
             setMessages(mapTRMessages(raw) as TRMessage[]);
-        } catch {
-            /* ignore */
+        } catch (error) {
+            // Otherwise the thread opens blank and reads as an empty chat.
+            notifyError(error, {
+                action: "load this chat",
+                dedupeKey: `tr-chat-messages:${chatId}`,
+                onRetry: () => {
+                    void handleLoadChat(chatId);
+                },
+            });
         } finally {
             setIsLoadingMessages(false);
         }
@@ -966,7 +1062,10 @@ export function TRChatPanel({
         abortRef.current?.abort();
     }
 
-    async function handleSubmit(message: Message) {
+    async function handleSubmit(
+        message: Message,
+        retry?: { transcript: TRMessage[]; chatId: string | null },
+    ) {
         const trimmed = message.content.trim();
         if (!trimmed || isLoading) return;
         if (!message.model || !message.reasoning) return;
@@ -974,9 +1073,13 @@ export function TRChatPanel({
         setCurrentChatReasoningLevel(message.reasoning);
 
         // Build messages array for backend (plain text history)
-        const history = buildTabularChatHistory(messages);
+        const transcriptBeforeSend = retry?.transcript ?? messages;
+        const targetChatId = retry ? retry.chatId : currentChatId;
+        const history = buildTabularChatHistory(transcriptBeforeSend);
         const allMessages = [...history, { role: "user", content: trimmed }];
 
+        // The transcript as it stood before this turn. Retry rewinds to it so
+        // resending cannot duplicate the question or the failed answer.
         const userMsg: TRMessage = { role: "user", content: trimmed };
         const assistantMsg: TRMessage = {
             role: "assistant",
@@ -985,7 +1088,7 @@ export function TRChatPanel({
             isStreaming: true,
         };
 
-        setMessages((prev) => [...prev, userMsg, assistantMsg]);
+        setMessages([...transcriptBeforeSend, userMsg, assistantMsg]);
         setIsLoading(true);
 
         setTimeout(() => {
@@ -1000,7 +1103,15 @@ export function TRChatPanel({
 
         const controller = new AbortController();
         abortRef.current = controller;
-        let streamChatId = currentChatId;
+        let streamChatId = targetChatId;
+        const retryThisTurn = async () => {
+            if (streamGenerationRef.current !== gen || abortRef.current ||
+                currentChatIdRef.current !== streamChatId) {
+                notifyInfo("This chat has changed. Send the message again from the chat it belongs to.");
+                return;
+            }
+            await handleSubmit(message, { transcript: transcriptBeforeSend, chatId: streamChatId });
+        };
         let streamHadError = false;
         if (streamChatId) {
             setChatResponseStatuses((current) => ({
@@ -1014,7 +1125,7 @@ export function TRChatPanel({
             const response = await streamTabularChat(
                 reviewId,
                 allMessages,
-                currentChatId,
+                targetChatId,
                 controller.signal,
                 { reviewTitle, projectName },
                 message.model,
@@ -1078,6 +1189,78 @@ export function TRChatPanel({
                                 ),
                             );
                             setCurrentChatTitle(title);
+                            continue;
+                        }
+
+                        if (data.type === "error") {
+                            if (data.code === "invalid_api_key") {
+                                setRejectedApiKey({
+                                    provider: getModelProvider(message.model),
+                                });
+                            }
+                            clearStreamingPlaceholders();
+                            pushEvent({
+                                type: "error",
+                                message:
+                                    data.safe_to_display === true &&
+                                    typeof data.message === "string" &&
+                                    data.message.trim()
+                                        ? data.message.trim()
+                                        : "An error occurred. Please try again.",
+                                ...(data.safe_to_display === true
+                                    ? { safe_to_display: true }
+                                    : {}),
+                                ...(data.code === "invalid_api_key"
+                                    ? { code: "invalid_api_key" as const }
+                                    : {}),
+                            });
+                            // The server ends a failed turn with this frame
+                            // and then `[DONE]`, so without this branch the
+                            // answer just stops mid-sentence and looks
+                            // finished. `safe_to_display` marks text the
+                            // backend wrote for the user (a configuration
+                            // refusal); anything else is internal and is
+                            // replaced.
+                            const safeToDisplay = data.safe_to_display === true;
+                            const errorText =
+                                safeToDisplay &&
+                                typeof data.message === "string" &&
+                                data.message.trim()
+                                    ? data.message.trim()
+                                    : "Mike couldn't finish this answer. Try again.";
+                            flushDrip();
+                            clearStreamingPlaceholders();
+                            setMessages((prev) => {
+                                const updated = [...prev];
+                                const last = updated[updated.length - 1];
+                                if (last?.role === "assistant") {
+                                    // Partial content stays; the turn is
+                                    // marked failed rather than erased.
+                                    updated[updated.length - 1] = {
+                                        ...last,
+                                        isStreaming: false,
+                                        error: errorText,
+                                    };
+                                }
+                                return updated;
+                            });
+                            notifyError(
+                                new UserVisibleError(errorText, {
+                                    kind: "server",
+                                    // A refusal the backend wrote (no key, a
+                                    // disallowed model) answers the same way
+                                    // however many times it is re-sent.
+                                    retryable: !safeToDisplay,
+                                }),
+                                {
+                                    action: "get a response",
+                                    dedupeKey: `tr-chat-error:${currentChatId ?? reviewId}`,
+                                    onRetry: safeToDisplay
+                                        ? undefined
+                                        : retryThisTurn,
+                                },
+                            );
+                            setIsLoading(false);
                             continue;
                         }
 
@@ -1512,31 +1695,6 @@ export function TRChatPanel({
                             continue;
                         }
 
-                        if (data.type === "error") {
-                            if (data.code === "invalid_api_key") {
-                                setRejectedApiKey({
-                                    provider: getModelProvider(message.model),
-                                });
-                            }
-                            clearStreamingPlaceholders();
-                            pushEvent({
-                                type: "error",
-                                message:
-                                    data.safe_to_display === true &&
-                                    typeof data.message === "string" &&
-                                    data.message.trim()
-                                        ? data.message.trim()
-                                        : "An error occurred. Please try again.",
-                                ...(data.safe_to_display === true
-                                    ? { safe_to_display: true }
-                                    : {}),
-                                ...(data.code === "invalid_api_key"
-                                    ? { code: "invalid_api_key" as const }
-                                    : {}),
-                            });
-                            continue;
-                        }
-
                         if (data.type === "citations") {
                             // End-of-stream signal — scrub any lingering
                             // placeholders so they don't persist into the
@@ -1558,7 +1716,13 @@ export function TRChatPanel({
                             continue;
                         }
                 } catch (err) {
-                    console.warn("[TRChatPanel] failed to handle SSE event:", data, err);
+                    // One notice per stream: an event we could not apply means
+                    // part of the answer is missing from the transcript, and
+                    // the stream itself keeps going.
+                    notifyError(err, {
+                        action: "show part of this answer",
+                        dedupeKey: `tr-chat-frame:${gen}`,
+                    });
                 }
             }
 
@@ -1615,33 +1779,26 @@ export function TRChatPanel({
                 const updated = [...prev];
                 const last = updated[updated.length - 1];
                 if (last?.role === "assistant") {
-                    const hasContent = (last.events ?? []).some(
-                        (e) =>
-                            e.type === "content" &&
-                            (e as { type: "content"; text: string }).text,
-                    );
-                    if (!hasContent) {
-                        updated[updated.length - 1] = {
-                            ...last,
-                            isStreaming: false,
-                            events: [
-                                ...(last.events ?? []),
-                                {
-                                    type: "content" as const,
-                                    text: isAbort
-                                        ? ""
-                                        : "An error occurred. Please try again.",
-                                },
-                            ],
-                        };
-                    } else {
-                        updated[updated.length - 1] = {
-                            ...last,
-                            isStreaming: false,
-                        };
-                    }
+                    // Whatever arrived before the break is real answer text
+                    // and stays on screen; only the streaming state is closed.
+                    updated[updated.length - 1] = {
+                        ...last,
+                        isStreaming: false,
+                    };
                 }
                 return updated;
+            });
+            // The failure used to be written into the answer as if the model
+            // had said it, which left no way to tell a real answer from a
+            // transport error and offered nothing to do about it.
+            notifyError(err, {
+                action: "finish this answer",
+                fallback:
+                    "The answer stopped before it finished. Anything already shown is kept.",
+                dedupeKey: `tr-chat-stream:${reviewId}`,
+                onRetry: isAbort
+                    ? undefined
+                    : retryThisTurn,
             });
         } finally {
             if (streamGenerationRef.current === gen) setIsLoading(false);
@@ -1845,12 +2002,6 @@ export function TRChatPanel({
                     }
                 />
             </div>
-            <WarningPopup
-                open={messageLoadWarning}
-                title="Chat unavailable"
-                message="This chat’s messages could not be loaded. Please try again."
-                onClose={() => setMessageLoadWarning(false)}
-            />
             <ApiKeyMissingPopup
                 open={rejectedApiKey !== null}
                 title="API key rejected"
