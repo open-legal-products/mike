@@ -29,7 +29,6 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 import type { HeaderActionsMenuItem } from "./HeaderActionsMenu";
 
 export interface DocumentActions {
-    onOpen: () => void;
     onAddToChat?: () => void | Promise<void>;
     onDownload?: () => void | Promise<void>;
     onRename?: (filename: string) => Promise<void>;
@@ -38,12 +37,17 @@ export interface DocumentActions {
     downloading?: boolean;
 }
 
-/** Shared by explorer rows and document tabs to keep their file actions identical. */
+/** Shared file actions; only explorer rows supply an Open action. */
 export function documentContextMenuItems(
-    actions: Omit<DocumentActions, "onRename"> & { onRename?: () => void },
+    actions: Omit<DocumentActions, "onRename"> & {
+        onOpen?: () => void;
+        onRename?: () => void;
+    },
 ): HeaderActionsMenuItem[] {
     return [
-        { label: "Open", icon: FileText, onSelect: actions.onOpen },
+        ...(actions.onOpen
+            ? [{ label: "Open", icon: FileText, onSelect: actions.onOpen }]
+            : []),
         ...(actions.onAddToChat
             ? [
                   {
@@ -187,7 +191,7 @@ export function DocumentTabActions({
     const [tabElement, setTabElement] = useState<HTMLElement | null>(null);
     const [error, setError] = useState<string | null>(null);
     function open(target: HTMLElement, x: number, y: number) {
-        if (renaming) return;
+        if (renaming || !items.length) return;
         setTabElement(target);
         setPosition({ x, y });
     }
@@ -209,13 +213,13 @@ export function DocumentTabActions({
         >
             {children({
                 onContextMenu: (event) => {
-                    if (renaming) return;
+                    if (renaming || !items.length) return;
                     event.preventDefault();
                     event.stopPropagation();
                     open(event.currentTarget, event.clientX, event.clientY);
                 },
                 onMenuKeyDown: (event) => {
-                    if (event.target !== event.currentTarget) return false;
+                    if (!items.length || event.target !== event.currentTarget) return false;
                     if (
                         event.key !== "ContextMenu" &&
                         !(event.shiftKey && event.key === "F10")

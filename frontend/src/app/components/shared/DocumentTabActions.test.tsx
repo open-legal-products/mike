@@ -107,7 +107,7 @@ function menuFor(name = "Second.docx") {
 describe.each(["project", "assistant"] as const)(
     "%s document tabs",
     (surface) => {
-        it("uses all explorer actions and targets the right-clicked inactive tab", async () => {
+        it("omits Open and targets the right-clicked inactive tab", async () => {
             const action = vi.fn();
             render(
                 <Harness surface={surface} rename={vi.fn()} action={action} />,
@@ -118,7 +118,6 @@ describe.each(["project", "assistant"] as const)(
                     .getAllByRole("menuitem")
                     .map((item) => item.textContent),
             ).toEqual([
-                "Open",
                 "Add to chat",
                 "Download",
                 "Rename",

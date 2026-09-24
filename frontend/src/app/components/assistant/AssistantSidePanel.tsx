@@ -131,7 +131,7 @@ interface Props {
     onCloseAll: () => void;
     documentActions?: (
         document: PanelDocument,
-    ) => Omit<DocumentActions, "onOpen">;
+    ) => DocumentActions;
     onReorderTabs?: (
         draggedTabId: string,
         targetTabId: string,
@@ -341,7 +341,6 @@ export function AssistantSidePanel({
                                                   : fileActions.onDownload?.();
                                           }
                                         : undefined,
-                                    onOpen: () => onActivateTab(tab.id),
                                 }}
                             >
                                 {({

@@ -132,7 +132,6 @@ export function ProjectDocumentTabs({
                             key={tab.documentId}
                             filename={tab.filename}
                             actions={{
-                                onOpen: () => onActivate(tab.documentId),
                                 onAddToChat:
                                     document && onAddToChat
                                         ? () => onAddToChat(document)

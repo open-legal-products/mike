@@ -6,7 +6,7 @@ View/Edit toggle. EigenPal's native toolbar owns mode switching and remains
 visible in Viewing mode so readers can return to Editing without reopening the
 file. The filename and download rows are omitted; only the formatting toolbar
 sits above the document. Right-click a viewer or assistant document tab for the
-explorer’s Open, Add to chat, Download, Rename, and Delete file actions. Rename
+explorer’s Add to chat, Download, Rename, and Delete file actions. Rename
 edits the tab label in place (Enter or blur to save, Escape to cancel).
 
 `DocxView` accepts `defaultMode` (view-only when omitted). The assistant document
