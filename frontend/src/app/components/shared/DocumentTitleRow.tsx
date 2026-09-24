@@ -79,7 +79,7 @@ export function DocumentTitleRow({
                 </div>
                 <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
                     {document.type === "docx" && saveState?.ready && (
-                        <span role="status" aria-live="polite" className="text-xs text-muted-foreground">
+                        <span role="status" aria-live="polite" className="mr-2 text-xs text-muted-foreground">
                             {saveState.error ? "Not saved" : saveState.dirty || saveState.status === "saving" ? "Saving…" : "Saved"}
                         </span>
                     )}
