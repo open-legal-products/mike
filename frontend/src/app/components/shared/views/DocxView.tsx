@@ -4,10 +4,8 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { Loader2 } from "lucide-react";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { useDocxAutosave } from "@/app/hooks/useDocxAutosave";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
-import type { DocxMode, DocxSurface } from "./DocxRenderer.types";
+import type { DocxMode, DocxSaveState, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { docxRevisionElements } from "./docxRevisionElements";
@@ -36,6 +34,7 @@ interface Props {
     displayUrl?: string | null;
     onReady?: () => void;
     onDownloadReady?: (download: (() => Promise<void>) | null) => void;
+    onSaveStateChange?: (documentId: string, state: DocxSaveState | null) => void;
     highlightEdit?: {
         key: string;
         inserted_text?: string;
@@ -98,7 +97,7 @@ export function DocxView(props: Props) {
 function DocxViewContent(props: Props) {
     const {
         documentId, versionId, displayUrl, refetchKey, cacheBytes = true,
-        warning, onWarningDismiss, onDownloadReady, rounded = true,
+        warning, onWarningDismiss, onDownloadReady, onSaveStateChange, rounded = true,
     } = props;
     const [initialMode] = useState<DocxMode>(props.defaultMode ?? "view");
     const [downloading, setDownloading] = useState(false);
@@ -120,6 +119,12 @@ function DocxViewContent(props: Props) {
         exportDocx: () => surfaceRef.current?.exportDocx?.(),
     });
     const { markChanged } = autosave;
+    const { dirty, status, error: saveError, save } = autosave;
+    const saveReady = !!bytes && !error && !displayUrl && readyKey === renderKey && failedKey !== renderKey;
+    useEffect(() => {
+        onSaveStateChange?.(documentId, { ready: saveReady, dirty, status, error: saveError, save });
+    }, [onSaveStateChange, documentId, saveReady, dirty, status, saveError, save]);
+    useEffect(() => () => onSaveStateChange?.(documentId, null), [onSaveStateChange, documentId]);
     const lastScrollTop = useRef(props.initialScrollTop ?? 0);
     const propsRef = useRef(props);
     const scrollFrame = useRef(0);
@@ -254,6 +259,7 @@ function DocxViewContent(props: Props) {
                     </div>
                 )}
                 {message && <div role="alert" className="flex h-full items-center justify-center p-5 text-sm text-destructive">{message}</div>}
+                {!onSaveStateChange && saveError && <p role="alert" className="px-3 py-1 text-xs text-destructive">{saveError}</p>}
                 <div className="docx-view-container min-h-0 flex-1" hidden={!!message}>
                     {bytes && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>
@@ -263,21 +269,6 @@ function DocxViewContent(props: Props) {
                         </DocxRenderBoundary>
                     )}
                 </div>
-                {!displayUrl && !message && readyKey === renderKey && bytes && (
-                    <div className={`absolute bottom-4 right-4 z-20 flex max-w-[calc(100%-2rem)] flex-wrap items-center justify-end gap-2 rounded-2xl px-3 py-1.5 text-xs text-muted-foreground ${LIQUID_GLASS_TRANSLUCENT_CLASS}`}>
-                        <span role="status" aria-live="polite" className={autosave.error ? "text-destructive" : undefined}>
-                            {autosave.error ?? (autosave.status === "saving" ? "Saving…" : autosave.dirty ? "Unsaved changes" : autosave.status === "saved" ? "Saved" : "Autosave on")}
-                        </span>
-                        {autosave.dirty && autosave.status !== "saving" && (
-                            <PillButtonUI tone="white" size="xs" onClick={() => void autosave.save()}>
-                                {autosave.error ? "Retry save" : "Save now"}
-                            </PillButtonUI>
-                        )}
-                        {autosave.error && (
-                            <PillButtonUI tone="white" size="xs" onClick={() => void download()}>Download copy</PillButtonUI>
-                        )}
-                    </div>
-                )}
             </div>
         </div>
     );

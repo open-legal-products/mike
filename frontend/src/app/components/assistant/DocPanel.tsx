@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PdfView } from "../shared/views/PdfView";
 import { DocxView } from "../shared/views/DocxView";
+import type { DocxSaveState } from "../shared/views/DocxRenderer.types";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
 import {
     CitationQuotesSection,
@@ -92,6 +93,13 @@ export function DocPanel({
     onScrollChange,
     onDownloadReady,
 }: Props) {
+    const [saveState, setSaveState] = useState<DocxSaveState | null>(null);
+    const onSaveStateChange = useCallback((_documentId: string, state: DocxSaveState | null) => setSaveState(state), []);
+    const localDownload = useRef<(() => Promise<void>) | null>(null);
+    const handleDownloadReady = useCallback((download: (() => Promise<void>) | null) => {
+        localDownload.current = download;
+        onDownloadReady?.(download);
+    }, [onDownloadReady]);
     const {
         document: resolvedDocument,
         isLoading: isDocumentLoading,
@@ -187,11 +195,13 @@ export function DocPanel({
 
     return (
         <div className="flex h-full flex-col">
-            {viewType !== "docx" && <DocumentTitleRow
+            <DocumentTitleRow
                 document={resolvedDocument}
                 isReloading={isReloading}
                 compactActions={compactActions}
-            />}
+                saveState={saveState}
+                onDownload={() => localDownload.current?.()}
+            />
 
             {mode.kind === "citation" && (
                 <CitationQuotesSection
@@ -242,7 +252,8 @@ export function DocPanel({
                     />
                 ) : viewType === "docx" ? (
                     <DocxView
-                        onDownloadReady={onDownloadReady}
+                        onDownloadReady={handleDownloadReady}
+                        onSaveStateChange={onSaveStateChange}
                         defaultMode="edit"
                         filename={resolvedDocument.title}
                         documentId={documentId}

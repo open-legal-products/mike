@@ -6,12 +6,14 @@ import { authenticatedFetch } from "@/app/lib/authEvents";
 import { useFetchSingleDoc } from "@/app/hooks/useFetchSingleDoc";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import type { Document } from "@/app/components/shared/types";
+import type { DocxSaveState } from "@/app/components/shared/views/DocxRenderer.types";
 import {
     ProjectDocumentPanels,
     type ProjectDocumentTab,
 } from "./ProjectDocumentPanels";
 
 const localExport = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const localSave = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/app/lib/mikeApi", async (original) => ({
     ...await original<typeof import("@/app/lib/mikeApi")>(),
     getDocumentFile: vi.fn(),
@@ -74,6 +76,7 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         cacheBytes,
         defaultMode,
         onDownloadReady,
+        onSaveStateChange,
     }: {
         documentId: string;
         versionId?: string | null;
@@ -81,6 +84,7 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         cacheBytes: boolean;
         defaultMode: string;
         onDownloadReady?: (download: (() => Promise<void>) | null) => void;
+        onSaveStateChange?: (id: string, state: DocxSaveState | null) => void;
     }) => {
         const { bytes } = useFetchDocxBytes(
             documentId,
@@ -94,6 +98,11 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
             onDownloadReady?.(localExport);
             return () => onDownloadReady?.(null);
         }, [bytes, onDownloadReady]);
+        useEffect(() => {
+            if (!bytes) return;
+            onSaveStateChange?.(documentId, { ready: true, dirty: true, status: "pending", error: null, save: localSave });
+            return () => onSaveStateChange?.(documentId, null);
+        }, [bytes, documentId, onSaveStateChange]);
         return <div data-testid="docx-mode" data-mode={defaultMode}><Viewer id={documentId} loaded={!!bytes} /></div>;
     },
 }));
@@ -112,6 +121,7 @@ const documents = tabs.map((tab) => ({
 const dismiss = vi.fn();
 beforeEach(() => {
     localExport.mockClear();
+    localSave.mockClear();
     vi.mocked(getDocumentFile).mockReset();
     vi.mocked(authenticatedFetch)
         .mockReset()
@@ -278,6 +288,10 @@ it("exports open DOCX edits from the title bar instead of downloading server byt
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     await waitFor(() => expect(localExport).toHaveBeenCalledOnce());
     expect(getDocumentFile).not.toHaveBeenCalled();
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save.parentElement).toBe(screen.getByRole("button", { name: "Download" }).parentElement);
+    fireEvent.click(save);
+    expect(localSave).toHaveBeenCalledOnce();
 });
 
 it("downloads the PDF version shown in the viewer's title bar", async () => {

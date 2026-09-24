@@ -160,12 +160,14 @@ it.each(["edit", "view"] as const)("passes the initial %s mode to the native too
 });
 
 it("keeps edits after a failed export and downloads the edited bytes on retry", async () => {
+    const onSaveStateChange = vi.fn();
     const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:edited-document");
     const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     exportDocx.mockRejectedValueOnce(new Error("internal serializer details"));
     let download: (() => Promise<void>) | null = null;
     render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} defaultMode="edit"
+        onSaveStateChange={onSaveStateChange}
         onDownloadReady={(handler) => { download = handler; }} />);
     await screen.findByText("EigenPal preview");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
@@ -184,7 +186,7 @@ it("keeps edits after a failed export and downloads the edited bytes on retry", 
     window.dispatchEvent(downloaded);
     expect(downloaded.defaultPrevented).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Save document" }));
-    await screen.findByText("Saved");
+    await waitFor(() => expect(onSaveStateChange).toHaveBeenLastCalledWith("export", expect.objectContaining({ status: "saved", dirty: false })));
     expect(replaceVersion).toHaveBeenCalledOnce();
     const saved = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(saved);

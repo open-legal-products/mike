@@ -1,5 +1,13 @@
 export type DocxMode = "view" | "edit";
 
+export interface DocxSaveState {
+    ready: boolean;
+    dirty: boolean;
+    status: "idle" | "pending" | "saving" | "saved" | "error";
+    error: string | null;
+    save: () => Promise<void>;
+}
+
 export interface DocxSurface {
     content: HTMLElement;
     scroll: HTMLElement;

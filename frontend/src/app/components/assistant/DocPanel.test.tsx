@@ -1,10 +1,22 @@
-import { render, screen } from "@testing-library/react";
+import { useEffect } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DocPanel, DocumentTitleRow } from "./DocPanel";
+import type { DocxSaveState } from "../shared/views/DocxRenderer.types";
+
+const saveDocument = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("../shared/views/DocxView", () => ({
-    DocxView: ({ defaultMode, filename }: { defaultMode: string; filename: string }) =>
-        <div data-testid="docx-editor" data-mode={defaultMode}>{filename}</div>,
+    DocxView: ({ defaultMode, filename, documentId, onSaveStateChange }: {
+        defaultMode: string; filename: string; documentId: string;
+        onSaveStateChange?: (id: string, state: DocxSaveState | null) => void;
+    }) => {
+        useEffect(() => {
+            onSaveStateChange?.(documentId, { ready: true, dirty: true, status: "pending", error: null, save: saveDocument });
+            return () => onSaveStateChange?.(documentId, null);
+        }, [documentId, onSaveStateChange]);
+        return <div data-testid="docx-editor" data-mode={defaultMode}>{filename}</div>;
+    },
 }));
 
 it("opens assistant DOCX documents in edit mode", () => {
@@ -12,11 +24,35 @@ it("opens assistant DOCX documents in edit mode", () => {
         document_id: "docx-1", title: "agreement.docx", type: "docx", metadata: [], quotes: [],
     }} />);
     expect(screen.getByTestId("docx-editor")).toHaveAttribute("data-mode", "edit");
-    expect(screen.queryByRole("heading", { name: "agreement.docx" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
+    expect(screen.getByRole("heading", { name: "agreement.docx" })).toBeVisible();
+    const download = screen.getByRole("button", { name: /download/i });
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save.parentElement).toBe(download.parentElement);
+    fireEvent.click(save);
+    expect(saveDocument).toHaveBeenCalledOnce();
 });
 
 describe("DocumentTitleRow", () => {
+    it("shows save progress, saved state, and retryable errors beside Download", () => {
+        const document = { document_id: "doc", title: "Draft.docx", type: "docx" as const, metadata: [], quotes: [] };
+        const save = vi.fn().mockResolvedValue(undefined);
+        const state: DocxSaveState = { ready: true, dirty: true, status: "pending", error: null, save };
+        const view = (saveState: DocxSaveState) => <DocumentTitleRow document={document} isReloading={false} compactActions saveState={saveState} />;
+        const { rerender } = render(view(state));
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        expect(save).toHaveBeenCalledOnce();
+        rerender(view({ ...state, status: "saving" }));
+        expect(screen.getByRole("button", { name: "Saving" })).toBeDisabled();
+        rerender(view({ ...state, status: "saved", dirty: false }));
+        expect(screen.getByRole("button", { name: "Saved" })).toBeDisabled();
+        rerender(view(state));
+        expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+        rerender(view({ ...state, status: "error", error: "Changes could not be saved. Retry or download a copy." }));
+        expect(screen.getByRole("alert")).toHaveTextContent("Changes could not be saved");
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        expect(save).toHaveBeenCalledTimes(2);
+        expect(screen.getByRole("button", { name: "Download" })).toBeEnabled();
+    });
     it("uses the shared compact title row with a file-type icon", () => {
         const { container } = render(
             <DocumentTitleRow

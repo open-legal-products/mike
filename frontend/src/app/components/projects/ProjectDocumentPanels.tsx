@@ -1,10 +1,11 @@
 "use client";
 
-import { memo, useRef, type ComponentProps } from "react";
+import { memo, useCallback, useRef, useState, type ComponentProps } from "react";
 import { DocumentTitleRow } from "@/app/components/shared/DocumentTitleRow";
 import { ProjectWorkspaceTips } from "./ProjectWorkspaceTips";
 import type { CitationQuote, Document } from "@/app/components/shared/types";
 import { DocxView } from "@/app/components/shared/views/DocxView";
+import type { DocxSaveState } from "@/app/components/shared/views/DocxRenderer.types";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { SpreadsheetView } from "@/app/components/shared/views/SpreadsheetView";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
@@ -47,6 +48,15 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
     onDownloadReady,
 }: Props) {
     const localDownloads = useRef(new Map<string, () => Promise<void>>());
+    const [saveStates, setSaveStates] = useState<Record<string, DocxSaveState>>({});
+    const onSaveStateChange = useCallback((documentId: string, state: DocxSaveState | null) => {
+        setSaveStates((current) => {
+            const next = { ...current };
+            if (state) next[documentId] = state;
+            else delete next[documentId];
+            return next;
+        });
+    }, []);
     const documentsById = new Map(documents.map((doc) => [doc.id, doc]));
     return (
         <div className="relative flex-1 min-h-0 overflow-hidden">
@@ -107,12 +117,14 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                             }}
                             isReloading={false}
                             compactActions={false}
+                            saveState={saveStates[tab.documentId]}
                             onDownload={() =>
                                 localDownloads.current.get(tab.documentId)?.()
                             }
                         />
                         {viewType === "docx" ? (
                             <DocxView
+                                onSaveStateChange={onSaveStateChange}
                                 onDownloadReady={(download) => {
                                     if (download)
                                         localDownloads.current.set(

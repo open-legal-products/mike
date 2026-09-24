@@ -11,6 +11,7 @@ import { WarningPopup } from "../popups/WarningPopup";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { VersionChip } from "./VersionChip";
 import type { PanelDocument } from "./types";
+import type { DocxSaveState } from "./views/DocxRenderer.types";
 
 type ExternalSourceLink = {
     href: string;
@@ -23,12 +24,14 @@ export function DocumentTitleRow({
     isReloading,
     compactActions,
     onDownload,
+    saveState,
 }: {
     document: PanelDocument;
     isReloading: boolean;
     compactActions: boolean;
     /** Export live editor bytes when available; undefined falls back to the server version. */
     onDownload?: () => Promise<void> | undefined;
+    saveState?: DocxSaveState | null;
 }) {
     const isFile =
         document.type === "docx" ||
@@ -75,6 +78,19 @@ export function DocumentTitleRow({
                     </div>
                 </div>
                 <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
+                    {document.type === "docx" && (
+                        <PillButtonUI
+                            tone="white"
+                            size="sm"
+                            disabled={!saveState?.ready || !saveState.dirty || isReloading}
+                            loading={saveState?.status === "saving"}
+                            onClick={() => void saveState?.save()}
+                            title={saveState?.error ? "Retry saving your changes" : undefined}
+                            aria-live="polite"
+                        >
+                            {saveState?.status === "saving" ? "Saving" : saveState?.status === "saved" && !saveState.dirty ? "Saved" : "Save"}
+                        </PillButtonUI>
+                    )}
                     {isFile && (
                         <DownloadButton
                             documentId={document.document_id}
@@ -106,6 +122,9 @@ export function DocumentTitleRow({
                     )}
                 </div>
             </div>
+            {document.type === "docx" && saveState?.error && (
+                <p role="alert" className="mt-1 text-xs text-destructive">{saveState.error}</p>
+            )}
             {document.metadata.length > 0 && (
                 <div className="mt-1 flex w-full flex-wrap items-center gap-x-3 gap-y-1 font-serif text-sm text-gray-600">
                     {document.metadata.map((item, index) => (
