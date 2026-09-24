@@ -135,7 +135,7 @@ function RenameInput({
                 ref={input}
                 aria-label="File name"
                 aria-invalid={!!error}
-                className="min-w-0 flex-1 rounded-none border-0 border-b border-foreground/50 bg-transparent px-0 text-xs text-foreground outline-none focus-visible:border-b-2 focus-visible:border-foreground"
+                className="min-w-0 flex-1 rounded-none border-0 border-b border-foreground/20 bg-transparent px-0 text-xs text-foreground outline-none focus-visible:border-foreground/40"
                 value={value}
                 readOnly={saving}
                 onChange={(event) => setValue(event.target.value)}
