@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { DocxEditor } from "@docx-editor.dev/react";
 import type { TextMatch } from "@docx-editor.dev/core";
 import { packagedFonts } from "@docx-editor.dev/fonts";
@@ -18,16 +18,6 @@ export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, 
     const unsubscribe = useRef<(() => void) | undefined>(undefined);
     const document = useMemo(() => new Uint8Array(bytes), [bytes]);
     useEffect(() => () => unsubscribe.current?.(), []);
-    useLayoutEffect(() => {
-        const root = host.current;
-        const header = root?.querySelector(".docx-toolbar")?.parentElement?.parentElement;
-        if (!root || !header) return;
-        const measure = () => root.style.setProperty("--mike-docx-toolbar-height", `${header.getBoundingClientRect().height}px`);
-        measure();
-        const observer = new ResizeObserver(measure);
-        observer.observe(header);
-        return () => observer.disconnect();
-    }, []);
     return (
         <div ref={host} className={`${styles.host} h-full min-h-0`} data-docx-renderer="eigenpal"
             onKeyDownCapture={(event) => {

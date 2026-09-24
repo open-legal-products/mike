@@ -293,12 +293,7 @@ export function ProjectDocumentTabs({
                                         />
                                         {renameInput || (
                                             <span
-                                                className={cn(
-                                                    "min-w-0 flex-1 truncate text-xs",
-                                                    isActive
-                                                        ? "font-medium"
-                                                        : "font-normal",
-                                                )}
+                                                className="min-w-0 flex-1 truncate text-xs font-normal"
                                                 title={tab.filename}
                                             >
                                                 {tab.filename}

@@ -531,7 +531,7 @@ export function AssistantSidePanel({
                                             )}
                                             {renameInput || (
                                                 <span
-                                                    className={`min-w-0 flex-1 truncate text-xs ${isActive ? "font-medium" : "font-normal"}`}
+                                                    className="min-w-0 flex-1 truncate text-xs font-normal"
                                                     title={title}
                                                 >
                                                     {title}
