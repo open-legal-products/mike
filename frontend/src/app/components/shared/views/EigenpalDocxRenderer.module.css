@@ -11,7 +11,7 @@
 }
 
 .host :global(.docx-toolbar) {
-    background: var(--liquid-glass-background-flat);
+    background: var(--doc-bg);
     border: 1px solid var(--liquid-glass-border-flat);
     box-shadow: var(--liquid-glass-shadow-flat);
     pointer-events: auto;
