@@ -50,8 +50,7 @@ type Listener = () => void;
 
 /**
  * A toast the user still has to act on: an error carrying "Retry" or
- * "Contact support". It is the one kind the stack must not evict to make
- * room for a "Saved" notice.
+ * "Contact support". These errors take priority over transient notices.
  */
 function isActionableError(toast: ToastRecord): boolean {
     return (
@@ -62,8 +61,8 @@ function isActionableError(toast: ToastRecord): boolean {
 
 /**
  * Trim the stack to `MAX_VISIBLE_TOASTS`, dropping dismissible chatter
- * (info/success, and errors with nothing to click) oldest-first and only
- * then falling back to actionable errors. The newest toast is always kept:
+ * oldest-first and only then falling back to persistent notices and
+ * actionable errors. The newest toast is always kept:
  * it is the one that just happened.
  */
 function trimToStack(next: readonly ToastRecord[]): readonly ToastRecord[] {
@@ -74,7 +73,7 @@ function trimToStack(next: readonly ToastRecord[]): readonly ToastRecord[] {
     const dropped = new Set<string>();
     for (const toast of next) {
         if (excess === 0) break;
-        if (toast === newest || isActionableError(toast)) continue;
+        if (toast === newest || isActionableError(toast) || toast.durationMs === null) continue;
         dropped.add(toast.id);
         excess -= 1;
     }

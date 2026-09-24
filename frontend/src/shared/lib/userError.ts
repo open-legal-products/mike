@@ -159,7 +159,6 @@ const SUPPORTABLE: ReadonlySet<UserErrorKind> = new Set([
  * (`backend/src`) or the Next proxy route (`frontend/src/app/api`). An
  * invented code is worse than no entry: it looks like coverage while the
  * real failure falls through to the status-based classification below.
- * `codeTable.drift.test.ts` fails when a code here exists in neither tree.
  */
 export const CODE_KINDS: Readonly<Record<string, UserErrorKind>> = {
     // Throttling
