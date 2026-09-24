@@ -152,4 +152,3 @@ const EMPTY: readonly ToastRecord[] = [];
 export function getServerSnapshot() {
     return EMPTY;
 }
-
