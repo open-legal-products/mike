@@ -22,8 +22,7 @@ import {
     type AccessContact,
 } from "@/app/components/popups/PermissionDeniedPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { UserVisibleError, notifyError } from "@/app/lib/userFacingError";
 import { useAuth } from "@/app/contexts/AuthContext";
 import type { Project } from "@/app/components/shared/types";
 import { can, roleFrom } from "@/app/lib/permissions";
@@ -141,7 +140,6 @@ export function ProjectsOverview() {
         action: string;
         contacts?: AccessContact[] | null;
     } | null>(null);
-    const [actionError, setActionError] = useState<string | null>(null);
     const [selectionCameFromSelectAll, setSelectionCameFromSelectAll] =
         useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
@@ -149,6 +147,7 @@ export function ProjectsOverview() {
         practices: [],
         owners: [],
     });
+    const [filterOptionsAttempt, setFilterOptionsAttempt] = useState(0);
     const actionsRef = useRef<HTMLDivElement>(null);
     const rowSelectionAnchorIdRef = useRef<string | null>(null);
     const { user, isAuthenticated, authLoading } = useAuth();
@@ -191,14 +190,22 @@ export function ProjectsOverview() {
             .then((data) => {
                 if (!controller.signal.aborted) setFilterOptions(data);
             })
-            .catch(() => {
-                // Filter option lists degrade to "no options" — not worth a
-                // user-facing error for a purely cosmetic dropdown.
+            .catch((error) => {
+                if (controller.signal.aborted) return;
+                // "All Practices" with nothing under it reads as "nobody has
+                // set a practice", so the empty dropdown is explained rather
+                // than left to be misread.
+                notifyError(error, {
+                    action: "load the project filters",
+                    dedupeKey: "projects-filter-options",
+                    onRetry: () =>
+                        setFilterOptionsAttempt((attempt) => attempt + 1),
+                });
             });
         return () => {
             controller.abort();
         };
-    }, [authLoading, isAuthenticated]);
+    }, [authLoading, filterOptionsAttempt, isAuthenticated]);
 
     useEffect(() => {
         function handleClick(e: MouseEvent) {
@@ -407,6 +414,52 @@ export function ProjectsOverview() {
         );
     }
 
+    /**
+     * Deletes a set of rows optimistically. Rows the server refuses come
+     * back, stay selected, and are named in one toast whose Retry re-runs
+     * only them — a bulk delete that half-worked must not read as a success.
+     */
+    async function deleteProjectRows(ids: string[]) {
+        if (ids.length === 0) return;
+        const snapshot = projects;
+        setSelectedIds([]);
+        setProjects((current) =>
+            current.filter((project) => !ids.includes(project.id)),
+        );
+        const { failedIds } = await deleteTabularReviewsWithConcurrency(
+            ids,
+            deleteProject,
+        );
+        if (failedIds.length === 0) return;
+        setProjects((current) =>
+            restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
+        );
+        setSelectedIds(failedIds);
+        const failedNames = snapshot
+            .filter((project) => failedIds.includes(project.id))
+            .map((project) => project.name);
+        const named = failedNames.length
+            ? ` (${failedNames.slice(0, 3).join(", ")}${
+                  failedNames.length > 3
+                      ? ` and ${failedNames.length - 3} more`
+                      : ""
+              })`
+            : "";
+        notifyError(
+            new UserVisibleError(
+                `${failedIds.length} of ${ids.length} projects couldn't be deleted${named}. They are back in the list and still selected.`,
+                { retryable: true },
+            ),
+            {
+                action: `delete ${failedIds.length} project${
+                    failedIds.length === 1 ? "" : "s"
+                }`,
+                dedupeKey: "projects-bulk-delete",
+                onRetry: () => void deleteProjectRows(failedIds),
+            },
+        );
+    }
+
     function requestDeleteSelected() {
         setActionsOpen(false);
         if (selectionCameFromSelectAll) {
@@ -424,7 +477,6 @@ export function ProjectsOverview() {
         try {
             await deleteProject(project.id);
         } catch (error) {
-            console.error("delete project failed", error);
             setProjects((current) =>
                 restoreOptimisticallyDeletedRows(current, snapshot, [
                     project.id,
@@ -432,13 +484,14 @@ export function ProjectsOverview() {
             );
             // The row action calls this without awaiting, so rethrowing would
             // only produce an unhandled rejection and a row that reappears
-            // with no explanation.
-            setActionError(
-                userFacingApiError(
-                    error,
-                    "This project could not be deleted. Please try again.",
-                ),
-            );
+            // with no explanation. The row is back, so deleting again is
+            // exactly the action that just failed.
+            notifyError(error, {
+                action: `delete “${project.name}”`,
+                dedupeKey: `project-delete:${project.id}`,
+                onRetry: () => void handleDeleteProjectRow(project),
+                supportNote: `Project: ${project.name} (${project.id})`,
+            });
         }
     }
 
@@ -470,21 +523,10 @@ export function ProjectsOverview() {
             return !!creatorId && !!user?.id && creatorId === user.id;
         });
         const blocked = ids.length - deletable.length;
+        // Unchanged from before this action was extracted: the whole
+        // selection is cleared even when every row was refused.
         setSelectedIds([]);
-        const snapshot = projects;
-        setProjects((current) =>
-            current.filter((project) => !deletable.includes(project.id)),
-        );
-        const { failedIds } = await deleteTabularReviewsWithConcurrency(
-            deletable,
-            deleteProject,
-        );
-        if (failedIds.length > 0) {
-            setProjects((current) =>
-                restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
-            );
-            setSelectedIds(failedIds);
-        }
+        await deleteProjectRows(deletable);
         if (blocked > 0) {
             // Several rows were refused, so offer the union of their admins
             // rather than a refusal that names nobody.
@@ -960,11 +1002,6 @@ export function ProjectsOverview() {
                 action={ownerOnlyAction?.action}
                 contacts={ownerOnlyAction?.contacts}
                 onClose={() => setOwnerOnlyAction(null)}
-            />
-            <WarningPopup
-                open={!!actionError}
-                message={actionError ?? ""}
-                onClose={() => setActionError(null)}
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}

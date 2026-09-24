@@ -30,6 +30,7 @@ import {
     LiquidDropdownSurface,
 } from "@/app/components/ui/liquid-dropdown";
 import { cn } from "@/app/lib/utils";
+import { notifyError } from "@/app/lib/userFacingError";
 import { LIQUID_GLASS_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 
 export { CLOSE_ROW_ACTIONS_EVENT, closeRowActionMenus };
@@ -105,6 +106,25 @@ export const RowActionMenuItems = forwardRef<
 }, ref) {
     const { className: surfaceClassName, ...restSurfaceProps } =
         surfaceProps ?? {};
+
+    // "Delete" alone would make the title "Couldn't delete"; callers that
+    // name the row ("Delete review") already read as an action.
+    const deleteAction =
+        deleteLabel.trim().toLowerCase() === "delete"
+            ? "delete this item"
+            : deleteLabel.trim().toLowerCase();
+
+    async function runDelete() {
+        if (!onDelete) return;
+        try {
+            await onDelete();
+        } catch (error) {
+            notifyError(error, {
+                action: deleteAction,
+                onRetry: () => void runDelete(),
+            });
+        }
+    }
 
     return (
         <LiquidDropdownSurface
@@ -235,13 +255,10 @@ export const RowActionMenuItems = forwardRef<
                     onClick={() => {
                         if (deleteDisabled || deleting) return;
                         onClose();
-                        // The menu closes immediately, so an async handler that
-                        // rejects has nothing left to report to. Swallow it here
-                        // rather than leaving an unhandled rejection; surfaces
-                        // that can explain the failure do so themselves.
-                        void Promise.resolve(onDelete()).catch((error) => {
-                            console.error("row delete action failed", error);
-                        });
+                        // The menu closes immediately, so the failure has no
+                        // row left to report to: it goes to the toast layer,
+                        // which outlives the menu and can offer a retry.
+                        void runDelete();
                     }}
                     disabled={deleting || deleteDisabled}
                     className={`flex items-center gap-2 w-full px-3 py-2 text-xs text-red-500 transition-colors disabled:opacity-40 ${

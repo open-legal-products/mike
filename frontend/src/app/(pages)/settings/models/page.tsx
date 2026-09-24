@@ -83,6 +83,9 @@ export default function ModelPreferencesPage() {
         setSavedField((current) => (current === field ? null : current));
       }, 1600);
     } else {
+      // The profile context classified the failure and raised the toast with
+      // a Retry; here the dropdown only snaps back to the saved value, so the
+      // page never shows a preference the server did not accept.
       setOptimisticValues((current) => {
         const next = { ...current };
         delete next[field];

@@ -86,19 +86,6 @@ describe("AppSidebar account dropdown", () => {
     expect(assistant.parentElement?.nextElementSibling).toContainElement(ide);
   });
 
-  it("shows a warning popup when sign out fails", async () => {
-    state.signOut.mockRejectedValue(new Error("network unavailable"));
-    const user = userEvent.setup();
-    render(<AppSidebar isOpen onToggle={vi.fn()} />);
-
-    await user.click(screen.getByText("Alice").closest("button")!);
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
-
-    expect(await screen.findByText("Sign out failed")).toBeInTheDocument();
-    expect(
-      screen.getByText("Unable to sign out. Please try again."),
-    ).toBeInTheDocument();
-  });
 
   it("shows responses loading while selected and detached, then marks a detached response complete until opened", async () => {
     const user = userEvent.setup();

@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { RowActionMenuItems, RowActions } from "./RowActions";
 
 describe("RowActions", () => {
+    beforeEach(() => clearToasts());
+    afterEach(() => clearToasts());
+
     it("offers and runs the view action from the row button menu", async () => {
         const user = userEvent.setup();
         const onView = vi.fn();
@@ -91,5 +95,75 @@ describe("RowActionMenuItems New subfolder", () => {
         fireEvent.click(item);
         expect(onNewSubfolder).toHaveBeenCalledTimes(1);
         expect(onClose).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("RowActions delete failures", () => {
+    beforeEach(() => clearToasts());
+    afterEach(() => clearToasts());
+
+    it("reports a rejected delete even though the menu has closed", async () => {
+        const user = userEvent.setup();
+        const onDelete = vi.fn().mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <RowActions onDelete={onDelete} />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(
+            screen.getByRole("button", { name: "Open row actions" }),
+        );
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't delete this item");
+        expect(alert).not.toHaveTextContent("boom");
+    });
+
+    it("retries only the delete that failed", async () => {
+        const user = userEvent.setup();
+        const onDelete = vi
+            .fn()
+            .mockRejectedValueOnce(new Error("boom"))
+            .mockResolvedValueOnce(undefined);
+        render(
+            <>
+                <RowActions onDelete={onDelete} />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(
+            screen.getByRole("button", { name: "Open row actions" }),
+        );
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+        await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+        expect(onDelete).toHaveBeenCalledTimes(2);
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("names the row action when the caller renamed the delete label", async () => {
+        const user = userEvent.setup();
+        render(
+            <>
+                <RowActions
+                    onDelete={vi.fn().mockRejectedValue(new Error("boom"))}
+                    deleteLabel="Delete review"
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(
+            screen.getByRole("button", { name: "Open row actions" }),
+        );
+        await user.click(screen.getByRole("button", { name: "Delete review" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't delete review",
+        );
     });
 });

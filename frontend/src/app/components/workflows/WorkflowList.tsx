@@ -217,6 +217,9 @@ export function WorkflowList({
         if (!controller.signal.aborted) setDatabaseFilterOptions(options);
       })
       .catch(() => {
+        // Silent on purpose: these only populate optional filter menus, the
+        // list itself still loads and reports its own failures, and the next
+        // tab or type change refetches them.
         if (!controller.signal.aborted) {
           setDatabaseFilterOptions({
             practices: [],
@@ -313,7 +316,8 @@ export function WorkflowList({
       const detailed = await getWorkflowAddon(addon.id);
       if (openAddonIdRef.current === addon.id) setSelectedAddon(detailed);
     } catch {
-      // The list payload still provides a useful preview.
+      // Silent on purpose: the panel is already open on the list payload,
+      // which is a complete preview; only the extra detail is missing.
     }
   }
 

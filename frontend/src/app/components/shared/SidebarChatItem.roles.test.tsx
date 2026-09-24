@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarChatItem } from "./SidebarChatItem";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import type { Chat } from "@/app/components/shared/types";
 
 // The live round left this surface as the one place still gating on
@@ -44,6 +45,7 @@ function openMenu() {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    clearToasts();
     deleteChat.mockResolvedValue(undefined);
 });
 
@@ -96,11 +98,14 @@ describe("SidebarChatItem role gates", () => {
 
     it("lets the creator delete — is_owner alone derives admin", async () => {
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: true })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            <>
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
         );
         openMenu();
         fireEvent.click(await screen.findByText("Delete"));
@@ -169,11 +174,14 @@ describe("SidebarChatItem role gates", () => {
         // the rename twin of the surfaced delete failure below.
         renameChat.mockRejectedValue(new Error("boom"));
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: true })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            <>
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
         );
         openMenu();
         fireEvent.click(await screen.findByText("Rename"));
@@ -237,11 +245,14 @@ describe("SidebarChatItem role gates", () => {
     it("surfaces a failed delete instead of swallowing it", async () => {
         deleteChat.mockRejectedValue(new Error("boom"));
         render(
-            <SidebarChatItem
-                chat={chat({ is_owner: true })}
-                isActive
-                onSelect={vi.fn()}
-            />,
+            <>
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
         );
         openMenu();
         fireEvent.click(await screen.findByText("Delete"));
@@ -249,5 +260,31 @@ describe("SidebarChatItem role gates", () => {
         expect(
             await screen.findByText(/could not be deleted/i),
         ).toBeInTheDocument();
+    });
+
+    it("reports a delete that fails again on Retry", async () => {
+        // The context reverts and rethrows without notifying, so a Retry
+        // that swallows its own rejection would leave the second failure
+        // silent: the toast is dismissed by the click and nothing replaces it.
+        deleteChat.mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <SidebarChatItem
+                    chat={chat({ is_owner: true })}
+                    isActive
+                    onSelect={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+        openMenu();
+        fireEvent.click(await screen.findByText("Delete"));
+        fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+        await waitFor(() => expect(deleteChat).toHaveBeenCalledTimes(2));
+        expect(
+            await screen.findByText(/could not be deleted/i),
+        ).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     });
 });

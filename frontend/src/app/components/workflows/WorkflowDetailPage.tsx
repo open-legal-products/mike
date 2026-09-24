@@ -88,6 +88,7 @@ import { DocumentUploadMenu } from "@/app/components/shared/DocumentUploadMenu";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
+import { notifyError } from "@/app/lib/userFacingError";
 import { downloadWorkflowZip } from "./workflowZipExport";
 import { WorkflowAssets, type WorkflowAssetsHandle } from "./WorkflowAssets";
 // dynamic import keeps Tiptap (browser-only) out of the SSR bundle
@@ -104,7 +105,7 @@ interface Props {
   workflowType: Workflow["metadata"]["type"];
 }
 
-type SaveStatus = "idle" | "saving" | "saved";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 type DeleteStatus = "idle" | "loading" | "complete";
 type AssistantTab = "prompt" | "assets";
 type WorkflowShare = Awaited<ReturnType<typeof listWorkflowShares>>[number];
@@ -126,6 +127,25 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // A load that failed for a reason other than "this does not exist". The
+  // screen must not claim the workflow is missing when the request never
+  // arrived.
+  const [loadFailed, setLoadFailed] = useState(false);
+  // "Retry" re-enters the latest loaders and savers: a toast raised inside a
+  // callback must not re-run that callback's stale closure.
+  const retryRef = useRef<{
+    reload: () => void;
+    savePrompt: () => void;
+    saveColumns: () => void;
+    deleteWorkflow: () => void;
+  }>({
+    reload: () => {},
+    savePrompt: () => {},
+    saveColumns: () => {},
+    deleteWorkflow: () => {},
+  });
+  const [reloadToken, setReloadToken] = useState(0);
+  const lastColumnsAttemptRef = useRef<ColumnConfig[] | null>(null);
 
   const workflowRole = roleFromLoaded(workflow);
   const readOnly =
@@ -136,6 +156,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
 
   // Editor state
   const [promptMd, setPromptMd] = useState("");
+  const promptMdRef = useRef("");
   const [columns, setColumns] = useState<ColumnConfig[]>([]);
   const [assetsUploading, setAssetsUploading] = useState(false);
   const [draggingAssets, setDraggingAssets] = useState(false);
@@ -257,6 +278,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   useEffect(() => {
     getWorkflow(id)
       .then((wf) => {
+        setLoadFailed(false);
         if (wf.metadata.type !== workflowType) {
           setNotFound(true);
           return;
@@ -267,9 +289,22 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
           (wf.columns_config ?? []).slice().sort((a, b) => a.index - b.index),
         );
       })
-      .catch(() => setNotFound(true))
+      .catch((error) => {
+        // A transient failure would otherwise render as "Workflow not found",
+        // which tells the user the wrong thing about their own data.
+        const described = notifyError(error, {
+          action: "load this workflow",
+          dedupeKey: `workflow-load:${id}`,
+          onRetry: () => retryRef.current.reload(),
+        });
+        if (described && described.kind !== "not_found") {
+          setLoadFailed(true);
+          return;
+        }
+        setNotFound(true);
+      })
       .finally(() => setLoading(false));
-  }, [id, workflowType]);
+  }, [id, workflowType, reloadToken]);
 
   const fetchWorkflowShares = useCallback(async () => {
     const shares = await listWorkflowShares(id);
@@ -303,22 +338,39 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   // ---------------------------------------------------------------------------
   // Debounced auto-save for prompt
   // ---------------------------------------------------------------------------
+  const persistPrompt = useCallback(
+    async (newPromptMd: string) => {
+      setSaveStatus("saving");
+      try {
+        await updateWorkflow(id, { skill_md: newPromptMd });
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      } catch (error) {
+        // An autosave that fails silently loses the user's writing without
+        // ever saying so. One toast per workflow however many ticks fail,
+        // and "Retry" saves what is in the editor *now*, not the draft this
+        // tick happened to carry.
+        setSaveStatus("error");
+        notifyError(error, {
+          action: "save your changes",
+          dedupeKey: `workflow-autosave:${id}`,
+          onRetry: () => retryRef.current.savePrompt(),
+        });
+      }
+    },
+    [id],
+  );
+
   const save = useCallback(
     (newPromptMd: string) => {
       if (readOnly) return;
       if (debounceRef.current) clearTimeout(debounceRef.current);
       setSaveStatus("saving");
-      debounceRef.current = setTimeout(async () => {
-        try {
-          await updateWorkflow(id, { skill_md: newPromptMd });
-          setSaveStatus("saved");
-          setTimeout(() => setSaveStatus("idle"), 2000);
-        } catch {
-          setSaveStatus("idle");
-        }
+      debounceRef.current = setTimeout(() => {
+        void persistPrompt(newPromptMd);
       }, 800);
     },
-    [id, readOnly],
+    [persistPrompt, readOnly],
   );
 
   async function handleDeleteWorkflow() {
@@ -328,8 +380,15 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       await deleteWorkflow(id);
       setDeleteStatus("complete");
       setTimeout(() => router.push("/workflows"), 600);
-    } catch {
+    } catch (error) {
+      // The dialog otherwise just returns to its resting state and the
+      // workflow is still there, which reads as "nothing happened".
       setDeleteStatus("idle");
+      notifyError(error, {
+        action: "delete this workflow",
+        dedupeKey: `workflow-delete:${id}`,
+        onRetry: () => retryRef.current.deleteWorkflow(),
+      });
     }
   }
 
@@ -344,6 +403,10 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   // ---------------------------------------------------------------------------
   async function saveColumns(next: ColumnConfig[]) {
     if (readOnly) return;
+    // Captured before the request: every caller sets `columns` optimistically
+    // and then calls this, so this closure still holds the pre-edit list.
+    const previous = columns;
+    lastColumnsAttemptRef.current = next;
     setSaveStatus("saving");
     try {
       const updated = await updateWorkflow(id, { columns_config: next });
@@ -356,10 +419,36 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       }));
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 2000);
-    } catch {
-      setSaveStatus("idle");
+    } catch (error) {
+      // Put the table back before saying so, so the screen never shows a
+      // column layout the server never accepted.
+      setColumns(previous);
+      setSaveStatus("error");
+      notifyError(error, {
+        action: "save the columns",
+        dedupeKey: `workflow-columns:${id}`,
+        onRetry: () => retryRef.current.saveColumns(),
+      });
     }
   }
+
+  // Keep "Retry" pointed at the current closures: the prompt retry must save
+  // what the editor holds now, not the draft the failing tick carried.
+  useEffect(() => {
+    promptMdRef.current = promptMd;
+    retryRef.current = {
+      reload: () => {
+        setLoadFailed(false);
+        setReloadToken((token) => token + 1);
+      },
+      savePrompt: () => void persistPrompt(promptMdRef.current),
+      saveColumns: () => {
+        const attempted = lastColumnsAttemptRef.current;
+        if (attempted) void saveColumns(attempted);
+      },
+      deleteWorkflow: () => void handleDeleteWorkflow(),
+    };
+  });
 
   function handleColumnsAdded(added: ColumnConfig[]) {
     const next = [
@@ -412,6 +501,28 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
             <AssistantWorkflowEditorSkeleton />
           )}
         </div>
+      </div>
+    );
+  }
+
+  if (loadFailed && !workflow) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <EmptyState
+          tone="error"
+          title="Couldn't load this workflow"
+          description="The workflow could not be loaded. It has not been changed."
+          action={
+            <PillButtonUI
+              type="button"
+              tone="white"
+              size="normal"
+              onClick={() => retryRef.current.reload()}
+            >
+              Try again
+            </PillButtonUI>
+          }
+        />
       </div>
     );
   }
@@ -496,11 +607,22 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                 {
                   type: "custom",
                   render: (
-                    <span className="inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-sm text-gray-500">
+                    <span
+                      className={`inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-sm ${
+                        saveStatus === "error"
+                          ? "text-red-600"
+                          : "text-gray-500"
+                      }`}
+                      aria-live="polite"
+                    >
                       {saveStatus === "saved" ? (
                         <Check className="h-3.5 w-3.5 text-green-600" />
                       ) : null}
-                      {saveStatus === "saving" ? "Saving…" : "Saved"}
+                      {saveStatus === "saving"
+                        ? "Saving…"
+                        : saveStatus === "error"
+                          ? "Couldn't save"
+                          : "Saved"}
                     </span>
                   ),
                 },

@@ -16,7 +16,8 @@ import {
 } from "@/app/components/popups/MfaVerificationPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { deleteAccount, isMfaRequiredError } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { authMessages } from "@/app/lib/authMessages";
+import { describeError, notifyError } from "@/app/lib/userFacingError";
 import {
   SettingsDescription,
   SettingsLabel,
@@ -34,6 +35,22 @@ interface EmailWarning {
   title: string;
   message: string;
 }
+
+/** Keyed by the `code` GoTrue returns from `PATCH /api/auth/email`. */
+// One auth message source (authMessages.ts); only the email-field wording
+// differs here, because a validation failure on this screen can only mean
+// the address itself.
+const EMAIL_ERROR_MESSAGES = authMessages({
+  validation_failed: "Enter a valid email address.",
+  invalid_request: "Enter a valid email address.",
+  reauthentication_needed: "Log in again before changing your email.",
+});
+
+const EMAIL_TAKEN_CODES = new Set(["email_exists", "user_already_exists"]);
+const EMAIL_RATE_LIMIT_CODES = new Set([
+  "over_email_send_rate_limit",
+  "over_request_rate_limit",
+]);
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -57,7 +74,6 @@ export default function SettingsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [accountDeleteMfaOpen, setAccountDeleteMfaOpen] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   const requiresPasswordForEmailChange =
     user?.createdWithGoogle === true && profile?.passwordSet !== true;
 
@@ -102,7 +118,6 @@ export default function SettingsPage() {
   const handleDeleteAccount = async () => {
     devLog("[account/mfa] delete account requested");
     setIsDeleting(true);
-    setDeleteError(null);
     try {
       if (await needsMfaVerification()) {
         setDeleteConfirm(false);
@@ -125,16 +140,14 @@ export default function SettingsPage() {
         return;
       }
       setDeleteConfirm(false);
-      // Deletion can be refused for a reason only the user can act on —
-      // a 409 naming the organization they are the last admin of, for
-      // instance. That is an intentional 4xx detail, so it is shown
-      // verbatim; the session is untouched because nothing was deleted.
-      setDeleteError(
-        userFacingApiError(
-          error,
-          "Your account could not be deleted. Please try again.",
-        ),
-      );
+      notifyError(error, {
+        action: "delete your account",
+        // Retry re-opens the confirmation instead of deleting outright: a
+        // button in a toast must never be the only thing between a stray
+        // click and an irreversible account deletion.
+        onRetry: () => setDeleteConfirm(true),
+        supportNote: "Account deletion failed.",
+      });
     }
   };
 
@@ -168,12 +181,15 @@ export default function SettingsPage() {
       setTimeout(() => setEmailSaved(false), 2000);
     } catch (error: unknown) {
       devLog("[account/mfa] save email failed", { error });
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Failed to update email. Please try again.";
+      // The backend passes GoTrue's `code` through, so the outcome is decided
+      // by that code rather than by matching English in the message.
+      const described = describeError(error, {
+        action: "update your email",
+        codeMessages: EMAIL_ERROR_MESSAGES,
+        fallback: "Unable to update your email. Try again.",
+      });
 
-      if (isAlreadyRegisteredEmailError(message)) {
+      if (described.code && EMAIL_TAKEN_CODES.has(described.code)) {
         setEmail(user?.pendingEmail || user?.email || "");
         setEmailWarning({
           title: "Email already registered",
@@ -182,17 +198,20 @@ export default function SettingsPage() {
         return;
       }
 
-      if (isEmailRateLimitError(message)) {
+      if (
+        (described.code && EMAIL_RATE_LIMIT_CODES.has(described.code)) ||
+        described.kind === "rate_limited"
+      ) {
         setEmail(user?.pendingEmail || user?.email || "");
         setEmailWarning({
           title: "Email change unavailable",
           message:
-            "You can’t change your email this often. Please wait before trying again.",
+            "You can’t change your email this often. Wait a few minutes before trying again.",
         });
         return;
       }
 
-      setEmailStatus("Failed to update email. Please try again.");
+      setEmailStatus(described.message);
     } finally {
       setIsSavingEmail(false);
     }
@@ -210,7 +229,10 @@ export default function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } else {
-      setNameError("Unable to save your name.");
+      // The profile context classified the failure and raised the toast
+      // (message, Retry, support). This line is only the field's status, so
+      // the user never reads two different explanations of one failure.
+      setNameError("Not saved");
     }
   };
 
@@ -226,7 +248,7 @@ export default function SettingsPage() {
       setOrgSaved(true);
       setTimeout(() => setOrgSaved(false), 2000);
     } else {
-      setOrgError("Unable to save your organisation.");
+      setOrgError("Not saved");
     }
   };
 
@@ -415,12 +437,6 @@ export default function SettingsPage() {
         onConfirm={() => void handleDeleteAccount()}
       />
       <WarningPopup
-        open={deleteError !== null}
-        title="Account deletion failed"
-        message={deleteError}
-        onClose={() => setDeleteError(null)}
-      />
-      <WarningPopup
         open={!!emailWarning}
         title={emailWarning?.title}
         message={emailWarning?.message}
@@ -469,14 +485,4 @@ export default function SettingsPage() {
       />
     </div>
   );
-}
-
-function isAlreadyRegisteredEmailError(message: string) {
-  return message
-    .toLowerCase()
-    .includes("a user with this email address has already been registered");
-}
-
-function isEmailRateLimitError(message: string) {
-  return /email.*rate limit|rate limit.*email/i.test(message);
 }

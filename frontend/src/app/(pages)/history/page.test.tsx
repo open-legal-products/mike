@@ -9,6 +9,12 @@ import {
   type AuditEvent,
 } from "@/app/lib/mikeApi";
 import HistoryPage from "./page";
+import { notifyError } from "@/app/lib/userFacingError";
+
+vi.mock("@/app/lib/userFacingError", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/lib/userFacingError")>()),
+  notifyError: vi.fn(),
+}));
 
 // The CSV now comes from the durable export job, so the page drives the
 // start/poll/download wrappers instead of one blob request.
@@ -314,18 +320,29 @@ describe("HistoryPage", () => {
     expect(mockedDownloadUserExport).toHaveBeenCalledWith("export-1");
   });
 
-  it("shows a warning popup and stops when the export job fails", async () => {
+  it("reports a failed export job with a retry instead of an alert", async () => {
     const user = userEvent.setup();
+    const alerted = vi
+      .spyOn(window, "alert")
+      .mockImplementation(() => undefined);
+    const notified = vi.mocked(notifyError);
+    notified.mockClear();
     mockedGetUserExportStatus.mockResolvedValue({ status: "failed" });
 
     render(<HistoryPage />);
     await screen.findByText("Alex Lawyer");
     await user.click(screen.getByRole("button", { name: "Export history" }));
 
-    expect(await screen.findByText("Export failed")).toBeInTheDocument();
-    expect(
-      screen.getByText("Your history could not be exported. Please try again."),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(notified).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: "export your history",
+          onRetry: expect.any(Function),
+        }),
+      ),
+    );
+    expect(alerted).not.toHaveBeenCalled();
     expect(mockedDownloadUserExport).not.toHaveBeenCalled();
     // The button returns to its idle state instead of spinning forever.
     expect(

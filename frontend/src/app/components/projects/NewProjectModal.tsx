@@ -22,14 +22,13 @@ import { FieldLabel, FormTextInput } from "../ui/form-field";
 import { ModalSelect } from "../modals/ModalSelect";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { ProjectPracticeField } from "./ProjectPracticeField";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 import { createSecureUuid } from "@/shared/lib/secureUuid";
 import {
     CreateAccessStep,
     type PendingDirectGrant,
     type PendingOrgOverride,
 } from "../modals/CreateAccessStep";
-import { WarningPopup } from "../popups/WarningPopup";
 
 const PERSONAL_WORKSPACE = "__personal__";
 
@@ -54,6 +53,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const [sharedUsers, setSharedUsers] = useState<PendingDirectGrant[]>([]);
     const [orgOverrides, setOrgOverrides] = useState<PendingOrgOverride[]>([]);
     const [orgs, setOrgs] = useState<Org[]>([]);
+    const [orgsAttempt, setOrgsAttempt] = useState(0);
     const [orgId, setOrgId] = useState<string>(PERSONAL_WORKSPACE);
     const [memoryEnabled, setMemoryEnabled] = useState(true);
     const memoryEditedRef = useRef(false);
@@ -61,8 +61,6 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
-    const [organizationLoadWarning, setOrganizationLoadWarning] =
-        useState(false);
     // A project created with only some of its files attached. The modal holds
     // it until the user has read which files are missing.
     const [pendingProject, setPendingProject] = useState<Project | null>(null);
@@ -110,20 +108,25 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     useEffect(() => {
         if (!open) return;
         let cancelled = false;
-        setOrganizationLoadWarning(false);
         listOrgs()
             .then((rows) => {
                 if (!cancelled) setOrgs(rows);
             })
-            .catch(() => {
-                // Silently showing only "No organization" would look like the
-                // caller belongs to no firm, so say the list failed instead.
-                if (!cancelled) setOrganizationLoadWarning(true);
+            .catch((error) => {
+                if (cancelled) return;
+                // A picker with only "No organization" in it looks like an
+                // account with no firms, and a project created from it lands
+                // in the wrong place. Say the list is missing.
+                notifyError(error, {
+                    action: "load your organizations",
+                    dedupeKey: "new-project-orgs",
+                    onRetry: () => setOrgsAttempt((attempt) => attempt + 1),
+                });
             });
         return () => {
             cancelled = true;
         };
-    }, [open]);
+    }, [open, orgsAttempt]);
 
     useEffect(() => {
         if (!open) {
@@ -443,7 +446,6 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
         setOrgId(PERSONAL_WORKSPACE);
         setMemoryEnabled(projectMemoryDefault);
         setError("");
-        setOrganizationLoadWarning(false);
     }
 
     function handleClose() {
@@ -689,14 +691,14 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                     </div>
                 )}
 
-                {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
+                {error && (
+                    // role="alert" so the failure is announced, not just
+                    // painted red under a form the user may not be looking at.
+                    <p role="alert" className="mt-3 text-sm text-red-500">
+                        {error}
+                    </p>
+                )}
             </form>
-            <WarningPopup
-                open={organizationLoadWarning}
-                title="Organizations unavailable"
-                message="Your organizations could not be loaded. Close this message and try opening the project form again."
-                onClose={() => setOrganizationLoadWarning(false)}
-            />
         </Modal>
     );
 }

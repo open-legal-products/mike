@@ -12,7 +12,7 @@ import {
     uploadStandaloneDocuments,
 } from "@/app/lib/mikeApi";
 import type { AccessAssignmentRole } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 import { FileDirectory } from "../shared/FileDirectory";
 import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
@@ -125,6 +125,8 @@ export function NewTRModal({
 
     // Workflow templates
     const [workflows, setWorkflows] = useState<Workflow[]>([]);
+    // Bumped by the "Retry" on a failed template load so the effect refetches.
+    const [workflowReloadKey, setWorkflowReloadKey] = useState(0);
     const [loadingWorkflows, setLoadingWorkflows] = useState(false);
     const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(
         null,
@@ -171,11 +173,18 @@ export function NewTRModal({
             .catch((error) => {
                 devLog("[workflows/ui:tabular-review-modal] failed", error);
                 setWorkflows([]);
+                // An empty list reads as "this firm has no templates", so a
+                // failed load has to say that it failed.
+                notifyError(error, {
+                    action: "load the workflow templates",
+                    dedupeKey: "new-review-workflows",
+                    onRetry: () => setWorkflowReloadKey((key) => key + 1),
+                });
             })
             .finally(() => setLoadingWorkflows(false));
 
         if (isProjectMode) preselectedProjectDocsRef.current = false;
-    }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [open, workflowReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (!open || !profile?.tabularModel) return;
@@ -321,6 +330,14 @@ export function NewTRModal({
             setProjectDocs(docs);
             setProjectFolders(proj.folders ?? []);
             setSelectedDocuments(docs);
+        } catch (error) {
+            // Without this the picker just sat there empty, and the rejection
+            // went nowhere because the caller does not await it.
+            notifyError(error, {
+                action: "load this project's files",
+                dedupeKey: `new-review-project:${projectId}`,
+                onRetry: () => void handleSelectProject(projectId),
+            });
         } finally {
             setLoadingDocs(false);
         }

@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect, useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat } from "@/app/components/shared/types";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { ChatAccessModal } from "./ChatAccessModal";
 
 const { getChatAccess, getChatPeople, grantChatAccess, revokeChatAccess } =
@@ -128,7 +129,10 @@ function chat(overrides: Partial<Chat> = {}): Chat {
     };
 }
 
+afterEach(() => clearToasts());
+
 beforeEach(() => {
+    clearToasts();
     vi.clearAllMocks();
     getChatPeople.mockResolvedValue({ owner: null, members: [] });
     getChatAccess.mockResolvedValue({
@@ -318,6 +322,87 @@ describe("ChatAccessModal", () => {
             expect(screen.getByTestId("access-error")).toHaveTextContent(
                 "Sharing details could not be loaded, so access cannot be changed here.",
             ),
+        );
+    });
+
+    it("says when the existing grants could not be loaded", async () => {
+        getChatAccess.mockRejectedValue(
+            Object.assign(new Error("API error: 500"), { status: 500 }),
+        );
+
+        render(
+            <>
+                <ChatAccessModal
+                    open
+                    chat={chat({ is_owner: true })}
+                    onClose={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(
+            "Couldn't load who this chat is shared with",
+        );
+        expect(alert).not.toHaveTextContent("API error: 500");
+    });
+
+    it("retries the grant list from the failure notice", async () => {
+        getChatAccess
+            .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+            .mockResolvedValue({
+                scope: "direct",
+                org_id: null,
+                access_role: "owner",
+                grants: [],
+            });
+
+        render(
+            <>
+                <ChatAccessModal
+                    open
+                    chat={chat({ is_owner: true })}
+                    onClose={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+        await waitFor(() => expect(getChatAccess).toHaveBeenCalledTimes(2));
+    });
+
+    it("does not report a successful share as failed when the re-read fails", async () => {
+        getChatAccess
+            .mockResolvedValueOnce({
+                scope: "direct",
+                org_id: null,
+                access_role: "owner",
+                grants: [],
+            })
+            .mockRejectedValue(new TypeError("Failed to fetch"));
+
+        render(
+            <>
+                <ChatAccessModal
+                    open
+                    chat={chat({ is_owner: true })}
+                    onClose={vi.fn()}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+        await waitFor(() =>
+            expect(screen.getByTestId("can-manage")).toHaveTextContent("true"),
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Grant" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(
+            "Couldn't refresh who this chat is shared with",
         );
     });
 });

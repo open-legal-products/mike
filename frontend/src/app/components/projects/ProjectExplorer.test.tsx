@@ -5,7 +5,9 @@ import {
     render,
     screen,
     waitFor,
+    within,
 } from "@testing-library/react";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
     Document,
@@ -253,6 +255,61 @@ describe("ProjectExplorer actions", () => {
 
         await waitFor(() =>
             expect(onRenameDoc).toHaveBeenCalledWith("doc-1", "Final.docx"),
+        );
+    });
+});
+
+describe("ProjectExplorer moves", () => {
+    afterEach(() => {
+        clearToasts();
+    });
+
+    it("says a dropped document did not move and offers a Retry", async () => {
+        // The drop is fired as `void handleDropOnTarget(...)`: an unhandled
+        // rejection used to be the only trace of a move that never happened.
+        const onMoveDoc = vi.fn().mockRejectedValue(new Error("boom"));
+        render(
+            <>
+                <ProjectExplorer
+                    documents={[
+                        {
+                            id: "doc-1",
+                            filename: "Draft.docx",
+                            folder_id: null,
+                        } as Document,
+                    ]}
+                    folders={[
+                        {
+                            id: "folder-1",
+                            name: "Drafts",
+                            parent_folder_id: null,
+                        } as ProjectFolder,
+                    ]}
+                    onDocClick={vi.fn()}
+                    onMoveDoc={onMoveDoc}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        const dataTransfer = {
+            types: ["application/mike-doc"],
+            getData: (type: string) =>
+                type === "application/mike-doc" ? "doc-1" : "",
+        };
+        fireEvent.drop(screen.getByText("Drafts").closest("div[draggable]")!, {
+            dataTransfer,
+        });
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't move this document");
+        expect(onMoveDoc).toHaveBeenCalledWith("doc-1", "folder-1");
+
+        onMoveDoc.mockClear();
+        onMoveDoc.mockResolvedValue(undefined);
+        fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+        await waitFor(() =>
+            expect(onMoveDoc).toHaveBeenCalledWith("doc-1", "folder-1"),
         );
     });
 });

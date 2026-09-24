@@ -29,7 +29,35 @@ import {
   startMcpConnectorOAuth,
   updateMcpConnector,
 } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { describeError } from "@/app/lib/userFacingError";
+
+/** What the user was doing, for "Couldn't ..." and honest retry text. */
+const CONNECTOR_ACTION_LABELS = {
+  create: "add this connector",
+  save: "save this connector",
+  "clear-token": "clear the stored token",
+  delete: "delete this connector",
+  refresh: "refresh this connector",
+  "connector-enabled": "change this connector",
+  "tool-enabled": "change this tool",
+} as const;
+
+// `connector_setup_required` is deliberately absent: the backend's 4xx
+// detail carries the operator's setup steps (env var names, callback URL),
+// and `describeError` passes a 4xx detail through untouched.
+const CONNECTOR_ERROR_MESSAGES = {
+  oauth_required:
+    "This connector needs to be authorized again. Use Refresh to reconnect.",
+} as const;
+
+/** The one place connector failures become words. Never echoes a raw error. */
+function connectorMessage(error: unknown, action: string): string {
+  return describeError(error, {
+    action,
+    codeMessages: CONNECTOR_ERROR_MESSAGES,
+    fallback: `Mike couldn't ${action}. Try again.`,
+  }).message;
+}
 import {
   SettingsDescription,
   SettingsLabel,
@@ -121,6 +149,8 @@ function isGoogleMcpConnector(connector: McpConnectorSummary) {
       hostname === "googleapis.com" || hostname.endsWith(".googleapis.com")
     );
   } catch {
+    // A URL we cannot parse is simply not Google's. Nothing the user asked
+    // for fails here, so there is nothing to report.
     return false;
   }
 }
@@ -286,7 +316,7 @@ export default function ConnectorsPage() {
     try {
       setConnectors(await listMcpConnectors());
     } catch (err) {
-      setError(userFacingApiError(err, "Failed to load connectors."));
+      setError(connectorMessage(err, "load your connectors"));
     } finally {
       setLoading(false);
     }
@@ -384,9 +414,7 @@ export default function ConnectorsPage() {
         current && current.id !== connectorId ? current : fresh,
       );
     } catch (err) {
-      setDetailError(
-        userFacingApiError(err, "Failed to load connector details."),
-      );
+      setDetailError(connectorMessage(err, "load this connector"));
     } finally {
       setLoadingConnectorId((current) =>
         current === connectorId ? null : current,
@@ -420,10 +448,10 @@ export default function ConnectorsPage() {
         // Refresh from the details modal on a Slack/Google connector
         // whose OAuth client is not configured on this server: show
         // the operator guidance where the user is looking.
-        setDetailSetupNotice(err.message);
+        setDetailSetupNotice(connectorMessage(err, CONNECTOR_ACTION_LABELS[action.type]));
         return;
       }
-      const message = userFacingApiError(err, "Action failed.");
+      const message = connectorMessage(err, CONNECTOR_ACTION_LABELS[action.type]);
       if (action.type === "create") {
         setAddErrorGuideUrl(
           isConnectorSetupError(err)
@@ -711,7 +739,7 @@ export default function ConnectorsPage() {
           // the incomplete connector from Installed is immediately actionable.
           await loadConnectors();
         }
-        const message = userFacingApiError(err, "Failed to add connector.");
+        const message = connectorMessage(err, "add this connector");
         const discarded = await discardCreatedConnector();
         setAddErrorGuideUrl(
           isConnectorSetupError(err)

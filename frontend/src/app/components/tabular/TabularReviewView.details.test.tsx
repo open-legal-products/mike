@@ -3,12 +3,12 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
     getProject,
     getTabularReview,
-    listProjects,
     streamTabularGeneration,
     updateTabularReview,
 } from "@/app/lib/mikeApi";
 import type { TabularReview } from "@/app/components/shared/types";
 import { TRView } from "./TabularReviewView";
+import { ToastViewportUI } from "@/shared/ui/ToastUI";
 
 const { apiKeyState } = vi.hoisted(() => ({
     apiKeyState: {
@@ -236,33 +236,25 @@ describe("TabularReviewView details gate", () => {
         );
     });
 
-    it("warns when the review project cannot be loaded", async () => {
+    // From #498. The project supplies the breadcrumb and the admin contacts
+    // shown on permission refusals, so a silent failure reads as "this review
+    // has no project". #496 keeps that coverage and moves the surface from a
+    // blocking popup to the shared toast.
+    it("reports a review project that could not be loaded", async () => {
         mockDetail({ access_role: "editor", project_id: "p1" });
         vi.mocked(getProject).mockRejectedValue(new Error("network unavailable"));
 
-        render(<TRView reviewId="r1" projectId="p1" />);
-
-        expect(
-            await screen.findByText("Project unavailable"),
-        ).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "The project for this tabular review could not be loaded. Please try again.",
-            ),
-        ).toBeInTheDocument();
-    });
-
-    it("does not warn on page load when the optional project list fails", async () => {
-        mockDetail({ access_role: "editor", project_id: null });
-        vi.mocked(listProjects).mockRejectedValueOnce(
-            new Error("network unavailable"),
+        render(
+            <>
+                <TRView reviewId="r1" projectId="p1" />
+                <ToastViewportUI />
+            </>,
         );
 
-        render(<TRView reviewId="r1" />);
-
-        await waitFor(() => expect(listProjects).toHaveBeenCalled());
-        expect(screen.queryByText("Project unavailable")).toBeNull();
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't load this review's project");
     });
+
 
     it("refuses a viewer with the editor tier, not the owner one", async () => {
         mockDetail({ access_role: "viewer" });

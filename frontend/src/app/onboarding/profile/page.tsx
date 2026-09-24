@@ -11,6 +11,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { updateUserProfile } from "@/app/lib/mikeApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
+import { describeError } from "@/app/lib/userFacingError";
 
 export default function OnboardingProfilePage() {
     const router = useRouter();
@@ -63,9 +64,10 @@ function ProfileDetailsForm({
             router.push("/onboarding/practice");
         } catch (submitError) {
             setError(
-                submitError instanceof Error
-                    ? submitError.message
-                    : "Unable to save your details",
+                describeError(submitError, {
+                    action: "save your details",
+                    fallback: "Unable to save your details. Try again.",
+                }).message,
             );
         } finally {
             setSubmitting(false);

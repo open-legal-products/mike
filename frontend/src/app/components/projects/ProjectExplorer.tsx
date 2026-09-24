@@ -30,6 +30,7 @@ import {
     SubfolderSvgIcon,
 } from "@/app/components/shared/FolderSvgIcon";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { notifyError } from "@/app/lib/userFacingError";
 
 interface Props {
     projectName?: string | null;
@@ -93,6 +94,15 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
     const [newFolderName, setNewFolderName] = useState("");
     const [renamingId, setRenamingId] = useState<string | null>(null);
     const [renamingDocId, setRenamingDocId] = useState<string | null>(null);
+    // "Retry" re-enters the move handler this component holds now, not the
+    // prop captured when the failing drop happened.
+    const dropRetryRef = useRef<{
+        doc: (docId: string, targetFolderId: string | null) => Promise<void>;
+        folder: (
+            folderId: string,
+            targetFolderId: string | null,
+        ) => Promise<void>;
+    }>({ doc: async () => {}, folder: async () => {} });
     const [renameValue, setRenameValue] = useState("");
     const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
     const [dragOverRoot, setDragOverRoot] = useState(false);
@@ -185,6 +195,53 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
         setContextMenu({ x: e.clientX, y: e.clientY, parentId, folderId, docId });
     }
 
+    // A drop is fired as `void handleDropOnTarget(...)`, so a rejecting move
+    // handler would otherwise become an unhandled rejection and the item
+    // would look moved while nothing happened. The owner of the tree reverts
+    // its own state; this layer guarantees the user hears about it, and that
+    // a failing retry is reported again rather than swallowed.
+    async function moveDocAndReport(
+        docId: string,
+        targetFolderId: string | null,
+    ) {
+        if (!onMoveDoc) return;
+        try {
+            await onMoveDoc(docId, targetFolderId);
+        } catch (error) {
+            notifyError(error, {
+                action: "move this document",
+                dedupeKey: `explorer-move-doc:${docId}`,
+                onRetry: () =>
+                    void dropRetryRef.current.doc(docId, targetFolderId),
+            });
+        }
+    }
+
+    async function moveFolderAndReport(
+        folderId: string,
+        targetFolderId: string | null,
+    ) {
+        if (!onMoveFolder) return;
+        try {
+            await onMoveFolder(folderId, targetFolderId);
+        } catch (error) {
+            notifyError(error, {
+                action: "move this folder",
+                dedupeKey: `explorer-move-folder:${folderId}`,
+                onRetry: () =>
+                    void dropRetryRef.current.folder(folderId, targetFolderId),
+            });
+        }
+    }
+
+    // Re-assigned every render so a retry uses the current props.
+    useEffect(() => {
+        dropRetryRef.current = {
+            doc: moveDocAndReport,
+            folder: moveFolderAndReport,
+        };
+    });
+
     function wouldCreateCycle(movingId: string, targetId: string): boolean {
         let cur: ProjectFolder | undefined = folders.find((f) => f.id === targetId);
         while (cur) {
@@ -202,12 +259,12 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
         if (docId && onMoveDoc) {
             const doc = documents.find((d) => d.id === docId);
             if (!doc || (doc.folder_id ?? null) === targetFolderId) return;
-            await onMoveDoc(docId, targetFolderId);
+            await moveDocAndReport(docId, targetFolderId);
         } else if (movingFolderId && movingFolderId !== targetFolderId && onMoveFolder) {
             if (targetFolderId !== null && wouldCreateCycle(movingFolderId, targetFolderId)) return;
             const folder = folders.find((f) => f.id === movingFolderId);
             if (!folder || (folder.parent_folder_id ?? null) === targetFolderId) return;
-            await onMoveFolder(movingFolderId, targetFolderId);
+            await moveFolderAndReport(movingFolderId, targetFolderId);
         }
     }
 

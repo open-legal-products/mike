@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+    getProject,
+    listWorkflows,
     uploadProjectDocuments,
     uploadStandaloneDocuments,
 } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { UPLOAD_LIMIT_MESSAGES } from "@/shared/api/uploadSessionClient";
 import type { Document } from "../shared/types";
 import { NewTRModal } from "./NewTRModal";
@@ -76,7 +80,10 @@ vi.mock("../shared/FileDirectory", () => ({
 }));
 
 describe("NewTRModal", () => {
+    afterEach(() => clearToasts());
+
     beforeEach(() => {
+        clearToasts();
         vi.clearAllMocks();
     });
 
@@ -365,5 +372,67 @@ describe("NewTRModal", () => {
             ),
         );
         expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+    });
+});
+
+describe("NewTRModal load failures", () => {
+    afterEach(() => clearToasts());
+
+    beforeEach(() => {
+        clearToasts();
+        vi.clearAllMocks();
+    });
+
+    it("says when the workflow templates could not be loaded", async () => {
+        vi.mocked(listWorkflows).mockRejectedValue(
+            new TypeError("Failed to fetch"),
+        );
+
+        render(
+            <>
+                <NewTRModal open onClose={vi.fn()} onAdd={vi.fn()} />
+                <ToastViewportUI />
+            </>,
+        );
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(
+            "Couldn't load the workflow templates",
+        );
+        expect(alert).not.toHaveTextContent("Failed to fetch");
+
+        vi.mocked(listWorkflows).mockResolvedValue([]);
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(listWorkflows).toHaveBeenCalledTimes(2));
+    });
+
+    it("says when the chosen project's files could not be loaded", async () => {
+        const user = userEvent.setup();
+        vi.mocked(listWorkflows).mockResolvedValue([]);
+        vi.mocked(getProject).mockRejectedValue(
+            Object.assign(new Error("API error: 500"), { status: 500 }),
+        );
+
+        render(
+            <>
+                <NewTRModal
+                    open
+                    onClose={vi.fn()}
+                    onAdd={vi.fn()}
+                    projects={[{ id: "project-1", name: "Acquisition" }] as never}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(
+            screen.getByRole("switch", { name: "Create under a project" }),
+        );
+        await user.click(screen.getByText("Select project..."));
+        await user.click(await screen.findByText("Acquisition"));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't load this project's files");
+        expect(alert).not.toHaveTextContent("API error: 500");
     });
 });

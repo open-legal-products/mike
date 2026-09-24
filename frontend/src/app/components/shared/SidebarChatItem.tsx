@@ -20,9 +20,8 @@ import {
 } from "@/app/components/ui/liquid-dropdown";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError } from "@/app/lib/userFacingError";
 import type { Chat } from "@/app/components/shared/types";
 import { ChatSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { ChatAccessModal } from "@/app/components/assistant/ChatAccessModal";
@@ -56,8 +55,6 @@ export function SidebarChatItem({
         action: string;
         requiredRole: "owner" | "editor";
     } | null>(null);
-    const [deleteError, setDeleteError] = useState<string | null>(null);
-    const [renameError, setRenameError] = useState<string | null>(null);
     const editInputRef = useRef<HTMLInputElement>(null);
     // Chats joined the project role ladder: rename is content collaboration
     // (member+, the tier the server's PATCH asks for) and delete sits at the
@@ -85,6 +82,19 @@ export function SidebarChatItem({
         .filter(Boolean)
         .join(" ");
 
+    // The context reverts the optimistic removal and rethrows without
+    // notifying, so every attempt, including a Retry from the toast, has to
+    // report its own failure. One handler, used by the menu and by Retry.
+    const handleDelete = () => {
+        deleteChat(chat.id).catch((error) => {
+            notifyError(error, {
+                action: "delete this chat",
+                fallback: "The chat could not be deleted. Try again.",
+                onRetry: handleDelete,
+            });
+        });
+    };
+
     useEffect(() => {
         if (isRenaming) editInputRef.current?.focus();
     }, [isRenaming]);
@@ -99,12 +109,14 @@ export function SidebarChatItem({
             // The context put the old title back; without this the user
             // watches their edit silently revert — the rename twin of the
             // surfaced delete failure below.
-            setRenameError(
-                userFacingApiError(
-                    error,
-                    "The chat could not be renamed. Please try again.",
-                ),
-            );
+            notifyError(error, {
+                action: "rename this chat",
+                fallback: "The chat could not be renamed. Try again.",
+                onRetry: () => {
+                    setEditTitle(trimmed);
+                    setIsRenaming(true);
+                },
+            });
         }
     };
 
@@ -273,14 +285,7 @@ export function SidebarChatItem({
                                         });
                                         return;
                                     }
-                                    deleteChat(chat.id).catch((error) => {
-                                        setDeleteError(
-                                            userFacingApiError(
-                                                error,
-                                                "The chat could not be deleted. Please try again.",
-                                            ),
-                                        );
-                                    });
+                                    handleDelete();
                                 }}
                                 className="text-red-600 focus:text-red-600"
                             >
@@ -302,18 +307,6 @@ export function SidebarChatItem({
                 action={gate?.action}
                 requiredRole={gate?.requiredRole}
                 onClose={() => setGate(null)}
-            />
-            <WarningPopup
-                open={!!deleteError}
-                title="Chat not deleted"
-                message={deleteError}
-                onClose={() => setDeleteError(null)}
-            />
-            <WarningPopup
-                open={!!renameError}
-                title="Chat not renamed"
-                message={renameError}
-                onClose={() => setRenameError(null)}
             />
             {shareOpen ? (
                 <ChatAccessModal

@@ -39,7 +39,9 @@ export default function FeaturesPage() {
     setSavingQuickActions(true);
     const ok = await updateQuickActionsVisible(visible);
     setSavingQuickActions(false);
-    if (!ok) setQuickActionsError("Could not update. Try again.");
+    // The profile context raised the toast that explains the failure and
+    // offers Retry; this is only the row's status.
+    if (!ok) setQuickActionsError("Not saved");
   };
 
   const handleCourtListenerChange = async (enabled: boolean) => {
@@ -51,7 +53,7 @@ export default function FeaturesPage() {
     setSaving(false);
     setOptimisticLegalResearchUs(null);
     if (!ok) {
-      setSaveError("Could not update. Try again.");
+      setSaveError("Not saved");
     }
   };
 

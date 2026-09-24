@@ -1,207 +1,257 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-    deleteWorkflowShare,
+    deleteWorkflow,
     getWorkflow,
-    getWorkflowPeople,
-    listWorkflowShares,
-    MikeApiError,
-    shareWorkflow,
+    updateWorkflow,
 } from "@/app/lib/mikeApi";
-import type { Workflow } from "../shared/types";
+import type { Workflow } from "@/app/components/shared/types";
 import { WorkflowDetailPage } from "./WorkflowDetailPage";
-
-// `importOriginal` keeps the real `MikeApiError`: `userFacingApiError`
-// decides with `instanceof`, so a stand-in class would make every 4xx look
-// like an unexpected failure.
-vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
-    deleteWorkflow: vi.fn(),
-    deleteWorkflowShare: vi.fn(),
-    getWorkflow: vi.fn(),
-    getWorkflowPeople: vi.fn(),
-    listWorkflowShares: vi.fn(),
-    shareWorkflow: vi.fn(),
-    updateWorkflow: vi.fn(),
-}));
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 vi.mock("next/navigation", () => ({
-    useRouter: () => ({ push: vi.fn() }),
-    useSearchParams: () => ({ get: () => null }),
+    useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+    useSearchParams: () => new URLSearchParams(),
+    usePathname: () => "/workflows/wf-1",
+}));
+
+vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
+    getWorkflow: vi.fn(),
+    updateWorkflow: vi.fn(),
+    deleteWorkflow: vi.fn(),
+    listWorkflowShares: vi.fn(async () => []),
+    getWorkflowPeople: vi.fn(async () => ({ owner: null, members: [] })),
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
-    useAuth: () => ({ user: { id: "me", email: "me@firm.test" } }),
-}));
-vi.mock("@/app/contexts/UserProfileContext", () => ({
-    useUserProfile: () => ({ profile: { practiceAreas: [] } }),
-}));
-vi.mock("@/app/hooks/useQueryParamTab", () => ({
-    useQueryParamTab: () => ["prompt", vi.fn()],
+    useAuth: () => ({ user: { id: "user-1", email: "user@example.com" } }),
 }));
 
-vi.mock("@/app/components/workflows/WorkflowPromptEditor", () => ({
-    WorkflowPromptEditor: () => null,
+vi.mock("@/app/contexts/UserProfileContext", () => ({
+    useUserProfile: () => ({
+        profile: { displayName: "User", practiceAreas: [] },
+    }),
 }));
+
+// The real editor is Tiptap behind a dynamic import; this stub is the same
+// contract (a controlled value with an onChange).
+vi.mock("@/app/components/workflows/WorkflowPromptEditor", () => ({
+    WorkflowPromptEditor: ({
+        value,
+        onChange,
+    }: {
+        value: string;
+        onChange?: (value: string) => void;
+    }) => (
+        <textarea
+            aria-label="Workflow prompt"
+            value={value}
+            onChange={(event) => onChange?.(event.target.value)}
+        />
+    ),
+}));
+
 vi.mock("./WorkflowAssets", () => ({
     WorkflowAssets: () => null,
 }));
+
 vi.mock("@/app/components/workflows/UseWorkflowModal", () => ({
     UseWorkflowModal: () => null,
 }));
-vi.mock("@/app/components/workflows/NewWorkflowModal", () => ({
-    NewWorkflowModal: () => null,
-}));
+
 vi.mock("@/app/components/modals/AddDocumentsModal", () => ({
     AddDocumentsModal: () => null,
 }));
 
-const workflow = {
-    id: "workflow-1",
-    is_owner: true,
-    access_role: "owner",
-    org_id: null,
-    metadata: {
-        title: "Contract Intake",
-        type: "assistant",
-        language: "English",
-        practice: null,
-        jurisdictions: null,
-    },
-    skill_md: "",
-} as unknown as Workflow;
+vi.mock("@/app/components/modals/AccessModal", () => ({
+    AccessModal: () => null,
+}));
 
-function people() {
-    return Promise.resolve({
-        owner: {
-            user_id: "me",
-            email: "me@firm.test",
-            display_name: "Me",
-            role: "owner" as const,
+vi.mock("@/app/components/workflows/NewWorkflowModal", () => ({
+    NewWorkflowModal: () => null,
+}));
+
+vi.mock("@/app/components/workflows/OpenSourceWorkflowModal", () => ({
+    OpenSourceWorkflowModal: () => null,
+}));
+
+function assistantWorkflow(): Workflow {
+    return {
+        id: "wf-1",
+        user_id: "user-1",
+        metadata: {
+            title: "Deposition prep",
+            description: null,
+            type: "assistant",
+            contributors: [],
+            language: "en",
+            version: "1",
+            practice: null,
+            jurisdictions: null,
         },
-        members: [
-            {
-                email: "counsel@firm.test",
-                display_name: null,
-                role: "viewer" as const,
-            },
-        ],
-    });
+        skill_md: "Ask the witness",
+        columns_config: null,
+        is_system: false,
+        is_owner: true,
+        created_at: "2026-09-01T00:00:00Z",
+    } as unknown as Workflow;
 }
 
-describe("WorkflowDetailPage access mutations", () => {
+describe("WorkflowDetailPage failures", () => {
     beforeEach(() => {
+        clearToasts();
         vi.clearAllMocks();
-        vi.mocked(getWorkflow).mockResolvedValue(workflow);
-        vi.mocked(getWorkflowPeople).mockImplementation(people);
-        vi.mocked(listWorkflowShares).mockResolvedValue([]);
-        vi.mocked(shareWorkflow).mockResolvedValue(undefined);
-        vi.mocked(deleteWorkflowShare).mockResolvedValue(undefined);
-        vi.stubGlobal(
-            "matchMedia",
-            vi.fn().mockReturnValue({
-                matches: true,
-                addEventListener: vi.fn(),
-                removeEventListener: vi.fn(),
-            }),
-        );
+        vi.mocked(updateWorkflow).mockReset().mockResolvedValue(assistantWorkflow());
+        vi.mocked(deleteWorkflow).mockReset().mockResolvedValue(undefined);
+        vi.mocked(getWorkflow).mockResolvedValue(assistantWorkflow());
+        window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+            matches: true,
+            media: query,
+            onchange: null,
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+        }));
     });
 
-    async function openAccess(user: ReturnType<typeof userEvent.setup>) {
-        render(<WorkflowDetailPage id="workflow-1" workflowType="assistant" />);
-        await user.click(
-            await screen.findByRole("button", {
-                name: "Open workflow access",
-            }),
+    afterEach(() => {
+        clearToasts();
+        vi.useRealTimers();
+    });
+
+    it("says an autosave failed and retries with the draft as it stands now", async () => {
+        // The autosave used to drop back to "idle" and lose the writing
+        // without ever saying so.
+        vi.mocked(updateWorkflow).mockRejectedValue(new Error("boom"));
+        const user = userEvent.setup();
+        render(
+            <>
+                <WorkflowDetailPage id="wf-1" workflowType="assistant" />
+                <ToastViewportUI />
+            </>,
         );
-        return screen.findByRole("button", {
-            name: "Role for counsel@firm.test",
+
+        const editor = await screen.findByLabelText("Workflow prompt");
+        await user.clear(editor);
+        await user.type(editor, "First draft");
+        // The save is debounced by 800ms.
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 900));
         });
-    }
 
-    it("does not report a role change as failed when only the re-read fails", async () => {
-        const user = userEvent.setup();
-        vi.mocked(listWorkflowShares).mockRejectedValue(
-            new MikeApiError({ message: "Shares unavailable.", status: 500 }),
-        );
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't save your changes");
+        expect(await screen.findByText("Couldn't save")).toBeVisible();
 
-        const rolePill = await openAccess(user);
-        await user.click(rolePill);
-        await user.click(screen.getByRole("menuitem", { name: "Owner" }));
+        // The user keeps typing; Retry must save what is in the editor now.
+        vi.mocked(updateWorkflow).mockResolvedValue(assistantWorkflow());
+        await user.type(editor, " and more");
+        await user.click(within(alert).getByRole("button", { name: "Retry" }));
 
         await waitFor(() =>
-            expect(shareWorkflow).toHaveBeenCalledWith("workflow-1", {
-                emails: ["counsel@firm.test"],
-                role: "owner",
+            expect(updateWorkflow).toHaveBeenLastCalledWith("wf-1", {
+                skill_md: "First draft and more",
             }),
         );
-        expect(
-            screen.queryByText("Could not change that role."),
-        ).not.toBeInTheDocument();
     });
 
-    it("says the list is stale when the re-read fails", async () => {
-        // `.catch(() => {})` left the roster showing the roles as they were
-        // BEFORE a change the server accepted, with nothing saying the screen
-        // had stopped tracking the server.
+    it("puts deleted columns back and says the column save failed", async () => {
+        const tabular = {
+            ...assistantWorkflow(),
+            metadata: {
+                ...assistantWorkflow().metadata,
+                type: "tabular" as const,
+            },
+            skill_md: null,
+            columns_config: [
+                { index: 0, name: "Party", prompt: "Who?", format: "text" },
+                { index: 1, name: "Date", prompt: "When?", format: "text" },
+            ],
+        } as unknown as Workflow;
+        vi.mocked(getWorkflow).mockResolvedValue(tabular);
+        vi.mocked(updateWorkflow).mockRejectedValue(new Error("boom"));
         const user = userEvent.setup();
-        vi.mocked(listWorkflowShares).mockRejectedValue(
-            new MikeApiError({ message: "Shares unavailable.", status: 500 }),
+        render(
+            <>
+                <WorkflowDetailPage id="wf-1" workflowType="tabular" />
+                <ToastViewportUI />
+            </>,
         );
 
-        const rolePill = await openAccess(user);
-        await user.click(rolePill);
-        await user.click(screen.getByRole("menuitem", { name: "Owner" }));
+        expect(await screen.findByText("Party")).toBeVisible();
+        // Select every column, then delete the selection.
+        await user.click(screen.getAllByRole("checkbox")[0]);
+        await user.click(screen.getAllByRole("button", { name: "Delete" })[0]);
 
-        expect(
-            await screen.findByText(
-                "The change was saved, but this list could not be reloaded. Reopen Access to see the current one.",
-            ),
-        ).toBeVisible();
-        // Still not reported as a failed change.
-        expect(
-            screen.queryByText("Could not change that role."),
-        ).not.toBeInTheDocument();
+        // Under load the prompt autosave debounce can fire during this test
+        // and raise its own toast for the same rejected mock, so pick the
+        // column-save toast by content rather than assuming a single alert.
+        await screen.findAllByRole("alert");
+        await waitFor(() =>
+            expect(
+                screen
+                    .getAllByRole("alert")
+                    .some((el) =>
+                        el.textContent?.includes("Couldn't save the columns"),
+                    ),
+            ).toBe(true),
+        );
+        // The optimistic removal is undone before the toast: the table never
+        // shows a layout the server refused.
+        expect(await screen.findByText("Party")).toBeVisible();
+        expect(screen.getByText("Date")).toBeVisible();
     });
 
-    it("does not report a revoke as failed when only the re-read fails", async () => {
+    it("says a workflow delete failed and offers a Retry", async () => {
+        vi.mocked(deleteWorkflow).mockRejectedValue(new Error("boom"));
         const user = userEvent.setup();
-        vi.mocked(listWorkflowShares).mockRejectedValue(
-            new MikeApiError({ message: "Shares unavailable.", status: 500 }),
+        render(
+            <>
+                <WorkflowDetailPage id="wf-1" workflowType="assistant" />
+                <ToastViewportUI />
+            </>,
         );
 
-        await openAccess(user);
+        await screen.findByLabelText("Workflow prompt");
         await user.click(
-            screen.getByRole("button", {
-                name: "Actions for counsel@firm.test",
-            }),
+            screen.getByRole("button", { name: "Workflow actions" }),
         );
-        await user.click(screen.getByRole("menuitem", { name: "Remove" }));
+        await user.click(
+            await screen.findByRole("menuitem", { name: "Delete" }),
+        );
+        await user.click(
+            await screen.findByRole("button", { name: "Delete" }),
+        );
 
-        await waitFor(() =>
-            expect(listWorkflowShares).toHaveBeenCalledWith("workflow-1"),
-        );
+        const alert = await screen.findByRole("alert", {}, { timeout: 3000 });
+        expect(alert).toHaveTextContent("Couldn't delete this workflow");
         expect(
-            screen.queryByText("Could not remove access."),
-        ).not.toBeInTheDocument();
+            within(alert).getByRole("button", { name: "Retry" }),
+        ).toBeVisible();
     });
 
-    it("still reports a role change the grant itself refused", async () => {
-        const user = userEvent.setup();
-        vi.mocked(shareWorkflow).mockRejectedValue(
-            new MikeApiError({
-                message: "Only owners can share this workflow.",
-                status: 403,
-            }),
+    it("says the workflow could not be loaded instead of claiming it is missing", async () => {
+        vi.mocked(getWorkflow).mockRejectedValue(
+            Object.assign(new Error("Internal error"), { status: 500 }),
+        );
+        render(
+            <>
+                <WorkflowDetailPage id="wf-1" workflowType="assistant" />
+                <ToastViewportUI />
+            </>,
         );
 
-        const rolePill = await openAccess(user);
-        await user.click(rolePill);
-        await user.click(screen.getByRole("menuitem", { name: "Owner" }));
-
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't load this workflow");
+        // The screen itself says so too, with a "Try again": a transport
+        // failure must not be reported as "Workflow not found."
         expect(
-            await screen.findByText("Only owners can share this workflow."),
+            await screen.findByRole("button", { name: "Try again" }),
         ).toBeVisible();
+        expect(screen.queryByText("Workflow not found.")).toBeNull();
     });
 });

@@ -97,9 +97,17 @@ Preserve the accessibility baseline:
   them out of `next build`; `frontend/src/__tests__/architecture.test.ts`
   enforces both rules.
 
-Do not expose raw backend, database, provider, or stack errors in the UI. Map
-known 4xx responses to intentional messages and use the generic fallback
-helpers in `frontend/src/app/lib/userFacingError.ts` for unexpected failures.
+Do not expose raw backend, database, provider, or stack errors in the UI.
+Classify a thrown value once with `describeError` from
+`frontend/src/shared/lib/userError.ts` (shared with the add-in) and show it
+with `notifyError` from `frontend/src/app/lib/userFacingError.ts`, which
+raises the toast, offers "Retry" only when a retry is honest, and offers
+"Contact support" only for failures the user cannot fix — a `mailto:` draft
+to `SUPPORT_EMAIL` (`will@mikeoss.com`), built by `supportMailtoFor`, that
+carries the request id, code, page and time so support can find the request
+in the logs. Auth sentences come from the single table in
+`frontend/src/app/lib/authMessages.ts`. See "Reporting failures" in
+`docs/design-system.md` for where each kind of failure is shown.
 
 ## Backend Structure
 
@@ -151,8 +159,14 @@ Keep route handlers thin when logic is reusable. Preserve authorization checks
 and ownership/project-sharing boundaries on every new query or mutation. Never
 send internal exception messages to clients: use the helpers in
 `backend/src/lib/httpError.ts`; logging must use the redaction helpers in
-`backend/src/lib/safeError.ts`. Intentional validation and permission failures
-should remain explicit 4xx responses.
+`backend/src/lib/observability/sentry.ts` (`redactText`, `redactUrl`,
+`scrubFreeform`, `redactShaped`). The last-resort guard that keeps an internal
+message out of a response body is `backend/src/middleware/
+internalErrorResponse.ts` — it is a net, not a licence to hand it raw text.
+Intentional validation and permission failures should remain explicit 4xx
+responses, and a `code` a client is expected to act on must be listed in
+`CODE_KINDS` in `frontend/src/shared/lib/userError.ts` (a drift test keeps
+that table to codes some server really emits).
 
 ## Database Migrations
 
