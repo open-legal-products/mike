@@ -28,6 +28,7 @@
 @source "../../../frontend/src/shared/ui/AuthDividerUI.tsx";
 @source "../../../frontend/src/shared/ui/WorkflowSlashCommandUI.tsx";
 @source "../../../frontend/src/shared/ui/LiquidGlassUI.ts";
+@source "../../../frontend/src/shared/ui/ToastUI.tsx";
 
 /* The web supplies these font variables via next/font; the add-in supplies
    them here (the actual font files are loaded via a <link> in index.html).

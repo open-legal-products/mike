@@ -36,6 +36,7 @@ vi.mock("@sentry/nextjs", () => ({
 import * as Sentry from "@sentry/nextjs";
 import {
     browserSentryOptions,
+    isReported,
     reportApiFailure,
     reportError,
     scrubEvent,
@@ -54,6 +55,19 @@ afterEach(() => {
 });
 
 describe("reportError", () => {
+    it("lets notification callers recognize an already-reported error by identity", () => {
+        const error = new Error("same failure");
+        expect(isReported(error)).toBe(false);
+        for (const value of [null, undefined, "same failure", 0]) {
+            expect(isReported(value)).toBe(false);
+        }
+
+        reportError(error);
+
+        expect(isReported(error)).toBe(true);
+        expect(isReported(new Error("same failure"))).toBe(false);
+    });
+
     it("is a no-op without a DSN but still marks the error for the console bridge", () => {
         const error = new Error("x");
         expect(reportError(error, { tags: { a: "b" } })).toBeNull();

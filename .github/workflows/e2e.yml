@@ -7,15 +7,10 @@
 # this job "e2e / playwright" as a required status check in branch protection —
 # see docs/e2e-ci.md ("Make it merge-blocking").
 #
-# The suite is green with NO secret: of the 31 specs, the 4 LLM-dependent ones
-# (chat + critical path) skip themselves when ANTHROPIC_API_KEY is absent (see
-# e2e/llm.ts), so a keyless run passes the other 27 specs. Mike supports local
-# Ollama models without a provider key, but this job does not provision Ollama;
-# the gate is not caused by the best-effort title-generation call. To run and
-# enforce those 4, set the ANTHROPIC_API_KEY repository secret; exact steps, the
-# fork-PR caveat (fork `pull_request` runs never receive secrets, so they
-# always take the skip path), cost, and how to verify the specs ran are in
-# docs/e2e-ci.md ("Enable the LLM specs").
+# Every browser flow runs without a paid provider key. A local Anthropic-protocol
+# fixture supplies deterministic completions while requests still cross the real
+# web gateway, backend, auth, database, storage and assistant streaming layers.
+# This verifies application flows, not the quality/availability of a live model.
 #
 # The e2e user (e2e@mike.local) is bootstrapped in-job by e2e/auth.setup.ts against
 # the local Supabase admin API, so no E2E_PASSWORD secret is needed — the defaults
@@ -24,18 +19,14 @@ name: e2e
 
 on:
   workflow_dispatch:
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    # `main` is the destination upstream; `upstream-main` is the fork's mirror of
-    # it, so the suite is exercised on the fork PR and stays correct once merged.
-    branches: [main, upstream-main]
   # Nightly run against the default branch, so drift that lands BETWEEN pull
   # requests (a dependency bump, a Supabase CLI change, an upstream UI tweak
   # breaking a selector) is caught within a day instead of surfacing on the next
   # unrelated PR. 03:47 UTC is a quiet hour for GitHub's cron pool (on-the-hour
-  # slots are congested and can be delayed or dropped). Scheduled runs exercise
-  # the 4 LLM-gated specs only when the ANTHROPIC_API_KEY repository secret is
-  # configured — without it they self-skip (e2e/llm.ts) and the run still
-  # covers the other specs.
+  # slots are congested and can be delayed or dropped). Scheduled runs use the
+  # same deterministic provider and exercise every flow.
   schedule:
     - cron: "47 3 * * *"
 
@@ -52,12 +43,10 @@ jobs:
       # Defaults match e2e/auth.setup.ts; overriding the password here would break
       # the valid-login specs, so only the base URL is pinned.
       PLAYWRIGHT_BASE_URL: http://localhost:3000
-      # Exposed to the Playwright process (not just backend/.env) so the LLM-gated
-      # specs can skip themselves when no key is present — see e2e/llm.ts. When the
-      # secret is set they run and are enforced; when absent they skip, so a keyless
-      # run (e.g. a fork PR, which never receives this secret) is still green on
-      # the other 27 of the 31 specs. Setup: docs/e2e-ci.md, "Enable the LLM specs".
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Dummy key enables model selection; the SDK's existing endpoint override
+      # sends every Anthropic request to the loopback fixture, never a provider.
+      ANTHROPIC_API_KEY: e2e-local-key
+      ANTHROPIC_BASE_URL: http://127.0.0.1:4141/v1
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -82,8 +71,27 @@ jobs:
       - name: Ensure lightningcss native binary
         run: npm install --no-save lightningcss --prefix frontend
 
+      # Playwright transpiles TypeScript without typechecking. Keep missing
+      # helpers and stale fixture signatures from hiding in gated browser flows.
+      - name: Typecheck browser specs
+        run: >-
+          npx tsc --ignoreConfig --noEmit --module nodenext
+          --moduleResolution nodenext --target es2022 --skipLibCheck
+          --esModuleInterop --types node e2e/*.ts playwright.config.ts
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+
+      - name: Verify and start deterministic model provider
+        run: |
+          node --test e2e/anthropic-stub.check.mjs
+          node e2e/anthropic-stub.mjs > /tmp/e2e-model.log 2>&1 &
+          for i in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:4141/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/e2e-model.log
+          exit 1
 
       # Object storage. Three specs upload a document (tabular-review row,
       # project-folder fixture) and assert the result renders; those uploads go
@@ -151,6 +159,9 @@ jobs:
           # is provided by RustFS above, and no spec reads local email. Excluding
           # the unused services also avoids Inbucket claiming host port 54324,
           # which can collide with runner processes before Playwright starts.
+          # Supabase defaults overlap Linux's ephemeral port range. Dedicated
+          # low ports avoid intermittent collisions with runner outbound traffic.
+          sed -i 's/54320/21320/g; s/54321/21321/g; s/54322/21322/g' supabase/config.toml
           supabase start -x studio,imgproxy,inbucket,analytics,vector,realtime,storage,edge-runtime,functions,meta
           DB_URL=$(supabase status -o json | jq -r '.DB_URL')
           # A fresh database runs the current schema exactly once. Historical
@@ -208,7 +219,8 @@ jobs:
             # Keep the release-job fixture reproducible even when the source
             # repository's main branch changes independently of this PR.
             echo "MIKE_WORKFLOWS_REF=ce62e6a2d3f47e1d3567a4f2edc61898cfe9e78a"
-            echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}"
+            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+            echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
             # Error reporting is on by default; CI runs must not report.
             echo "SENTRY_DISABLED=true"
           } >> backend/.env

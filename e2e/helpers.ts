@@ -12,42 +12,21 @@ import path from "path";
 /** The one-page PDF every upload flow attaches. */
 export const PDF_FIXTURE = path.join(__dirname, "fixtures/test.pdf");
 
-/**
- * The model `selectClaudeModel` picks — the cheapest Anthropic entry in
- * ModelToggle.MODELS.
- */
+/** Anthropic model available through the CI provider fixture or a local live key. */
 export const CLAUDE_MODEL_LABEL = "Claude Sonnet 4.6";
 
-/**
- * Select a Claude model in the chat input's ModelToggle.
- *
- * The specs that call this run only when ANTHROPIC_API_KEY is set in the
- * Playwright environment (test.skip(!hasLlmKey, ...) — e2e/llm.ts). The CI stack
- * exports the same secret to the backend, whose key resolution (modules/user/user.apiKeyStore.ts
- * envApiKey()) falls back to the ANTHROPIC_API_KEY env var, so the "claude"
- * provider reports as configured and ModelToggle shows the Anthropic models as
- * available. The default model, however, is "gemini-3-flash-preview"
- * (ModelToggle.DEFAULT_MODEL_ID), for which no key is configured in CI;
- * ChatInput.handleSubmit then refuses to send. So every LLM spec has to switch
- * the model first.
- *
- * ModelToggle renders a Radix DropdownMenu: the trigger is a button whose title
- * is "Choose model" (current model available) or "API key missing for selected
- * model" (current model not available — the default-Gemini case).
- */
+/** Select through the shared model picker's accessible trigger and provider group. */
 export async function selectClaudeModel(page: Page) {
-    const trigger = page
-        .locator(
-            'button[title="Choose model"], button[title="API key missing for selected model"]',
-        )
-        .first();
-    await expect(trigger).toBeVisible({ timeout: 10_000 });
+    const trigger = page.getByRole("button", { name: "Choose model", exact: true });
+    await expect(trigger).toBeEnabled({ timeout: 10_000 });
     await trigger.click();
-    await page.getByRole("menuitem", { name: CLAUDE_MODEL_LABEL }).click();
-    // After selection the trigger label reflects the chosen model.
-    await expect(
-        page.getByRole("button", { name: CLAUDE_MODEL_LABEL }),
-    ).toBeVisible({ timeout: 5_000 });
+    const provider = page.getByRole("menuitem", { name: "Anthropic", exact: true });
+    await expect(provider).toBeVisible();
+    if (await provider.getAttribute("aria-expanded") !== "true") {
+        await provider.click();
+    }
+    await page.getByRole("menuitem", { name: CLAUDE_MODEL_LABEL, exact: true }).click();
+    await expect(trigger).toHaveAttribute("title", `Choose model — ${CLAUDE_MODEL_LABEL}`);
 }
 
 /**

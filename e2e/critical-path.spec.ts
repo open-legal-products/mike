@@ -8,7 +8,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { hasLlmKey, LLM_SKIP_REASON } from "./llm";
-import { PDF_FIXTURE, selectClaudeModel } from "./helpers";
+import { createProject, PDF_FIXTURE, selectClaudeModel } from "./helpers";
 
 /* ─── Test 1: authenticated landing ─────────────────────────────────────── */
 

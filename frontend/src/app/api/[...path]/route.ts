@@ -85,7 +85,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
         // this error, a console bridge drops the nested copy as a duplicate.
         console.error("[api-gateway] upstream request failed", { requestId, stage, error });
         return Response.json(
-            { detail: "The API is temporarily unavailable.", request_id: requestId },
+            { code: "upstream_unavailable", detail: "The API is temporarily unavailable.", request_id: requestId },
             { status: 502, headers: { "x-request-id": requestId } },
         );
     }

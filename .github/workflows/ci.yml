@@ -12,10 +12,11 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    branches: [main]
 
 jobs:
   backend:

@@ -10,7 +10,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import { hasLlmKey, LLM_SKIP_REASON } from "./llm";
-import { selectClaudeModel } from "./helpers";
+import { createProject, selectClaudeModel } from "./helpers";
 
 /* ─── Helpers ────────────────────────────────────────────────────────────────── */
 
@@ -124,16 +124,8 @@ test("rename chat: sidebar rename interaction updates the title", async ({ page 
     // ── Step 3: ensure the sidebar is open ───────────────────────────────────────
     await ensureSidebarOpen(page);
 
-    // ── Step 4: locate the active chat item ──────────────────────────────────────
-    // SidebarChatItem.tsx renders a `div.group.relative` wrapper for each chat.
-    // When isActive=true the wrapper carries APP_SURFACE_ACTIVE_CLASS
-    // ("bg-app-surface-active"); inactive items carry APP_SURFACE_HOVER_CLASS
-    // ("hover:bg-app-surface-hover", a different token), so matching
-    // "bg-app-surface-active" distinguishes the active item. (The olp liquid-
-    // surface refresh renamed the old "bg-gray-200/60" active token.)
-    const activeItem = page
-        .locator('div.group.relative[class*="bg-app-surface-active"]')
-        .first();
+    // The selected chat uses the shared liquid-glass selected surface.
+    const activeItem = page.locator("div.group.relative.liquid-glass-selected");
 
     // The active item's trigger is already opacity-100, but hover is harmless and
     // keeps parity with the inactive-item path.
@@ -167,14 +159,10 @@ test("rename chat: sidebar rename interaction updates the title", async ({ page 
     // ChatHistoryContext.renameChatFn optimistically updates the chat title in state.
     // SidebarChatItem re-renders the title button with the new text.
     //
-    // exact: true is load-bearing. The row's menu trigger now carries
-    // aria-label="Actions for <title>" (an a11y fix worth keeping), and
-    // Playwright's default name matching is a case-insensitive SUBSTRING
-    // match — so a bare { name: newTitle } resolves to the title button AND
-    // its sibling trigger, and the assertion dies on a strict-mode violation
-    // rather than on anything real.
+    // Match visible title text: the accessible name may append response status,
+    // while the icon-only "Actions for <title>" trigger has no visible title text.
     await expect(
-        page.getByRole("button", { name: newTitle, exact: true })
+        page.getByRole("button").filter({ hasText: newTitle })
     ).toBeVisible({ timeout: 10_000 });
 });
 
@@ -249,12 +237,8 @@ test("delete chat: sidebar delete action removes the chat from history", async (
     await renameInput.press("Enter");
 
     // The renamed chat's title button now uniquely identifies its row.
-    // exact: true — the row's menu trigger is labelled "Actions for <title>",
-    // which Playwright's default substring name matching also hits.
-    const targetTitle = page.getByRole("button", {
-        name: uniqueTitle,
-        exact: true,
-    });
+    // Visible text excludes the icon-only menu and tolerates status in aria-label.
+    const targetTitle = page.getByRole("button").filter({ hasText: uniqueTitle });
     await expect(targetTitle).toBeVisible({ timeout: 10_000 });
     // The row wrapper that contains that title button (for reaching its menu).
     const targetRow = page
@@ -275,101 +259,27 @@ test("delete chat: sidebar delete action removes the chat from history", async (
 
 test("project assistant: create a new chat and submit a question", async ({ page }) => {
     test.skip(!hasLlmKey, LLM_SKIP_REASON);
-    // REGRESSION: fails if the project chat creation route is broken — specifically if
-    // handleNewChat() in ProjectPage.tsx (lines 515-519) fails to call saveChat() or
-    // router.push to /projects/[id]/assistant/chat/[chatId]. (Verified by temporarily
-    // removing that router.push: "+ Create New" then no longer navigates and the
-    // Step 8 waitForURL below fails.)
-
-    // This test creates a project then a chat (two sequential write round-trips
-    // plus a navigation each) and ends with an LLM-backed submit, so give it
-    // headroom beyond the 30s default.
     test.setTimeout(120_000);
 
-    // ── Steps 1-4: create a project ──────────────────────────────────────────────
-    // The whole wizard (Details → Access → Add Documents) lives in one shared
-    // helper, e2e/helpers.ts, so a step added to NewProjectModal cannot leave
-    // this spec behind — which is exactly what happened when the Access step
-    // landed: a single "Next" left this test on step two, and the
-    // /create project|creating/i primary it then waited for was two clicks
-    // away. No document is attached; this test is about routing.
-    // NewProjectModal.handleSubmit does NOT navigate itself — it calls
-    // onCreated() then onClose(). ProjectsOverview.onCreated inserts the row
-    // AND router.push(`/projects/${p.id}`), so the helper's waitForURL is what
-    // confirms creation; the name never re-appears in a list to click.
     const projectName = `E2E Chat Route ${Date.now()}`;
     await createProject(page, projectName);
     await expect(page).toHaveURL(/\/projects\/[^/]+$/);
-
-    // ── Step 6: open the assistant tab and reach the empty-state "Create" ────────
-    // The project assistant is now a nested route (/projects/[id]/assistant), not a
-    // ?tab= query on the detail page. Navigating straight there avoids ambiguity
-    // with the sidebar "Assistant" nav item.
-    const assistantUrl = page.url() + "/assistant";
-    // The olp UI replaced the old "+ Create New" text link with a PillButton
-    // reading "Create" in the ProjectAssistantTable empty state
-    // (ProjectAssistantTable.tsx:110-115, shown when chats.length === 0).
-    const createNewBtn = page.getByRole("button", { name: "Create", exact: true });
+    const assistantUrl = `${page.url()}/assistant`;
     await page.goto(assistantUrl);
-    await expect(createNewBtn).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Create", exact: true }).click();
 
-    // ── Step 7-8: click "Create" and wait for the project chat URL ───────────────
-    // handleNewChat (ProjectPage.tsx:515-519) calls saveChat(projectId) then
-    // router.push(`/projects/${projectId}/assistant/chat/${id}`).
-    //
-    // REGRESSION (the target of this test): if handleNewChat's router.push is
-    // removed — or saveChat itself is broken — no navigation happens and the
-    // waitForURL below fails.
-    const chatUrl = /\/projects\/.+\/assistant\/chat\/.+/;
-    await createNewBtn.click();
-    await page.waitForURL(chatUrl, { timeout: 20_000 });
-
-    // ── Step 9: assert the ChatInput textarea is visible ─────────────────────────
-    // ProjectAssistantChatPage renders <ChatInput> in the right "Project Assistant"
-    // panel (line 1221-1229 of the chat page component).
+    // Existing main behavior: Create opens a draft; the first message persists
+    // the chat and replaces this URL with its durable id.
+    await expect(page).toHaveURL(`${assistantUrl}/chat`);
     const chatInput = page.getByPlaceholder("How can I help?");
-    await expect(chatInput).toBeVisible({ timeout: 10_000 });
-
-    // ── Step 10-11: pick an available model, submit a question, assert it clears ──
-    // ChatInput.handleSubmit (ChatInput.tsx:113-140) clears the textarea
-    // synchronously (setValue("")) ONLY when the selected model is available and no
-    // prior response is in flight; otherwise it returns early. Two transient gates
-    // exist under load:
-    //   • useSelectedModel (useSelectedModel.ts:16-20) seeds DEFAULT (Gemini) for
-    //     one render before its localStorage-read effect restores the Claude
-    //     model, so a submit racing a ChatInput remount can momentarily see
-    //     Gemini → the ApiKeyMissingModal ("API key required") pops and the
-    //     submit no-ops.
-    //   • A transient in-flight response (isResponseLoading) also no-ops the submit.
-    // Re-select the Claude model and re-submit until the textarea clears. A
-    // genuinely broken send never clears on ANY attempt, so a real regression is
-    // still caught.
-    const question = "What is in this project?";
-    const apiKeyModalHeading = page.getByRole("heading", {
-        name: "API key required",
+    await expect(chatInput).toBeVisible();
+    await selectClaudeModel(page);
+    await chatInput.fill("What is in this project?");
+    await chatInput.press("Enter");
+    await expect(chatInput).toHaveValue("");
+    await expect(page).toHaveURL(/\/projects\/[^/]+\/assistant\/chat\/[^/]+$/, {
+        timeout: 30_000,
     });
-    const SUBMIT_ATTEMPTS = 4;
-    let cleared = false;
-    for (let attempt = 0; attempt < SUBMIT_ATTEMPTS && !cleared; attempt++) {
-        // Dismiss a stray "API key required" modal left by a prior racey attempt
-        // (Cancel closes it without navigating; "Go to settings" would).
-        if (await apiKeyModalHeading.isVisible().catch(() => false)) {
-            await page
-                .getByRole("button", { name: "Cancel" })
-                .click()
-                .catch(() => {});
-        }
-        // Re-assert the Claude model as the active (available) model after any remount.
-        await selectClaudeModel(page);
-        await chatInput.fill(question);
-        // ChatInput.handleKeyDown: Enter (no Shift) → handleSubmit().
-        await chatInput.press("Enter");
-        // setValue("") runs synchronously on a successful send.
-        cleared = await expect(chatInput)
-            .toHaveValue("", { timeout: 5_000 })
-            .then(() => true)
-            .catch(() => false);
-    }
-    // Final assertion surfaces a genuinely broken send (never clears).
-    await expect(chatInput).toHaveValue("", { timeout: 5_000 });
+    await expect(page.locator("div.prose.font-serif.text-gray-900").first())
+        .toContainText(/\S/, { timeout: 30_000 });
 });

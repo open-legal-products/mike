@@ -37,6 +37,26 @@ const scrubber = createEventScrubber({ install });
 /** `beforeSend` for every Sentry client in the web app (browser, server, edge). */
 export const scrubEvent = scrubber.scrubEvent;
 
+/**
+ * The scrubber's "already sent" registry is a closure, so it can answer the
+ * console bridge but not a caller. This mirror answers callers: a screen
+ * that catches an error the API client already reported (every 5xx, every
+ * transport failure) must not report it a second time under its own tags.
+ */
+const reportedHere = new WeakSet<object>();
+
+function markReported(error: unknown): void {
+    scrubber.markReported(error);
+    if (error && typeof error === "object") reportedHere.add(error);
+}
+
+/** Has this exact error object already been sent to Sentry with context? */
+export function isReported(error: unknown): boolean {
+    return (
+        error !== null && typeof error === "object" && reportedHere.has(error)
+    );
+}
+
 function applyContext(scope: Sentry.Scope, context: ReportContext): void {
     if (context.level) scope.setLevel(context.level);
     if (context.fingerprint) scope.setFingerprint(context.fingerprint);
@@ -56,7 +76,7 @@ export function reportError(
     error: unknown,
     context: ReportContext = {},
 ): string | null {
-    scrubber.markReported(error);
+    markReported(error);
     if (!Sentry.isEnabled()) return null;
     return Sentry.withScope((scope) => {
         applyContext(scope, context);
@@ -83,7 +103,7 @@ export function reportApiFailure(failure: {
      */
     error?: unknown;
 }): string | null {
-    scrubber.markReported(failure.error);
+    markReported(failure.error);
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";
@@ -183,7 +203,7 @@ export function reportNetworkFailure(
     error: unknown,
     request: { method: string; url: string },
 ): string | null {
-    scrubber.markReported(error);
+    markReported(error);
     if (!Sentry.isEnabled() || pageIsBeingLeft()) return null;
     const route = normalizeApiPath(request.url);
     let networkState = "unknown";

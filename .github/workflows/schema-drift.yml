@@ -35,8 +35,8 @@ name: Schema drift
 on:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    branches: [main, upstream-main]
   workflow_dispatch:
 
 concurrency:
@@ -81,6 +81,9 @@ jobs:
       - name: Start local Supabase stack
         run: |
           supabase init
+          # Supabase defaults overlap Linux's ephemeral port range. Dedicated
+          # low ports avoid intermittent collisions with runner outbound traffic.
+          sed -i 's/54320/21320/g; s/54321/21321/g; s/54322/21322/g' supabase/config.toml
           supabase start -x studio,imgproxy,inbucket,analytics,vector,realtime,storage,edge-runtime,functions,meta
 
       - name: Export stack connection env

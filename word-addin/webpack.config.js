@@ -219,6 +219,11 @@ module.exports = async (_env, options) => {
         // Sentry event hygiene (PII scrub + console-bridge dedupe) is one
         // policy for the web app and the add-in.
         "@mike/sentry-event": frontendShared("lib", "sentryEvent.ts"),
+        // Error presentation: one classifier and one toast stack for both
+        // clients, so a failure reads the same in Word as it does on the web.
+        "@mike/toast-store": frontendShared("lib", "toastStore.ts"),
+        "@mike/toast-ui": frontendSharedUi("ToastUI.tsx"),
+        "@mike/user-error": frontendShared("lib", "userError.ts"),
       },
     },
     module: {
