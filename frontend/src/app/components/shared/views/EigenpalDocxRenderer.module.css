@@ -3,17 +3,27 @@
 .host {
     /* Capture Mike's focus token before EigenPal shadows it with HSL. */
     --mike-docx-focus-color: var(--ring);
+    --mike-docx-toolbar-height: 54px;
+}
+
+.host :global(.docx-editor) {
+    position: relative;
 }
 
 .host :global(.docx-toolbar) {
     background: var(--liquid-glass-background-flat);
     border: 1px solid var(--liquid-glass-border-flat);
     box-shadow: var(--liquid-glass-shadow-flat);
+    pointer-events: auto;
 }
 
 .host :global(.docx-editor) > div:has(:global(.docx-toolbar)) {
+    position: absolute !important;
+    inset: 0 0 auto;
+    background: transparent !important;
     border-bottom: 0 !important;
     box-shadow: none !important;
+    pointer-events: none;
 }
 
 .host :global(.docx-editor) > div:has(:global(.docx-toolbar)) > div:first-child {
@@ -22,6 +32,20 @@
 
 .host :global(.docx-editor) > div > div:has(> :global(.docx-toolbar)) {
     padding-top: 0.25rem !important;
+}
+
+/* The first page clears the floating toolbar; later pages scroll beneath it.
+   Measure the header so narrow layouts and toolbar wrapping stay usable. */
+.host :global(.docx-editor):not(:has(> :global(.docx-font-notice))) :global(.docx-content-mount) {
+    padding-top: var(--mike-docx-toolbar-height);
+}
+
+.host :global(.docx-editor):not(:has(> :global(.docx-font-notice))) :global(.docx-nav) {
+    top: var(--mike-docx-toolbar-height);
+}
+
+.host :global(.docx-editor) > :global(.docx-font-notice) {
+    margin-top: var(--mike-docx-toolbar-height);
 }
 
 /* Native navigation chrome has more specific fill and hover rules than the
