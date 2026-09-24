@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import Image from "next/image";
 import { MoreHorizontal } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -21,12 +21,13 @@ import {
 
 interface InitialViewProps {
     onSubmit: (message: Message) => void;
+    inputRef?: RefObject<ChatInputHandle | null>;
     onDocumentClick?: (document: Document) => void;
 }
 
 const ICON_SIZE = 30;
 const GAP = 12; // gap-4 = 1rem = 16px
-export function InitialView({ onSubmit, onDocumentClick }: InitialViewProps) {
+export function InitialView({ onSubmit, onDocumentClick, inputRef }: InitialViewProps) {
     const { user } = useAuth();
     const { profile } = useUserProfile();
     const [loaded, setLoaded] = useState(false);
@@ -35,7 +36,8 @@ export function InitialView({ onSubmit, onDocumentClick }: InitialViewProps) {
     const [iconOffset, setIconOffset] = useState(0);
     const [textOffset, setTextOffset] = useState(0);
     const textRef = useRef<HTMLHeadingElement>(null);
-    const chatInputRef = useRef<ChatInputHandle>(null);
+    const localInputRef = useRef<ChatInputHandle>(null);
+    const chatInputRef = inputRef ?? localInputRef;
 
     const username =
         profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";

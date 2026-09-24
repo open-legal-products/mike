@@ -7,6 +7,10 @@ import {
     useState,
     type CSSProperties,
 } from "react";
+import {
+    DocumentTabActions,
+    type DocumentActions,
+} from "../shared/DocumentTabActions";
 import Image from "next/image";
 import { X } from "lucide-react";
 import { DocPanel, type DocPanelMode } from "./DocPanel";
@@ -125,6 +129,9 @@ interface Props {
     onActivateTab: (id: string) => void;
     onCloseTab: (id: string) => void;
     onCloseAll: () => void;
+    documentActions?: (
+        document: PanelDocument,
+    ) => Omit<DocumentActions, "onOpen">;
     onReorderTabs?: (
         draggedTabId: string,
         targetTabId: string,
@@ -190,6 +197,7 @@ export function AssistantSidePanel({
     onActivateTab,
     onCloseTab,
     onCloseAll,
+    documentActions,
     onReorderTabs,
     isEditorReloading,
     isEditReloading,
@@ -201,6 +209,7 @@ export function AssistantSidePanel({
     onScrollChange,
 }: Props) {
     const panelRef = useRef<HTMLDivElement>(null);
+    const documentDownloads = useRef(new Map<string, () => Promise<void>>());
     const [panelWidth, setPanelWidth] = useState(() =>
         typeof window !== "undefined"
             ? Math.min(
@@ -297,12 +306,12 @@ export function AssistantSidePanel({
             />
 
             {/* Tab strip (Chrome-style) */}
-            <div
-                className={cn(
-                    "document-tab-strip flex items-end gap-1 pt-2",
-                )}
-            >
-                <div className="flex-1 flex items-end gap-1 overflow-hidden px-2">
+            <div className={cn("document-tab-strip flex items-end gap-1 pt-2")}>
+                <div
+                    role="tablist"
+                    aria-label="Assistant documents"
+                    className="flex-1 flex items-end gap-1 overflow-hidden px-2"
+                >
                     {tabs.map((tab) => {
                         const isActive = tab.id === active.id;
                         const showVersionBadge =
@@ -310,143 +319,249 @@ export function AssistantSidePanel({
                             Number.isFinite(tab.document.version_number) &&
                             tab.document.version_number > 1;
                         const title = tabTitle(tab);
+                        const fileActions =
+                            tab.document.type !== "case" &&
+                            tab.document.type !== "legislation"
+                                ? documentActions?.(tab.document)
+                                : undefined;
                         return (
-                            <div
+                            <DocumentTabActions
                                 key={tab.id}
-                                draggable={!!onReorderTabs && tabs.length > 1}
-                                onDragStart={(event) => {
-                                    if (!onReorderTabs) return;
-                                    draggedTabIdRef.current = tab.id;
-                                    setDraggedTabId(tab.id);
-                                    event.dataTransfer.effectAllowed = "move";
-                                    event.dataTransfer.setData(
-                                        "text/plain",
-                                        tab.id,
-                                    );
+                                filename={title}
+                                actions={{
+                                    ...fileActions,
+                                    onDownload: fileActions?.onDownload
+                                        ? () => {
+                                              const download =
+                                                  documentDownloads.current.get(
+                                                      tab.id,
+                                                  );
+                                              return download
+                                                  ? download()
+                                                  : fileActions.onDownload?.();
+                                          }
+                                        : undefined,
+                                    onOpen: () => onActivateTab(tab.id),
                                 }}
-                                onDragOver={(event) => {
-                                    const draggedId =
-                                        draggedTabIdRef.current ??
-                                        event.dataTransfer.getData(
-                                            "text/plain",
-                                        );
-                                    if (!onReorderTabs || !draggedId) {
-                                        return;
-                                    }
-                                    if (draggedId === tab.id) {
-                                        setDropTarget(null);
-                                        return;
-                                    }
-                                    event.preventDefault();
-                                    event.dataTransfer.dropEffect = "move";
-                                    const rect =
-                                        event.currentTarget.getBoundingClientRect();
-                                    const position =
-                                        event.clientX <
-                                        rect.left + rect.width / 2
-                                            ? "before"
-                                            : "after";
-                                    setDropTarget((current) =>
-                                        current?.tabId === tab.id &&
-                                        current.position === position
-                                            ? current
-                                            : { tabId: tab.id, position },
-                                    );
-                                }}
-                                onDrop={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    const draggedId =
-                                        draggedTabIdRef.current ??
-                                        event.dataTransfer.getData(
-                                            "text/plain",
-                                        );
-                                    if (
-                                        onReorderTabs &&
-                                        draggedId &&
-                                        draggedId !== tab.id
-                                    ) {
-                                        const rect =
-                                            event.currentTarget.getBoundingClientRect();
-                                        onReorderTabs(
-                                            draggedId,
-                                            tab.id,
-                                            event.clientX <
-                                                rect.left + rect.width / 2
-                                                ? "before"
-                                                : "after",
-                                        );
-                                    }
-                                    clearTabDrag();
-                                }}
-                                onDragEnd={clearTabDrag}
-                                onClick={() => onActivateTab(tab.id)}
-                                data-active={isActive ? "true" : "false"}
-                                className={cn(
-                                    "document-tab group relative flex items-center gap-1.5 pl-3 pr-1.5 h-7 min-w-0 max-w-[220px] rounded-t-lg cursor-pointer select-none transition-colors",
-                                    isActive ? "z-20" : "z-10",
-                                    onReorderTabs && tabs.length > 1
-                                        ? "cursor-grab active:cursor-grabbing"
-                                        : "",
-                                    draggedTabId === tab.id ? "opacity-55" : "",
-                                )}
                             >
-                                {dropTarget?.tabId === tab.id &&
-                                    draggedTabId !== tab.id && (
-                                        <span
-                                            aria-hidden="true"
-                                            className={cn(
-                                                "pointer-events-none absolute inset-y-1 z-30 w-0.5 rounded-full bg-blue-500",
-                                                dropTarget.position === "before"
-                                                    ? "left-0"
-                                                    : "right-0",
-                                            )}
-                                        />
-                                    )}
-                                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                    {tab.document.type === "case" ||
-                                    tab.document.type === "legislation" ? (
-                                        <Image
-                                            src={
-                                                tab.document.type === "case"
-                                                    ? "/icons/legal-sources/case-law.svg"
-                                                    : "/icons/legal-sources/legislation.svg"
+                                {({
+                                    onContextMenu,
+                                    onMenuKeyDown,
+                                    renaming,
+                                    renameInput,
+                                }) => (
+                                    <div
+                                        role="tab"
+                                        aria-label={title}
+                                        aria-selected={isActive}
+                                        tabIndex={isActive ? 0 : -1}
+                                        onContextMenu={onContextMenu}
+                                        onKeyDown={(event) => {
+                                            if (
+                                                onMenuKeyDown(event) ||
+                                                event.target !==
+                                                    event.currentTarget
+                                            )
+                                                return;
+                                            if (
+                                                event.key === "Enter" ||
+                                                event.key === " "
+                                            ) {
+                                                event.preventDefault();
+                                                onActivateTab(tab.id);
                                             }
-                                            alt=""
-                                            aria-hidden="true"
-                                            width={14}
-                                            height={14}
-                                            className="h-3.5 w-3.5 shrink-0 object-contain"
-                                        />
-                                    ) : (
-                                        <FileTypeIcon
-                                            fileType={tab.document.title}
-                                            className="h-3.5 w-3.5 shrink-0"
-                                        />
-                                    )}
-                                    <span
-                                        className={`min-w-0 flex-1 truncate text-xs ${isActive ? "font-medium" : "font-normal"}`}
-                                        title={title}
+                                            if (
+                                                [
+                                                    "ArrowLeft",
+                                                    "ArrowRight",
+                                                    "Home",
+                                                    "End",
+                                                ].includes(event.key)
+                                            ) {
+                                                event.preventDefault();
+                                                const index = tabs.indexOf(tab);
+                                                const next =
+                                                    event.key === "Home"
+                                                        ? 0
+                                                        : event.key === "End"
+                                                          ? tabs.length - 1
+                                                          : (index +
+                                                                (event.key ===
+                                                                "ArrowLeft"
+                                                                    ? -1
+                                                                    : 1) +
+                                                                tabs.length) %
+                                                            tabs.length;
+                                                onActivateTab(tabs[next].id);
+                                                (
+                                                    event.currentTarget.parentElement?.querySelectorAll(
+                                                        '[role="tab"]',
+                                                    )[next] as HTMLElement
+                                                )?.focus();
+                                            }
+                                        }}
+                                        draggable={
+                                            !renaming &&
+                                            !!onReorderTabs &&
+                                            tabs.length > 1
+                                        }
+                                        onDragStart={(event) => {
+                                            if (!onReorderTabs) return;
+                                            draggedTabIdRef.current = tab.id;
+                                            setDraggedTabId(tab.id);
+                                            event.dataTransfer.effectAllowed =
+                                                "move";
+                                            event.dataTransfer.setData(
+                                                "text/plain",
+                                                tab.id,
+                                            );
+                                        }}
+                                        onDragOver={(event) => {
+                                            const draggedId =
+                                                draggedTabIdRef.current ??
+                                                event.dataTransfer.getData(
+                                                    "text/plain",
+                                                );
+                                            if (!onReorderTabs || !draggedId) {
+                                                return;
+                                            }
+                                            if (draggedId === tab.id) {
+                                                setDropTarget(null);
+                                                return;
+                                            }
+                                            event.preventDefault();
+                                            event.dataTransfer.dropEffect =
+                                                "move";
+                                            const rect =
+                                                event.currentTarget.getBoundingClientRect();
+                                            const position =
+                                                event.clientX <
+                                                rect.left + rect.width / 2
+                                                    ? "before"
+                                                    : "after";
+                                            setDropTarget((current) =>
+                                                current?.tabId === tab.id &&
+                                                current.position === position
+                                                    ? current
+                                                    : {
+                                                          tabId: tab.id,
+                                                          position,
+                                                      },
+                                            );
+                                        }}
+                                        onDrop={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            const draggedId =
+                                                draggedTabIdRef.current ??
+                                                event.dataTransfer.getData(
+                                                    "text/plain",
+                                                );
+                                            if (
+                                                onReorderTabs &&
+                                                draggedId &&
+                                                draggedId !== tab.id
+                                            ) {
+                                                const rect =
+                                                    event.currentTarget.getBoundingClientRect();
+                                                onReorderTabs(
+                                                    draggedId,
+                                                    tab.id,
+                                                    event.clientX <
+                                                        rect.left +
+                                                            rect.width / 2
+                                                        ? "before"
+                                                        : "after",
+                                                );
+                                            }
+                                            clearTabDrag();
+                                        }}
+                                        onDragEnd={clearTabDrag}
+                                        onClick={() => onActivateTab(tab.id)}
+                                        data-active={
+                                            isActive ? "true" : "false"
+                                        }
+                                        className={cn(
+                                            "document-tab group relative flex items-center gap-1.5 pl-3 pr-1.5 h-7 min-w-0 max-w-[220px] rounded-t-lg cursor-pointer select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                                            isActive ? "z-20" : "z-10",
+                                            onReorderTabs && tabs.length > 1
+                                                ? "cursor-grab active:cursor-grabbing"
+                                                : "",
+                                            draggedTabId === tab.id
+                                                ? "opacity-55"
+                                                : "",
+                                        )}
                                     >
-                                        {title}
-                                    </span>
-                                    {showVersionBadge && (
-                                        <VersionChip
-                                            n={tab.document.version_number}
-                                            size="sm"
-                                        />
-                                    )}
-                                </div>
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onCloseTab(tab.id);
-                                    }}
-                                    className="shrink-0 rounded-full p-0.5 text-gray-400 hover:text-gray-700"
-                                >
-                                    <X className="h-3 w-3" />
-                                </button>
-                            </div>
+                                        {dropTarget?.tabId === tab.id &&
+                                            draggedTabId !== tab.id && (
+                                                <span
+                                                    aria-hidden="true"
+                                                    className={cn(
+                                                        "pointer-events-none absolute inset-y-1 z-30 w-0.5 rounded-full bg-blue-500",
+                                                        dropTarget.position ===
+                                                            "before"
+                                                            ? "left-0"
+                                                            : "right-0",
+                                                    )}
+                                                />
+                                            )}
+                                        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                                            {tab.document.type === "case" ||
+                                            tab.document.type ===
+                                                "legislation" ? (
+                                                <Image
+                                                    src={
+                                                        tab.document.type ===
+                                                        "case"
+                                                            ? "/icons/legal-sources/case-law.svg"
+                                                            : "/icons/legal-sources/legislation.svg"
+                                                    }
+                                                    alt=""
+                                                    aria-hidden="true"
+                                                    width={14}
+                                                    height={14}
+                                                    className="h-3.5 w-3.5 shrink-0 object-contain"
+                                                />
+                                            ) : (
+                                                <FileTypeIcon
+                                                    fileType={
+                                                        tab.document.title
+                                                    }
+                                                    className="h-3.5 w-3.5 shrink-0"
+                                                />
+                                            )}
+                                            {renameInput || (
+                                                <span
+                                                    className={`min-w-0 flex-1 truncate text-xs ${isActive ? "font-medium" : "font-normal"}`}
+                                                    title={title}
+                                                >
+                                                    {title}
+                                                </span>
+                                            )}
+                                            {showVersionBadge && (
+                                                <VersionChip
+                                                    n={
+                                                        tab.document
+                                                            .version_number
+                                                    }
+                                                    size="sm"
+                                                />
+                                            )}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            aria-label={`Close ${title}`}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onCloseTab(tab.id);
+                                            }}
+                                            className="shrink-0 rounded-full p-0.5 text-gray-400 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </button>
+                                    </div>
+                                )}
+                            </DocumentTabActions>
                         );
                     })}
                     <div
@@ -529,6 +644,17 @@ export function AssistantSidePanel({
                             inert={!isActive}
                         >
                             <DocPanel
+                                onDownloadReady={(download) => {
+                                    if (download)
+                                        documentDownloads.current.set(
+                                            tab.id,
+                                            download,
+                                        );
+                                    else
+                                        documentDownloads.current.delete(
+                                            tab.id,
+                                        );
+                                }}
                                 active={isActive}
                                 document={tab.document}
                                 mode={mode}
@@ -543,8 +669,7 @@ export function AssistantSidePanel({
                                     onWarningDismiss?.(tab.id)
                                 }
                                 onCloseAnnotation={
-                                    tab.kind !== "document" &&
-                                    onCloseAnnotation
+                                    tab.kind !== "document" && onCloseAnnotation
                                         ? () => onCloseAnnotation(tab.id)
                                         : undefined
                                 }

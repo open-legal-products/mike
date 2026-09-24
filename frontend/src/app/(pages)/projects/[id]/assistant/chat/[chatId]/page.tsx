@@ -339,6 +339,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // Upload state
     const fileInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
+    const documentDownloads = useRef(new Map<string, () => Promise<void>>());
     const projectExplorerRef = useRef<ProjectExplorerHandle>(null);
     const [addDocumentsOpen, setAddDocumentsOpen] = useState(false);
     const projectPicker = useProjectPicker();
@@ -1834,6 +1835,15 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                 )}
                 <ProjectDocumentTabs
+                    onAddToChat={(document) => chatInputRef.current?.addDoc(document)}
+                    addToChatDisabled={!canSendChat}
+                    onDownloadDoc={(document) => {
+                        const download = documentDownloads.current.get(document.id);
+                        return download ? download() : explorerDownload.downloadDocument(document);
+                    }}
+                    downloading={explorerDownload.downloading}
+                    onRenameDoc={handleRenameDoc}
+                    onDeleteDoc={handleDeleteDoc}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
@@ -1852,6 +1862,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     }
                 />
                 <ProjectDocumentPanels
+                    onDownloadReady={(documentId, download) => {
+                        if (download) documentDownloads.current.set(documentId, download);
+                        else documentDownloads.current.delete(documentId);
+                    }}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}

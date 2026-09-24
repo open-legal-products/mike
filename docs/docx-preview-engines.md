@@ -4,16 +4,19 @@
 and document side panels. There is no rendering-engine selector or Mike
 View/Edit toggle. EigenPal's native toolbar owns mode switching and remains
 visible in Viewing mode so readers can return to Editing without reopening the
-file.
+file. The filename and download rows are omitted; only the formatting toolbar
+sits above the document. Right-click a viewer or assistant document tab for the
+explorer’s Open, Add to chat, Download, Rename, and Delete file actions. Rename
+edits the tab label in place (Enter or blur to save, Escape to cancel).
 
 `DocxView` accepts `defaultMode` (view-only when omitted). The assistant document
 panel, IDE viewer, and document side panel set `defaultMode="edit"`. This is an
 initial mode: parent rerenders do not override the reader's native toolbar
 choice. Opening another document or version creates a new editor.
 
-Edits are local to the mounted editor. **Download DOCX** and the native save
-action export the edited document; they do not create a Mike version or overwrite
-the server file. Download before closing the viewer or switching documents.
+Edits are local to the mounted editor. **Download** in an open tab’s context
+menu and **Ctrl/Cmd+S** inside the editor export the edited document; they do not
+create a Mike version or overwrite the server file. Download before closing the viewer or switching documents.
 Native mode switching preserves edits. Reloading the browser with unsaved edits
 triggers its leave-page warning. Existing Mike edit cards still resolve changes
 through the backend and refresh the document.

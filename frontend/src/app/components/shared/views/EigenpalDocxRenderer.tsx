@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { DocxEditor } from "@docx-editor.dev/react";
 import { packagedFonts } from "@docx-editor.dev/fonts";
 import "@docx-editor.dev/core/styles/editor.css";
+import styles from "./EigenpalDocxRenderer.module.css";
 import type { DocxRendererProps } from "./DocxRenderer.types";
 
 // Use packaged, metric-compatible fonts; document text never goes to a conversion service.
@@ -15,7 +16,14 @@ export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, 
     const document = useMemo(() => new Uint8Array(bytes), [bytes]);
     useEffect(() => () => unsubscribe.current?.(), []);
     return (
-        <div ref={host} className="h-full min-h-0" data-docx-renderer="eigenpal">
+        <div ref={host} className={`${styles.host} h-full min-h-0`} data-docx-renderer="eigenpal"
+            onKeyDownCapture={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void onSave?.();
+                }
+            }}>
             <DocxEditor
                 document={document}
                 fonts={fonts}

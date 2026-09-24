@@ -29,6 +29,7 @@ interface Props {
           })
         | null;
     onWarningDismiss: (documentId: string) => void;
+    onDownloadReady?: (documentId: string, download: (() => Promise<void>) | null) => void;
 }
 
 /** Retain loaded bytes and viewer state for exactly the lifetime of an open tab. */
@@ -39,6 +40,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
     quotes,
     highlightEdit,
     onWarningDismiss,
+    onDownloadReady,
 }: Props) {
     const documentsById = new Map(documents.map((doc) => [doc.id, doc]));
     return (
@@ -84,6 +86,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                     >
                         {viewType === "docx" ? (
                             <DocxView
+                                onDownloadReady={(download) => onDownloadReady?.(tab.documentId, download)}
                                 defaultMode="edit"
                                 filename={tab.filename}
                                 documentId={tab.documentId}

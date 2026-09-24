@@ -13,7 +13,7 @@ vi.mock("./EigenpalDocxRenderer", () => ({
     default: (props: DocxRendererProps) => <MockRenderer {...props} />,
 }));
 
-function MockRenderer({ bytes, mode, onChange, onReady, onError }: DocxRendererProps) {
+function MockRenderer({ bytes, mode, onChange, onReady, onError, onSave }: DocxRendererProps) {
     const scroll = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const revision = new Uint8Array(bytes)[0];
@@ -24,6 +24,7 @@ function MockRenderer({ bytes, mode, onChange, onReady, onError }: DocxRendererP
     return (
         <div ref={scroll} data-testid="renderer-scroll" data-mode={mode}>
             {mode === "edit" && <div role="toolbar" aria-label="Document formatting"><button onClick={onChange}>Change document</button></div>}
+            <button onClick={() => void onSave?.()}>Save document</button>
             <div ref={content}>
                 <p>EigenPal preview</p><p>Document revision {revision}</p>
                 <p>Payment in thirty days.</p><p>Confidential information.</p>
@@ -108,7 +109,7 @@ it.each(["edit", "view"] as const)("passes the initial %s mode to the native too
     const surface = screen.getByTestId("renderer-scroll");
     expect(surface).toHaveAttribute("data-mode", mode);
     expect(screen.queryByRole("group", { name: "DOCX mode" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Download DOCX" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Download DOCX" })).toBeNull();
     // The native toolbar owns mode changes; parent updates must not reset it.
     rerender(<DocxView documentId="modes" cacheBytes={false} defaultMode={mode === "edit" ? "view" : "edit"} />);
     expect(screen.getByTestId("renderer-scroll")).toBe(surface);
@@ -124,16 +125,20 @@ it("keeps edits after a failed export and downloads the edited bytes on retry", 
     render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} defaultMode="edit" />);
     await screen.findByText("EigenPal preview");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
-    fireEvent.click(screen.getByRole("button", { name: "Download DOCX" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Your edits are still open");
-    expect(screen.getByText(/Unsaved local edits/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    expect(await screen.findByText(/Your edits are still open/)).toBeVisible();
+    const unsaved = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unsaved);
+    expect(unsaved.defaultPrevented).toBe(true);
     expect(screen.queryByText(/internal serializer/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Download DOCX" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
     await waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(createUrl).toHaveBeenCalledWith(expect.any(Blob));
     expect(click.mock.instances[0]).toHaveAttribute("download", "Agreement.docx");
     expect(exportDocx).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(/Unsaved local edits/)).toBeNull();
+    const saved = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(saved);
+    expect(saved.defaultPrevented).toBe(false);
     expect(screen.queryByRole("alert")).toBeNull();
     // Cleanup's revoke timeout can run after the test restores its mocks.
     revokeUrl.mockRestore();

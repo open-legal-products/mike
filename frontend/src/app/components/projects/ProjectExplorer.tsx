@@ -12,10 +12,8 @@ import {
 import {
     ChevronRight,
     ChevronDown,
-    FileText,
     Download,
     Loader2,
-    MessageSquarePlus,
     Pencil,
     Trash2,
 } from "lucide-react";
@@ -23,6 +21,7 @@ import type {
     Document,
     Folder as ProjectFolder,
 } from "@/app/components/shared/types";
+import { documentContextMenuItems } from "@/app/components/shared/DocumentTabActions";
 import { VersionChip } from "@/app/components/shared/VersionChip";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import {
@@ -491,46 +490,28 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                     className={`fixed z-50 w-44 overflow-hidden rounded-lg text-xs ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
                     style={{ top: contextMenu.y, left: contextMenu.x }}
                 >
-                    {contextDocument && (
-                        <button
-                            type="button"
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
-                            onClick={() => {
-                                onDocClick(contextDocument);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <FileText aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-                            Open
+                    {contextDocument && documentContextMenuItems({
+                        onOpen: () => onDocClick(contextDocument),
+                        onAddToChat: onAddToChat ? () => onAddToChat(contextDocument) : undefined,
+                        onDownload: onDownloadDoc ? () => onDownloadDoc(contextDocument) : undefined,
+                        onRename: onRenameDoc ? () => {
+                            setRenameValue(contextDocument.filename);
+                            setRenamingDocId(contextDocument.id);
+                        } : undefined,
+                        onDelete: onDeleteDoc ? () => onDeleteDoc(contextDocument.id) : undefined,
+                        addToChatDisabled, downloading,
+                    }).map(({ label, icon: Icon, onSelect, disabled, variant }) => (
+                        <button key={label} type="button" disabled={disabled}
+                            className={`theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 ${variant === "danger" ? "text-red-600" : "text-gray-700"}`}
+                            onClick={() => { onSelect(); setContextMenu(null); }}>
+                            {Icon && <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />}{label}
                         </button>
-                    )}
-                    {contextDocument && onAddToChat && (
-                        <button
-                            type="button"
-                            disabled={addToChatDisabled}
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40"
-                            onClick={() => {
-                                onAddToChat(contextDocument);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <MessageSquarePlus aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-                            Add to chat
-                        </button>
-                    )}
-                    {((contextDocument && onDownloadDoc) || (contextFolder && onDownloadFolder)) && (
-                        <button
-                            type="button"
-                            disabled={downloading}
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40"
-                            onClick={() => {
-                                if (contextDocument) void onDownloadDoc?.(contextDocument);
-                                else if (contextFolder) void onDownloadFolder?.(contextFolder);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <Download aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-                            Download
+                    ))}
+                    {contextFolder && onDownloadFolder && (
+                        <button type="button" disabled={downloading}
+                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-40"
+                            onClick={() => { void onDownloadFolder(contextFolder); setContextMenu(null); }}>
+                            <Download aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />Download
                         </button>
                     )}
                     {onCreateFolder && !contextMenu.docId && (
@@ -566,20 +547,6 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             Rename
                         </button>
                     )}
-                    {contextMenu.docId && onRenameDoc && (
-                        <button
-                            type="button"
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700"
-                            onClick={() => {
-                                setRenameValue(contextDocument?.filename ?? "");
-                                setRenamingDocId(contextMenu.docId!);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <Pencil aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-                            Rename
-                        </button>
-                    )}
                     {contextMenu.folderId && onDeleteFolder && (
                         <button
                             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
@@ -592,18 +559,7 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                             Delete folder
                         </button>
                     )}
-                    {contextMenu.docId && onDeleteDoc && (
-                        <button
-                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
-                            onClick={() => {
-                                void onDeleteDoc(contextMenu.docId!);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                            Delete file
-                        </button>
-                    )}
+
                 </div>
             )}
         </ul>

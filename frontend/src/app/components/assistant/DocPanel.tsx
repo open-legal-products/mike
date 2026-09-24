@@ -79,6 +79,7 @@ interface Props {
     onCloseAnnotation?: () => void;
     initialScrollTop?: number | null;
     onScrollChange?: (scrollTop: number) => void;
+    onDownloadReady?: (download: (() => Promise<void>) | null) => void;
 }
 
 /** One shared panel shell with a document-type-specific body. */
@@ -93,6 +94,7 @@ export function DocPanel({
     onCloseAnnotation,
     initialScrollTop,
     onScrollChange,
+    onDownloadReady,
 }: Props) {
     const {
         document: resolvedDocument,
@@ -189,11 +191,11 @@ export function DocPanel({
 
     return (
         <div className="flex h-full flex-col">
-            <DocumentTitleRow
+            {viewType !== "docx" && <DocumentTitleRow
                 document={resolvedDocument}
                 isReloading={isReloading}
                 compactActions={compactActions}
-            />
+            />}
 
             {mode.kind === "citation" && (
                 <CitationQuotesSection
@@ -244,6 +246,7 @@ export function DocPanel({
                     />
                 ) : viewType === "docx" ? (
                     <DocxView
+                        onDownloadReady={onDownloadReady}
                         defaultMode="edit"
                         filename={resolvedDocument.title}
                         documentId={documentId}

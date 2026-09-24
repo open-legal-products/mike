@@ -1,3 +1,5 @@
+import { useImperativeHandle, type Ref } from "react";
+import type { ChatInputHandle } from "./ChatInput";
 import {
     fireEvent,
     render,
@@ -8,7 +10,14 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat, Document, Message } from "@/app/components/shared/types";
 import { ChatView } from "./ChatView";
-import { listDocumentVersions } from "@/app/lib/mikeApi";
+import {
+    listDocumentVersions,
+    getDocument,
+    renameProjectDocument,
+    renameLibraryDocument,
+    deleteDocument,
+    getDocumentFile,
+} from "@/app/lib/mikeApi";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 
 const { push, renameChat, deleteChat, setCurrentChatId, setNewChatMessages } =
@@ -19,6 +28,8 @@ const { push, renameChat, deleteChat, setCurrentChatId, setNewChatMessages } =
         setCurrentChatId: vi.fn(),
         setNewChatMessages: vi.fn(),
     }));
+
+const addDoc = vi.hoisted(() => vi.fn());
 
 const activeChat: Chat = {
     id: "chat-1",
@@ -64,14 +75,16 @@ const spreadsheet = {
 } as Document;
 vi.mock("./ChatInput", () => ({
     ChatInput: ({
-        onDocumentClick,
+        onDocumentClick, ref,
     }: {
         onDocumentClick?: (document: Document) => void;
-    }) => (
-        <button onClick={() => onDocumentClick?.(spreadsheet)}>
+        ref?: Ref<ChatInputHandle>;
+    }) => {
+        useImperativeHandle(ref, () => ({ addDoc, addFiles: vi.fn(), startWorkflow: vi.fn(), startWorkflowDocumentSelection: vi.fn() }));
+        return <button onClick={() => onDocumentClick?.(spreadsheet)}>
             Open Budget.xlsx
-        </button>
-    ),
+        </button>;
+    },
 }));
 vi.mock("@/app/contexts/AuthContext", () => ({
     useAuth: () => ({ user: { id: "user-1", email: "user@example.com" } }),
@@ -82,6 +95,11 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     listDocumentVersions: vi.fn(),
+    getDocument: vi.fn(),
+    renameProjectDocument: vi.fn(),
+    renameLibraryDocument: vi.fn(),
+    deleteDocument: vi.fn(),
+    getDocumentFile: vi.fn(),
     listQuickActions: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../shared/views/SpreadsheetView", () => ({
@@ -214,7 +232,9 @@ describe("ChatView header actions", () => {
     it("positions a detached chat after its full history replaces the live overlay", async () => {
         const handleChat = vi.fn().mockResolvedValue("chat-2");
         const view = (chatLoading: boolean, messages: Message[]) => (
-            <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+            <PageChromeContext.Provider
+                value={{ mobileActionsContainer: null }}
+            >
                 <ChatView
                     chatId="chat-2"
                     chat={{ ...activeChat, id: "chat-2" }}
@@ -247,7 +267,11 @@ describe("ChatView header actions", () => {
         rerender(
             view(false, [
                 { id: "old-user", role: "user", content: "Older question" },
-                { id: "old-answer", role: "assistant", content: "Older answer" },
+                {
+                    id: "old-answer",
+                    role: "assistant",
+                    content: "Older answer",
+                },
                 ...liveOverlay,
             ]),
         );
@@ -495,5 +519,114 @@ describe("rejected API key", () => {
             screen.getByRole("button", { name: "Dismiss warning" }),
         );
         expect(onDismiss).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("assistant document tab actions", () => {
+    it.each([false, true])("adds a tab's document to the composer (initial view: %s)", async (initial) => {
+        vi.mocked(getDocument).mockResolvedValue(spreadsheet);
+        renderView(vi.fn(), [], null, initial ? vi.fn() : undefined);
+        fireEvent.click(screen.getByRole("button", { name: "Open Budget.xlsx" }));
+        fireEvent.contextMenu(await screen.findByRole("tab", { name: "Budget.xlsx" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Add to chat" }));
+        await waitFor(() => expect(addDoc).toHaveBeenCalledWith(spreadsheet));
+    });
+
+    it.each([null, "project-1"])(
+        "renames the persisted file in its owning scope %s",
+        async (projectId) => {
+            const file = { ...spreadsheet, project_id: projectId };
+            vi.mocked(getDocument).mockResolvedValue(file);
+            vi.mocked(renameProjectDocument).mockResolvedValue({
+                ...file,
+                filename: "Renamed.xlsx",
+            });
+            vi.mocked(renameLibraryDocument).mockResolvedValue({
+                ...file,
+                filename: "Renamed.xlsx",
+            });
+            renderView();
+            fireEvent.click(
+                screen.getByRole("button", { name: "Open Budget.xlsx" }),
+            );
+            const tab = await screen.findByRole("tab", { name: "Budget.xlsx" });
+            fireEvent.contextMenu(tab);
+            fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+            const input = screen.getByRole("textbox", { name: "File name" });
+            fireEvent.change(input, { target: { value: "Renamed.xlsx" } });
+            fireEvent.keyDown(input, { key: "Enter" });
+            expect(
+                await screen.findByRole("tab", { name: "Renamed.xlsx" }),
+            ).toBeVisible();
+            if (projectId) {
+                expect(renameProjectDocument).toHaveBeenCalledWith(
+                    projectId,
+                    "excel-1",
+                    "Renamed.xlsx",
+                );
+                expect(renameLibraryDocument).not.toHaveBeenCalled();
+            } else {
+                expect(renameLibraryDocument).toHaveBeenCalledWith(
+                    "files",
+                    "excel-1",
+                    "Renamed.xlsx",
+                );
+                expect(renameProjectDocument).not.toHaveBeenCalled();
+            }
+        },
+    );
+
+    it("downloads the version represented by the tab", async () => {
+        vi.mocked(getDocumentFile).mockRejectedValue(
+            new Error("internal storage error"),
+        );
+        renderView();
+        fireEvent.click(
+            screen.getByRole("button", { name: "Open Budget.xlsx" }),
+        );
+        fireEvent.contextMenu(
+            await screen.findByRole("tab", { name: "Budget.xlsx" }),
+        );
+        fireEvent.click(screen.getByRole("menuitem", { name: "Download" }));
+        await waitFor(() =>
+            expect(getDocumentFile).toHaveBeenCalledWith("excel-1", "excel-v4"),
+        );
+        expect(
+            await screen.findByText(
+                "This file action could not be completed. Please try again.",
+            ),
+        ).toBeVisible();
+        expect(screen.queryByText("internal storage error")).toBeNull();
+    });
+
+    it("keeps the tab on a failed deletion and closes it after success", async () => {
+        vi.mocked(deleteDocument)
+            .mockRejectedValueOnce(new Error("private database details"))
+            .mockResolvedValueOnce(undefined);
+        renderView();
+        fireEvent.click(
+            screen.getByRole("button", { name: "Open Budget.xlsx" }),
+        );
+        fireEvent.contextMenu(
+            await screen.findByRole("tab", { name: "Budget.xlsx" }),
+        );
+        fireEvent.click(screen.getByRole("menuitem", { name: "Delete file" }));
+        expect(
+            await screen.findByText(
+                "This file action could not be completed. Please try again.",
+            ),
+        ).toBeVisible();
+        expect(screen.getByRole("tab", { name: "Budget.xlsx" })).toBeVisible();
+        fireEvent.click(
+            screen.getByRole("button", { name: "Dismiss warning" }),
+        );
+        fireEvent.contextMenu(screen.getByRole("tab", { name: "Budget.xlsx" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Delete file" }));
+        await waitFor(() =>
+            expect(
+                screen.queryByRole("tab", { name: "Budget.xlsx" }),
+            ).toBeNull(),
+        );
+        expect(deleteDocument).toHaveBeenCalledWith("excel-1");
     });
 });

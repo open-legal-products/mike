@@ -50,6 +50,13 @@ import {
     providerLabel,
 } from "@/app/lib/modelAvailability";
 import { can, roleFrom } from "@/app/lib/permissions";
+import {
+    getDocument,
+    getDocumentFile,
+    renameProjectDocument,
+    renameLibraryDocument,
+    deleteDocument,
+} from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 
 interface Props {
@@ -953,6 +960,7 @@ export function ChatView({
             <div className="flex min-w-0 flex-col h-full flex-1 relative">
                 {onInitialSubmit ? (
                     <InitialView
+                        inputRef={chatInputRef}
                         onSubmit={onInitialSubmit}
                         onDocumentClick={handleAttachedDocumentClick}
                     />
@@ -1257,6 +1265,87 @@ export function ChatView({
                 >
                     <AssistantSidePanel
                         tabs={tabs}
+                        documentActions={(document) => ({
+                            addToChatDisabled:
+                                !accessResolved ||
+                                (canSend !== undefined && canSend !== true) ||
+                                !!chatLoading,
+                            onAddToChat: async () => {
+                                const file = await getDocument(
+                                    document.document_id,
+                                );
+                                chatInputRef.current?.addDoc(file);
+                            },
+                            onDownload: async () => {
+                                const file = await getDocumentFile(
+                                    document.document_id,
+                                    document.version_id,
+                                );
+                                const url = URL.createObjectURL(file.blob);
+                                const link = window.document.createElement("a");
+                                link.href = url;
+                                link.download =
+                                    document.title ||
+                                    file.filename ||
+                                    "document";
+                                link.click();
+                                setTimeout(
+                                    () => URL.revokeObjectURL(url),
+                                    1000,
+                                );
+                            },
+                            onRename: async (filename) => {
+                                const file = await getDocument(
+                                    document.document_id,
+                                );
+                                const updated = file.project_id
+                                    ? await renameProjectDocument(
+                                          file.project_id,
+                                          file.id,
+                                          filename,
+                                      )
+                                    : await renameLibraryDocument(
+                                          file.library_kind === "template"
+                                              ? "templates"
+                                              : "files",
+                                          file.id,
+                                          filename,
+                                      );
+                                setTabs((current) =>
+                                    current.map((tab) =>
+                                        tab.document.document_id === file.id
+                                            ? {
+                                                  ...tab,
+                                                  document: {
+                                                      ...tab.document,
+                                                      title: updated.filename,
+                                                  },
+                                              }
+                                            : tab,
+                                    ),
+                                );
+                            },
+                            onDelete: async () => {
+                                await deleteDocument(document.document_id);
+                                setTabs((current) => {
+                                    const remaining = current.filter(
+                                        (tab) =>
+                                            tab.document.document_id !==
+                                            document.document_id,
+                                    );
+                                    if (!remaining.length) {
+                                        closeAllTabs();
+                                        return current;
+                                    }
+                                    setActiveTabId((id) =>
+                                        remaining.some((tab) => tab.id === id)
+                                            ? id
+                                            : remaining[0].id,
+                                    );
+                                    return remaining;
+                                });
+                            },
+                        })}
                         activeTabId={activeTabId}
                         onActivateTab={setActiveTabId}
                         onCloseTab={closeTab}

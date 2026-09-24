@@ -7,7 +7,7 @@ import { clearDocxQuoteHighlights, highlightDocxQuote } from "./highlightDocxQuo
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
 import type { DocxMode, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { docxRevisionElements } from "./docxRevisionElements";
 
 const DocxRenderer = lazy(() => import("./EigenpalDocxRenderer"));
@@ -33,6 +33,7 @@ interface Props {
     versionId?: string | null;
     displayUrl?: string | null;
     onReady?: () => void;
+    onDownloadReady?: (download: (() => Promise<void>) | null) => void;
     highlightEdit?: {
         key: string;
         inserted_text?: string;
@@ -90,7 +91,7 @@ export function DocxView(props: Props) {
 function DocxViewContent(props: Props) {
     const {
         documentId, versionId, displayUrl, refetchKey, cacheBytes = true,
-        warning, onWarningDismiss, rounded = true,
+        warning, onWarningDismiss, onDownloadReady, rounded = true,
     } = props;
     const [initialMode] = useState<DocxMode>(props.defaultMode ?? "view");
     const [dirtyKey, setDirtyKey] = useState<string | null>(null);
@@ -179,6 +180,11 @@ function DocxViewContent(props: Props) {
             setDownloading(false);
         }
     }, [downloading]);
+    useEffect(() => {
+        if (readyKey !== renderKey || failedKey === renderKey) return;
+        onDownloadReady?.(download);
+        return () => onDownloadReady?.(null);
+    }, [onDownloadReady, readyKey, renderKey, failedKey, download]);
     const quoteKey = JSON.stringify(props.quotes ?? []);
     useEffect(() => {
         if (surfaceRef.current && readyKey === renderKey && bytes) {
@@ -212,11 +218,7 @@ function DocxViewContent(props: Props) {
     const pending = !message && (loading && !bytes || bytes && readyKey !== renderKey);
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
-                <PillButtonUI tone="white" size="sm" disabled={!!pending || !!message || downloading} onClick={() => void download()}>Download DOCX</PillButtonUI>
-                <span className="text-xs text-muted-foreground">{dirty ? "Unsaved local edits. " : ""}Download to keep edits before closing or switching documents.</span>
-                {downloadError && <span role="alert" className="text-xs text-destructive">{downloadError}</span>}
-            </div>
+            <WarningPopup open={!!downloadError} title="Download failed" message={downloadError} onClose={() => setDownloadError(null)} />
             <div
                 className={`document-canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${rounded ? "rounded-lg" : ""}`}
                 data-document-id={documentId}

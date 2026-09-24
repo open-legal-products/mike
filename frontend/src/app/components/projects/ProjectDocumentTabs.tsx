@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type DragEvent } from "react";
+import { DocumentTabActions } from "@/app/components/shared/DocumentTabActions";
 import { X } from "lucide-react";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { VersionChip } from "@/app/components/shared/VersionChip";
@@ -15,6 +16,12 @@ interface Props {
     documents: ReadonlyArray<Document>;
     activeTabId: string | null;
     onActivate: (documentId: string) => void;
+    onAddToChat?: (document: Document) => void;
+    onDownloadDoc?: (document: Document) => Promise<void>;
+    onRenameDoc?: (documentId: string, filename: string) => Promise<void>;
+    onDeleteDoc?: (documentId: string) => Promise<void>;
+    addToChatDisabled?: boolean;
+    downloading?: boolean;
     onClose: (documentId: string) => void;
     onReorder: (
         draggedId: string,
@@ -28,6 +35,12 @@ export function ProjectDocumentTabs({
     documents,
     activeTabId,
     onActivate,
+    onAddToChat,
+    onDownloadDoc,
+    onRenameDoc,
+    onDeleteDoc,
+    addToChatDisabled,
+    downloading,
     onClose,
     onReorder,
 }: Props) {
@@ -106,156 +119,213 @@ export function ProjectDocumentTabs({
             ) : (
                 tabs.map((tab, index) => {
                     const isActive = tab.documentId === activeTabId;
-                    const versionNumber = documents.find(
+                    const document = documents.find(
                         (document) => document.id === tab.documentId,
-                    )?.latest_version_number;
+                    );
+                    const versionNumber = document?.latest_version_number;
                     const showVersion =
                         typeof versionNumber === "number" &&
                         Number.isFinite(versionNumber) &&
                         versionNumber > 1;
                     return (
-                        <div
+                        <DocumentTabActions
                             key={tab.documentId}
-                            ref={(element) => {
-                                itemRefs.current[tab.documentId] = element;
+                            filename={tab.filename}
+                            actions={{
+                                onOpen: () => onActivate(tab.documentId),
+                                onAddToChat:
+                                    document && onAddToChat
+                                        ? () => onAddToChat(document)
+                                        : undefined,
+                                onDownload:
+                                    document && onDownloadDoc
+                                        ? () => onDownloadDoc(document)
+                                        : undefined,
+                                onRename: onRenameDoc
+                                    ? (name) =>
+                                          onRenameDoc(tab.documentId, name)
+                                    : undefined,
+                                onDelete: onDeleteDoc
+                                    ? () => onDeleteDoc(tab.documentId)
+                                    : undefined,
+                                addToChatDisabled,
+                                downloading,
                             }}
-                            role="tab"
-                            id={`project-document-tab-${tab.documentId}`}
-                            aria-controls={
-                                isActive
-                                    ? `project-document-panel-${tab.documentId}`
-                                    : undefined
-                            }
-                            tabIndex={
-                                isActive || (!activeTabId && index === 0)
-                                    ? 0
-                                    : -1
-                            }
-                            aria-selected={isActive}
-                            aria-label={tab.filename}
-                            draggable={tabs.length > 1}
-                            onDragStart={(event) => {
-                                draggedIdRef.current = tab.documentId;
-                                setDraggedId(tab.documentId);
-                                event.dataTransfer.effectAllowed = "move";
-                                event.dataTransfer.setData(
-                                    TAB_DRAG_TYPE,
-                                    tab.documentId,
-                                );
-                            }}
-                            onDragOver={(event) =>
-                                dragOver(event, tab.documentId)
-                            }
-                            onDrop={(event) => drop(event, tab.documentId)}
-                            onDragEnd={clearDrag}
-                            onClick={() => onActivate(tab.documentId)}
-                            onKeyDown={(event) => {
-                                if (event.target !== event.currentTarget)
-                                    return;
-                                if (
-                                    event.key === "Enter" ||
-                                    event.key === " "
-                                ) {
-                                    event.preventDefault();
-                                    onActivate(tab.documentId);
-                                }
-                                if (
-                                    !event.altKey &&
-                                    [
-                                        "ArrowLeft",
-                                        "ArrowRight",
-                                        "Home",
-                                        "End",
-                                    ].includes(event.key)
-                                ) {
-                                    event.preventDefault();
-                                    const nextIndex =
-                                        event.key === "Home"
-                                            ? 0
-                                            : event.key === "End"
-                                              ? tabs.length - 1
-                                              : (index +
-                                                    (event.key === "ArrowLeft"
-                                                        ? -1
-                                                        : 1) +
-                                                    tabs.length) %
-                                                tabs.length;
-                                    const target = tabs[nextIndex];
-                                    onActivate(target.documentId);
-                                    itemRefs.current[
-                                        target.documentId
-                                    ]?.focus();
-                                }
-                                if (
-                                    event.altKey &&
-                                    (event.key === "ArrowLeft" ||
-                                        event.key === "ArrowRight")
-                                ) {
-                                    const direction =
-                                        event.key === "ArrowLeft" ? -1 : 1;
-                                    const target = tabs[index + direction];
-                                    if (!target) return;
-                                    event.preventDefault();
-                                    onReorder(
-                                        tab.documentId,
-                                        target.documentId,
-                                        direction === -1 ? "before" : "after",
-                                    );
-                                }
-                            }}
-                            data-active={isActive ? "true" : "false"}
-                            className={cn(
-                                "document-tab group relative flex h-9 min-w-0 max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
-                                isActive ? "z-20" : "z-10",
-                                tabs.length > 1 &&
-                                    "cursor-grab active:cursor-grabbing",
-                                draggedId === tab.documentId && "opacity-55",
-                            )}
                         >
-                            {dropTarget?.id === tab.documentId &&
-                                draggedId !== tab.documentId && (
-                                    <span
-                                        aria-hidden="true"
-                                        className={cn(
-                                            "pointer-events-none absolute inset-y-1 z-30 w-0.5 rounded-full bg-blue-500",
-                                            dropTarget.position === "before"
-                                                ? "left-0"
-                                                : "right-0",
-                                        )}
-                                    />
-                                )}
-                            <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                <FileTypeIcon
-                                    fileType={tab.filename}
-                                    className="h-3.5 w-3.5"
-                                />
-                                <span
-                                    className={cn(
-                                        "min-w-0 flex-1 truncate text-xs",
+                            {({
+                                onContextMenu,
+                                onMenuKeyDown,
+                                renaming,
+                                renameInput,
+                            }) => (
+                                <div
+                                    onContextMenu={onContextMenu}
+                                    ref={(element) => {
+                                        itemRefs.current[tab.documentId] =
+                                            element;
+                                    }}
+                                    role="tab"
+                                    id={`project-document-tab-${tab.documentId}`}
+                                    aria-controls={
                                         isActive
-                                            ? "font-medium"
-                                            : "font-normal",
+                                            ? `project-document-panel-${tab.documentId}`
+                                            : undefined
+                                    }
+                                    tabIndex={
+                                        isActive ||
+                                        (!activeTabId && index === 0)
+                                            ? 0
+                                            : -1
+                                    }
+                                    aria-selected={isActive}
+                                    aria-label={tab.filename}
+                                    draggable={!renaming && tabs.length > 1}
+                                    onDragStart={(event) => {
+                                        draggedIdRef.current = tab.documentId;
+                                        setDraggedId(tab.documentId);
+                                        event.dataTransfer.effectAllowed =
+                                            "move";
+                                        event.dataTransfer.setData(
+                                            TAB_DRAG_TYPE,
+                                            tab.documentId,
+                                        );
+                                    }}
+                                    onDragOver={(event) =>
+                                        dragOver(event, tab.documentId)
+                                    }
+                                    onDrop={(event) =>
+                                        drop(event, tab.documentId)
+                                    }
+                                    onDragEnd={clearDrag}
+                                    onClick={() => onActivate(tab.documentId)}
+                                    onKeyDown={(event) => {
+                                        if (onMenuKeyDown(event)) return;
+                                        if (
+                                            event.target !== event.currentTarget
+                                        )
+                                            return;
+                                        if (
+                                            event.key === "Enter" ||
+                                            event.key === " "
+                                        ) {
+                                            event.preventDefault();
+                                            onActivate(tab.documentId);
+                                        }
+                                        if (
+                                            !event.altKey &&
+                                            [
+                                                "ArrowLeft",
+                                                "ArrowRight",
+                                                "Home",
+                                                "End",
+                                            ].includes(event.key)
+                                        ) {
+                                            event.preventDefault();
+                                            const nextIndex =
+                                                event.key === "Home"
+                                                    ? 0
+                                                    : event.key === "End"
+                                                      ? tabs.length - 1
+                                                      : (index +
+                                                            (event.key ===
+                                                            "ArrowLeft"
+                                                                ? -1
+                                                                : 1) +
+                                                            tabs.length) %
+                                                        tabs.length;
+                                            const target = tabs[nextIndex];
+                                            onActivate(target.documentId);
+                                            itemRefs.current[
+                                                target.documentId
+                                            ]?.focus();
+                                        }
+                                        if (
+                                            event.altKey &&
+                                            (event.key === "ArrowLeft" ||
+                                                event.key === "ArrowRight")
+                                        ) {
+                                            const direction =
+                                                event.key === "ArrowLeft"
+                                                    ? -1
+                                                    : 1;
+                                            const target =
+                                                tabs[index + direction];
+                                            if (!target) return;
+                                            event.preventDefault();
+                                            onReorder(
+                                                tab.documentId,
+                                                target.documentId,
+                                                direction === -1
+                                                    ? "before"
+                                                    : "after",
+                                            );
+                                        }
+                                    }}
+                                    data-active={isActive ? "true" : "false"}
+                                    className={cn(
+                                        "document-tab group relative flex h-9 min-w-0 max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                                        isActive ? "z-20" : "z-10",
+                                        tabs.length > 1 &&
+                                            "cursor-grab active:cursor-grabbing",
+                                        draggedId === tab.documentId &&
+                                            "opacity-55",
                                     )}
-                                    title={tab.filename}
                                 >
-                                    {tab.filename}
-                                </span>
-                                {showVersion && (
-                                    <VersionChip n={versionNumber} size="sm" />
-                                )}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    onClose(tab.documentId);
-                                }}
-                                className="shrink-0 rounded-full p-0.5 text-gray-400 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-                                aria-label={`Close ${tab.filename}`}
-                            >
-                                <X aria-hidden="true" className="h-3 w-3" />
-                            </button>
-                        </div>
+                                    {dropTarget?.id === tab.documentId &&
+                                        draggedId !== tab.documentId && (
+                                            <span
+                                                aria-hidden="true"
+                                                className={cn(
+                                                    "pointer-events-none absolute inset-y-1 z-30 w-0.5 rounded-full bg-blue-500",
+                                                    dropTarget.position ===
+                                                        "before"
+                                                        ? "left-0"
+                                                        : "right-0",
+                                                )}
+                                            />
+                                        )}
+                                    <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+                                        <FileTypeIcon
+                                            fileType={tab.filename}
+                                            className="h-3.5 w-3.5"
+                                        />
+                                        {renameInput || (
+                                            <span
+                                                className={cn(
+                                                    "min-w-0 flex-1 truncate text-xs",
+                                                    isActive
+                                                        ? "font-medium"
+                                                        : "font-normal",
+                                                )}
+                                                title={tab.filename}
+                                            >
+                                                {tab.filename}
+                                            </span>
+                                        )}
+                                        {showVersion && (
+                                            <VersionChip
+                                                n={versionNumber}
+                                                size="sm"
+                                            />
+                                        )}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            onClose(tab.documentId);
+                                        }}
+                                        className="shrink-0 rounded-full p-0.5 text-gray-400 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                                        aria-label={`Close ${tab.filename}`}
+                                    >
+                                        <X
+                                            aria-hidden="true"
+                                            className="h-3 w-3"
+                                        />
+                                    </button>
+                                </div>
+                            )}
+                        </DocumentTabActions>
                     );
                 })
             )}

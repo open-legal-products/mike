@@ -12,6 +12,8 @@ it("opens assistant DOCX documents in edit mode", () => {
         document_id: "docx-1", title: "agreement.docx", type: "docx", metadata: [], quotes: [],
     }} />);
     expect(screen.getByTestId("docx-editor")).toHaveAttribute("data-mode", "edit");
+    expect(screen.queryByRole("heading", { name: "agreement.docx" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /download/i })).toBeNull();
 });
 
 describe("DocumentTitleRow", () => {

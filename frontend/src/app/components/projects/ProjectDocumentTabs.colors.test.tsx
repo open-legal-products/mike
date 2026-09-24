@@ -129,7 +129,7 @@ describe("project document tab colors", () => {
             const docxTab = screen.getByRole("tab", { name: "Draft.docx" });
             const pdfTab = screen.getByRole("tab", { name: "Exhibit.pdf" });
             const docxCanvas =
-                screen.getByTestId("docx-view").firstElementChild!;
+                screen.getByTestId("docx-view").querySelector(".document-canvas")!;
             const pdfCanvas = screen.getByTestId("pdf-view").firstElementChild!;
             const resting = backgroundColor(
                 screen.getByTestId("resting-surface"),
