@@ -603,15 +603,20 @@ async function processReplacementDocumentVersion(
     file.filename,
   );
   await copyFile(file.sealed_storage_path, sourcePath);
-  const pdfPath = await buildPdfRendition({
-    sourceFilePath: artifact.filePath,
-    workingDirectory: artifact.directory,
-    fileType: file.file_type,
-    userId: session.user_id,
-    documentId,
-    versionSlug,
-    sourceStoragePath: sourcePath,
-  });
+  // Editor saves only persist the source. Clearing the previous rendition in
+  // the same update prevents serving stale PDF content; lifecycle cleanup
+  // retires that object. An uploaded PDF is already its own rendition.
+  const pdfPath = session.destination.generate_pdf === false && file.file_type !== "pdf"
+    ? null
+    : await buildPdfRendition({
+        sourceFilePath: artifact.filePath,
+        workingDirectory: artifact.directory,
+        fileType: file.file_type,
+        userId: session.user_id,
+        documentId,
+        versionSlug,
+        sourceStoragePath: sourcePath,
+      });
   const pageCount =
     file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
   const { data: updated, error } = await updateDocumentVersion(

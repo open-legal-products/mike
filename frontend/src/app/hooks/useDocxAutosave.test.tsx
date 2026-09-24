@@ -34,7 +34,7 @@ it("debounces edits, saves the open version with a hash precondition, and evicts
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(replaceDocumentVersionFile).not.toHaveBeenCalled();
     await act(async () => { await vi.advanceTimersByTimeAsync(DOCX_AUTOSAVE_DELAY); await result.current.save(); });
-    expect(replaceDocumentVersionFile).toHaveBeenCalledExactlyOnceWith("doc", "v1", expect.objectContaining({ name: "Agreement.docx", size: 1 }), undefined, { expectedContentSha256: hash(original) });
+    expect(replaceDocumentVersionFile).toHaveBeenCalledExactlyOnceWith("doc", "v1", expect.objectContaining({ name: "Agreement.docx", size: 1 }), undefined, { expectedContentSha256: hash(original), generatePdf: false });
     expect(result.current).toMatchObject({ dirty: false, status: "saved", error: null });
     expect(invalidateDocxBytes).toHaveBeenCalledWith("doc");
 });
@@ -52,7 +52,7 @@ it("serializes saves and persists edits made during an upload using the new base
     expect(result.current.save()).toBe(pending);
     await act(async () => { finish(); await pending; });
     expect(replaceDocumentVersionFile).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(replaceDocumentVersionFile).mock.calls[1][4]).toEqual({ expectedContentSha256: hash(edited) });
+    expect(vi.mocked(replaceDocumentVersionFile).mock.calls[1][4]).toEqual({ expectedContentSha256: hash(edited), generatePdf: false });
     expect(result.current.dirty).toBe(false);
 });
 

@@ -70,6 +70,7 @@ export function useDocxAutosave(options: Options) {
                     const nextHash = await sha256(bytes);
                     await replaceDocumentVersionFile(current.documentId, targetVersion.current, file, undefined, {
                         expectedContentSha256: await expectedHash.current,
+                        generatePdf: false,
                     });
                     expectedHash.current = Promise.resolve(nextHash);
                     savedSequence.current = savingSequence;

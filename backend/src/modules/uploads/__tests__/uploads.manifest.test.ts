@@ -24,6 +24,15 @@ function documentRequest(fileCount: number, sizeBytes = 1024) {
 }
 
 describe("parseUploadSessionRequest", () => {
+  it("accepts an explicit PDF-generation opt-out for replacements and rejects non-booleans", () => {
+    const request = {
+      purpose: "document_version_replace",
+      destination: { document_id: USER_ID, version_id: SESSION_ID, generate_pdf: false },
+      files: [{ ...documentRequest(1).files[0], filename: "contract.docx" }],
+    };
+    expect(parseUploadSessionRequest(request, USER_ID, SESSION_ID).destination).toMatchObject({ generate_pdf: false });
+    expect(() => parseUploadSessionRequest({ ...request, destination: { ...request.destination, generate_pdf: "false" } }, USER_ID, SESSION_ID)).toThrow(UploadSessionValidationError);
+  });
   it("accepts a SHA-256 precondition for editor saves and rejects malformed hashes", () => {
     const request = {
       purpose: "document_version_replace",

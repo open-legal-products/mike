@@ -1864,7 +1864,11 @@ export async function replaceDocumentVersionFile(
     versionId: string,
     file: File,
     filename?: string,
-    options?: UploadRequestOptions<DocumentVersion> & { expectedContentSha256?: string },
+    options?: UploadRequestOptions<DocumentVersion> & {
+        expectedContentSha256?: string;
+        /** Skip eager PDF generation for frequent editor saves. */
+        generatePdf?: boolean;
+    },
 ): Promise<DocumentVersion> {
     const uploadedFile = filename
         ? new File([file], filename, {
@@ -1880,6 +1884,9 @@ export async function replaceDocumentVersionFile(
                 version_id: versionId,
                 ...(options?.expectedContentSha256
                     ? { expected_content_sha256: options.expectedContentSha256 }
+                    : {}),
+                ...(options?.generatePdf !== undefined
+                    ? { generate_pdf: options.generatePdf }
                     : {}),
             },
             files: [{ file: uploadedFile }],
