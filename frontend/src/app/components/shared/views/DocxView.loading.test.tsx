@@ -4,13 +4,20 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { DocxRendererProps } from "./DocxRenderer.types";
 import { DocxView } from "./DocxView";
+import { webcrypto } from "node:crypto";
 
 const exportDocx = vi.hoisted(() => vi.fn());
 const selectText = vi.hoisted(() => vi.fn());
 const clearTextSelection = vi.hoisted(() => vi.fn());
+const replaceVersion = vi.hoisted(() => vi.fn());
 
 vi.mock("@/app/lib/authEvents", () => ({ authenticatedFetch: vi.fn() }));
-vi.mock("@/app/lib/mikeApi", () => ({ getDocumentFileUrl: (id: string) => "/api/document/" + id }));
+vi.mock("@/app/lib/mikeApi", () => ({
+    getDocumentFileUrl: (id: string) => "/api/document/" + id,
+    replaceDocumentVersionFile: replaceVersion,
+    listDocumentVersions: vi.fn().mockResolvedValue({ current_version_id: "v1", versions: [] }),
+    MikeApiError: class extends Error {},
+}));
 vi.mock("./EigenpalDocxRenderer", () => ({
     default: (props: DocxRendererProps) => <MockRenderer {...props} />,
 }));
@@ -39,6 +46,8 @@ function MockRenderer({ bytes, mode, onChange, onReady, onError, onSave }: DocxR
 
 const originalScrollTo = HTMLElement.prototype.scrollTo;
 beforeEach(() => {
+    vi.stubGlobal("crypto", webcrypto);
+    replaceVersion.mockReset().mockResolvedValue({ id: "v1" });
     exportDocx.mockReset().mockResolvedValue(new Uint8Array([42]).buffer);
     selectText.mockReset().mockReturnValue(true);
     clearTextSelection.mockReset();
@@ -48,7 +57,7 @@ beforeEach(() => {
         this.scrollTop = typeof options === "number" ? 0 : options?.top ?? 0;
     });
 });
-afterEach(() => { HTMLElement.prototype.scrollTo = originalScrollTo; vi.restoreAllMocks(); });
+afterEach(() => { HTMLElement.prototype.scrollTo = originalScrollTo; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it("keeps the document visible during refresh, hides it on failure, and recovers", async () => {
     let fileResponse = () => Promise.resolve(new Response(new Uint8Array([1])));
@@ -155,20 +164,28 @@ it("keeps edits after a failed export and downloads the edited bytes on retry", 
     const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     exportDocx.mockRejectedValueOnce(new Error("internal serializer details"));
-    render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} defaultMode="edit" />);
+    let download: (() => Promise<void>) | null = null;
+    render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} defaultMode="edit"
+        onDownloadReady={(handler) => { download = handler; }} />);
     await screen.findByText("EigenPal preview");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await act(async () => download?.());
     expect(await screen.findByText(/Your edits are still open/)).toBeVisible();
     const unsaved = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(unsaved);
     expect(unsaved.defaultPrevented).toBe(true);
     expect(screen.queryByText(/internal serializer/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await act(async () => download?.());
     await waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(createUrl).toHaveBeenCalledWith(expect.any(Blob));
     expect(click.mock.instances[0]).toHaveAttribute("download", "Agreement.docx");
     expect(exportDocx).toHaveBeenCalledTimes(2);
+    const downloaded = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(downloaded);
+    expect(downloaded.defaultPrevented).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await screen.findByText("Saved");
+    expect(replaceVersion).toHaveBeenCalledOnce();
     const saved = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(saved);
     expect(saved.defaultPrevented).toBe(false);
@@ -201,4 +218,17 @@ it("reports rendering failure and recovers with new bytes", async () => {
     rerender(<DocxView documentId="bad" cacheBytes={false} refetchKey={1} />);
     expect(await screen.findByText("Document revision 2")).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("keeps the live editor through metadata refreshes after local editing begins", async () => {
+    const view = (refetchKey: number) => <DocxView documentId="live-edit" versionId="v1" cacheBytes={false} defaultMode="edit" refetchKey={refetchKey} />;
+    const { rerender } = render(view(0));
+    await screen.findByText("Document revision 1");
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    const editor = screen.getByTestId("renderer-scroll");
+    vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([2])));
+    rerender(view(1));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("renderer-scroll")).toBe(editor);
+    expect(screen.getByText("Document revision 1")).toBeVisible();
 });

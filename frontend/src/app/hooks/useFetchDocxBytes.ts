@@ -18,6 +18,7 @@ export interface FetchDocxResult {
 // key share a single in-flight request.
 const bytesCache = new Map<string, ArrayBuffer>();
 const inFlight = new Map<string, Promise<ArrayBuffer>>();
+const generations = new Map<string, number>();
 
 function cacheKey(
     documentId: string,
@@ -77,6 +78,7 @@ export function useFetchDocxBytes(
         const pending =
             (cacheBytes ? inFlight.get(key) : undefined) ??
             (async () => {
+                const generation = generations.get(documentId) ?? 0;
                 // Stream bytes through the backend (avoids CORS on R2
                 // signed URLs).
                 const bin = await authenticatedFetch(url, {
@@ -84,7 +86,7 @@ export function useFetchDocxBytes(
                 });
                 if (!bin.ok) throw new Error(`HTTP ${bin.status}`);
                 const buf = await bin.arrayBuffer();
-                if (cacheBytes) bytesCache.set(key, buf);
+                if (cacheBytes && generation === (generations.get(documentId) ?? 0)) bytesCache.set(key, buf);
                 return buf;
             })();
         if (cacheBytes && !inFlight.has(key)) inFlight.set(key, pending);
@@ -126,6 +128,11 @@ export function invalidateDocxBytes(
     documentId: string,
     versionId?: string | null,
 ): void {
+    generations.set(documentId, (generations.get(documentId) ?? 0) + 1);
+    // A read started before a save must not serve stale bytes to a reopened tab.
+    for (const key of inFlight.keys()) {
+        if (key.startsWith(`${documentId}:`)) inFlight.delete(key);
+    }
     if (versionId !== undefined) {
         for (const key of Array.from(bytesCache.keys())) {
             if (key.startsWith(`${documentId}:${versionId ?? ""}:`)) {

@@ -99,6 +99,17 @@ describe("document version persistence boundary", () => {
     ]);
     fake.done();
   });
+
+  it.each([null, "original-hash"])("atomically guards editor saves against intervening writes (%s)", async (hash) => {
+    const fake = scriptedDb([{ table: "document_versions", op: "update", data: null }]);
+    const result = await updateDocumentVersion(fake.db, "doc", "v", { storage_path: "new/key" }, {
+      expectedStoragePath: "old/key", expectedContentSha256: hash,
+    });
+    expect(result.data).toBeNull();
+    expect(fake.calls[0].filters).toContainEqual(["eq", "storage_path", "old/key"]);
+    expect(fake.calls[0].filters).toContainEqual([hash === null ? "is" : "eq", "content_sha256", hash]);
+    fake.done();
+  });
 });
 
 const storage = vi.hoisted(() => ({

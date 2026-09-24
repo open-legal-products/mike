@@ -3,6 +3,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
+import { useDocxAutosave } from "@/app/hooks/useDocxAutosave";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
 import type { DocxMode, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
@@ -98,28 +100,31 @@ function DocxViewContent(props: Props) {
         warning, onWarningDismiss, onDownloadReady, rounded = true,
     } = props;
     const [initialMode] = useState<DocxMode>(props.defaultMode ?? "view");
-    const [dirtyKey, setDirtyKey] = useState<string | null>(null);
     const [downloading, setDownloading] = useState(false);
     const [downloadError, setDownloadError] = useState<string | null>(null);
-    const editSequence = useRef(0);
-    const { bytes, loading, error } = useFetchDocxBytes(documentId, versionId, refetchKey, displayUrl, cacheBytes);
+    const fetched = useFetchDocxBytes(documentId, versionId, refetchKey, displayUrl, cacheBytes);
+    // Metadata refreshes after an autosave must not remount the editor, lose
+    // its undo stack, or discard edits typed while the upload was in flight.
+    const [editedBytes, setEditedBytes] = useState<ArrayBuffer | null>(null);
+    const bytes = editedBytes ?? fetched.bytes;
+    const { loading } = fetched;
+    const error = editedBytes ? null : fetched.error;
     const renderKey = bytes ? String(bufferId(bytes)) : null;
-    const dirty = dirtyKey !== null && dirtyKey === renderKey;
     const [readyKey, setReadyKey] = useState<string | null>(null);
     const [failedKey, setFailedKey] = useState<string | null>(null);
     const surfaceRef = useRef<DocxSurface | null>(null);
+    const autosave = useDocxAutosave({
+        documentId, versionId, filename: props.filename, bytes,
+        enabled: !displayUrl,
+        exportDocx: () => surfaceRef.current?.exportDocx?.(),
+    });
+    const { markChanged } = autosave;
     const lastScrollTop = useRef(props.initialScrollTop ?? 0);
     const propsRef = useRef(props);
     const scrollFrame = useRef(0);
     const focusFrame = useRef(0);
 
     useEffect(() => { propsRef.current = props; });
-    useEffect(() => {
-        if (!dirty) return;
-        const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-        window.addEventListener("beforeunload", warn);
-        return () => window.removeEventListener("beforeunload", warn);
-    }, [dirty]);
     useEffect(() => () => {
         cancelAnimationFrame(scrollFrame.current);
         cancelAnimationFrame(focusFrame.current);
@@ -157,13 +162,12 @@ function DocxViewContent(props: Props) {
     const onError = useCallback(() => setFailedKey(renderKey), [renderKey]);
     const onChange = useCallback(() => {
         if (!surfaceRef.current?.content.isConnected) return;
-        editSequence.current += 1;
-        setDirtyKey(renderKey);
-    }, [renderKey]);
+        setEditedBytes(bytes);
+        markChanged();
+    }, [bytes, markChanged]);
     const download = useCallback(async (providedBytes?: ArrayBuffer) => {
         const surface = surfaceRef.current;
         if (!surface?.exportDocx || downloading) return;
-        const sequence = editSequence.current;
         setDownloading(true);
         setDownloadError(null);
         try {
@@ -177,7 +181,6 @@ function DocxViewContent(props: Props) {
             link.download = /\.docx$/i.test(name) ? name : `${name}.docx`;
             link.click();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-            if (editSequence.current === sequence) setDirtyKey(null);
         } catch {
             setDownloadError("This document could not be downloaded. Your edits are still open; please try again.");
         } finally {
@@ -254,11 +257,26 @@ function DocxViewContent(props: Props) {
                     {bytes && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>
                             <Suspense fallback={null}>
-                                <DocxRenderer bytes={bytes} mode={initialMode} filename={props.filename} onChange={onChange} onSave={download} onReady={onReady} onError={onError} />
+                                <DocxRenderer bytes={bytes} mode={initialMode} filename={props.filename} onChange={onChange} onSave={displayUrl ? download : autosave.save} onReady={onReady} onError={onError} />
                             </Suspense>
                         </DocxRenderBoundary>
                     )}
                 </div>
+                {!displayUrl && !message && readyKey === renderKey && bytes && (
+                    <div className="flex shrink-0 items-center justify-end gap-2 bg-app-surface px-3 py-1 text-xs text-muted-foreground">
+                        <span role="status" aria-live="polite" className={autosave.error ? "text-destructive" : undefined}>
+                            {autosave.error ?? (autosave.status === "saving" ? "Saving…" : autosave.dirty ? "Unsaved changes" : autosave.status === "saved" ? "Saved" : "Autosave on")}
+                        </span>
+                        {autosave.dirty && autosave.status !== "saving" && (
+                            <PillButtonUI tone="white" size="xs" onClick={() => void autosave.save()}>
+                                {autosave.error ? "Retry save" : "Save now"}
+                            </PillButtonUI>
+                        )}
+                        {autosave.error && (
+                            <PillButtonUI tone="white" size="xs" onClick={() => void download()}>Download copy</PillButtonUI>
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );

@@ -24,6 +24,15 @@ function documentRequest(fileCount: number, sizeBytes = 1024) {
 }
 
 describe("parseUploadSessionRequest", () => {
+  it("accepts a SHA-256 precondition for editor saves and rejects malformed hashes", () => {
+    const request = {
+      purpose: "document_version_replace",
+      destination: { document_id: USER_ID, version_id: SESSION_ID, expected_content_sha256: "a".repeat(64) },
+      files: documentRequest(1).files,
+    };
+    expect(parseUploadSessionRequest(request, USER_ID, SESSION_ID).destination).toMatchObject({ expected_content_sha256: "a".repeat(64) });
+    expect(() => parseUploadSessionRequest({ ...request, destination: { ...request.destination, expected_content_sha256: "bad" } }, USER_ID, SESSION_ID)).toThrow(UploadSessionValidationError);
+  });
   it("accepts exactly 50 files and derives server-owned storage metadata", () => {
     const result = parseUploadSessionRequest(
       documentRequest(MAX_UPLOAD_SESSION_FILES),
