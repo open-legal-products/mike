@@ -1,5 +1,15 @@
 /* EigenPal 2.21.1 has no title-row or frame-border option. Scope these
    overrides to its packaged chrome; Mike owns the filename and file actions. */
+.host {
+    /* Capture Mike's neutral token before EigenPal shadows --muted with HSL. */
+    --mike-docx-toolbar-background: var(--muted);
+    --mike-docx-focus-color: var(--ring);
+}
+
+.host :global(.docx-toolbar) {
+    background: var(--mike-docx-toolbar-background);
+}
+
 .host :global(.docx-editor) > div:has(:global(.docx-toolbar)) {
     border-bottom: 0 !important;
     box-shadow: none !important;
@@ -20,4 +30,54 @@
     background: var(--liquid-glass-translucent-background);
     border: 1px solid var(--liquid-glass-translucent-border);
     box-shadow: var(--liquid-glass-shadow-translucent);
+}
+
+.host :global(.docx-font-notice),
+.host :global(.docx-notification-warning) {
+    background: var(--app-surface) !important;
+    border-color: var(--liquid-glass-border-flat) !important;
+}
+
+.host :global(.docx-font-notice) {
+    color: var(--color-gray-700);
+}
+
+/* These packaged dismiss buttons have no styling slot. Match PillButtonUI's
+   white/xs material and shape while preserving EigenPal's dismissal handlers.
+   Toast controls use inline styles, hence the scoped important overrides. */
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    height: 1.5rem;
+    padding: 0 0.625rem !important;
+    border-radius: 9999px !important;
+    border: 1px solid var(--liquid-glass-border-flat) !important;
+    background: var(--liquid-glass-background-flat) !important;
+    box-shadow: var(--liquid-glass-shadow-flat);
+    color: var(--color-gray-700) !important;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 150ms, box-shadow 150ms, transform 150ms;
+}
+
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child):hover {
+    background: var(--liquid-glass-hover-background) !important;
+}
+
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child):active {
+    transform: scale(0.98);
+}
+
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child):focus-visible {
+    outline: 2px solid var(--mike-docx-focus-color);
+    outline-offset: 2px;
+}
+
+.host :global(.docx-notification-toast) > div > button:last-child {
+    width: 1.5rem;
+    padding: 0 !important;
 }
