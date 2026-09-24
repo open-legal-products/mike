@@ -50,7 +50,12 @@ import {
   updatePassword,
   verificationSchema,
   verifyMfaChallenge,
+  signupSchema,
 } from "./auth.service";
+import {
+  describeAuthProviderError,
+  describeAuthValidationIssues,
+} from "./auth.messages";
 
 export const authRouter = Router();
 
@@ -78,42 +83,21 @@ function authError(
   error: unknown,
   fallback = "Authentication could not be completed.",
 ) {
-  const candidate = error as {
-    status?: unknown;
-    code?: unknown;
-    message?: unknown;
-  };
-  const suppliedStatus =
-    typeof candidate?.status === "number" ? candidate.status : null;
-  if (
-    suppliedStatus === null ||
-    suppliedStatus < 400 ||
-    suppliedStatus >= 500
-  ) {
+  const wire = describeAuthProviderError(error, fallback);
+  if (wire.status >= 500) {
     console.error(
       "[auth] unexpected server-side authentication failure",
       error,
     );
-    res.status(500).json({
-      code: null,
-      detail: fallback,
-    });
-    return;
   }
-  res.status(suppliedStatus).json({
-    code: typeof candidate?.code === "string" ? candidate.code : null,
-    detail:
-      typeof candidate?.message === "string" && candidate.message
-        ? candidate.message
-        : fallback,
-  });
+  res.status(wire.status).json({ code: wire.code, detail: wire.detail });
 }
 
-function invalidBody(res: Response) {
-  res.status(400).json({
-    code: "invalid_request",
-    detail: "The authentication request is invalid.",
-  });
+function invalidBody(
+  res: Response,
+  issues?: ReadonlyArray<{ path: PropertyKey[]; code: string; message?: string }>,
+) {
+  res.status(400).json(describeAuthValidationIssues(issues ?? []));
 }
 
 function cookieClient(req: Request, res: Response): SupabaseClient | null {
@@ -130,7 +114,7 @@ function cookieClient(req: Request, res: Response): SupabaseClient | null {
 
 authRouter.post("/login", asyncRoute(async (req, res) => {
   const parsed = credentialsSchema.safeParse(req.body);
-  if (!parsed.success) return invalidBody(res);
+  if (!parsed.success) return invalidBody(res, parsed.error.issues);
 
   try {
     const client = createRequestSupabase(req, res);
@@ -143,8 +127,8 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
 }));
 
 authRouter.post("/signup", asyncRoute(async (req, res) => {
-  const parsed = credentialsSchema.safeParse(req.body);
-  if (!parsed.success) return invalidBody(res);
+  const parsed = signupSchema.safeParse(req.body);
+  if (!parsed.success) return invalidBody(res, parsed.error.issues);
 
   try {
     const client = createRequestSupabase(req, res);
@@ -376,7 +360,7 @@ authRouter.patch("/email", requireAuth, asyncRoute(async (req, res) => {
 
 authRouter.patch("/password", requireAuth, asyncRoute(async (req, res) => {
   const parsed = passwordSchema.safeParse(req.body);
-  if (!parsed.success) return invalidBody(res);
+  if (!parsed.success) return invalidBody(res, parsed.error.issues);
   const client = cookieClient(req, res);
   if (!client) return;
   const { data, error } = await updatePassword(client, parsed.data.password);

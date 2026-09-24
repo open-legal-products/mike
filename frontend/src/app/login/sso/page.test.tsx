@@ -66,4 +66,22 @@ describe("SsoLoginPage", () => {
         );
         expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
     });
+
+    it("says the connection failed instead of blaming the domain", async () => {
+        startSso.mockRejectedValue(new TypeError("Failed to fetch"));
+        const user = userEvent.setup();
+        render(<SsoLoginPage />);
+
+        await user.type(
+            screen.getByRole("textbox", { name: "Email" }),
+            "lawyer@example.com",
+        );
+        await user.click(screen.getByRole("button", { name: "Continue" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Mike couldn't reach the server. Check your connection and try again.",
+        );
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+        expect(startSso).toHaveBeenCalledTimes(2);
+    });
 });

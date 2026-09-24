@@ -17,12 +17,47 @@ import { AuthDivider } from "@/app/components/auth/AuthDivider";
 import { SsoAuthButton } from "@/app/components/auth/SsoAuthButton";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
 import { FieldLabel } from "@/app/components/ui/form-field";
-import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
+import {
+    describeError,
+    supportMailtoFor,
+    type UserFacingError,
+} from "@/app/lib/userFacingError";
+import {
+    AUTH_ERROR_MESSAGES,
+    TOO_MANY_ATTEMPTS_MESSAGE,
+    authMessages,
+} from "@/app/lib/authMessages";
 
-const LOGIN_ERROR_MESSAGES = {
-    invalid_credentials: "The email or password is incorrect.",
-    email_not_confirmed: "Confirm your email address before logging in.",
-} as const;
+/**
+ * The shared auth table (`@/app/lib/authMessages`) with this screen's
+ * deltas. Anything not listed falls through to `describeError`, which
+ * classifies by status (429, 5xx) or by the failure itself (offline,
+ * connection dropped), so no login failure can collapse into "please try
+ * again" without saying what happened.
+ */
+const LOGIN_ERROR_MESSAGES = authMessages({
+    // Same text as invalid_credentials: saying "no such account" would let
+    // anyone test which addresses are registered.
+    user_not_found: AUTH_ERROR_MESSAGES.invalid_credentials,
+    // Here the account exists; it is this sign-in route that is closed.
+    signup_disabled: "This account can't be used to log in.",
+    validation_failed: "Enter your email address and password.",
+    invalid_request: "Enter your email address and password.",
+    request_timeout: "The login request timed out. Try again.",
+});
+
+/** Classify a login failure into text a person can act on. */
+function describeLoginError(error: unknown): UserFacingError {
+    const described = describeError(error, {
+        action: "log in",
+        codeMessages: LOGIN_ERROR_MESSAGES,
+        fallback: "Unable to log in right now. Try again.",
+    });
+    // A 429 without a GoTrue code still means "you tried too often".
+    return described.kind === "rate_limited"
+        ? { ...described, message: TOO_MANY_ATTEMPTS_MESSAGE }
+        : described;
+}
 
 export default function LoginPage() {
     const router = useRouter();
@@ -36,7 +71,8 @@ export default function LoginPage() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<UserFacingError | null>(null);
+    const [retryingSession, setRetryingSession] = useState(false);
 
     useEffect(() => {
         if (!authLoading && isAuthenticated) {
@@ -44,25 +80,41 @@ export default function LoginPage() {
         }
     }, [authLoading, isAuthenticated, router]);
 
-    const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const submitLogin = async () => {
         setLoading(true);
         setError(null);
-
         try {
             await login(email, password);
             await refreshSession();
             router.push("/onboarding/profile");
-        } catch (error: unknown) {
-            setError(
-                knownErrorCodeMessage(
-                    error,
-                    LOGIN_ERROR_MESSAGES,
-                    "Unable to log in right now. Please try again.",
-                ),
-            );
+        } catch (caught: unknown) {
+            setError(describeLoginError(caught));
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleLogin = async (e: React.FormEvent) => {
+        e.preventDefault();
+        await submitLogin();
+    };
+
+    const handleRetrySession = async () => {
+        setRetryingSession(true);
+        setError(null);
+        try {
+            await retrySession();
+        } catch (caught: unknown) {
+            // The Retry button failing silently is what made the original
+            // session error look permanent; say so instead.
+            setError(
+                describeError(caught, {
+                    action: "restore your session",
+                    fallback: "Unable to restore your session. Try again.",
+                }),
+            );
+        } finally {
+            setRetryingSession(false);
         }
     };
 
@@ -113,18 +165,43 @@ export default function LoginPage() {
                         </div>
 
                         {(error || authError) && (
-                            <div className="text-red-600 text-sm bg-red-50 p-3 rounded">
-                                {error ?? authError}
+                            <div
+                                role="alert"
+                                className="text-red-600 text-sm bg-red-50 p-3 rounded"
+                            >
+                                {error ? error.message : authError}
                                 {!error && authError && (
                                     <button
                                         type="button"
-                                        onClick={() =>
-                                            void retrySession().catch(() => {})
-                                        }
-                                        className="ml-2 underline underline-offset-2"
+                                        onClick={() => void handleRetrySession()}
+                                        disabled={retryingSession}
+                                        className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                                    >
+                                        {retryingSession
+                                            ? "Retrying..."
+                                            : "Retry"}
+                                    </button>
+                                )}
+                                {error?.retryable && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void submitLogin()}
+                                        disabled={loading}
+                                        className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
                                     >
                                         Retry
                                     </button>
+                                )}
+                                {error?.supportable && (
+                                    <a
+                                        href={supportMailtoFor(
+                                            error,
+                                            "Failed to log in.",
+                                        )}
+                                        className="ml-2 underline underline-offset-2"
+                                    >
+                                        Contact support
+                                    </a>
                                 )}
                             </div>
                         )}

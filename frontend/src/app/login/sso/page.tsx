@@ -14,23 +14,27 @@ import { Input } from "@/app/components/ui/input";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { startSso } from "@/app/lib/authApi";
-import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
+import {
+    describeError,
+    supportMailtoFor,
+    type UserFacingError,
+} from "@/app/lib/userFacingError";
+import { authMessages } from "@/app/lib/authMessages";
 
-const SSO_ERROR_MESSAGES = {
+/** The shared auth table with this screen's deltas: the address asked for
+ *  here is a work address, so "valid email" is not specific enough. */
+const SSO_ERROR_MESSAGES = authMessages({
     invalid_request: "Enter a valid company email address.",
-    sso_domain_not_allowed:
-        "Single sign-on is not available for this email domain.",
-    sso_disabled: "Single sign-on is not enabled.",
-    sso_unavailable:
-        "Unable to start single sign-on for this email domain.",
-} as const;
+    validation_failed: "Enter a valid company email address.",
+    email_address_invalid: "Enter a valid company email address.",
+});
 
 export default function SsoLoginPage() {
     const router = useRouter();
     const { isAuthenticated, authLoading } = useAuth();
     const [email, setEmail] = useState("");
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<UserFacingError | null>(null);
 
     useEffect(() => {
         if (!authLoading && isAuthenticated) {
@@ -38,8 +42,7 @@ export default function SsoLoginPage() {
         }
     }, [authLoading, isAuthenticated, router]);
 
-    const handleSubmit = async (event: React.FormEvent) => {
-        event.preventDefault();
+    const startSsoFlow = async () => {
         setLoading(true);
         setError(null);
 
@@ -50,15 +53,27 @@ export default function SsoLoginPage() {
             );
             window.location.assign(url);
         } catch (caught) {
+            const described = describeError(caught, {
+                action: "start single sign-on",
+                codeMessages: SSO_ERROR_MESSAGES,
+                fallback: "Unable to start single sign-on. Try again.",
+            });
             setError(
-                knownErrorCodeMessage(
-                    caught,
-                    SSO_ERROR_MESSAGES,
-                    "Unable to start single sign-on. Please try again.",
-                ),
+                described.kind === "rate_limited"
+                    ? {
+                          ...described,
+                          message:
+                              "Too many attempts. Wait a moment and try again.",
+                      }
+                    : described,
             );
             setLoading(false);
         }
+    };
+
+    const handleSubmit = async (event: React.FormEvent) => {
+        event.preventDefault();
+        await startSsoFlow();
     };
 
     return (
@@ -101,7 +116,28 @@ export default function SsoLoginPage() {
                                 role="alert"
                                 className="rounded bg-red-50 p-3 text-sm text-red-600"
                             >
-                                {error}
+                                {error.message}
+                                {error.retryable && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void startSsoFlow()}
+                                        disabled={loading}
+                                        className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                                    >
+                                        Retry
+                                    </button>
+                                )}
+                                {error.supportable && (
+                                    <a
+                                        href={supportMailtoFor(
+                                            error,
+                                            "Failed to start single sign-on.",
+                                        )}
+                                        className="ml-2 underline underline-offset-2"
+                                    >
+                                        Contact support
+                                    </a>
+                                )}
                             </div>
                         )}
 

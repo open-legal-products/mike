@@ -65,6 +65,7 @@ vi.mock("../../../middleware/auth", () => ({
 }));
 
 import { authRouter } from "../auth.routes";
+import { signupSchema } from "../auth.service";
 
 const app = express();
 app.use(express.json());
@@ -310,6 +311,92 @@ describe("auth routes", () => {
       expect(response.status).toBe(500);
       expect(response.text).not.toContain("private diagnostics");
     }
+  });
+
+  it("translates a provider login failure into our own sentence", async () => {
+    authClient.auth.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: {
+        status: 400,
+        code: "invalid_credentials",
+        message: "Invalid login credentials (gotrue internal id 42)",
+      },
+    });
+
+    const response = await request(app)
+      .post("/auth/login")
+      .set("Origin", origin)
+      .send({ email: user.email, password: "wrong horse" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "invalid_credentials",
+      detail: "The email or password is incorrect.",
+    });
+    expect(response.text).not.toContain("gotrue internal");
+  });
+
+  it("rejects an over-long password with a specific message before calling the provider", async () => {
+    const response = await request(app)
+      .post("/auth/signup")
+      .set("Origin", origin)
+      .send({ email: user.email, password: "x".repeat(73) });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_long",
+      detail: "Password must be at most 72 UTF-8 bytes. Accented characters and emoji can use more than one byte.",
+    });
+    expect(authClient.auth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("counts bcrypt's 72-byte limit in bytes, not characters", async () => {
+    // 36 two-byte characters: 36 long by String.length, 72 bytes to bcrypt,
+    // so this one is legal. A `.max(72)` on characters would instead let
+    // its 37-character sibling through for GoTrue to reject.
+    const atTheLimit = "é".repeat(36);
+    const overTheLimit = "é".repeat(37);
+    expect(atTheLimit.length).toBe(36);
+    expect(signupSchema.safeParse({ email: user.email, password: atTheLimit }).success).toBe(true);
+
+    const response = await request(app)
+      .post("/auth/signup")
+      .set("Origin", origin)
+      .send({ email: user.email, password: overTheLimit });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_long",
+      detail: "Password must be at most 72 UTF-8 bytes. Accented characters and emoji can use more than one byte.",
+    });
+    expect(authClient.auth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("enforces the sign-up minimum length on the API, not only in the form", async () => {
+    const response = await request(app)
+      .post("/auth/signup")
+      .set("Origin", origin)
+      .send({ email: user.email, password: "eightch8" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_short",
+      detail: "Password must be at least 10 characters.",
+    });
+    expect(authClient.auth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("names a too-short password on password update", async () => {
+    const response = await request(app)
+      .patch("/auth/password")
+      .set("Origin", origin)
+      .send({ password: "short" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_short",
+      detail: "Password must be at least 10 characters.",
+    });
   });
 
   it("does not reveal whether a password-reset email exists", async () => {
