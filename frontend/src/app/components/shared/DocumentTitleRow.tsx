@@ -40,7 +40,7 @@ export function DocumentTitleRow({
     const versionNumber = document.version_number;
 
     return (
-        <div className="relative z-10 shrink-0 px-3 py-2 shadow-sm">
+        <div className="shrink-0 px-3 py-2">
             {/* Centred against the actions: they are taller than the title,
                 so top-aligning left the title floating above them. */}
             <div className="flex items-center gap-3">
