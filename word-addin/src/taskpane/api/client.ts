@@ -11,7 +11,7 @@ import type {
 // parity tests) never pull this module, and its runtime imports, into
 // the web app's type-check graph.
 export type { ApiKeyStatus } from "../types";
-import { describeNetworkFailure } from "../lib/networkError";
+import { networkFailure } from "../lib/networkError";
 import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
 import {
@@ -50,16 +50,97 @@ const devLog = (...args: Parameters<typeof console.log>): void => {
   if (isDev) console.log(...args);
 };
 
-class MikeApiError extends Error {
+/**
+ * A non-ok HTTP response. Carries everything the UI needs to classify the
+ * failure (`status`, `code`) and everything support needs to find it in the
+ * logs (`requestId`). `message` is only ever safe-to-show text: the
+ * backend's own 4xx `detail`, or a generic line for 5xx.
+ */
+export class MikeApiError extends Error {
   readonly status: number;
   readonly code: string | null;
+  readonly requestId: string | null;
 
-  constructor(args: { message: string; status: number; code?: string | null }) {
+  constructor(args: {
+    message: string;
+    status: number;
+    code?: string | null;
+    requestId?: string | null;
+  }) {
     super(args.message);
     this.name = "MikeApiError";
     this.status = args.status;
     this.code = args.code ?? null;
+    this.requestId = args.requestId ?? null;
   }
+}
+
+/**
+ * A 5xx body is a stack trace, a proxy's HTML, or a provider's raw
+ * complaint — never something written for a user. Replace it wholesale.
+ */
+const SERVER_ERROR_MESSAGE = "Something went wrong on our side. Try again.";
+
+export interface ParsedApiError {
+  message: string;
+  code: string | null;
+  requestId: string | null;
+}
+
+/**
+ * Turn a non-ok response body into the fields the UI shows. Pure, so the
+ * rules ("never echo a 5xx body", "keep the backend's 4xx detail") can be
+ * checked without a server.
+ *
+ * `message` falls back to `API error: <status>`, which `describeError`
+ * recognises as "no usable text" and replaces with its own wording.
+ */
+export function parseApiErrorBody(args: {
+  status: number;
+  body: string;
+  requestId?: string | null;
+}): ParsedApiError {
+  const generic = `API error: ${args.status}`;
+  let code: string | null = null;
+  let requestId = args.requestId ?? null;
+  let detail: string | null = null;
+
+  try {
+    const parsed = JSON.parse(args.body) as {
+      detail?: unknown;
+      code?: unknown;
+      request_id?: unknown;
+      error?: { code?: unknown; message?: unknown; request_id?: unknown };
+    };
+    code =
+      typeof parsed.error?.code === "string"
+        ? parsed.error.code
+        : typeof parsed.code === "string"
+          ? parsed.code
+          : null;
+    requestId =
+      (typeof parsed.request_id === "string" ? parsed.request_id : null) ??
+      (typeof parsed.error?.request_id === "string"
+        ? parsed.error.request_id
+        : null) ??
+      requestId;
+    detail =
+      typeof parsed.error?.message === "string" && parsed.error.message
+        ? parsed.error.message
+        : typeof parsed.detail === "string" && parsed.detail
+          ? parsed.detail
+          : null;
+  } catch {
+    // A non-JSON body is a proxy or host page, never user-facing copy.
+    detail = null;
+  }
+
+  return {
+    // 4xx detail is written for users by the backend; 5xx text never is.
+    message: args.status >= 500 ? SERVER_ERROR_MESSAGE : (detail ?? generic),
+    code,
+    requestId,
+  };
 }
 
 let clientConfig: ResolvedMikeApiClientConfig = {
@@ -109,87 +190,52 @@ async function sendRequest(
       throw error;
     }
     reportNetworkFailure(error, { method: init.method ?? "GET", url });
-    throw new Error(
-      describeNetworkFailure(error, {
-        method: init.method ?? "GET",
-        url,
-      }),
-      { cause: error },
-    );
+    throw networkFailure(error, { method: init.method ?? "GET", url });
   }
 }
 
-async function toApiError(
+/**
+ * Build the error for a non-ok response. Exported so every hand-rolled
+ * fetch in the add-in (auth, word-chat) produces the same shape as the
+ * typed client instead of a bespoke `new Error(status + body)`.
+ */
+export async function responseError(
   response: Response,
-  path: string,
+  path?: string,
   method = "GET",
 ): Promise<MikeApiError> {
-  const text = await response.text();
-  try {
-    const parsed = JSON.parse(text) as {
-      detail?: unknown;
-      code?: unknown;
-      request_id?: unknown;
-      error?: { code?: unknown; message?: unknown };
-    };
-    const code =
-      typeof parsed.error?.code === "string"
-        ? parsed.error.code
-        : typeof parsed.code === "string"
-          ? parsed.code
-          : null;
-    const message =
-      typeof parsed.error?.message === "string" && parsed.error.message
-        ? parsed.error.message
-        : typeof parsed.detail === "string" && parsed.detail
-          ? parsed.detail
-          : `API error: ${response.status}`;
-    devLog("[mike-api] non-ok response", {
-      path,
+  const text = await response.text().catch(() => "");
+  const parsed = parseApiErrorBody({
+    status: response.status,
+    body: text,
+    requestId: response.headers.get("x-request-id"),
+  });
+  devLog("[mike-api] non-ok response", {
+    path: path ?? response.url,
+    status: response.status,
+    code: parsed.code,
+    requestId: parsed.requestId,
+    bodyPreview: text.slice(0, 200),
+  });
+  const apiError = new MikeApiError({
+    status: response.status,
+    code: parsed.code,
+    requestId: parsed.requestId,
+    message: parsed.message,
+  });
+  // A 5xx is the server's fault and worth an event; 4xx are user-facing
+  // outcomes (validation, permission) and stay out of Sentry.
+  if (response.status >= 500) {
+    reportApiFailure({
+      path: path ?? response.url,
+      method,
       status: response.status,
-      code,
-      detail: parsed.detail,
+      code: parsed.code,
+      requestId: parsed.requestId,
+      error: apiError,
     });
-    const apiError = new MikeApiError({
-      status: response.status,
-      code,
-      message,
-    });
-    if (response.status >= 500) {
-      reportApiFailure({
-        path,
-        method,
-        status: response.status,
-        code,
-        requestId:
-          typeof parsed.request_id === "string"
-            ? parsed.request_id
-            : response.headers.get("x-request-id"),
-        error: apiError,
-      });
-    }
-    return apiError;
-  } catch {
-    devLog("[mike-api] non-ok non-json response", {
-      path,
-      status: response.status,
-      bodyPreview: text.slice(0, 200),
-    });
-    const apiError = new MikeApiError({
-      status: response.status,
-      message: text || `API error: ${response.status}`,
-    });
-    if (response.status >= 500) {
-      reportApiFailure({
-        path,
-        method,
-        status: response.status,
-        requestId: response.headers.get("x-request-id"),
-        error: apiError,
-      });
-    }
-    return apiError;
   }
+  return apiError;
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -206,7 +252,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw await toApiError(response, path, restInit.method ?? "GET");
+    throw await responseError(response, path, restInit.method ?? "GET");
   }
   if (
     response.status === 204 ||

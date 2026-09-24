@@ -71,7 +71,8 @@ describe("Word API transport cancellation", () => {
             signal: new AbortController().signal,
         })).rejects.toMatchObject({
             cause: error,
-            message: expect.stringContaining("POST"),
+            message: expect.stringContaining("couldn't reach the server"),
+            request: { method: "POST", url: "https://api.example.test/word-chat" },
         });
 
         expect(reportNetworkFailure).toHaveBeenCalledExactlyOnceWith(error, {

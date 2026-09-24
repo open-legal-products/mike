@@ -23,6 +23,7 @@ import { useWordDocumentIdentity } from "./lib/wordDocumentIdentity";
 import { clearLocalWordChats } from "./lib/localWordChats";
 import type { ReasoningLevel } from "./lib/wordChatTypes";
 import { setReportingUser } from "./lib/errorReporting";
+import { refreshSession } from "./auth/session";
 
 export default function App(): React.ReactElement {
   const { user, loading, error, logout } = useAuth();
@@ -234,10 +235,17 @@ export default function App(): React.ReactElement {
       <div className="absolute inset-x-3 top-14 z-30">
         {error && (
           <div
-            className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 shadow-sm"
+            className="mb-2 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 shadow-sm"
             role="alert"
           >
-            {error}
+            <span className="min-w-0 flex-1">{error}</span>
+            <button
+              type="button"
+              onClick={() => void refreshSession().catch(() => null)}
+              className="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium text-red-700 underline underline-offset-2 hover:text-red-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+            >
+              Retry
+            </button>
           </div>
         )}
         <ApiKeyBanner />
