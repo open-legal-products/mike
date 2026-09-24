@@ -7,6 +7,8 @@ export interface DocxSurface {
     revealText?: (text: string) => boolean;
     /** Select and reveal a citation using the editor's native selection. */
     selectText?: (text: string) => boolean;
+    /** Clear the citation selection without removing document content. */
+    clearTextSelection?: () => void;
     exportDocx?: () => Promise<ArrayBuffer>;
 }
 

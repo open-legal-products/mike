@@ -7,6 +7,7 @@ import { DocxView } from "./DocxView";
 
 const exportDocx = vi.hoisted(() => vi.fn());
 const selectText = vi.hoisted(() => vi.fn());
+const clearTextSelection = vi.hoisted(() => vi.fn());
 
 vi.mock("@/app/lib/authEvents", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("@/app/lib/mikeApi", () => ({ getDocumentFileUrl: (id: string) => "/api/document/" + id }));
@@ -20,7 +21,7 @@ function MockRenderer({ bytes, mode, onChange, onReady, onError, onSave }: DocxR
     const revision = new Uint8Array(bytes)[0];
     useEffect(() => {
         if (revision === 99) onError();
-        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current, exportDocx, selectText });
+        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current, exportDocx, selectText, clearTextSelection });
     }, [bytes, onReady, onError, revision]);
     return (
         <div ref={scroll} data-testid="renderer-scroll" data-mode={mode}>
@@ -40,6 +41,7 @@ const originalScrollTo = HTMLElement.prototype.scrollTo;
 beforeEach(() => {
     exportDocx.mockReset().mockResolvedValue(new Uint8Array([42]).buffer);
     selectText.mockReset().mockReturnValue(true);
+    clearTextSelection.mockReset();
     vi.mocked(authenticatedFetch).mockReset();
     vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([1])));
     HTMLElement.prototype.scrollTo = vi.fn(function (this: HTMLElement, options?: ScrollToOptions | number) {
@@ -117,6 +119,10 @@ it("selects one native citation range and leaves selection alone during repaints
     expect(selectText).not.toHaveBeenCalled();
     rerender(view(1));
     await waitFor(() => expect(selectText).toHaveBeenLastCalledWith("Payment in thirty days."));
+    expect(clearTextSelection).not.toHaveBeenCalled();
+    rerender(<DocxView documentId="native-selection" cacheBytes={false} defaultMode="edit" quotes={[]} />);
+    await waitFor(() => expect(clearTextSelection).toHaveBeenCalledOnce());
+    expect(screen.getByText("EigenPal preview")).toBeVisible();
 });
 
 it("does not show old bytes while switching documents", async () => {

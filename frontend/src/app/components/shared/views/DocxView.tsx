@@ -77,6 +77,7 @@ function focusHighlights(surface: DocxSurface, props: Props, scrollToMatch = tru
                 if (text && surface.selectText?.(text)) return true;
             }
         }
+        surface.clearTextSelection?.();
         return false;
     }
     const offset = anchor.getBoundingClientRect().top - scroll.getBoundingClientRect().top

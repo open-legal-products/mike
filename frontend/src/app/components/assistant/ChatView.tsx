@@ -1082,9 +1082,13 @@ export function ChatView({
                                                         activeCitation={
                                                             activeCitation
                                                         }
-                                                        onCitationClick={(citation) =>
-                                                            void openCitation(citation)
-                                                        }
+                                                        onCitationClick={(citation) => {
+                                                            if (activeCitation === citation && activeTab) {
+                                                                handleCloseAnnotation(activeTab.id);
+                                                            } else {
+                                                                void openCitation(citation);
+                                                            }
+                                                        }}
                                                         onOpenCitationSource={(
                                                             citation,
                                                         ) =>

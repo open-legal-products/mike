@@ -815,6 +815,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     };
 
     const handleCitationClick = (citation: Citation) => {
+        if (activeCitation === citation) {
+            setActiveCitation(null);
+            setActiveQuotes(null);
+            return;
+        }
         if (citation.kind === "case") return;
         openTab(
             citation.document_id,

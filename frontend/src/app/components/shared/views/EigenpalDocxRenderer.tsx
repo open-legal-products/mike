@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { DocxEditor } from "@docx-editor.dev/react";
+import type { TextMatch } from "@docx-editor.dev/core";
 import { packagedFonts } from "@docx-editor.dev/fonts";
 import "@docx-editor.dev/core/styles/editor.css";
 import styles from "./EigenpalDocxRenderer.module.css";
@@ -12,6 +13,7 @@ const fonts = packagedFonts();
 
 export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, onReady, onError }: DocxRendererProps) {
     const host = useRef<HTMLDivElement>(null);
+    const citationMatch = useRef<TextMatch | null>(null);
     const unsubscribe = useRef<(() => void) | undefined>(undefined);
     const document = useMemo(() => new Uint8Array(bytes), [bytes]);
     useEffect(() => () => unsubscribe.current?.(), []);
@@ -55,7 +57,18 @@ export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, 
                         },
                         selectText: (text) => {
                             const match = editor.findMatches(text)[0];
-                            return match ? editor.selectMatch(match).ok : false;
+                            if (!match || !editor.selectMatch(match).ok) return false;
+                            citationMatch.current = match;
+                            return true;
+                        },
+                        clearTextSelection: () => {
+                            const match = citationMatch.current;
+                            citationMatch.current = null;
+                            // Leave a subsequent user selection alone. Collapse only
+                            // the citation range that this viewer selected.
+                            if (match && editor.query({ type: "selectedText" }) === match.text) {
+                                editor.selectMatch({ ...match, length: 0 });
+                            }
                         },
                     });
                     else onError();

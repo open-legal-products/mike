@@ -45,8 +45,8 @@ vi.mock("./ChatAccessModal", () => ({ ChatAccessModal: () => null }));
 // not this file's.
 vi.mock("./AssistantSidePanel", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./AssistantSidePanel")>()),
-    AssistantSidePanel: ({ tabs }: { tabs: { id: string }[] }) => (
-        <div data-testid="panel-tabs">{tabs.length}</div>
+    AssistantSidePanel: ({ tabs }: { tabs: { id: string; kind: string }[] }) => (
+        <div data-testid="panel-tabs" data-kind={tabs[0]?.kind}>{tabs.length}</div>
     ),
 }));
 
@@ -55,10 +55,12 @@ vi.mock("./AssistantSidePanel", async (importOriginal) => ({
 vi.mock("./AssistantMessage", () => ({
     AssistantMessage: ({
         citations,
+        activeCitation,
         onCitationClick,
         onOpenDocument,
     }: {
         citations?: Citation[];
+        activeCitation?: Citation | null;
         onCitationClick?: (citation: Citation) => void;
         onOpenDocument?: (args: {
             documentId: string;
@@ -70,6 +72,7 @@ vi.mock("./AssistantMessage", () => ({
         <>
             <button
                 type="button"
+                aria-pressed={activeCitation === citations?.[0]}
                 onClick={() => citations?.[0] && onCitationClick?.(citations[0])}
             >
                 citation pill
@@ -260,7 +263,7 @@ describe("ChatView citation on a chat shared without its documents", () => {
         ).toBeInTheDocument();
     });
 
-    it("opens the citation normally when the versions are readable", async () => {
+    it.each([null, "project-1"])("toggles citations off and back on in chat with project %s", async (projectId) => {
         listDocumentVersions.mockResolvedValue({
             current_version_id: "v1",
             versions: [
@@ -273,11 +276,22 @@ describe("ChatView citation on a chat shared without its documents", () => {
                 },
             ],
         });
-        renderView();
+        renderView({ project_id: projectId });
 
         fireEvent.click(screen.getByRole("button", { name: "citation pill" }));
 
         expect(await screen.findByTestId("panel-tabs")).toHaveTextContent("1");
         expect(screen.queryByText("Document not shared")).not.toBeInTheDocument();
+        const pill = screen.getByRole("button", { name: "citation pill" });
+        expect(pill).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "citation");
+        fireEvent.click(pill);
+        expect(pill).toHaveAttribute("aria-pressed", "false");
+        expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "document");
+        expect(screen.getByTestId("panel-tabs")).toHaveTextContent("1");
+        expect(listDocumentVersions).toHaveBeenCalledTimes(1);
+        fireEvent.click(pill);
+        await waitFor(() => expect(pill).toHaveAttribute("aria-pressed", "true"));
+        expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "citation");
     });
 });

@@ -187,7 +187,7 @@ vi.mock("@/app/components/assistant/AssistantMessage", () => ({
     ),
 }));
 vi.mock("@/app/components/shared/views/DocxView", () => ({
-    DocxView: () => <div>Draft viewer</div>,
+    DocxView: ({ quotes }: { quotes?: { quote: string }[] }) => <div data-testid="draft-viewer" data-quotes={JSON.stringify(quotes ?? [])}>Draft viewer</div>,
 }));
 vi.mock("@/app/components/shared/views/PdfView", () => ({
     PdfView: () => null,
@@ -501,6 +501,16 @@ describe("project chat workspace lifecycle", () => {
         expect(pill).toHaveAttribute("data-active", "false");
         fireEvent.click(pill);
         expect(pill).toHaveAttribute("data-active", "true");
+        expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language"));
+
+        fireEvent.click(pill);
+        expect(pill).toHaveAttribute("data-active", "false");
+        expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", "[]");
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+
+        fireEvent.click(pill);
+        expect(pill).toHaveAttribute("data-active", "true");
+        expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language"));
 
         fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
         expect(pill).toHaveAttribute("data-active", "false");
