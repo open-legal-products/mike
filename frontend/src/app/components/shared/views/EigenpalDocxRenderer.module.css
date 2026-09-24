@@ -1,13 +1,14 @@
 /* EigenPal 2.21.1 has no title-row or frame-border option. Scope these
    overrides to its packaged chrome; Mike owns the filename and file actions. */
 .host {
-    /* Capture Mike's neutral token before EigenPal shadows --muted with HSL. */
-    --mike-docx-toolbar-background: var(--muted);
+    /* Capture Mike's focus token before EigenPal shadows it with HSL. */
     --mike-docx-focus-color: var(--ring);
 }
 
 .host :global(.docx-toolbar) {
-    background: var(--mike-docx-toolbar-background);
+    background: var(--liquid-glass-background-flat);
+    border: 1px solid var(--liquid-glass-border-flat);
+    box-shadow: var(--liquid-glass-shadow-flat);
 }
 
 .host :global(.docx-editor) > div:has(:global(.docx-toolbar)) {
