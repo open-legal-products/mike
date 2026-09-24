@@ -3,11 +3,11 @@ import { DocxView } from "./DocxView";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 
-const meta = { title: "Documents / DOCX comparison" };
+const meta = { title: "Documents / DOCX editor" };
 export default meta;
 
-/** Local-only renderer comparison: generated sample or a file selected on this machine. */
-export function CompareRenderers() {
+/** Local-only DOCX editor: generated sample or a file selected on this machine. */
+export function EditDocument() {
     const [url, setUrl] = useState<string | null>(null);
     const [narrow, setNarrow] = useState(false);
     const [quote, setQuote] = useState(false);
@@ -23,10 +23,10 @@ export function CompareRenderers() {
         }) => {
             const doc = new Document({
                 styles: { default: { document: { run: { font: "Times New Roman", size: 24 } } } },
-                footnotes: { "1": { children: [new Paragraph("This is a synthetic footnote for rendering comparison.")] } },
+                footnotes: { "1": { children: [new Paragraph("This is a synthetic footnote for editor testing.")] } },
                 sections: [{
                     headers: { default: new Header({ children: [new Paragraph("MIKE — SYNTHETIC DOCUMENT")] }) },
-                    footers: { default: new Footer({ children: [new Paragraph("Local renderer comparison")] }) },
+                    footers: { default: new Footer({ children: [new Paragraph("Local editor sample")] }) },
                     children: [
                         new Paragraph({ text: "Sample services agreement", heading: HeadingLevel.TITLE }),
                         new Paragraph({ children: [new TextRun("Payment is due within thirty days."), new FootnoteReferenceRun(1)] }),

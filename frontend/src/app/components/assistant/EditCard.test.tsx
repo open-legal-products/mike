@@ -20,22 +20,20 @@ const annotation = {
 };
 
 describe("EditCard", () => {
-    it.each(["eigenpal", "casual"])("resolves every native revision run and reverts on failure (%s)", (engine) => {
+    it("resolves every SuperDoc revision run and reverts on failure", () => {
         const { container } = render(
             <div data-document-id="document-1"><div className="docx-view-container">
-                {["first", "second"].map((text) => <span key={text} data-revision-id="8"
-                    data-revision-kind={engine === "eigenpal" ? "insert" : undefined}
-                    className={engine === "casual" ? "docx-insertion" : undefined}>{text}</span>)}
-                <span data-revision-id="7" data-revision-kind={engine === "eigenpal" ? "delete" : undefined}
-                    className={engine === "casual" ? "docx-deletion" : undefined}>old text</span>
+                {["first", "second"].map((text) => <span key={text}
+                    data-track-change-kind="insert" data-track-change-ids="imported:8">{text}</span>)}
+                <span data-track-change-kind="delete" data-track-change-ids="imported:7">old text</span>
             </div></div>,
         );
         const revert = applyOptimisticResolution({ ...annotation, ins_w_id: "8", del_w_id: "7" }, "reject");
         expect(container.querySelectorAll(".docx-edit-hidden")).toHaveLength(2);
-        expect(container.querySelector('[data-revision-id="7"]')).toHaveClass("docx-edit-kept");
+        expect(container.querySelector('[data-track-change-ids="imported:7"]')).toHaveClass("docx-edit-kept");
         revert();
         expect(container.querySelectorAll(".docx-edit-hidden, .docx-edit-kept")).toHaveLength(0);
-        expect(container.querySelector('[data-revision-id="8"]')).not.toHaveStyle({ display: "none" });
+        expect(container.querySelector('[data-track-change-ids="imported:8"]')).not.toHaveStyle({ display: "none" });
     });
     beforeEach(() => {
         resolveDocumentEdit.mockReset();

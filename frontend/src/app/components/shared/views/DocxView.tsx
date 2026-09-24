@@ -9,14 +9,9 @@ import type { DocxMode, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { docxRevisionElements } from "./docxRevisionElements";
 
-const EigenpalDocxRenderer = lazy(() => import("./EigenpalDocxRenderer"));
-const CasualDocxRenderer = lazy(() => import("./CasualDocxRenderer"));
-const SuperdocDocxRenderer = lazy(() => import("./SuperdocDocxRenderer"));
-const renderers = { eigenpal: EigenpalDocxRenderer, casual: CasualDocxRenderer, superdoc: SuperdocDocxRenderer };
-type Engine = keyof typeof renderers;
+const DocxRenderer = lazy(() => import("./SuperdocDocxRenderer"));
 const RENDER_ERROR = "This document could not be displayed. Please download it to view it.";
 const bufferIds = new WeakMap<ArrayBuffer, number>();
 let nextBufferId = 0;
@@ -98,19 +93,16 @@ function DocxViewContent(props: Props) {
         documentId, versionId, displayUrl, refetchKey, cacheBytes = true,
         warning, onWarningDismiss, rounded = true,
     } = props;
-    const [engine, setEngine] = useState<Engine>("eigenpal");
     const [mode, setMode] = useState<DocxMode>(props.defaultMode ?? "view");
-    const [pendingEngine, setPendingEngine] = useState<Engine | null>(null);
     const [dirtyKey, setDirtyKey] = useState<string | null>(null);
     const [downloading, setDownloading] = useState(false);
     const [downloadError, setDownloadError] = useState<string | null>(null);
     const editSequence = useRef(0);
     const { bytes, loading, error } = useFetchDocxBytes(documentId, versionId, refetchKey, displayUrl, cacheBytes);
-    const renderKey = bytes ? engine + bufferId(bytes) : null;
+    const renderKey = bytes ? String(bufferId(bytes)) : null;
     const dirty = dirtyKey !== null && dirtyKey === renderKey;
     const [readyKey, setReadyKey] = useState<string | null>(null);
     const [failedKey, setFailedKey] = useState<string | null>(null);
-    const DocxRenderer = renderers[engine];
     const surfaceRef = useRef<DocxSurface | null>(null);
     const lastScrollTop = useRef(props.initialScrollTop ?? 0);
     const propsRef = useRef(props);
@@ -150,8 +142,8 @@ function DocxViewContent(props: Props) {
         surfaceRef.current = surface;
         setReadyKey(renderKey);
         setFailedKey(null);
-        // Casual republishes its DOM after edits; don't move the caret's
-        // viewport back to an earlier citation on every keystroke.
+        // Repeated ready notifications must not move the caret viewport
+        // back to an earlier citation after an edit.
         if (!firstMount) return;
         if (!focusSurface(surface)) {
             surface.scroll.scrollTop = lastScrollTop.current;
@@ -204,8 +196,8 @@ function DocxViewContent(props: Props) {
         const observer = new MutationObserver((records) => {
             const repainted = records.some((record) => Array.from(record.addedNodes).some(
                 (node) => node instanceof Element && (
-                    node.matches(".docx-page, .layout-page, .layout-line, .superdoc-page, .superdoc-line")
-                    || node.querySelector(".layout-line, .superdoc-line")
+                    node.matches(".superdoc-page, .superdoc-line")
+                    || node.querySelector(".superdoc-line")
                 ),
             ));
             if (!repainted) return;
@@ -219,27 +211,15 @@ function DocxViewContent(props: Props) {
     const renderError = bytes && failedKey === renderKey ? RENDER_ERROR : null;
     const message = error || renderError;
     const pending = !message && (loading && !bytes || bytes && readyKey !== renderKey);
-    const switchEngine = (next: Engine) => {
-        if (engine === next) return;
-        if (dirty) setPendingEngine(next);
-        else setEngine(next);
-    };
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
-                <div role="group" aria-label="DOCX rendering engine" className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Renderer</span>
-                    <TabPillButtonUI active={engine === "eigenpal"} disabled={downloading} onClick={() => switchEngine("eigenpal")}>EigenPal</TabPillButtonUI>
-                    <TabPillButtonUI active={engine === "casual"} disabled={downloading} onClick={() => switchEngine("casual")}>Casual Docs</TabPillButtonUI>
-                    <TabPillButtonUI active={engine === "superdoc"} disabled={downloading} onClick={() => switchEngine("superdoc")}>SuperDoc</TabPillButtonUI>
-                </div>
                 <div role="group" aria-label="DOCX mode" className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">Mode</span>
                     <TabPillButtonUI active={mode === "view"} onClick={() => setMode("view")}>View</TabPillButtonUI>
                     <TabPillButtonUI active={mode === "edit"} onClick={() => setMode("edit")}>Edit</TabPillButtonUI>
                 </div>
                 {(mode === "edit" || dirty) && <PillButtonUI tone="white" size="sm" disabled={!!pending || !!message || downloading} onClick={() => void download()}>Download DOCX</PillButtonUI>}
-                {engine === "eigenpal" && <span className="text-xs text-muted-foreground">Deleted text is hidden. Use Casual Docs to view redlines.</span>}
                 {(mode === "edit" || dirty) && <span className="text-xs text-muted-foreground">{dirty ? "Unsaved local edits. " : ""}Download to keep edits before closing or switching documents.</span>}
                 {downloadError && <span role="alert" className="text-xs text-destructive">{downloadError}</span>}
             </div>
@@ -280,14 +260,6 @@ function DocxViewContent(props: Props) {
                     )}
                 </div>
             </div>
-            <ConfirmPopup open={pendingEngine !== null} title="Discard local edits?"
-                message="Switching renderers reloads the original document. Download your edited DOCX first to keep it."
-                confirmLabel="Discard and switch" cancelLabel="Keep editing" confirmVariant="danger"
-                onCancel={() => setPendingEngine(null)} onConfirm={() => {
-                    if (pendingEngine) setEngine(pendingEngine);
-                    setDirtyKey(null);
-                    setPendingEngine(null);
-                }} />
         </div>
     );
 }

@@ -9,17 +9,11 @@ const exportDocx = vi.hoisted(() => vi.fn());
 
 vi.mock("@/app/lib/authEvents", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("@/app/lib/mikeApi", () => ({ getDocumentFileUrl: (id: string) => "/api/document/" + id }));
-vi.mock("./EigenpalDocxRenderer", () => ({
-    default: (props: DocxRendererProps) => <MockRenderer {...props} engine="EigenPal" />,
-}));
-vi.mock("./CasualDocxRenderer", () => ({
-    default: (props: DocxRendererProps) => <MockRenderer {...props} engine="Casual Docs" />,
-}));
 vi.mock("./SuperdocDocxRenderer", () => ({
-    default: (props: DocxRendererProps) => <MockRenderer {...props} engine="SuperDoc" />,
+    default: (props: DocxRendererProps) => <MockRenderer {...props} />,
 }));
 
-function MockRenderer({ bytes, mode, onChange, onReady, onError, engine }: DocxRendererProps & { engine: string }) {
+function MockRenderer({ bytes, mode, onChange, onReady, onError }: DocxRendererProps) {
     const scroll = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const revision = new Uint8Array(bytes)[0];
@@ -31,10 +25,10 @@ function MockRenderer({ bytes, mode, onChange, onReady, onError, engine }: DocxR
         <div ref={scroll} data-testid="renderer-scroll" data-mode={mode}>
             {mode === "edit" && <div role="toolbar" aria-label="Document formatting"><button onClick={onChange}>Change document</button></div>}
             <div ref={content}>
-                <p>{engine} preview</p><p>Document revision {revision}</p>
+                <p>SuperDoc preview</p><p>Document revision {revision}</p>
                 <p>Payment in thirty days.</p><p>Confidential information.</p>
-                <span className="docx-insertion" data-revision-kind="insert" data-revision-id="7">Repeated edit</span>
-                <span className="docx-insertion" data-revision-kind="insert" data-revision-id="8">Repeated edit</span>
+                <span data-track-change-kind="insert" data-track-change-ids="imported:7">Repeated edit</span>
+                <span data-track-change-kind="insert" data-track-change-ids="imported:8">Repeated edit</span>
             </div>
         </div>
     );
@@ -74,40 +68,27 @@ it("keeps the document visible during refresh, hides it on failure, and recovers
     expect(screen.queryByRole("alert")).toBeNull();
 });
 
-it("switches engines without fetching again and retains scroll position", async () => {
+it("opens SuperDoc without an engine selector and restores the document scroll position", async () => {
     const onScrollChange = vi.fn();
-    render(<DocxView documentId="switch" cacheBytes={false} onScrollChange={onScrollChange} />);
-    await screen.findByText("EigenPal preview");
+    render(<DocxView documentId="scroll" cacheBytes={false} initialScrollTop={240} onScrollChange={onScrollChange} />);
+    await screen.findByText("SuperDoc preview");
+    expect(screen.queryByRole("group", { name: "DOCX rendering engine" })).toBeNull();
     const scroll = screen.getByTestId("renderer-scroll");
-    scroll.scrollTop = 240;
+    expect(scroll.scrollTop).toBe(240);
+    scroll.scrollTop = 320;
     fireEvent.scroll(scroll);
-    await waitFor(() => expect(onScrollChange).toHaveBeenCalledWith(240));
-    fireEvent.click(screen.getByRole("button", { name: "Casual Docs" }));
-    expect(await screen.findByText("Casual Docs preview")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Casual Docs" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByTestId("renderer-scroll").scrollTop).toBe(240);
-    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "SuperDoc" }));
-    expect(await screen.findByText("SuperDoc preview")).toBeVisible();
-    expect(screen.getByRole("button", { name: "SuperDoc" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByTestId("renderer-scroll").scrollTop).toBe(240);
-    fireEvent.click(screen.getByRole("button", { name: "EigenPal" }));
-    expect(await screen.findByText("EigenPal preview")).toBeVisible();
+    await waitFor(() => expect(onScrollChange).toHaveBeenCalledWith(320));
     expect(authenticatedFetch).toHaveBeenCalledTimes(1);
 });
 
-it("retains multiple citation highlights and uses native revision IDs after switching", async () => {
+it("retains multiple citation highlights and uses native revision IDs", async () => {
     const { container } = render(<DocxView documentId="quotes" cacheBytes={false}
         quotes={[{ quote: "Payment in thirty days." }, { quote: "Confidential information." }]}
         highlightEdit={{ key: "edit-8", ins_w_id: "8", inserted_text: "Repeated edit" }} />);
-    await screen.findByText("EigenPal preview");
+    await screen.findByText("SuperDoc preview");
     expect(container.querySelectorAll(".docx-text-highlight")).toHaveLength(2);
-    expect(container.querySelector('[data-revision-id="8"]')).toHaveClass("docx-edit-flash");
-    expect(container.querySelector('[data-revision-id="7"]')).not.toHaveClass("docx-edit-flash");
-    fireEvent.click(screen.getByRole("button", { name: "Casual Docs" }));
-    await screen.findByText("Casual Docs preview");
-    expect(container.querySelectorAll(".docx-text-highlight")).toHaveLength(2);
-    expect(container.querySelector('[data-revision-id="8"]')).toHaveClass("docx-edit-flash");
+    expect(container.querySelector('[data-track-change-ids="imported:8"]')).toHaveClass("docx-edit-flash");
+    expect(container.querySelector('[data-track-change-ids="imported:7"]')).not.toHaveClass("docx-edit-flash");
 });
 
 it("does not show old bytes while switching documents", async () => {
@@ -121,18 +102,16 @@ it("does not show old bytes while switching documents", async () => {
     expect(await screen.findByText("Document revision 2")).toBeVisible();
 });
 
-it.each(["EigenPal", "Casual Docs", "SuperDoc"])("supports %s edit and view modes without remounting the document", async (engine) => {
-    const { rerender } = render(<DocxView documentId={`modes-${engine}`} cacheBytes={false} defaultMode="edit" />);
-    await screen.findByText("EigenPal preview");
-    fireEvent.click(screen.getByRole("button", { name: engine }));
-    await screen.findByText(`${engine} preview`);
+it("supports edit and view modes without remounting the document", async () => {
+    const { rerender } = render(<DocxView documentId="modes" cacheBytes={false} defaultMode="edit" />);
+    await screen.findByText("SuperDoc preview");
     const surface = screen.getByTestId("renderer-scroll");
     expect(surface).toHaveAttribute("data-mode", "edit");
     expect(screen.getByRole("toolbar", { name: "Document formatting" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     // Parent rerenders do not override the reader's selection.
-    rerender(<DocxView documentId={`modes-${engine}`} cacheBytes={false} defaultMode="edit" />);
+    rerender(<DocxView documentId="modes" cacheBytes={false} defaultMode="edit" />);
     expect(surface).toHaveAttribute("data-mode", "view");
     expect(screen.queryByRole("toolbar")).toBeNull();
     expect(screen.getByRole("button", { name: "View" })).toHaveAttribute("aria-pressed", "true");
@@ -143,27 +122,13 @@ it.each(["EigenPal", "Casual Docs", "SuperDoc"])("supports %s edit and view mode
     expect(authenticatedFetch).toHaveBeenCalledTimes(1);
 });
 
-it("protects unsaved edits when switching renderers", async () => {
-    render(<DocxView documentId="dirty-switch" cacheBytes={false} defaultMode="edit" />);
-    await screen.findByText("EigenPal preview");
-    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
-    fireEvent.click(screen.getByRole("button", { name: "Casual Docs" }));
-    expect(screen.getByRole("dialog", { name: "Discard local edits?" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
-    expect(screen.getByText("EigenPal preview")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Casual Docs" }));
-    fireEvent.click(screen.getByRole("button", { name: "Discard and switch" }));
-    expect(await screen.findByText("Casual Docs preview")).toBeVisible();
-    expect(screen.getByRole("toolbar", { name: "Document formatting" })).toBeVisible();
-});
-
 it("keeps edits after a failed export and downloads the edited bytes on retry", async () => {
     const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:edited-document");
     const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     exportDocx.mockRejectedValueOnce(new Error("internal serializer details"));
     render(<DocxView documentId="export" filename="Agreement.docx" cacheBytes={false} defaultMode="edit" />);
-    await screen.findByText("EigenPal preview");
+    await screen.findByText("SuperDoc preview");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "Download DOCX" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Your edits are still open");
@@ -191,7 +156,7 @@ it("re-centers a citation after the engine restores scroll during page paint", a
     });
     render(<DocxView documentId="paint-settle" cacheBytes={false}
         quotes={[{ quote: "Payment in thirty days." }]} />);
-    await screen.findByText("EigenPal preview");
+    await screen.findByText("SuperDoc preview");
     await waitFor(() => expect(vi.mocked(HTMLElement.prototype.scrollTo).mock.calls.length).toBeGreaterThanOrEqual(3));
     expect(screen.getByTestId("renderer-scroll").scrollTop).toBe(0);
 });

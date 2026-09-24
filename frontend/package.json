@@ -25,11 +25,7 @@
     "dependencies": {
         "@aws-sdk/client-s3": "^3.1136.0",
         "@aws-sdk/s3-request-presigner": "^3.1136.0",
-        "@casualoffice/docs": "1.4.2",
         "@daypicker/react": "^10.0.1",
-        "@docx-editor.dev/core": "2.21.1",
-        "@docx-editor.dev/fonts": "2.21.1",
-        "@docx-editor.dev/react": "2.21.1",
         "@fortune-sheet/core": "1.0.4",
         "@fortune-sheet/react": "1.0.4",
         "@hocuspocus/provider": "2.15.3",
@@ -71,8 +67,6 @@
         "resend": "^6.28.1",
         "tailwind-merge": "^3.7.0",
         "tiptap-markdown": "^0.9.0",
-        "y-prosemirror": "1.3.7",
-        "y-websocket": "2.1.0",
         "yjs": "13.6.32"
     },
     "devDependencies": {

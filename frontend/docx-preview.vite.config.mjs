@@ -1,13 +1,9 @@
-// EigenPal's HarfBuzz loader uses top-level await. This local comparison
-// catalog targets the same modern browsers as the application.
-export default {
-    // The shared API client imports Next's Sentry adapter. Supply an empty
-    // browser environment in this standalone catalog, never host env values.
+// The standalone DOCX catalog targets the same modern browsers as the app.
+const config = {
+    // Supply an empty browser environment for Next's Sentry adapter.
     define: { "process.env": "{}" },
     build: { target: "esnext" },
-    optimizeDeps: {
-        // Preserve import.meta.url relative font assets during development.
-        exclude: ["@docx-editor.dev/fonts", "@docx-editor.dev/core", "@docx-editor.dev/react"],
-        esbuildOptions: { target: "esnext" },
-    },
+    optimizeDeps: { esbuildOptions: { target: "esnext" } },
 };
+
+export default config;
