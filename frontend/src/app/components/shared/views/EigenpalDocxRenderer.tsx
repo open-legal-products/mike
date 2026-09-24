@@ -50,8 +50,9 @@ export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, 
                     if (content && scroll) onReady({ content, scroll, exportDocx: () => editor.save(), revealText: (text) => {
                         const match = editor.findMatches(text)[0];
                         if (!match) return false;
-                        editor.selectMatch(match);
-                        return true;
+                        // Reveal virtualized text without adding a native selection over
+                        // Mike's citation highlight (which darkens selected words).
+                        return editor.scrollToBlock(match.blockId);
                     } });
                     else onError();
                 }}

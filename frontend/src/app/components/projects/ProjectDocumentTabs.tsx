@@ -265,7 +265,7 @@ export function ProjectDocumentTabs({
                                     }}
                                     data-active={isActive ? "true" : "false"}
                                     className={cn(
-                                        "document-tab group relative flex h-8 min-w-0 max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-lg pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                                        "document-tab group relative flex h-7 min-w-0 max-w-[220px] shrink-0 cursor-pointer select-none items-center gap-1.5 rounded-lg pl-3 pr-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
                                         isActive ? "z-20" : "z-10",
                                         tabs.length > 1 &&
                                             "cursor-grab active:cursor-grabbing",
@@ -334,7 +334,7 @@ export function ProjectDocumentTabs({
             {tabs.length > 0 && (
                 <div
                     aria-hidden="true"
-                    className="h-8 min-w-4 flex-1"
+                    className="h-7 min-w-4 flex-1"
                     onDragOver={(event) =>
                         dragOver(
                             event,
