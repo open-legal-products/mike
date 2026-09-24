@@ -5,6 +5,8 @@ export interface DocxSurface {
     scroll: HTMLElement;
     /** Materialize an off-screen match in engines that virtualize pages. */
     revealText?: (text: string) => boolean;
+    /** Select and reveal a citation using the editor's native selection. */
+    selectText?: (text: string) => boolean;
     exportDocx?: () => Promise<ArrayBuffer>;
 }
 

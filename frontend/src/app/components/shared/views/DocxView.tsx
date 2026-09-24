@@ -3,7 +3,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
-import { clearDocxQuoteHighlights, highlightDocxQuote } from "./highlightDocxQuote";
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
 import type { DocxMode, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
@@ -54,28 +53,32 @@ interface Props {
 
 function focusHighlights(surface: DocxSurface, props: Props, scrollToMatch = true): boolean {
     const { content, scroll } = surface;
-    clearDocxQuoteHighlights(content);
     content.querySelectorAll(".docx-edit-flash").forEach((element) => element.classList.remove("docx-edit-flash"));
-    let quoteAnchor: HTMLElement | null = null;
-    for (const quote of props.quotes ?? []) {
-        const match = highlightDocxQuote(content, quote.quote, false);
-        quoteAnchor ??= match;
-    }
     const edit = props.highlightEdit;
     const revisions = edit ? [
         ...docxRevisionElements(content, "ins", edit.ins_w_id, edit.inserted_text),
         ...docxRevisionElements(content, "del", edit.del_w_id, edit.deleted_text),
     ] : [];
     revisions.forEach((element) => element.classList.add("docx-edit-flash"));
-    const anchor = revisions[0] || quoteAnchor;
+    // Repaints may restore revision flashes, but must not overwrite the user's
+    // current selection. EigenPal owns citation selection and its painting.
+    if (!scrollToMatch) return revisions.length > 0;
+    const anchor = revisions[0];
     if (!anchor) {
-        const text = edit?.inserted_text || edit?.deleted_text || props.quotes?.[0]?.quote.split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)[0]?.trim();
-        if (scrollToMatch && text && surface.revealText?.(text)) {
+        const text = edit?.inserted_text || edit?.deleted_text;
+        if (text && surface.revealText?.(text)) {
             return true;
+        }
+        // Native selection holds one contiguous range. Select the first matching
+        // quote segment, including when its page has not been painted yet.
+        for (const quote of props.quotes ?? []) {
+            for (const segment of quote.quote.split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)) {
+                const text = segment.trim();
+                if (text && surface.selectText?.(text)) return true;
+            }
         }
         return false;
     }
-    if (!scrollToMatch) return true;
     const offset = anchor.getBoundingClientRect().top - scroll.getBoundingClientRect().top
         + scroll.scrollTop - scroll.clientHeight / 2;
     scroll.scrollTo({ top: Math.max(0, offset), behavior: "instant" });
@@ -126,7 +129,7 @@ function DocxViewContent(props: Props) {
         const focused = focusHighlights(surface, propsRef.current);
         // Long jumps materialize pages and can trigger the engine's own scroll
         // restoration. Re-center once after that paint, using the current props.
-        if (focused) focusFrame.current = requestAnimationFrame(() => {
+        if (focused && propsRef.current.highlightEdit) focusFrame.current = requestAnimationFrame(() => {
             focusFrame.current = requestAnimationFrame(() => {
                 if (surfaceRef.current === surface && surface.content.isConnected) {
                     focusHighlights(surface, propsRef.current);
@@ -193,7 +196,7 @@ function DocxViewContent(props: Props) {
     }, [bytes, readyKey, renderKey, quoteKey, props.quoteFocusKey, props.highlightEdit?.key, focusSurface]);
 
     // Font loading, fitting and page virtualization can replace the engine's
-    // painted runs. Restore highlights without pulling the reader's scroll back.
+    // painted runs. Restore revision flashes without changing native selection.
     useEffect(() => {
         const surface = surfaceRef.current;
         if (!surface || readyKey !== renderKey) return;

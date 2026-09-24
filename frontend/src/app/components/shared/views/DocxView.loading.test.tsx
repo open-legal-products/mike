@@ -6,6 +6,7 @@ import type { DocxRendererProps } from "./DocxRenderer.types";
 import { DocxView } from "./DocxView";
 
 const exportDocx = vi.hoisted(() => vi.fn());
+const selectText = vi.hoisted(() => vi.fn());
 
 vi.mock("@/app/lib/authEvents", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("@/app/lib/mikeApi", () => ({ getDocumentFileUrl: (id: string) => "/api/document/" + id }));
@@ -19,7 +20,7 @@ function MockRenderer({ bytes, mode, onChange, onReady, onError, onSave }: DocxR
     const revision = new Uint8Array(bytes)[0];
     useEffect(() => {
         if (revision === 99) onError();
-        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current, exportDocx });
+        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current, exportDocx, selectText });
     }, [bytes, onReady, onError, revision]);
     return (
         <div ref={scroll} data-testid="renderer-scroll" data-mode={mode}>
@@ -38,6 +39,7 @@ function MockRenderer({ bytes, mode, onChange, onReady, onError, onSave }: DocxR
 const originalScrollTo = HTMLElement.prototype.scrollTo;
 beforeEach(() => {
     exportDocx.mockReset().mockResolvedValue(new Uint8Array([42]).buffer);
+    selectText.mockReset().mockReturnValue(true);
     vi.mocked(authenticatedFetch).mockReset();
     vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([1])));
     HTMLElement.prototype.scrollTo = vi.fn(function (this: HTMLElement, options?: ScrollToOptions | number) {
@@ -82,14 +84,39 @@ it("opens EigenPal without an engine selector and restores the document scroll p
     expect(authenticatedFetch).toHaveBeenCalledTimes(1);
 });
 
-it("retains multiple citation highlights and uses native revision IDs", async () => {
+it("uses native revision IDs without adding citation highlight spans", async () => {
     const { container } = render(<DocxView documentId="quotes" cacheBytes={false}
         quotes={[{ quote: "Payment in thirty days." }, { quote: "Confidential information." }]}
         highlightEdit={{ key: "edit-8", ins_w_id: "8", inserted_text: "Repeated edit" }} />);
     await screen.findByText("EigenPal preview");
-    expect(container.querySelectorAll(".docx-text-highlight")).toHaveLength(2);
+    expect(container.querySelectorAll(".docx-text-highlight")).toHaveLength(0);
     expect(container.querySelector('[data-revision-id="8"]')).toHaveClass("docx-edit-flash");
     expect(container.querySelector('[data-revision-id="7"]')).not.toHaveClass("docx-edit-flash");
+    expect(selectText).not.toHaveBeenCalled();
+});
+
+it("selects one native citation range and leaves selection alone during repaints and edits", async () => {
+    selectText.mockImplementation((text: string) => text === "Payment in thirty days.");
+    const quotes = [{ quote: "Missing segment…Payment in thirty days." }, { quote: "Confidential information." }];
+    const view = (quoteFocusKey: number) => <DocxView documentId="native-selection" cacheBytes={false}
+        defaultMode="edit" quotes={quotes} quoteFocusKey={quoteFocusKey} />;
+    const { container, rerender } = render(view(0));
+    await screen.findByText("EigenPal preview");
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Loading document" })).toBeNull());
+    expect(selectText).toHaveBeenCalledWith("Missing segment");
+    expect(selectText).toHaveBeenLastCalledWith("Payment in thirty days.");
+    expect(selectText).not.toHaveBeenCalledWith("Confidential information.");
+    expect(container.querySelector(".docx-text-highlight")).toBeNull();
+    selectText.mockClear();
+    // A newly painted page and a local edit must not reselect an earlier quote.
+    const page = document.createElement("div");
+    page.className = "docx-page";
+    screen.getByText("EigenPal preview").parentElement!.appendChild(page);
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    expect(selectText).not.toHaveBeenCalled();
+    rerender(view(1));
+    await waitFor(() => expect(selectText).toHaveBeenLastCalledWith("Payment in thirty days."));
 });
 
 it("does not show old bytes while switching documents", async () => {
@@ -144,7 +171,7 @@ it("keeps edits after a failed export and downloads the edited bytes on retry", 
     revokeUrl.mockRestore();
 });
 
-it("re-centers a citation after the engine restores scroll during page paint", async () => {
+it("re-centers a revision after the engine restores scroll during page paint", async () => {
     let firstScroll = true;
     vi.mocked(HTMLElement.prototype.scrollTo).mockImplementation(function (this: HTMLElement) {
         this.scrollTop = 0;
@@ -154,7 +181,7 @@ it("re-centers a citation after the engine restores scroll during page paint", a
         }
     });
     render(<DocxView documentId="paint-settle" cacheBytes={false}
-        quotes={[{ quote: "Payment in thirty days." }]} />);
+        highlightEdit={{ key: "edit-8", ins_w_id: "8", inserted_text: "Repeated edit" }} />);
     await screen.findByText("EigenPal preview");
     await waitFor(() => expect(vi.mocked(HTMLElement.prototype.scrollTo).mock.calls.length).toBeGreaterThanOrEqual(3));
     expect(screen.getByTestId("renderer-scroll").scrollTop).toBe(0);

@@ -47,13 +47,17 @@ export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, 
                     }
                     const content = host.current?.querySelector<HTMLElement>(".docx-paginated-surface");
                     const scroll = host.current?.querySelector<HTMLElement>(".docx-editor__scroll-container");
-                    if (content && scroll) onReady({ content, scroll, exportDocx: () => editor.save(), revealText: (text) => {
-                        const match = editor.findMatches(text)[0];
-                        if (!match) return false;
-                        // Reveal virtualized text without adding a native selection over
-                        // Mike's citation highlight (which darkens selected words).
-                        return editor.scrollToBlock(match.blockId);
-                    } });
+                    if (content && scroll) onReady({
+                        content, scroll, exportDocx: () => editor.save(),
+                        revealText: (text) => {
+                            const match = editor.findMatches(text)[0];
+                            return match ? editor.scrollToBlock(match.blockId) : false;
+                        },
+                        selectText: (text) => {
+                            const match = editor.findMatches(text)[0];
+                            return match ? editor.selectMatch(match).ok : false;
+                        },
+                    });
                     else onError();
                 }}
             />
