@@ -1,5 +1,5 @@
 /* EigenPal 2.21.1 has no title-row or frame-border option. Scope these
-   overrides to its packaged chrome; tabs own the filename and file actions. */
+   overrides to its packaged chrome; Mike owns the filename and file actions. */
 .host :global(.docx-editor) > div:has(:global(.docx-toolbar)) {
     border-bottom: 0 !important;
     box-shadow: none !important;
@@ -7,4 +7,8 @@
 
 .host :global(.docx-editor) > div:has(:global(.docx-toolbar)) > div:first-child {
     display: none !important;
+}
+
+.host :global(.docx-editor) > div > div:has(> :global(.docx-toolbar)) {
+    padding-top: 0 !important;
 }
