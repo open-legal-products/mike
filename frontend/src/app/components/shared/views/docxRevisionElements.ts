@@ -1,4 +1,4 @@
-/** A revision can span several rendered runs or lines in SuperDoc. */
+/** A revision can span several rendered runs or lines in EigenPal. */
 export function docxRevisionElements(
     root: Element,
     kind: "ins" | "del",
@@ -6,13 +6,11 @@ export function docxRevisionElements(
     text?: string,
 ): HTMLElement[] {
     const selector = kind === "ins"
-        ? '[data-track-change-kind="insert"]'
-        : '[data-track-change-kind="delete"]';
+        ? '[data-revision-kind="insert"]'
+        : '[data-revision-kind="delete"]';
     const candidates = Array.from(root.querySelectorAll<HTMLElement>(selector));
     const exact = id == null ? [] : candidates.filter(
-        // The first imported ID identifies this run. Subsequent IDs can
-        // include the opposite side of a grouped replacement.
-        (element) => element.dataset.trackChangeIds?.split(",")[0] === `imported:${id}`,
+        (element) => element.dataset.revisionId === id,
     );
     if (exact.length) return exact;
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim();

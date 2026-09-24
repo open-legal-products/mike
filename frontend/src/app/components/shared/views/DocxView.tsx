@@ -7,11 +7,10 @@ import { clearDocxQuoteHighlights, highlightDocxQuote } from "./highlightDocxQuo
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
 import type { DocxMode, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { docxRevisionElements } from "./docxRevisionElements";
 
-const DocxRenderer = lazy(() => import("./SuperdocDocxRenderer"));
+const DocxRenderer = lazy(() => import("./EigenpalDocxRenderer"));
 const RENDER_ERROR = "This document could not be displayed. Please download it to view it.";
 const bufferIds = new WeakMap<ArrayBuffer, number>();
 let nextBufferId = 0;
@@ -93,7 +92,7 @@ function DocxViewContent(props: Props) {
         documentId, versionId, displayUrl, refetchKey, cacheBytes = true,
         warning, onWarningDismiss, rounded = true,
     } = props;
-    const [mode, setMode] = useState<DocxMode>(props.defaultMode ?? "view");
+    const [initialMode] = useState<DocxMode>(props.defaultMode ?? "view");
     const [dirtyKey, setDirtyKey] = useState<string | null>(null);
     const [downloading, setDownloading] = useState(false);
     const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -196,8 +195,8 @@ function DocxViewContent(props: Props) {
         const observer = new MutationObserver((records) => {
             const repainted = records.some((record) => Array.from(record.addedNodes).some(
                 (node) => node instanceof Element && (
-                    node.matches(".superdoc-page, .superdoc-line")
-                    || node.querySelector(".superdoc-line")
+                    node.matches(".docx-page")
+                    || node.querySelector(".docx-page")
                 ),
             ));
             if (!repainted) return;
@@ -214,13 +213,8 @@ function DocxViewContent(props: Props) {
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
-                <div role="group" aria-label="DOCX mode" className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Mode</span>
-                    <TabPillButtonUI active={mode === "view"} onClick={() => setMode("view")}>View</TabPillButtonUI>
-                    <TabPillButtonUI active={mode === "edit"} onClick={() => setMode("edit")}>Edit</TabPillButtonUI>
-                </div>
-                {(mode === "edit" || dirty) && <PillButtonUI tone="white" size="sm" disabled={!!pending || !!message || downloading} onClick={() => void download()}>Download DOCX</PillButtonUI>}
-                {(mode === "edit" || dirty) && <span className="text-xs text-muted-foreground">{dirty ? "Unsaved local edits. " : ""}Download to keep edits before closing or switching documents.</span>}
+                <PillButtonUI tone="white" size="sm" disabled={!!pending || !!message || downloading} onClick={() => void download()}>Download DOCX</PillButtonUI>
+                <span className="text-xs text-muted-foreground">{dirty ? "Unsaved local edits. " : ""}Download to keep edits before closing or switching documents.</span>
                 {downloadError && <span role="alert" className="text-xs text-destructive">{downloadError}</span>}
             </div>
             <div
@@ -254,7 +248,7 @@ function DocxViewContent(props: Props) {
                     {bytes && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>
                             <Suspense fallback={null}>
-                                <DocxRenderer bytes={bytes} mode={mode} filename={props.filename} onChange={onChange} onSave={download} onReady={onReady} onError={onError} />
+                                <DocxRenderer bytes={bytes} mode={initialMode} filename={props.filename} onChange={onChange} onSave={download} onReady={onReady} onError={onError} />
                             </Suspense>
                         </DocxRenderBoundary>
                     )}
