@@ -59,7 +59,7 @@
 
 .host :global(.docx-font-notice),
 .host :global(.docx-notification-warning) {
-    background: var(--app-surface) !important;
+    background: var(--liquid-glass-background-flat) !important;
     border-color: var(--liquid-glass-border-flat) !important;
 }
 
