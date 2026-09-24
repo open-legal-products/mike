@@ -110,7 +110,10 @@ export function ProjectDocumentTabs({
         <div
             role="tablist"
             aria-label="Project documents"
-            className="project-document-tabs flex h-10 min-w-0 shrink-0 items-end gap-1 overflow-x-auto bg-app-surface px-1 pt-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+            className={cn(
+                "project-document-tabs flex h-10 min-w-0 shrink-0 items-end gap-1 overflow-x-auto px-1 pt-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+                tabs.length ? "document-tab-strip" : "bg-app-surface",
+            )}
         >
             {tabs.length === 0 ? (
                 <span className="self-center px-2 text-xs text-muted-foreground">

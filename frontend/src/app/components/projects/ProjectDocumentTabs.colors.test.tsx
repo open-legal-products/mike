@@ -87,12 +87,12 @@ function backgroundColor(element: Element): string {
     return color;
 }
 
-function Harness() {
+function Harness({ empty = false }: { empty?: boolean }) {
     const [activeTabId, setActiveTabId] = useState("docx");
     return (
         <div className="bg-app-surface" data-testid="resting-surface">
             <ProjectDocumentTabs
-                tabs={[
+                tabs={empty ? [] : [
                     { documentId: "docx", filename: "Draft.docx" },
                     { documentId: "pdf", filename: "Exhibit.pdf" },
                 ]}
@@ -102,6 +102,9 @@ function Harness() {
                 onClose={vi.fn()}
                 onReorder={vi.fn()}
             />
+            <div className="document-tab-strip" data-testid="side-panel-strip">
+                <span className="document-tab" data-testid="side-panel-inactive" />
+            </div>
             <div data-testid="docx-view">
                 <DocxView documentId="docx" rounded={false} />
             </div>
@@ -119,13 +122,13 @@ describe("project document tab colors", () => {
         ["dark", "loading"],
         ["dark", "error"],
     ])(
-        "matches the document canvas in %s mode during %s and after switching tabs",
+        "matches side-panel colors in %s mode during %s and preserves the empty header",
         (theme, state) => {
             document.documentElement.classList.toggle("dark", theme === "dark");
             fetchState.loading = state === "loading";
             fetchState.error =
                 state === "error" ? "Document could not be loaded." : null;
-            render(<Harness />);
+            const { rerender } = render(<Harness />);
             const docxTab = screen.getByRole("tab", { name: "Draft.docx" });
             const pdfTab = screen.getByRole("tab", { name: "Exhibit.pdf" });
             const docxCanvas =
@@ -138,12 +141,20 @@ describe("project document tab colors", () => {
             expect(canvas).not.toBe("rgba(0, 0, 0, 0)");
             expect(canvas).not.toBe(resting);
             expect(backgroundColor(pdfCanvas)).toBe(canvas);
-            expect(backgroundColor(docxTab)).toBe(canvas);
-            expect(backgroundColor(pdfTab)).toBe(resting);
+            expect(backgroundColor(docxTab)).toBe(resting);
+            const inactive = backgroundColor(screen.getByTestId("side-panel-inactive"));
+            expect(inactive).not.toBe(resting);
+            expect(backgroundColor(pdfTab)).toBe(inactive);
+            expect(backgroundColor(screen.getByRole("tablist"))).toBe(
+                backgroundColor(screen.getByTestId("side-panel-strip")),
+            );
             fireEvent.click(pdfTab);
             expect(pdfTab).toHaveAttribute("aria-selected", "true");
-            expect(backgroundColor(pdfTab)).toBe(canvas);
-            expect(backgroundColor(docxTab)).toBe(resting);
+            expect(backgroundColor(pdfTab)).toBe(resting);
+            expect(backgroundColor(docxTab)).toBe(inactive);
+            rerender(<Harness empty />);
+            expect(screen.getByText("Document Viewer")).toBeVisible();
+            expect(backgroundColor(screen.getByRole("tablist"))).toBe(resting);
         },
     );
 });
