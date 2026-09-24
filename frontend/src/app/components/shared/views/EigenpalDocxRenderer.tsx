@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { DocxEditor } from "@docx-editor.dev/react";
 import type { TextMatch } from "@docx-editor.dev/core";
 import { packagedFonts } from "@docx-editor.dev/fonts";
+import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import "@docx-editor.dev/core/styles/editor.css";
 import styles from "./EigenpalDocxRenderer.module.css";
 import type { DocxRendererProps } from "./DocxRenderer.types";
@@ -35,6 +36,7 @@ export default function DocxRenderer({ bytes, mode, filename, onChange, onSave, 
                 onChange={onChange}
                 onSave={onSave}
                 menu={false}
+                navigation={{ toggle: { className: `${styles.navigationToggle} ${LIQUID_GLASS_TRANSLUCENT_CLASS}` } }}
                 rulers={false}
                 contextMenu
                 className="h-full min-h-0 overflow-auto"

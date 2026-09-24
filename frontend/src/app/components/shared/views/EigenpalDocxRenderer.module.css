@@ -12,3 +12,12 @@
 .host :global(.docx-editor) > div > div:has(> :global(.docx-toolbar)) {
     padding-top: 0 !important;
 }
+
+/* Native navigation chrome has more specific fill and hover rules than the
+   shared glass class. Keep its geometry and focus ring, using Mike's material. */
+.host :global(.docx-editor) .navigationToggle,
+.host :global(.docx-editor) .navigationToggle:hover {
+    background: var(--liquid-glass-translucent-background);
+    border: 1px solid var(--liquid-glass-translucent-border);
+    box-shadow: var(--liquid-glass-shadow-translucent);
+}

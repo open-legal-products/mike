@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { useDocxAutosave } from "@/app/hooks/useDocxAutosave";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
 import type { DocxMode, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
@@ -263,7 +264,7 @@ function DocxViewContent(props: Props) {
                     )}
                 </div>
                 {!displayUrl && !message && readyKey === renderKey && bytes && (
-                    <div className="flex shrink-0 items-center justify-end gap-2 bg-app-surface px-3 py-1 text-xs text-muted-foreground">
+                    <div className={`absolute bottom-4 right-4 z-20 flex max-w-[calc(100%-2rem)] flex-wrap items-center justify-end gap-2 rounded-2xl px-3 py-1.5 text-xs text-muted-foreground ${LIQUID_GLASS_TRANSLUCENT_CLASS}`}>
                         <span role="status" aria-live="polite" className={autosave.error ? "text-destructive" : undefined}>
                             {autosave.error ?? (autosave.status === "saving" ? "Saving…" : autosave.dirty ? "Unsaved changes" : autosave.status === "saved" ? "Saved" : "Autosave on")}
                         </span>
