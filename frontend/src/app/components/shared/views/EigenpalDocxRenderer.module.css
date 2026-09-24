@@ -21,7 +21,7 @@
 }
 
 .host :global(.docx-editor) > div > div:has(> :global(.docx-toolbar)) {
-    padding-top: 0 !important;
+    padding-top: 0.25rem !important;
 }
 
 /* Native navigation chrome has more specific fill and hover rules than the
