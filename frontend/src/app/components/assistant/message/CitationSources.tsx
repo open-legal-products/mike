@@ -171,13 +171,14 @@ export function CitationsBlock({
                         return (
                             <div
                                 key={row.key}
-                                className="flex items-center gap-3 px-3 py-3"
+                                className="flex items-start gap-3 px-3 py-3"
                             >
                                 <button
                                     type="button"
                                     onClick={() => onOpenSource?.(row.source)}
                                     disabled={!sourceIsClickable}
-                                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left text-sm font-serif text-gray-700 transition-colors enabled:hover:text-gray-950 disabled:cursor-default"
+                                    title={row.label}
+                                    className="flex w-40 min-w-0 max-w-[50%] shrink-0 items-center gap-2 rounded-lg text-left text-sm font-serif text-gray-700 transition-colors enabled:hover:text-gray-950 disabled:cursor-default"
                                 >
                                     <CitationSourceIcon
                                         annotation={row.source}
@@ -186,7 +187,7 @@ export function CitationsBlock({
                                         {row.label}
                                     </span>
                                 </button>
-                                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                                <div className="flex min-w-0 flex-1 flex-wrap justify-end gap-1">
                                     {row.entries.map(
                                         ({ annotation, index }) => (
                                             <CitationPillUI
