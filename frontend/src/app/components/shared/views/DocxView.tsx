@@ -119,11 +119,11 @@ function DocxViewContent(props: Props) {
         exportDocx: () => surfaceRef.current?.exportDocx?.(),
     });
     const { markChanged } = autosave;
-    const { dirty, status, error: saveError, save } = autosave;
+    const { dirty, status, error: saveError } = autosave;
     const saveReady = !!bytes && !error && !displayUrl && readyKey === renderKey && failedKey !== renderKey;
     useEffect(() => {
-        onSaveStateChange?.(documentId, { ready: saveReady, dirty, status, error: saveError, save });
-    }, [onSaveStateChange, documentId, saveReady, dirty, status, saveError, save]);
+        onSaveStateChange?.(documentId, { ready: saveReady, dirty, status, error: saveError });
+    }, [onSaveStateChange, documentId, saveReady, dirty, status, saveError]);
     useEffect(() => () => onSaveStateChange?.(documentId, null), [onSaveStateChange, documentId]);
     const lastScrollTop = useRef(props.initialScrollTop ?? 0);
     const propsRef = useRef(props);

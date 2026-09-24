@@ -78,18 +78,10 @@ export function DocumentTitleRow({
                     </div>
                 </div>
                 <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
-                    {document.type === "docx" && (
-                        <PillButtonUI
-                            tone="white"
-                            size="sm"
-                            disabled={!saveState?.ready || !saveState.dirty || isReloading}
-                            loading={saveState?.status === "saving"}
-                            onClick={() => void saveState?.save()}
-                            title={saveState?.error ? "Retry saving your changes" : undefined}
-                            aria-live="polite"
-                        >
-                            {saveState?.status === "saving" ? "Saving" : saveState?.status === "saved" && !saveState.dirty ? "Saved" : "Save"}
-                        </PillButtonUI>
+                    {document.type === "docx" && saveState?.ready && (
+                        <span role="status" aria-live="polite" className="text-xs text-muted-foreground">
+                            {saveState.error ? "Not saved" : saveState.dirty || saveState.status === "saving" ? "Saving…" : "Saved"}
+                        </span>
                     )}
                     {isFile && (
                         <DownloadButton

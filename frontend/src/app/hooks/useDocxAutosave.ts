@@ -87,7 +87,7 @@ export function useDocxAutosave(options: Options) {
                         && reason.outcomes.some((outcome) => outcome.errorCode === "document_changed");
                     setError(conflict
                         ? "This document changed elsewhere. Download your edits before reopening the latest version."
-                        : userFacingApiError(reason, "Changes could not be saved. Your edits are still open. Retry or download a copy."));
+                        : userFacingApiError(reason, "Changes could not be saved. Your edits are still open. Press Cmd/Ctrl+S to retry, or download a copy."));
                     setStatus("error");
                 }
             }

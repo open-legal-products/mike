@@ -13,7 +13,6 @@ import {
 } from "./ProjectDocumentPanels";
 
 const localExport = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const localSave = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/app/lib/mikeApi", async (original) => ({
     ...await original<typeof import("@/app/lib/mikeApi")>(),
     getDocumentFile: vi.fn(),
@@ -100,7 +99,7 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         }, [bytes, onDownloadReady]);
         useEffect(() => {
             if (!bytes) return;
-            onSaveStateChange?.(documentId, { ready: true, dirty: true, status: "pending", error: null, save: localSave });
+            onSaveStateChange?.(documentId, { ready: true, dirty: true, status: "pending", error: null });
             return () => onSaveStateChange?.(documentId, null);
         }, [bytes, documentId, onSaveStateChange]);
         return <div data-testid="docx-mode" data-mode={defaultMode}><Viewer id={documentId} loaded={!!bytes} /></div>;
@@ -121,7 +120,6 @@ const documents = tabs.map((tab) => ({
 const dismiss = vi.fn();
 beforeEach(() => {
     localExport.mockClear();
-    localSave.mockClear();
     vi.mocked(getDocumentFile).mockReset();
     vi.mocked(authenticatedFetch)
         .mockReset()
@@ -288,10 +286,9 @@ it("exports open DOCX edits from the title bar instead of downloading server byt
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     await waitFor(() => expect(localExport).toHaveBeenCalledOnce());
     expect(getDocumentFile).not.toHaveBeenCalled();
-    const save = screen.getByRole("button", { name: "Save" });
-    expect(save.parentElement).toBe(screen.getByRole("button", { name: "Download" }).parentElement);
-    fireEvent.click(save);
-    expect(localSave).toHaveBeenCalledOnce();
+    expect(screen.getByRole("status")).toHaveTextContent("Saving…");
+    expect(screen.getByRole("status").parentElement).toBe(screen.getByRole("button", { name: "Download" }).parentElement);
+    expect(screen.queryByRole("button", { name: /sav/i })).toBeNull();
 });
 
 it("downloads the PDF version shown in the viewer's title bar", async () => {
