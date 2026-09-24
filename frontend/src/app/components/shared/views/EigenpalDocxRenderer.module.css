@@ -11,6 +11,88 @@
     box-shadow: none;
 }
 
+/* The packaged toolbar doesn't expose a shared dropdown component slot.
+   Use LiquidDropdownSurface's material tokens for its menus, palettes, nested
+   table pickers and overflow panel without replacing native menu behavior. */
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu),
+    :global(.docx-toolbar__more-panel),
+    :global(.docx-toolbar__mode-menu),
+    :global(.docx-toolbar__reviewers-menu),
+    :global(.docx-toolbar__image-wrap-menu),
+    :global(.docx-toolbar__alt-text-panel),
+    :global(.docx-toolbar__swatch-popup),
+    :global(.docx-table-chrome__panel)
+) {
+    background: var(--liquid-glass-background-float);
+    border: 1px solid var(--liquid-glass-border-float);
+    border-radius: 1rem;
+    box-shadow: var(--liquid-glass-shadow-float);
+    backdrop-filter: blur(40px);
+}
+
+/* Match Mike's dropdown rows, preserving font/style previews and swatch colors. */
+.host :global(.docx-toolbar) :global(.docx-toolbar__font-search) {
+    background: var(--liquid-glass-background-subtle);
+    border: 1px solid var(--liquid-glass-border-subtle);
+    border-radius: 0.75rem;
+    box-shadow: var(--liquid-glass-shadow-subtle);
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu-item),
+    :global(.docx-toolbar__mode-item),
+    :global(.docx-toolbar__reviewer-item),
+    :global(.docx-toolbar__font-family-item),
+    :global(.docx-toolbar__style-item),
+    :global(.docx-table-chrome__width-row),
+    :global(.docx-toolbar__swatch-clear)
+) {
+    border-radius: 0.5rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu-item),
+    :global(.docx-toolbar__mode-item),
+    :global(.docx-toolbar__reviewer-item),
+    :global(.docx-toolbar__font-family-item),
+    :global(.docx-toolbar__style-item),
+    :global(.docx-table-chrome__width-row),
+    :global(.docx-toolbar__swatch-clear)
+):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) {
+    background: var(--liquid-glass-hover-background);
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu-item),
+    :global(.docx-toolbar__mode-item),
+    :global(.docx-toolbar__reviewer-item),
+    :global(.docx-toolbar__font-family-item),
+    :global(.docx-toolbar__style-item),
+    :global(.docx-table-chrome__width-row),
+    :global(.docx-toolbar__alignment-option),
+    :global(.docx-table-chrome__option),
+    :global(.docx-table-chrome__target-btn)
+):is([aria-selected="true"], [aria-checked="true"], [data-active="true"], [data-active=""]) {
+    background: var(--liquid-glass-selected-background);
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu),
+    :global(.docx-toolbar__more-panel),
+    :global(.docx-toolbar__mode-menu),
+    :global(.docx-toolbar__reviewers-menu),
+    :global(.docx-toolbar__image-wrap-menu),
+    :global(.docx-toolbar__alt-text-panel),
+    :global(.docx-toolbar__swatch-popup),
+    :global(.docx-table-chrome__panel)
+) :focus-visible {
+    outline: 2px solid var(--mike-docx-focus-color);
+    outline-offset: -2px;
+}
+
 .host :global(.docx-editor) > div:has(:global(.docx-toolbar)) {
     border-bottom: 0 !important;
     box-shadow: none !important;
