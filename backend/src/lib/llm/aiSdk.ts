@@ -3,6 +3,7 @@ import type { LanguageModel, ToolSet } from "ai" with {
 };
 import type * as AiSdk from "ai" with { "resolution-mode": "import" };
 import type {
+  LlmMessage,
   NormalizedToolCall,
   NormalizedToolResult,
   OpenAIToolSchema,
@@ -185,6 +186,8 @@ export type AiSdkAdapterConfig = {
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
   courtlistenerCitationReminder?: boolean;
+  /** Send stored reasoning on earlier assistant turns; see ConfiguredModel. */
+  replayReasoning?: boolean;
 };
 
 type PendingToolExecution = {
@@ -334,19 +337,53 @@ type StreamTextProviderOptions = NonNullable<
   Parameters<typeof AiSdk.streamText>[0]["providerOptions"]
 >;
 
-export function withPrefixCacheHints(params: StreamChatParams): {
+/**
+ * An earlier assistant turn's reasoning becomes a reasoning part ahead of its
+ * text, which the OpenAI-compatible adapter sends as `reasoning_content`.
+ * Without `replay` the stored reasoning is dropped, so no other provider ever
+ * receives it.
+ */
+function toModelMessage(
+  message: LlmMessage,
+  replay: boolean,
+): AiSdk.UserModelMessage | AiSdk.AssistantModelMessage {
+  if (message.role === "user") {
+    return { role: "user", content: message.content };
+  }
+  if (!replay || !message.reasoning) {
+    return { role: "assistant", content: message.content };
+  }
+  return {
+    role: "assistant",
+    content: [
+      { type: "reasoning", text: message.reasoning },
+      { type: "text", text: message.content },
+    ],
+  };
+}
+
+export function withPrefixCacheHints(
+  params: StreamChatParams,
+  options: { replayReasoning?: boolean } = {},
+): {
   messages: AiSdk.ModelMessage[];
   providerOptions?: StreamTextProviderOptions;
 } {
-  if (!params.conversationId || !params.messages.length) {
-    return { messages: params.messages };
+  const messages: (AiSdk.UserModelMessage | AiSdk.AssistantModelMessage)[] =
+    params.messages.some((m) => m.reasoning !== undefined)
+      ? params.messages.map((m) =>
+          toModelMessage(m, options.replayReasoning === true),
+        )
+      : params.messages;
+  if (!params.conversationId || !messages.length) {
+    return { messages };
   }
-  const last = params.messages.length - 1;
+  const last = messages.length - 1;
   const breakpoint = {
     anthropic: { cacheControl: { type: "ephemeral" } },
   };
   return {
-    messages: params.messages.map((message, index): AiSdk.ModelMessage => {
+    messages: messages.map((message, index): AiSdk.ModelMessage => {
       if (index !== last) return message;
       return message.role === "assistant"
         ? { role: "assistant", content: message.content, providerOptions: breakpoint }
@@ -390,7 +427,9 @@ export async function streamAiSdk(
             : e.message,
           { cause: e },
         );
-  const cacheHints = withPrefixCacheHints(params);
+  const cacheHints = withPrefixCacheHints(params, {
+    replayReasoning: config.replayReasoning,
+  });
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,

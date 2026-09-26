@@ -156,6 +156,114 @@ export function spotlightWorkflow(text: string, nonce: string): string {
   return `<workflow-instructions nonce="${nonce}">\n${neutralized}\n</workflow-instructions nonce="${nonce}">`;
 }
 
+/** Tail of a turn's reasoning kept when it is replayed to the model. */
+export const MAX_REPLAYED_REASONING_CHARS = 12_000;
+
+/**
+ * Reasoning replayed across the whole history. The newest turns are kept
+ * first; once a turn does not fit, it and every older turn go back as text.
+ */
+export const MAX_REPLAYED_REASONING_TOTAL_CHARS = 36_000;
+
+/**
+ * Attaches each earlier assistant turn's stored reasoning to the matching
+ * message in `messages`, for models that need their own thinking replayed
+ * (see ConfiguredModel.replayReasoning). Only reasoning events stamped with
+ * `model` are used, so a model never receives another model's thinking and
+ * turns stored before stamping are never replayed. The client sends history
+ * as text only, so a message is matched to a stored row by its visible text
+ * — the row's `content` events joined, exactly as the frontend rebuilds it.
+ * An unmatched or ambiguous message is left as is. Run this before
+ * enrichWithPriorEvents, which appends to the last assistant message's text.
+ */
+export async function attachPriorReasoning(
+  messages: ChatMessage[],
+  chatId: string | null | undefined,
+  model: string,
+  db: Db,
+  messageTable = "chat_messages",
+): Promise<ChatMessage[]> {
+  if (!chatId || !messages.some((m) => m.role === "assistant")) {
+    return messages;
+  }
+  const { data: rows, error } = await db
+    .from(messageTable)
+    .select("content")
+    .eq("chat_id", chatId)
+    .eq("role", "assistant")
+    .not("content", "is", null)
+    .order("created_at", { ascending: true });
+  // Replay is an optimisation: a failed read degrades to text-only history.
+  if (error || !rows?.length) return messages;
+
+  const turns = (rows as { content?: unknown }[]).map((row) => {
+    const events = Array.isArray(row.content)
+      ? (row.content as { type?: unknown; text?: unknown; model?: unknown }[])
+      : [];
+    const textOf = (type: string, producedBy?: string) =>
+      events
+        .filter(
+          (ev) =>
+            ev?.type === type &&
+            typeof ev.text === "string" &&
+            (producedBy === undefined || ev.model === producedBy),
+        )
+        .map((ev) => ev.text as string);
+    const reasoning = textOf("reasoning", model).join("\n\n").trim();
+    return {
+      text: textOf("content").join("").trim(),
+      reasoning:
+        reasoning.length > MAX_REPLAYED_REASONING_CHARS
+          ? reasoning.slice(-MAX_REPLAYED_REASONING_CHARS)
+          : reasoning,
+    };
+  });
+
+  // Identical replies are paired in order only when the request carries every
+  // stored copy. If some are missing (a shortened or retried history), there
+  // is no telling which turn a copy is, so it goes back as text.
+  const storedByText = new Map<string, number[]>();
+  for (const [i, { text }] of turns.entries()) {
+    const indices = storedByText.get(text);
+    if (indices) indices.push(i);
+    else storedByText.set(text, [i]);
+  }
+  const assistantText = (msg: ChatMessage) =>
+    msg.role === "assistant" ? (msg.content ?? "").trim() : "";
+  const requestCount = new Map<string, number>();
+  for (const msg of messages) {
+    const text = assistantText(msg);
+    if (text) requestCount.set(text, (requestCount.get(text) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  const matched = messages.map((msg) => {
+    const text = assistantText(msg);
+    if (!text) return undefined;
+    const occurrence = seen.get(text) ?? 0;
+    seen.set(text, occurrence + 1);
+    const stored = storedByText.get(text) ?? [];
+    if (stored.length !== requestCount.get(text)) return undefined;
+    return turns[stored[occurrence]].reasoning || undefined;
+  });
+
+  let remaining = MAX_REPLAYED_REASONING_TOTAL_CHARS;
+  for (let i = matched.length - 1; i >= 0; i--) {
+    const reasoning = matched[i];
+    if (reasoning === undefined) continue;
+    if (reasoning.length > remaining) {
+      remaining = 0;
+      matched[i] = undefined;
+    } else {
+      remaining -= reasoning.length;
+    }
+  }
+
+  return messages.map((msg, i) => {
+    const reasoning = matched[i];
+    return reasoning === undefined ? msg : { ...msg, reasoning };
+  });
+}
+
 export async function enrichWithPriorEvents(
   messages: ChatMessage[],
   chatId: string | null | undefined,
@@ -407,7 +515,11 @@ export function buildMessages(
       });
       content = `[The user attached the following document(s) to this message:\n${lines.join("\n")}]\n\n${content}`;
     }
-    formatted.push({ role: msg.role, content });
+    formatted.push(
+      msg.role === "assistant" && msg.reasoning
+        ? { role: msg.role, content, reasoning: msg.reasoning }
+        : { role: msg.role, content },
+    );
   }
   return formatted;
 }

@@ -311,8 +311,13 @@ export async function runLLMStream(params: {
     : withoutDocumentMutatingTools(advertisedTools);
 
   // Extract system prompt; pass remaining turns to the adapter as
-  // plain user/assistant messages.
-  const rawMsgs = apiMessages as { role: string; content: string | null }[];
+  // plain user/assistant messages (assistant turns may carry stored
+  // reasoning, which only reasoning-replaying models receive).
+  const rawMsgs = apiMessages as {
+    role: string;
+    content: string | null;
+    reasoning?: string;
+  }[];
   const baseSystemPrompt =
     rawMsgs[0]?.role === "system" ? (rawMsgs[0].content ?? "") : "";
   const memory = await buildMemoryTurn({
@@ -327,10 +332,13 @@ export async function runLLMStream(params: {
   const chatMessages: LlmMessage[] = rawMsgs
     .filter((m) => m.role !== "system")
     .map(
-      (m): LlmMessage => ({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: m.content ?? "",
-      }),
+      (m): LlmMessage =>
+        m.role === "assistant" && m.reasoning
+          ? { role: "assistant", content: m.content ?? "", reasoning: m.reasoning }
+          : {
+              role: m.role === "assistant" ? "assistant" : "user",
+              content: m.content ?? "",
+            },
     )
     // An assistant turn with no text (an error, a cancellation, or a client
     // that keeps prose in events) carries nothing for the model, and Anthropic
@@ -357,6 +365,16 @@ export async function runLLMStream(params: {
   let iterText = "";
   let iterVisibleText = "";
   let iterReasoning = "";
+  // Stamped on stored reasoning events so replay can tell which model
+  // produced them. Unset until the requested model has been resolved.
+  let reasoningModel: string | undefined;
+  const pushReasoning = (text: string) => {
+    events.push(
+      reasoningModel
+        ? { type: "reasoning", text, model: reasoningModel }
+        : { type: "reasoning", text },
+    );
+  };
   let visibleTailBuffer = "";
   let citationsOpenSeen = false;
   let streamingCitationsBuffer = "";
@@ -461,7 +479,7 @@ export async function runLLMStream(params: {
   const flushPartialTurn = (opts: { emit?: boolean } = {}) => {
     flushText(opts);
     if (iterReasoning) {
-      events.push({ type: "reasoning", text: iterReasoning });
+      pushReasoning(iterReasoning);
       iterReasoning = "";
     }
   };
@@ -496,6 +514,7 @@ export async function runLLMStream(params: {
       db,
       "throw",
     );
+    reasoningModel = selectedModel;
     await streamChatWithTools({
       model: selectedModel,
       systemPrompt,
@@ -523,7 +542,7 @@ export async function runLLMStream(params: {
         },
         onReasoningBlockEnd: () => {
           if (!iterReasoning) return;
-          events.push({ type: "reasoning", text: iterReasoning });
+          pushReasoning(iterReasoning);
           write(`data: ${JSON.stringify({ type: "reasoning_block_end" })}\n\n`);
           iterReasoning = "";
         },

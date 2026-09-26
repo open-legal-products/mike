@@ -256,6 +256,7 @@ async function createConfiguredAdapter(
       : base,
     modelId: configured.id,
     supportsReasoning: false,
+    replayReasoning: configured.replayReasoning === true,
   };
 }
 
