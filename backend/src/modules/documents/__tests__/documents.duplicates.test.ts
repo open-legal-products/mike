@@ -97,6 +97,9 @@ describe("matchDocumentsByContentHash paging", () => {
             ok: true,
             matches: { [hash("a")]: [{ id: "d1", filename: "Mine.pdf", folder_id: null }] },
         });
+        // Stable ordering is what makes the pages line up.
+        expect(fake.calls[0].filters).toContainEqual(["order", "id"]);
+        expect(fake.calls[1].filters).toContainEqual(["order", "id"]);
         expect(fake.calls[1].filters).toContainEqual(["range", 1000, 1999]);
         fake.done();
     });
