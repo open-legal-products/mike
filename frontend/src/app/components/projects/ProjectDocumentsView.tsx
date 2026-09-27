@@ -18,6 +18,7 @@ import {
     moveDocumentToFolder,
     moveSubfolderToFolder,
     renameProjectDocument,
+    findProjectDocumentDuplicates,
     renameProjectFolder,
     resolveProjectFolderPath,
     uploadProjectDocument,
@@ -235,6 +236,8 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 moveDocumentToFolder(projectId, documentId, folderId),
             renameDocument: (documentId: string, filename: string) =>
                 renameProjectDocument(projectId, documentId, filename),
+            findDuplicates: (hashes: string[]) =>
+                findProjectDocumentDuplicates(projectId, hashes),
         }),
         [projectId, refreshCollection],
     );

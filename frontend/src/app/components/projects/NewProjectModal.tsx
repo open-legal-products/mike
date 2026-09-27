@@ -30,6 +30,7 @@ import {
     type PendingOrgOverride,
 } from "../modals/CreateAccessStep";
 import { WarningPopup } from "../popups/WarningPopup";
+import { useUploadDuplicateCheck } from "../documents/useUploadDuplicateCheck";
 
 const PERSONAL_WORKSPACE = "__personal__";
 
@@ -59,6 +60,8 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const memoryEditedRef = useRef(false);
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+    // Same file picked twice (see the hook); the project does not exist yet.
+    const { checkSelection, duplicateDialog } = useUploadDuplicateCheck();
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [organizationLoadWarning, setOrganizationLoadWarning] =
@@ -147,7 +150,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
 
     if (!open) return null;
 
-    function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const files = Array.from(e.target.files ?? []);
         e.target.value = "";
         if (!files.length) return;
@@ -155,10 +158,27 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
         // dropped the second of two files called `contract.pdf` — a normal
         // thing to attach from two different folders — and the user was never
         // told one of their picks had not been taken.
+        const added = files.filter((file) => !pendingFiles.includes(file));
+        // Taken at once, so "Create project" right after picking sees them.
         setPendingFiles((prev) => [
             ...prev,
-            ...files.filter((file) => !prev.includes(file)),
+            ...added.filter((file) => !prev.includes(file)),
         ]);
+        // Then the same content picked twice (now or earlier) is asked
+        // about: the project is still empty, so only the selection itself
+        // can repeat. Already-pending files come first, so only new picks can
+        // be the repeats; "Skip duplicates" removes those again, and Cancel
+        // removes everything this pick added.
+        const decision = await checkSelection(
+            [...pendingFiles, ...added].map((file) => ({ file })),
+        );
+        const keep = decision
+            ? new Set(decision.upload.map((entry) => entry.file))
+            : new Set<File>();
+        const dropped = added.filter((file) => !keep.has(file));
+        if (dropped.length > 0) {
+            setPendingFiles((prev) => prev.filter((file) => !dropped.includes(file)));
+        }
     }
 
     /** A stable per-file upload id, so outcomes map back to their File. */
@@ -459,6 +479,8 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     }
 
     return (
+        <>
+        {duplicateDialog}
         <Modal
             open={open}
             onClose={handleClose}
@@ -548,7 +570,7 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 type="file"
                 multiple
                 className="hidden"
-                onChange={handleFileChange}
+                onChange={(event) => void handleFileChange(event)}
             />
             <form
                 id={formId}
@@ -698,5 +720,6 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                 onClose={() => setOrganizationLoadWarning(false)}
             />
         </Modal>
+        </>
     );
 }

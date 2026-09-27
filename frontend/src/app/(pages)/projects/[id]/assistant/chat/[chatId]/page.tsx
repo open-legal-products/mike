@@ -118,6 +118,7 @@ import {
     type DocumentUploadEntry,
 } from "@/app/lib/documentDirectoryUpload";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
+import { useUploadDuplicateCheck } from "@/app/components/documents/useUploadDuplicateCheck";
 
 interface Props {
     params: Promise<{ id: string; chatId?: string }>;
@@ -342,6 +343,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const projectExplorerRef = useRef<ProjectExplorerHandle>(null);
     const [addDocumentsOpen, setAddDocumentsOpen] = useState(false);
     const projectPicker = useProjectPicker();
+    // Exact-duplicate check for uploads into the project (see the hook).
+    const { checkProjectUpload, duplicateDialog } = useUploadDuplicateCheck();
     const [uploadingDocuments, setUploadingDocuments] = useState<
         Array<{ clientId: string; filename: string }>
     >([]);
@@ -1046,10 +1049,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     async function uploadEntries(
-        entries: DocumentUploadEntry[],
+        requestedEntries: DocumentUploadEntry[],
         openInViewer = false,
     ) {
-        if (!entries.length) return;
+        if (!requestedEntries.length) return;
         if (!canEditContent) {
             // Only accuse somebody of lacking a role once we know they do.
             if (projectRole) {
@@ -1057,6 +1060,20 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             }
             return;
         }
+
+        // Files already in the project are not uploaded again: with "Use
+        // existing" their documents are used instead (and opened, when the
+        // drop was meant for viewing).
+        const decision = await checkProjectUpload(projectId, requestedEntries, {
+            reuse: true,
+        });
+        if (!decision) return;
+        if (decision.reuse.length > 0) {
+            addUploadedDocuments(decision.reuse);
+            if (openInViewer) decision.reuse.forEach(handleDocClick);
+        }
+        const entries = decision.upload;
+        if (!entries.length) return;
 
         const pendingUploads = entries.map((entry) => ({
             clientId: crypto.randomUUID(),
@@ -1578,6 +1595,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [explorerCollapsed]);
 
     return (
+        <>
+        {duplicateDialog}
         <div
             ref={workspaceRef}
             className="my-2 ml-2 mr-3 flex h-[calc(100dvh-1rem)] min-h-0 md:my-3 md:h-[calc(100dvh-1.5rem)]"
@@ -2268,5 +2287,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 onConfirm={() => void confirmDeletePendingFolder()}
             />
         </div>
+        </>
     );
 }

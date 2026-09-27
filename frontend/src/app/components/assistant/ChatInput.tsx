@@ -71,6 +71,7 @@ import {
 } from "@/app/lib/documentUploadValidation";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
+import { useUploadDuplicateCheck } from "@/app/components/documents/useUploadDuplicateCheck";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
@@ -351,6 +352,9 @@ function ChatInputForChatImpl(
         [],
     );
 
+    // Exact-duplicate check for uploads into the project (see the hook).
+    const { checkProjectUpload, checkLibraryUpload, duplicateDialog } =
+        useUploadDuplicateCheck();
     const addAttachedDocuments = useCallback((documents: Document[]) => {
         setAttachedDocs((prev) => {
             const existing = new Set(prev.map((document) => document.id));
@@ -376,7 +380,19 @@ function ChatInputForChatImpl(
             setUploadWarning(formatUnsupportedDocumentWarning(unsupported));
             if (supported.length === 0) return;
 
-            const uploadInputs = supported.map((file) => ({
+            // Files already in the project (or, for standalone uploads, in
+            // the user's library, where those land) are not uploaded again:
+            // with "Use existing" their documents are attached instead.
+            const uploadsToProject = dropUploadsToProject && !!projectId;
+            const entries = supported.map((file) => ({ file }));
+            const decision = uploadsToProject
+                ? await checkProjectUpload(projectId, entries, { reuse: true })
+                : await checkLibraryUpload("files", entries, { reuse: true });
+            if (!decision) return;
+            const filesToUpload = decision.upload.map((entry) => entry.file);
+            const reused = decision.reuse;
+
+            const uploadInputs = filesToUpload.map((file) => ({
                 file,
                 clientId: crypto.randomUUID(),
             }));
@@ -415,8 +431,9 @@ function ChatInputForChatImpl(
                     addCompletedDocument(progress.result);
                 }
             };
+            reused.forEach(addCompletedDocument);
+            if (uploadInputs.length === 0) return;
             try {
-                const uploadsToProject = dropUploadsToProject && !!projectId;
                 const outcomes = uploadsToProject
                     ? await uploadProjectDocuments(projectId, uploadInputs, {
                           onProgress: handleProgress,
@@ -454,6 +471,8 @@ function ChatInputForChatImpl(
         [
             addAttachedDocuments,
             canSend,
+            checkLibraryUpload,
+            checkProjectUpload,
             composerOpen,
             dropUploadsToProject,
             onDocumentsUploaded,
@@ -659,6 +678,7 @@ function ChatInputForChatImpl(
 
     return (
         <>
+            {duplicateDialog}
             <div className="relative w-full">
                 {slashMenuOpen && (
                     <WorkflowSlashMenu

@@ -38,6 +38,7 @@ import {
     moveLibraryDocument,
     moveLibraryFolder,
     renameLibraryDocument,
+    findLibraryDocumentDuplicates,
     renameLibraryFolder,
   resolveLibraryFolderPath,
   searchLibraryDocuments,
@@ -889,6 +890,9 @@ export function LibraryCollectionPage({
                 moveLibraryDocument(kind, documentId, folderId),
             renameDocument: (documentId: string, filename: string) =>
                 renameLibraryDocument(kind, documentId, filename),
+            // Exact-duplicate check before uploading (see DocTable).
+            findDuplicates: (hashes: string[]) =>
+                findLibraryDocumentDuplicates(kind, hashes),
       bulkDeleteDocuments: (documentIds: string[]) =>
         bulkDeleteLibraryDocuments(kind, documentIds),
         }),

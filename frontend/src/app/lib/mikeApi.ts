@@ -1146,6 +1146,31 @@ export async function getProject(projectId: string): Promise<Project> {
     return apiRequest<Project>(`/projects/${projectId}`);
 }
 
+export type DuplicateDocumentMatch = {
+    id: string;
+    filename: string;
+    folder_id: string | null;
+};
+
+/**
+ * Which of these file hashes (SHA-256 of the file bytes, lower-case hex)
+ * already exist as a document in the project. Checked before an upload so
+ * the user can skip exact duplicates.
+ */
+export async function findProjectDocumentDuplicates(
+    projectId: string,
+    hashes: string[],
+): Promise<Record<string, DuplicateDocumentMatch[]>> {
+    return apiRequest<Record<string, DuplicateDocumentMatch[]>>(
+        `/projects/${encodeURIComponent(projectId)}/documents/duplicates`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hashes }),
+        },
+    );
+}
+
 export async function updateProject(
     projectId: string,
     payload: {
@@ -1753,6 +1778,25 @@ export async function uploadLibraryDocument(
 ): Promise<Document> {
     return firstUploadResult(
         await uploadLibraryDocuments(kind, [{ file, folderId }], options),
+    );
+}
+
+/**
+ * Which of these file hashes (SHA-256 of the file bytes, lower-case hex)
+ * already exist in the user's library of this kind. Checked before a
+ * library (or standalone) upload so the user can skip exact duplicates.
+ */
+export async function findLibraryDocumentDuplicates(
+    kind: LibraryKind,
+    hashes: string[],
+): Promise<Record<string, DuplicateDocumentMatch[]>> {
+    return apiRequest<Record<string, DuplicateDocumentMatch[]>>(
+        `/library/${kind}/documents/duplicates`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hashes }),
+        },
     );
 }
 

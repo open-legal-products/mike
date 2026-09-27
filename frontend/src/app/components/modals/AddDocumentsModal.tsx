@@ -22,6 +22,7 @@ import {
 } from "@/app/lib/documentUploadValidation";
 import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { useUploadDuplicateCheck } from "@/app/components/documents/useUploadDuplicateCheck";
 
 interface Props {
     open: boolean;
@@ -78,6 +79,9 @@ export function AddDocumentsModal({
         ].join(":");
     const uploadStateKey = `add-documents-upload:${uploadSurfaceId}`;
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
+    // Exact-duplicate check for uploads into the project (see the hook).
+    const { checkProjectUpload, checkLibraryUpload, duplicateDialog } =
+        useUploadDuplicateCheck();
     const [uploading, setUploading] = useRemountPersistentState(
         `${uploadStateKey}:active`,
         false,
@@ -254,7 +258,24 @@ export function AddDocumentsModal({
             if (fileInputRef.current) fileInputRef.current.value = "";
             return;
         }
-        const uploadInputs = supported.map((file) => ({
+        // Files already in the project (or, outside a project, in the
+        // user's library, where standalone uploads land) are not uploaded
+        // again: with "Use existing" their documents are selected instead.
+        let filesToUpload = supported;
+        let reused: Document[] = [];
+        {
+            const entries = supported.map((file) => ({ file }));
+            const decision = projectId
+                ? await checkProjectUpload(projectId, entries, { reuse: true })
+                : await checkLibraryUpload("files", entries, { reuse: true });
+            if (!decision) {
+                if (fileInputRef.current) fileInputRef.current.value = "";
+                return;
+            }
+            filesToUpload = decision.upload.map((entry) => entry.file);
+            reused = decision.reuse;
+        }
+        const uploadInputs = filesToUpload.map((file) => ({
             file,
             clientId: crypto.randomUUID(),
         }));
@@ -289,6 +310,13 @@ export function AddDocumentsModal({
                 addUploadedDocument(progress.result);
             }
         };
+        reused.forEach(addUploadedDocument);
+        if (uploadInputs.length === 0) {
+            setUploading(false);
+            setUploadingFiles([]);
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            return;
+        }
         try {
             const outcomes = projectId
                 ? await uploadProjectDocuments(
@@ -377,6 +405,8 @@ export function AddDocumentsModal({
     }
 
     return (
+        <>
+        {duplicateDialog}
         <Modal
             open={open}
             onClose={onClose}
@@ -462,5 +492,6 @@ export function AddDocumentsModal({
                 />
             </div>
         </Modal>
+        </>
     );
 }

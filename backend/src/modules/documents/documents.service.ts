@@ -59,3 +59,12 @@ export { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "./d
 export { createDocumentVersions, activateDocumentVersion, updateDocumentVersion, type DocumentVersionPatch } from "./documents.lifecycle";
 
 export { runConversionJob, setDocumentTerminalStatus } from "./documents.conversion";
+
+// Exact-duplicate lookup for upload checks (projects and library).
+export {
+    MAX_DUPLICATE_CHECK_HASHES,
+    matchDocumentsByContentHash,
+    parseContentHashes,
+    type DuplicateCandidate,
+    type DuplicateDocumentMatch,
+} from "./documents.duplicates";

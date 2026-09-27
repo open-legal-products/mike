@@ -7,7 +7,14 @@
 // the thin route handlers in library.routes.ts map them onto HTTP responses.
 
 import { parseFolderPath, validateFolderMove, collectFolderSubtree } from "../../lib/folderTree";
-import { renameDocument, deleteCollectionDocuments } from "../documents/documents.service";
+import {
+  renameDocument,
+  deleteCollectionDocuments,
+  MAX_DUPLICATE_CHECK_HASHES,
+  matchDocumentsByContentHash,
+  parseContentHashes,
+  type DuplicateDocumentMatch,
+} from "../documents/documents.service";
 import type { Db } from "../../lib/supabase";
 import {
   attachActiveVersionPaths,
@@ -580,4 +587,56 @@ export async function renameLibraryDocument(
   if (result.ok) return ok(mapLibraryDocument(result.data));
   if (result.kind === "error") return internalErr(result.error);
   return err(result.kind === "validation" ? 400 : 404, result.detail);
+}
+
+/**
+ * Which of the given file hashes (SHA-256 of the raw bytes, lower-case hex)
+ * already exist as the current version of a document in the user's library
+ * of this kind. The library is the user's own standalone documents, so the
+ * scope is simply theirs; nothing of other users is ever compared or
+ * returned. Used by the upload dialog to warn about exact duplicates.
+ */
+export async function findLibraryDocumentDuplicates(
+  db: Db,
+  userId: string,
+  kind: LibraryKind,
+  hashesValue: unknown,
+): Promise<ServiceResult<Record<string, DuplicateDocumentMatch[]>>> {
+  const hashes = parseContentHashes(hashesValue);
+  if (!hashes) {
+    return err(
+      400,
+      `hashes must be an array of at most ${MAX_DUPLICATE_CHECK_HASHES} lower-case SHA-256 hex strings`,
+    );
+  }
+  if (hashes.length === 0) return ok({});
+
+  let query = db
+    .from("documents")
+    .select("id, current_version_id, library_folder_id")
+    .eq("user_id", userId)
+    .is("project_id", null);
+  // Files include legacy rows without a kind, like the library listing.
+  query =
+    kind === "file"
+      ? query.or("library_kind.eq.file,library_kind.is.null")
+      : query.eq("library_kind", kind);
+  const { data: documents, error } = await query;
+  if (error) return internalErr(error);
+
+  const result = await matchDocumentsByContentHash(
+    db,
+    ((documents ?? []) as {
+      id: string;
+      current_version_id: string | null;
+      library_folder_id: string | null;
+    }[]).map((doc) => ({
+      id: doc.id,
+      current_version_id: doc.current_version_id,
+      folder_id: doc.library_folder_id,
+    })),
+    hashes,
+  );
+  if (!result.ok) return internalErr(result.error);
+  return ok(result.matches);
 }

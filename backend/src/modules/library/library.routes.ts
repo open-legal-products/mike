@@ -29,6 +29,7 @@ import {
   getLibraryLevels,
   getLibraryFilterOptions,
   getLibraryDocumentIds,
+  findLibraryDocumentDuplicates,
   bulkDeleteLibraryDocuments,
   getLibraryFolderPath,
   resolveLibraryFolderPath,
@@ -187,6 +188,28 @@ libraryRouter.get("/:kind/ids", requireAuth, asyncRoute(async (req, res) => {
     return void sendServiceError(res, result);
   res.json(result.data);
 }));
+
+// POST /library/:kind/documents/duplicates  { hashes: string[] }
+// `{ [sha256]: [{ id, filename, folder_id }] }` for hashes that already exist
+// in the user's library of this kind. The upload dialog sends the SHA-256 of
+// each selected file before uploading.
+libraryRouter.post(
+  "/:kind/documents/duplicates",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const userId = res.locals.userId as string;
+    const kind = normalizeLibraryKind(req.params.kind);
+    if (!kind) return void res.status(404).json({ detail: "Library not found" });
+    const result = await findLibraryDocumentDuplicates(
+      createServerSupabase(),
+      userId,
+      kind,
+      (req.body as { hashes?: unknown } | undefined)?.hashes,
+    );
+    if (!result.ok) return void sendServiceError(res, result);
+    res.json(result.data);
+  }),
+);
 
 // POST /library/:kind/documents/bulk-delete
 // One bounded backend operation replaces an unbounded browser request burst.

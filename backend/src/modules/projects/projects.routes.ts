@@ -9,6 +9,7 @@ import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendInternalError } from "../../lib/httpError";
+import { sendServiceFailure } from "../../lib/serviceResult";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { normalizeSearchTerm } from "../../lib/search";
 import { parseProjectSort } from "../../lib/sort";
@@ -29,6 +30,7 @@ import {
   deleteProject,
   exportProjectManifest,
   listProjectDocuments,
+  findProjectDocumentDuplicates,
   getProjectDirectoryLevel,
   assignOrCopyDocument,
   renameProjectDocument,
@@ -397,6 +399,25 @@ projectsRouter.get("/:projectId/documents", requireAuth, asyncRoute(async (req, 
     return void res.status(404).json({ detail: "Project not found" });
   res.json(result.docs);
 }));
+
+// POST /projects/:projectId/documents/duplicates  { hashes: string[] }
+// `{ [sha256]: [{ id, filename, folder_id }] }` for hashes that already exist
+// as the current version of a document in the project. The upload dialog
+// sends the SHA-256 of each selected file before uploading.
+projectsRouter.post(
+  "/:projectId/documents/duplicates",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const result = await findProjectDocumentDuplicates(createServerSupabase(), {
+      projectId: req.params.projectId,
+      userId: res.locals.userId as string,
+      userEmail: res.locals.userEmail as string | undefined,
+      hashes: (req.body as { hashes?: unknown } | undefined)?.hashes,
+    });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.json(result.data);
+  }),
+);
 
 // GET /projects/:projectId/export — tamper-evident manifest of the project's
 // documents: every version with its content_sha256 plus the accept/reject

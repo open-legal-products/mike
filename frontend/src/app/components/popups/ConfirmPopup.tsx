@@ -17,6 +17,9 @@ interface ConfirmPopupProps {
   confirmVariant?: "default" | "danger";
   confirmStatus?: ConfirmStatus;
   cancelLabel?: ReactNode;
+  /** Optional third choice, shown between Cancel and the confirm button. */
+  secondaryLabel?: ReactNode;
+  onSecondary?: () => void;
   onConfirm: () => void;
   onCancel: () => void;
   confirmDisabled?: boolean;
@@ -31,6 +34,8 @@ export function ConfirmPopup({
   confirmVariant = "default",
   confirmStatus = "idle",
   cancelLabel = "Cancel",
+  secondaryLabel,
+  onSecondary,
   onConfirm,
   onCancel,
   confirmDisabled = false,
@@ -108,6 +113,16 @@ export function ConfirmPopup({
           <PillButtonUI tone="white" size="sm" onClick={onCancel}>
             {cancelLabel}
           </PillButtonUI>
+          {secondaryLabel && onSecondary && (
+            <PillButtonUI
+              tone="white"
+              size="sm"
+              onClick={onSecondary}
+              disabled={confirmStatus !== "idle"}
+            >
+              {secondaryLabel}
+            </PillButtonUI>
+          )}
           <PillButtonUI
             tone={isDangerAction ? "danger" : "black"}
             size="sm"
