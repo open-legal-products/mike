@@ -62,6 +62,9 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     // Same file picked twice (see the hook); the project does not exist yet.
     const { checkSelection, duplicateDialog } = useUploadDuplicateCheck();
+    // Each pick's duplicate check; only the latest may change the staged
+    // files (a newer pick's dialog cancels an older one's).
+    const selectionGenerationRef = useRef(0);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [organizationLoadWarning, setOrganizationLoadWarning] =
@@ -169,9 +172,13 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
         // can repeat. Already-pending files come first, so only new picks can
         // be the repeats; "Skip duplicates" removes those again, and Cancel
         // removes everything this pick added.
+        const generation = ++selectionGenerationRef.current;
         const decision = await checkSelection(
             [...pendingFiles, ...added].map((file) => ({ file })),
         );
+        // A newer pick started meanwhile: its own check decides; this stale
+        // one must not remove anything it staged.
+        if (generation !== selectionGenerationRef.current) return;
         const keep = decision
             ? new Set(decision.upload.map((entry) => entry.file))
             : new Set<File>();

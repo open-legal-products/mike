@@ -124,10 +124,24 @@ export function useUploadDuplicateCheck(): {
             if (choice === "cancel") return null;
             if (choice === "all") return unchanged;
 
-            const skipped = new Set(duplicates.map((duplicate) => duplicate.entry));
+            // With reuse, a duplicate is only skipped once its existing
+            // document is in hand: if that cannot be loaded (deleted in the
+            // meantime, a failed request), the file is uploaded after all
+            // rather than neither uploaded nor attached.
+            const loaded = reuse ? await existingDocuments(duplicates) : new Map();
+            const skipped = new Set(
+                duplicates
+                    .filter(
+                        (duplicate) =>
+                            !reuse ||
+                            duplicate.kind === "selection" ||
+                            loaded.has(duplicate.matches[0].id),
+                    )
+                    .map((duplicate) => duplicate.entry),
+            );
             return {
                 upload: entries.filter((entry) => !skipped.has(entry)),
-                reuse: reuse ? await existingDocuments(duplicates) : [],
+                reuse: [...loaded.values()],
             };
         },
         [],
@@ -214,13 +228,13 @@ export function useUploadDuplicateCheck(): {
 }
 
 /**
- * The existing documents behind "already here" duplicates, loaded so the
- * caller can select them. A document that cannot be loaded (deleted in the
- * meantime) is left out; its file was skipped, which the user asked for.
+ * The existing documents behind "already here" duplicates, by id, loaded so
+ * the caller can select them. Documents that cannot be loaded are missing
+ * from the map; the caller uploads their files instead.
  */
 async function existingDocuments<E extends { file: File }>(
     duplicates: UploadDuplicate<E>[],
-): Promise<Document[]> {
+): Promise<Map<string, Document>> {
     const ids = [
         ...new Set(
             duplicates.flatMap((duplicate) =>
@@ -229,7 +243,9 @@ async function existingDocuments<E extends { file: File }>(
         ),
     ];
     const loaded = await Promise.allSettled(ids.map((id) => getDocument(id)));
-    return loaded.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-    );
+    const byId = new Map<string, Document>();
+    loaded.forEach((result, index) => {
+        if (result.status === "fulfilled") byId.set(ids[index], result.value);
+    });
+    return byId;
 }

@@ -5,6 +5,7 @@
 // Shared by the project and library upload checks. The caller decides which
 // documents are in scope (a project's, or a user's library of one kind) and
 // authorises the request first; this only compares hashes within that set.
+import { fetchAllPages } from "../../lib/pagination";
 import type { Db } from "../../lib/supabase";
 
 export type DuplicateDocumentMatch = {
@@ -65,17 +66,25 @@ export async function matchDocumentsByContentHash(
     return { ok: true, matches };
   }
   for (let i = 0; i < hashes.length; i += HASH_BATCH) {
-    const { data: versions, error } = await db
-      .from("document_versions")
-      .select("id, filename, content_sha256")
-      .in("content_sha256", hashes.slice(i, i + HASH_BATCH))
-      .is("deleted_at", null);
-    if (error) return { ok: false, error };
-    for (const version of (versions ?? []) as {
+    const batch = hashes.slice(i, i + HASH_BATCH);
+    // All versions with these hashes, instance-wide (the service role sees
+    // every row): paged, so copies elsewhere beyond the row cap cannot crowd
+    // out a match in scope. Out-of-scope rows are dropped below.
+    const versions = await fetchAllPages<{
       id: string;
       filename: string | null;
       content_sha256: string;
-    }[]) {
+    }>((from, to) =>
+      db
+        .from("document_versions")
+        .select("id, filename, content_sha256")
+        .in("content_sha256", batch)
+        .is("deleted_at", null)
+        .order("id")
+        .range(from, to),
+    );
+    if (!versions.ok) return { ok: false, error: versions.error };
+    for (const version of versions.rows) {
       const doc = byCurrentVersion.get(version.id);
       if (!doc) continue;
       (matches[version.content_sha256] ??= []).push({

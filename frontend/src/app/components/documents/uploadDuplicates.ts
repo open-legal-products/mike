@@ -17,6 +17,8 @@ export type UploadDuplicate<E> =
       };
 
 const HASH_CONCURRENCY = 2;
+/** The duplicate endpoints accept at most this many hashes per request. */
+export const HASHES_PER_REQUEST = 100;
 
 /**
  * Find exact duplicates among files about to be uploaded: files whose bytes
@@ -46,9 +48,17 @@ export async function findUploadDuplicates<E extends { file: File }>(
     );
     if (hashes.some((value) => value === null)) return null;
 
-    let existing: Record<string, DuplicateDocumentMatch[]>;
+    // Asked in requests of at most 100 hashes (a folder upload can hold far
+    // more files); one failed request means the check cannot run.
+    const unique = [...new Set(hashes as string[])];
+    const existing: Record<string, DuplicateDocumentMatch[]> = {};
     try {
-        existing = await find([...new Set(hashes as string[])]);
+        for (let i = 0; i < unique.length; i += HASHES_PER_REQUEST) {
+            Object.assign(
+                existing,
+                await find(unique.slice(i, i + HASHES_PER_REQUEST)),
+            );
+        }
     } catch {
         return null;
     }

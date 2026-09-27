@@ -29,6 +29,7 @@ import {
   storageKey,
 } from "../../lib/storage";
 import { convertedPdfKey } from "../../lib/convert";
+import { fetchAllPages } from "../../lib/pagination";
 import { checkProjectAccess, resolveContentOrgId } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import { contentTypeForDocumentType } from "../../lib/documentTypes";
@@ -387,17 +388,18 @@ export async function findProjectDocumentDuplicates(
   if (!access.ok) return failure("not_found", "Project not found");
   if (hashes.length === 0) return ok({});
 
-  const { data: documents, error } = await db
-    .from("documents")
-    .select("id, current_version_id, folder_id")
-    .eq("project_id", projectId);
-  if (error) return internalFailure(error);
-
-  const result = await matchDocumentsByContentHash(
-    db,
-    (documents ?? []) as DuplicateCandidate[],
-    hashes,
+  // Every document of the project, past the PostgREST row cap.
+  const documents = await fetchAllPages<DuplicateCandidate>((from, to) =>
+    db
+      .from("documents")
+      .select("id, current_version_id, folder_id")
+      .eq("project_id", projectId)
+      .order("id")
+      .range(from, to),
   );
+  if (!documents.ok) return internalFailure(documents.error);
+
+  const result = await matchDocumentsByContentHash(db, documents.rows, hashes);
   if (!result.ok) return internalFailure(result.error);
   return ok(result.matches);
 }

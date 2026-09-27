@@ -38,6 +38,8 @@ describe("findLibraryDocumentDuplicates", () => {
             ["eq", "user_id", "u1"],
             ["is", "project_id", null],
             ["or", "library_kind.eq.file,library_kind.is.null"],
+            ["order", "id"],
+            ["range", 0, 999],
         ]);
         fake.done();
     });

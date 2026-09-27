@@ -73,3 +73,31 @@ describe("matchDocumentsByContentHash", () => {
         ).toEqual({ ok: false, error });
     });
 });
+
+describe("matchDocumentsByContentHash paging", () => {
+    it("keeps reading versions past the row cap, so copies elsewhere cannot hide a match", async () => {
+        const elsewhere = Array.from({ length: 1000 }, (_, i) => ({
+            id: `other-${i}`,
+            filename: "Copy.pdf",
+            content_sha256: hash("a"),
+        }));
+        const fake = scriptedDb([
+            { table: "document_versions", data: elsewhere },
+            {
+                table: "document_versions",
+                data: [{ id: "v1", filename: "Mine.pdf", content_sha256: hash("a") }],
+            },
+        ]);
+        const result = await matchDocumentsByContentHash(
+            fake.db,
+            [{ id: "d1", current_version_id: "v1", folder_id: null }],
+            [hash("a")],
+        );
+        expect(result).toEqual({
+            ok: true,
+            matches: { [hash("a")]: [{ id: "d1", filename: "Mine.pdf", folder_id: null }] },
+        });
+        expect(fake.calls[1].filters).toContainEqual(["range", 1000, 1999]);
+        fake.done();
+    });
+});

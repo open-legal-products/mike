@@ -20,7 +20,7 @@ import {
   attachActiveVersionPaths,
   attachLatestVersionNumbers,
 } from "../../lib/documentVersions";
-import type { PaginationParams } from "../../lib/pagination";
+import { fetchAllPages, type PaginationParams } from "../../lib/pagination";
 
 export type LibraryKind = "file" | "template";
 
@@ -611,26 +611,29 @@ export async function findLibraryDocumentDuplicates(
   }
   if (hashes.length === 0) return ok({});
 
-  let query = db
-    .from("documents")
-    .select("id, current_version_id, library_folder_id")
-    .eq("user_id", userId)
-    .is("project_id", null);
-  // Files include legacy rows without a kind, like the library listing.
-  query =
-    kind === "file"
-      ? query.or("library_kind.eq.file,library_kind.is.null")
-      : query.eq("library_kind", kind);
-  const { data: documents, error } = await query;
-  if (error) return internalErr(error);
+  // Every document of the library, past the PostgREST row cap.
+  const documents = await fetchAllPages<{
+    id: string;
+    current_version_id: string | null;
+    library_folder_id: string | null;
+  }>((from, to) => {
+    let query = db
+      .from("documents")
+      .select("id, current_version_id, library_folder_id")
+      .eq("user_id", userId)
+      .is("project_id", null);
+    // Files include legacy rows without a kind, like the library listing.
+    query =
+      kind === "file"
+        ? query.or("library_kind.eq.file,library_kind.is.null")
+        : query.eq("library_kind", kind);
+    return query.order("id").range(from, to);
+  });
+  if (!documents.ok) return internalErr(documents.error);
 
   const result = await matchDocumentsByContentHash(
     db,
-    ((documents ?? []) as {
-      id: string;
-      current_version_id: string | null;
-      library_folder_id: string | null;
-    }[]).map((doc) => ({
+    documents.rows.map((doc) => ({
       id: doc.id,
       current_version_id: doc.current_version_id,
       folder_id: doc.library_folder_id,

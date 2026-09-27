@@ -50,10 +50,16 @@ describe("findProjectDocumentDuplicates", () => {
             },
         });
         expect(access).toHaveBeenCalledWith("p1", "u1", "u1@example.test", fake.db);
-        expect(fake.calls[0].filters).toEqual([["eq", "project_id", "p1"]]);
+        expect(fake.calls[0].filters).toEqual([
+            ["eq", "project_id", "p1"],
+            ["order", "id"],
+            ["range", 0, 999],
+        ]);
         expect(fake.calls[1].filters).toEqual([
             ["in", "content_sha256", [hash("a"), hash("b")]],
             ["is", "deleted_at", null],
+            ["order", "id"],
+            ["range", 0, 999],
         ]);
         fake.done();
     });
@@ -95,6 +101,35 @@ describe("findProjectDocumentDuplicates", () => {
         expect(result).toEqual({ ok: true, data: {} });
         expect((fake.calls[1].filters[0][2] as string[]).length).toBe(25);
         expect((fake.calls[2].filters[0][2] as string[]).length).toBe(5);
+        fake.done();
+    });
+
+    it("reads projects past the 1000-row cap page by page", async () => {
+        const page = Array.from({ length: 1000 }, (_, i) => ({
+            id: `d${i}`,
+            current_version_id: `v${i}`,
+            folder_id: null,
+        }));
+        const fake = scriptedDb([
+            { table: "documents", data: page },
+            {
+                table: "documents",
+                data: [{ id: "last", current_version_id: "v-last", folder_id: null }],
+            },
+            {
+                table: "document_versions",
+                data: [{ id: "v-last", filename: "Last.pdf", content_sha256: hash("c") }],
+            },
+        ]);
+        const result = await findProjectDocumentDuplicates(fake.db, {
+            ...base,
+            hashes: [hash("c")],
+        });
+        expect(fake.calls[1].filters).toContainEqual(["range", 1000, 1999]);
+        expect(result).toEqual({
+            ok: true,
+            data: { [hash("c")]: [{ id: "last", filename: "Last.pdf", folder_id: null }] },
+        });
         fake.done();
     });
 });

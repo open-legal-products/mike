@@ -883,6 +883,35 @@ describe("NewProjectModal sharing", () => {
         ).toBeInTheDocument();
     });
 
+    it("keeps an earlier pick when a newer pick replaces its dialog", async () => {
+        // Two picks with duplicates in quick succession: the newer dialog
+        // cancels the older one, which must not remove the files it staged.
+        const user = userEvent.setup({ delay: null });
+        renderModal();
+
+        await user.type(screen.getByPlaceholderText("Add project name"), "P");
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+
+        const input = document.querySelector(
+            'input[type="file"]',
+        ) as HTMLInputElement;
+        fireEvent.change(input, {
+            target: { files: [new File(["x"], "A.pdf"), new File(["x"], "A copy.pdf")] },
+        });
+        await screen.findByText("A copy.pdf: same file as A.pdf in this upload");
+        fireEvent.change(input, {
+            target: { files: [new File(["y"], "B.pdf"), new File(["y"], "B copy.pdf")] },
+        });
+        await screen.findByText("B copy.pdf: same file as B.pdf in this upload");
+        await user.click(screen.getByRole("button", { name: "Upload anyway" }));
+
+        // All four stay: the first pick's cancelled check changed nothing.
+        expect(
+            await screen.findByRole("button", { name: /Upload \(4\)/ }),
+        ).toBeInTheDocument();
+    });
+
     it("says the attached files are still pending when a grant is refused", async () => {
         // Grants run before the attachments, so a refusal there means nothing
         // the user picked has been sent — an error that mentions only the

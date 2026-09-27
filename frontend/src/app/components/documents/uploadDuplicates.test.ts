@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { DuplicateDocumentMatch } from "@/app/lib/mikeApi";
 import {
     describeUploadDuplicate,
     findUploadDuplicates,
@@ -36,6 +37,28 @@ describe("findUploadDuplicates", () => {
         expect(duplicates!.map(describeUploadDuplicate)).toEqual([
             "a.pdf: already here as Lease.pdf",
             "b copy.pdf: same file as b.pdf in this upload",
+        ]);
+    });
+
+    it("asks in requests of at most 100 hashes and merges the answers", async () => {
+        const entries = Array.from({ length: 150 }, (_, i) => entry(`f${i}.pdf`));
+        const hash = vi.fn(async (file: File) => `h-${file.name}`);
+        const find = vi.fn(
+            async (hashes: string[]): Promise<Record<string, DuplicateDocumentMatch[]>> =>
+            hashes.includes("h-f149.pdf")
+                ? { "h-f149.pdf": [{ id: "d9", filename: "Old.pdf", folder_id: null }] }
+                : {},
+        );
+
+        const duplicates = await findUploadDuplicates(entries, find, hash);
+
+        expect(find.mock.calls.map(([hashes]) => hashes.length)).toEqual([100, 50]);
+        expect(duplicates).toEqual([
+            {
+                entry: entries[149],
+                kind: "existing",
+                matches: [{ id: "d9", filename: "Old.pdf", folder_id: null }],
+            },
         ]);
     });
 

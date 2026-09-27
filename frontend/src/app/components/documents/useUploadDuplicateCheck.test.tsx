@@ -74,6 +74,20 @@ describe("useUploadDuplicateCheck", () => {
         expect(result?.reuse).toEqual([{ id: "d1", filename: "Lease.pdf" }]);
     });
 
+    it("uploads the file after all when its existing document cannot be loaded", async () => {
+        api.getDocument.mockRejectedValue(new Error("gone"));
+        const entries = [{ file: file("Lease.pdf", "lease") }, { file: file("Other.pdf") }];
+        const result = await run(
+            () => hook.checkProjectUpload("p1", entries, { reuse: true }),
+            "Use existing",
+        );
+        expect(result?.upload.map((entry) => entry.file.name)).toEqual([
+            "Lease.pdf",
+            "Other.pdf",
+        ]);
+        expect(result?.reuse).toEqual([]);
+    });
+
     it("skips duplicates without reuse", async () => {
         const entries = [{ file: file("Lease.pdf", "lease") }, { file: file("Other.pdf") }];
         const result = await run(
