@@ -90,13 +90,16 @@ function httpOk(url, allow = [200]) {
 // The bundled zonky Postgres ships only initdb/pg_ctl/postgres — no psql, no
 // pg_isready — so all SQL goes through the pure-JS `pg` client instead.
 // query() without parameters uses the simple protocol, which accepts
-// multi-statement strings (schema.sql, migration files) exactly like
-// `psql -f` — except wrapped in one implicit transaction, which is fine
-// here: nothing in schema.sql/migrations is non-transactional (no
-// CONCURRENTLY/VACUUM), and all-or-nothing per file is what a migration
-// runner wants anyway.
+// multi-statement strings (schema.sql, migration files) like `psql -f` —
+// except wrapped in one implicit transaction. That all-or-nothing is what a
+// migration runner wants, but main's migrations are written for psql and may
+// carry statements Postgres refuses inside a transaction block (#505 added
+// `DROP/CREATE INDEX CONCURRENTLY`), so file application goes through
+// runSqlFile (./sql.js): transactional first, per-statement autocommit only
+// when Postgres rejects the transactional attempt with SQLSTATE 25001.
 
 const { Client } = require("pg");
+const { runSqlFile } = require("./sql");
 
 async function withPg(secrets, fn) {
   const client = new Client({
@@ -125,6 +128,16 @@ async function pgValue(secrets, sql) {
 async function pgExec(secrets, sql, label) {
   try {
     await withPg(secrets, (client) => client.query(sql));
+  } catch (err) {
+    throw new Error(`${label ?? "sql"} failed: ${String(err.message).slice(0, 2000)}`);
+  }
+}
+
+// schema.sql and migration files: same as pgExec, but with the
+// transaction-block fallback described above.
+async function pgExecFile(secrets, sql, label) {
+  try {
+    await withPg(secrets, (client) => runSqlFile((text) => client.query(text), sql));
   } catch (err) {
     throw new Error(`${label ?? "sql"} failed: ${String(err.message).slice(0, 2000)}`);
   }
@@ -235,7 +248,7 @@ async function applySchema(paths, dirs, secrets, status) {
     (await pgValue(secrets, "select to_regclass('public.user_profiles') is null;")) === "true";
   if (fresh) {
     status("Setting up the product schema…");
-    await pgExec(secrets,
+    await pgExecFile(secrets,
       fs.readFileSync(path.join(backend, "schema.sql"), "utf8"), "schema.sql");
     const values = migrations.map((m) => `('${m}')`).join(",");
     if (values) {
@@ -247,7 +260,7 @@ async function applySchema(paths, dirs, secrets, status) {
     for (const m of migrations) {
       if (applied.has(m)) continue;
       status(`Applying update ${m}…`);
-      await pgExec(secrets,
+      await pgExecFile(secrets,
         fs.readFileSync(path.join(migrationsDir, m), "utf8"), m);
       await pgExec(secrets,
         `insert into public.mike_schema_migrations (name) values ('${m}') on conflict do nothing;`,
