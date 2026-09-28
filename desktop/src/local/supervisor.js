@@ -89,17 +89,13 @@ function httpOk(url, allow = [200]) {
 // --- Postgres helpers -------------------------------------------------------
 // The bundled zonky Postgres ships only initdb/pg_ctl/postgres — no psql, no
 // pg_isready — so all SQL goes through the pure-JS `pg` client instead.
-// query() without parameters uses the simple protocol, which accepts
-// multi-statement strings (schema.sql, migration files) like `psql -f` —
-// except wrapped in one implicit transaction. That all-or-nothing is what a
-// migration runner wants, but main's migrations are written for psql and may
-// carry statements Postgres refuses inside a transaction block (#505 added
-// `DROP/CREATE INDEX CONCURRENTLY`), so file application goes through
-// runSqlFile (./sql.js): transactional first, per-statement autocommit only
-// when Postgres rejects the transactional attempt with SQLSTATE 25001.
+// Schema bootstrap and the migration ledger live in ./schema.js, bound here
+// to the running local Postgres through `withPg`; upgrade.test.js binds the
+// same functions to a throwaway cluster so CI upgrades an old schema through
+// exactly this code path.
 
 const { Client } = require("pg");
-const { runSqlFile } = require("./sql");
+const schema = require("./schema");
 
 async function withPg(secrets, fn) {
   const client = new Client({
@@ -117,31 +113,7 @@ async function withPg(secrets, fn) {
   }
 }
 
-async function pgValue(secrets, sql) {
-  return withPg(secrets, async (client) => {
-    const res = await client.query(sql);
-    const row = res.rows?.[0];
-    return row ? String(Object.values(row)[0]) : "";
-  });
-}
-
-async function pgExec(secrets, sql, label) {
-  try {
-    await withPg(secrets, (client) => client.query(sql));
-  } catch (err) {
-    throw new Error(`${label ?? "sql"} failed: ${String(err.message).slice(0, 2000)}`);
-  }
-}
-
-// schema.sql and migration files: same as pgExec, but with the
-// transaction-block fallback described above.
-async function pgExecFile(secrets, sql, label) {
-  try {
-    await withPg(secrets, (client) => runSqlFile((text) => client.query(text), sql));
-  } catch (err) {
-    throw new Error(`${label ?? "sql"} failed: ${String(err.message).slice(0, 2000)}`);
-  }
-}
+const pgValue = (secrets, sql) => schema.pgValue((fn) => withPg(secrets, fn), sql);
 
 async function pgReachable(secrets) {
   try {
@@ -194,87 +166,6 @@ function initdbIfNeeded(paths, dirs, secrets, status) {
   }
 }
 
-// Everything the supabase/postgres image pre-creates that this stack relies
-// on, distilled: the role ladder (authenticator can wear anon/authenticated/
-// service_role; service_role BYPASSes the RLS that schema.sql enables with
-// no policies), and GoTrue's login role. Idempotent — runs every boot.
-async function bootstrapRoles(secrets) {
-  const pw = secrets.dbPassword.replace(/'/g, "''");
-  await pgExec(secrets, `
-    do $$ begin
-      if not exists (select from pg_roles where rolname = 'anon') then create role anon nologin; end if;
-      if not exists (select from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
-      if not exists (select from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
-      if not exists (select from pg_roles where rolname = 'supabase_auth_admin') then create role supabase_auth_admin login createrole; end if;
-      if not exists (select from pg_roles where rolname = 'authenticator') then create role authenticator login noinherit; end if;
-    end $$;
-    alter role supabase_auth_admin with login password '${pw}';
-    alter role authenticator with login password '${pw}' noinherit;
-    grant anon, authenticated, service_role to authenticator;
-    create schema if not exists auth authorization supabase_auth_admin;
-    -- GoTrue's migrator creates its own schema_migrations table WITHOUT a
-    -- schema qualifier — it must land in auth, and since PG15 public no
-    -- longer grants CREATE to non-owners anyway. The supabase image sets
-    -- exactly this search_path on the auth admin role.
-    alter role supabase_auth_admin set search_path = auth;
-  `, "role bootstrap");
-}
-
-// db-init's job plus a real upgrade story. Fresh database: apply schema.sql
-// and record every shipped migration as already-contained-in-schema (the
-// repo's stated contract: schema.sql converges with migrations, CI-enforced).
-// Existing database: apply only migrations the ledger hasn't seen. Then the
-// service_role grants, which must re-run after any migration that created
-// tables.
-async function applySchema(paths, dirs, secrets, status) {
-  const backend = paths.backendDir;
-  await pgExec(secrets, `
-    create table if not exists public.mike_schema_migrations (
-      name text primary key,
-      applied_at timestamptz not null default now()
-    );
-  `, "migration ledger");
-  const migrationsDir = path.join(backend, "migrations");
-  const migrations = fs.existsSync(migrationsDir)
-    ? fs.readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()
-    : [];
-  const applied = new Set(
-    await withPg(secrets, async (c) =>
-      (await c.query("select name from public.mike_schema_migrations")).rows.map((r) => r.name),
-    ),
-  );
-
-  const fresh =
-    (await pgValue(secrets, "select to_regclass('public.user_profiles') is null;")) === "true";
-  if (fresh) {
-    status("Setting up the product schema…");
-    await pgExecFile(secrets,
-      fs.readFileSync(path.join(backend, "schema.sql"), "utf8"), "schema.sql");
-    const values = migrations.map((m) => `('${m}')`).join(",");
-    if (values) {
-      await pgExec(secrets,
-        `insert into public.mike_schema_migrations (name) values ${values} on conflict do nothing;`,
-        "migration baseline");
-    }
-  } else {
-    for (const m of migrations) {
-      if (applied.has(m)) continue;
-      status(`Applying update ${m}…`);
-      await pgExecFile(secrets,
-        fs.readFileSync(path.join(migrationsDir, m), "utf8"), m);
-      await pgExec(secrets,
-        `insert into public.mike_schema_migrations (name) values ('${m}') on conflict do nothing;`,
-        "migration ledger insert");
-    }
-  }
-
-  await pgExec(secrets, `
-    grant usage on schema public to service_role;
-    grant all privileges on all tables in schema public to service_role;
-    grant all privileges on all sequences in schema public to service_role;
-  `, "service_role grants");
-}
-
 function findSoffice() {
   const candidate = "/Applications/LibreOffice.app/Contents/MacOS/soffice";
   return fs.existsSync(candidate) ? candidate : null;
@@ -313,7 +204,7 @@ async function startLocalStack(app, status = () => {}) {
        "-c", "listen_addresses=127.0.0.1", "-k", ""],
       { dirs });
     await waitFor("postgres", () => pgReachable(secrets));
-    await bootstrapRoles(secrets);
+    await schema.bootstrapRoles((fn) => withPg(secrets, fn), secrets.dbPassword);
 
     // 2. GoTrue — applies its own migrations (creates auth.users) at boot.
     status("Starting auth…");
@@ -360,7 +251,7 @@ async function startLocalStack(app, status = () => {}) {
       { timeoutMs: 120_000 });
 
     // 3. Product schema
-    await applySchema(paths, dirs, secrets, status);
+    await schema.applySchema((fn) => withPg(secrets, fn), paths.backendDir, status);
     status("Preparing local workflows…");
     await withPg(secrets, (client) => installBundledWorkflows({
       client,

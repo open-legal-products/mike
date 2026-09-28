@@ -16,10 +16,12 @@ runtime catalog download. Model inference is a separate capability: the base PR
 can connect to Ollama, and the child model-onboarding branch manages the optional
 runtime/model download experience.
 
-Run `npm test --prefix desktop` for portable environment/catalog checks and
-`npm run e2e:local --prefix desktop` for the packaged first-run flow. The local
-guest uses the same authenticated API as other accounts; its random credentials
-remain in this installation. Removing app data removes the workspace.
+Run `npm test --prefix desktop` for the environment/catalog/gateway checks and
+the schema-upgrade test, and `npm run e2e:local --prefix desktop` for the
+packaged first-run flow followed by a returning-user relaunch (see "Tests"
+below). The local guest uses the same authenticated API as other accounts; its
+random credentials remain in this installation. Removing app data removes the
+workspace.
 
 `dist:local` produces an unsigned developer build. A public drag-to-Applications
 download must use `dist:local:signed` with an Apple Developer certificate and
@@ -277,8 +279,9 @@ So the certificate lives only as encrypted secrets and never on a laptop:
 - Run `npm run dist:signed` and upload the `dmg`/`zip` as release assets.
 
 > The signed path is documented and pre-wired but **can only be exercised with
-> the org's certificate**. The unsigned local build and e2e suites have been
-> verified locally; this parent branch does not yet have a desktop CI workflow.
+> the org's certificate**. The unsigned build and the packaged e2e run in CI
+> on every change (`.github/workflows/desktop.yml`, see "Tests" below); the
+> signed build is the one step CI cannot take.
 
 ### Signing the self-contained build (`dist:local:signed`)
 
@@ -345,7 +348,39 @@ plate. `assets/icon.html` is the source of truth; regenerate with:
 npm run icon   # renders via Electron's Chromium, then iconutil → icon.icns
 ```
 
-## E2E
+## Tests
+
+`npm test` (`node --test src/local/*.test.js`) is fast and has no services to
+start, with one deliberate exception:
+
+- `src/local/upgrade.test.js` is the desktop counterpart of the repo's
+  `schema-drift.yml` job, run through the app's **own** migration runner
+  (`src/local/schema.js`) instead of psql. It boots a throwaway cluster from
+  the fetched Postgres (`MIKE_LOCAL_FETCH_ONLY=postgres npm run local:fetch`
+  gets just that, no Go needed), builds an installation from the pinned
+  schema baseline plus the ledger such an install carries, upgrades it with
+  `applySchema`, and requires the result to fingerprint identically to a
+  fresh install through the same code. It also states the trap that took
+  every existing workspace down once: a migration Postgres refuses inside a
+  transaction block (`CREATE INDEX CONCURRENTLY`, #505) must fail under a
+  one-transaction-per-file runner and succeed under `sql.js`. Without the
+  binaries it skips; CI sets `MIKE_REQUIRE_LOCAL_STACK=1` so a missing fetch
+  fails instead of skipping.
+
+`npm run e2e:local` drives the **packaged** app (or `MIKE_E2E_DEV=1` for
+`electron .`) through the cold first run — initdb, signup, onboarding,
+project, upload, blob-token download, guest sign-in twice — then quits it for
+real (postgres fast shutdown) and relaunches on the same userData: the
+returning-user path must land in the product without a login, replay no
+migrations, and still show the project and document. Fresh-only suites never
+see that path, which is how the upgrade regression above shipped.
+
+CI (`.github/workflows/desktop.yml`) runs both on Apple Silicon runners: the
+unit job on every desktop/backend/frontend change, and the packaged job — the
+full fetch → build → stage → package → e2e pipeline, unsigned — on the same
+triggers. Screenshots land in the `desktop-local-e2e` artifact.
+
+## E2E (shell flows against a running stack)
 
 With the docker-compose stack running and the app packaged:
 
@@ -364,8 +399,9 @@ can't be driven over CDP — menu coverage is manual.
 
 - **Signing & notarization** — config is wired (see above); needs the org's
   Apple Developer ID to actually run.
-- **Release CI** — no workflow builds `desktop/` yet, so it will drift from the
-  frontend unless a build+e2e job is added.
+- **Release CI** — `desktop.yml` builds and tests the unsigned app on every
+  change; a release job that signs, notarizes and publishes the `.dmg`
+  needs the org certificate (see above) and is still to be added.
 - **Auto-update** (electron-updater) — the `zip` target is already emitted for
   it; wiring it up is a follow-up decision.
 - **`mike://` deep links** — the email-change confirmation link still opens in

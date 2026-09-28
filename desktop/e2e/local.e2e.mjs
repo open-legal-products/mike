@@ -12,7 +12,11 @@
 //
 // A fresh userData per run is the point: it exercises the first-run path a
 // downloader hits (initdb → roles → gotrue migrations → schema.sql → ledger
-// baseline) every single time.
+// baseline) every single time. The run then QUITS and relaunches on the same
+// userData — the returning-user path (warm postgres, ledger already
+// complete, session cookie and data persisted) that a fresh-only suite
+// never touches. Schema upgrades from older baselines are covered by
+// src/local/upgrade.test.js against the same runner.
 
 import { chromium } from "playwright-core";
 import { spawn } from "node:child_process";
@@ -95,25 +99,45 @@ const args = [
   `--remote-debugging-port=${CDP_PORT}`,
   "--local",
 ];
-const app = spawn(APP_BINARY, args, {
-  stdio: "ignore",
-  detached: false,
-  cwd: DESKTOP,
-  env: {
-    ...process.env,
-    MIKE_DOWNLOAD_DIR: DOWNLOAD_DIR,
-    MIKE_E2E_CAPTURE_EXTERNAL: CAPTURE_FILE,
-    MIKE_E2E_DOWNLOAD_LOG: DOWNLOAD_LOG,
-    MIKE_USER_DATA_DIR: USER_DATA_DIR,
-  },
-});
-
-try {
+const launchApp = () =>
+  spawn(APP_BINARY, args, {
+    stdio: "ignore",
+    detached: false,
+    cwd: DESKTOP,
+    env: {
+      ...process.env,
+      MIKE_DOWNLOAD_DIR: DOWNLOAD_DIR,
+      MIKE_E2E_CAPTURE_EXTERNAL: CAPTURE_FILE,
+      MIKE_E2E_DOWNLOAD_LOG: DOWNLOAD_LOG,
+      MIKE_USER_DATA_DIR: USER_DATA_DIR,
+    },
+  });
+const connectApp = async () => {
   await waitForCdp();
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
   const context = browser.contexts()[0];
   const page = context.pages().find((p) => !p.url().startsWith("devtools"));
   if (!page) throw new Error("no app page found over CDP");
+  return { browser, page };
+};
+// SIGTERM is what ⌘Q becomes for the process: Electron routes it through
+// app.quit() → before-quit → supervisor.stopLocalStack (postgres fast
+// shutdown). Wait for the real exit so the next launch finds a clean
+// cluster and free ports, not a stale postmaster.pid.
+const quitApp = async (proc) => {
+  proc.kill("SIGTERM");
+  await new Promise((resolve) => {
+    if (proc.exitCode !== null) return resolve();
+    proc.once("exit", resolve);
+    setTimeout(resolve, 30_000);
+  });
+  if (proc.exitCode === null) throw new Error("app did not exit within 30s of SIGTERM");
+};
+
+let app = launchApp();
+
+try {
+  let { browser, page } = await connectApp();
 
   // 1. First-run boot: the window shows the local-boot progress page while
   //    the supervisor initdbs and starts six services, then lands on the
@@ -283,10 +307,56 @@ try {
   }
   await shot(page, "local-05-guest");
 
+  // 7. Returning user: quit for real, relaunch on the SAME userData. This is
+  //    the path every launch after the first takes, and the one a fresh-only
+  //    run can never see: the supervisor finds an initialised cluster and a
+  //    complete ledger (must replay nothing), the guest's httpOnly session
+  //    cookie is still in the profile (must land in the product, not on
+  //    /login), and what was written before the quit is still there
+  //    (postgres + fs storage survived a clean stop). The session that
+  //    survives is the GUEST's — the signup account's project and document
+  //    are rightly invisible to it — so the guest leaves its own project
+  //    behind first, and the signup account's upload is checked on disk.
+  const GUEST_PROJECT = `${PROJECT_NAME} (guest)`;
+  await page.goto(`${FRONTEND_URL}/projects`);
+  await page.getByRole("button", { name: "New project", exact: true }).click({ timeout: 15_000 });
+  await page.getByPlaceholder("Add project name").fill(GUEST_PROJECT);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("dialog", { name: "Access", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("dialog", { name: "Add Documents", exact: true })
+    .getByRole("button", { name: "Create project", exact: true })
+    .click({ timeout: 15_000 });
+  await page.getByText(GUEST_PROJECT, { exact: false }).first().waitFor({ timeout: 20_000 });
+  await browser.close();
+  await quitApp(app);
+  const pgLog = readFileSync(path.join(USER_DATA_DIR, "local", "logs", "postgres.log"), "utf8");
+  assert(/database system is shut down/.test(pgLog), "quit must stop postgres cleanly");
+  const relaunchedAt = Date.now();
+  app = launchApp();
+  ({ browser, page } = await connectApp());
+  await page.waitForURL((url) => url.href.startsWith(FRONTEND_URL), { timeout: 120_000 });
+  const warmBootMs = Date.now() - relaunchedAt;
+  await page
+    .getByRole("button", { name: "Assistant", exact: true })
+    .first()
+    .waitFor({ timeout: 30_000 });
+  assert(!/\/(login|signup|onboarding)/.test(page.url()),
+    `returning user must land in the product, got ${page.url()}`);
+  await page.goto(`${FRONTEND_URL}/projects`);
+  await page.getByText(GUEST_PROJECT, { exact: false }).first().waitFor({ timeout: 20_000 });
+  assert(walk(storageRoot).some((file) => !file.startsWith(path.join(storageRoot, "mike-workflows") + path.sep)),
+    "the first run's upload must still be on disk after quit + relaunch");
+  const relaunchLog = readFileSync(path.join(USER_DATA_DIR, "local", "logs", "postgres.log"), "utf8").slice(pgLog.length);
+  assert(!/(FATAL|PANIC|database system was not properly shut down)/.test(relaunchLog),
+    "warm boot must not pay crash recovery or fail");
+  console.log(`✓ returning user: relaunch on the same workspace → product in ${(warmBootMs / 1000).toFixed(1)}s, guest project + first run's upload still there`);
+  await shot(page, "local-06-returning");
+
   writeFileSync(
     path.join(ARTIFACTS, "local-summary.json"),
     JSON.stringify(
-      { ok: process.exitCode !== 1, EMAIL, PROJECT_NAME, download: entry },
+      { ok: process.exitCode !== 1, EMAIL, PROJECT_NAME, download: entry, warmBootMs },
       null,
       2,
     ),
