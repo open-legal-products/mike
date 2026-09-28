@@ -241,6 +241,8 @@ export type McpToolEvent = {
   openai_tool_name: string;
   status: "ok" | "error";
   error?: string;
+  /** Server-owned Google proposal rendered for approval in the assistant flow. */
+  google_action_id?: string;
 };
 
 export type AssistantEvent =
@@ -363,3 +365,24 @@ export interface WordDocumentEdit {
 }
 
 export type WordEditResolutionStatus = "accepted" | "rejected";
+
+/** Explicit Google service connections are independent of Mike sign-in. */
+export type GoogleWorkspaceProvider = 'gmail' | 'google-calendar';
+export interface GoogleWorkspaceStatus {
+    configured: boolean;
+    schemaReady: boolean;
+    connected: boolean;
+    writeEnabled: boolean;
+    grantId?: string;
+    accountEmail?: string;
+    redirectUri: string | null;
+}
+export interface GoogleWorkspaceActionReview {
+    id: string;
+    provider: GoogleWorkspaceProvider;
+    status: 'pending' | 'expired' | 'executing' | 'succeeded' | 'failed' | 'uncertain' | 'rejected';
+    expiresAt: string;
+    createdAt: string;
+    resultMessage: string | null;
+    proposal: {tool: string; accountEmail: string; args: Record<string, unknown>; before?: unknown};
+}

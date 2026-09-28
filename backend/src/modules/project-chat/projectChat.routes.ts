@@ -1,4 +1,7 @@
-import { openAssistantSse } from "../../lib/assistantSse";
+import {
+    attachAssistantTurnSse,
+    startAssistantTurnRun,
+} from "../../lib/assistantTurnRuns";
 // HTTP layer for the project-chat module.
 //
 // The route handler parses the request body, calls
@@ -32,7 +35,10 @@ import {
     parseOptionalModel,
     parseOptionalReasoning,
 } from "../chat/chat.service";
-import { generateAssistantChatTitle } from "../chat/chat.service";
+import {
+    generateAssistantChatTitle,
+    logChatTitleFailure,
+} from "../chat/chat.service";
 import { titleModelForChat } from "../../lib/modelSelection";
 import {
     releaseMemoryConversationTurn,
@@ -149,17 +155,38 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     let memoryTurnScheduled = false;
 
     try {
-        // The same SSE setup the chat and word-chat routes use: headers,
-        // flush, an abort controller wired to the client hanging up, and a
-        // write that drops a line raised after the response has ended.
-        const stream = openAssistantSse(res);
+        // The generation is a server-owned run: it survives the caller's
+        // socket and only the Stop endpoint (POST /chat/:chatId/turn/:turnId/
+        // stop) aborts it. `attachAssistantTurnSse` gives the same
+        // { signal, write, finish } the chat route drives its stream with.
+        const run = startAssistantTurnRun({
+            id: assistantMessageId ?? randomUUID(),
+            chatId,
+            userId,
+            assistantMessageId:
+                assistantMessageId ??
+                askInputsResponse?.assistant_message_id ??
+                "",
+        });
+        if (!run) {
+            return void res.status(409).json({
+                code: "turn_in_progress",
+                detail: "A response is already being generated for this chat.",
+            });
+        }
+        const stream = attachAssistantTurnSse(res, run);
         const write = stream.write;
 
+        let titlePromise: Promise<void> = Promise.resolve();
+        // A holder, not a `let`: it is assigned inside the title promise's
+        // catch, which TypeScript's flow analysis cannot see.
+        const titleOutcome: { failure: { error: unknown } | null } = { failure: null };
         try {
             write(
                 `data: ${JSON.stringify({
                     type: "chat_id",
                     chatId,
+                    turnId: run.id,
                     ...(assistantMessageId ? { assistantMessageId } : {}),
                 })}\n\n`,
             );
@@ -179,7 +206,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                       .filter(Boolean)
                       .join("\n")
                 : "";
-            const titlePromise = shouldGenerateTitle
+            titlePromise = shouldGenerateTitle
                 ? generateAssistantChatTitle({
                       model: titleModelForChat(selectedModel, titleModel),
                       message: titleMessage,
@@ -199,10 +226,9 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                           }
                       })
                       .catch((error) => {
-                          console.error(
-                              "[project-chat/stream] failed to generate chat title",
-                              error,
-                          );
+                          // Decided once the reply has settled: see the
+                          // logChatTitleFailure calls below.
+                          titleOutcome.failure = { error };
                       })
                 : Promise.resolve();
 
@@ -271,6 +297,13 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             }
 
             await titlePromise;
+            if (titleOutcome.failure) {
+                logChatTitleFailure(
+                    "[project-chat/stream] failed to generate chat title",
+                    titleOutcome.failure.error,
+                    null,
+                );
+            }
 
             if (!chatTitle && lastUser?.content) {
                 const title = lastUser.content.slice(0, 120);
@@ -326,8 +359,18 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             );
             write("data: [DONE]\n\n");
         } catch (err) {
+            // The title ran in parallel with the reply; only now is it known
+            // whether its failure is the reply's failure seen twice.
+            await titlePromise;
+            if (titleOutcome.failure) {
+                logChatTitleFailure(
+                    "[project-chat/stream] failed to generate chat title",
+                    titleOutcome.failure.error,
+                    isAbortError(err) ? null : err,
+                );
+            }
             if (isAbortError(err)) {
-                console.log("[project-chat/stream] client aborted stream", {
+                console.log("[project-chat/stream] turn stopped", {
                     chatId,
                 });
                 if (err instanceof AssistantStreamError) {
@@ -365,6 +408,8 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         );
                     }
                 }
+                write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+                write("data: [DONE]\n\n");
                 return;
             }
             console.error("[project-chat/stream] error:", err);

@@ -73,9 +73,9 @@ describe("createEventScrubber", () => {
         expect(scrubEvent({ user: {} })!.user).toBeUndefined();
     });
 
-    it("leaves an event without optional sections untouched", () => {
+    it("classifies an event without optional sections as a message", () => {
         const { scrubEvent } = createEventScrubber({ install: "official" });
-        expect(scrubEvent({})).toEqual({});
+        expect(scrubEvent({})).toEqual({ tags: { capture_source: "message" } });
     });
 
     it("discards the console bridge's copy of an already-reported error only", () => {
@@ -440,7 +440,7 @@ describe("community install minimisation", () => {
             tags: { detail: "person@example.test", api_key: "private-key" },
             fingerprint: ["person@example.test", "Bearer private-token"],
         })!;
-        expect(out.tags).toEqual({ detail: "[email]", api_key: "[Filtered]" });
+        expect(out.tags).toEqual({ detail: "[email]", api_key: "[Filtered]", capture_source: "message" });
         expect(out.fingerprint).toEqual(["[email]", "Bearer [Filtered]"]);
     });
 
@@ -485,7 +485,7 @@ describe("community install minimisation", () => {
         expect(out.server_name).toBeUndefined();
         expect(out.user).toBeUndefined();
         expect(out.breadcrumbs).toBeUndefined();
-        expect(out.tags).toEqual({ component: "mike-api" });
+        expect(out.tags).toEqual({ component: "mike-api", capture_source: "exception" });
         expect(out.request).toEqual({ method: "POST", url: "/api/projects/1" });
         expect(out.contexts).toEqual({ browser: { name: "Chrome", version: "128" } });
         expect(out.exception?.values?.[0]?.stacktrace?.frames?.[0]?.filename).toBe("frontend/src/app/x.tsx");

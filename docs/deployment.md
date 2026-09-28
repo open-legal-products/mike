@@ -97,7 +97,9 @@ is not needed while building the frontend.
 
 Use:
 
-- `NODE_ENV=production` so startup enforces HTTPS and secure-cookie invariants;
+- `NODE_ENV=production` so startup enforces HTTPS and secure-cookie invariants
+  (the backend Docker image sets this by default; see
+  [Running the backend image](#running-the-backend-image));
 - the Supabase project URL for backend `SUPABASE_URL`;
 - the anon/publishable key for backend `SUPABASE_PUBLISHABLE_KEY`;
 - the service-role key for backend `SUPABASE_SECRET_KEY`; and
@@ -434,6 +436,35 @@ npm run build --prefix backend
 npm run build --prefix frontend
 ```
 
+If port 3001 (or `PORT`) is already taken, for example by the Docker Compose
+backend, the backend reports the bind failure and exits instead of starting
+without a listener.
+
+### Running the backend image
+
+The backend image sets `NODE_ENV=production`, so it refuses to start unless
+`FRONTEND_URL` and `API_PUBLIC_URL` are set to `https` URLs (and
+`WORD_ADDIN_URL`, when set, is too). That default is deliberate: an image
+deployed without `NODE_ENV` must not quietly issue non-`Secure` cookies.
+Docker Compose overrides it with `NODE_ENV=development` and local `http` URLs,
+which is why `docker compose up` works without TLS.
+
+The image contains no `.env` file. Pass the backend environment explicitly:
+
+```bash
+docker build -t mike-backend -f backend/Dockerfile .
+docker run --rm -p 3001:3001 --env-file backend/.env \
+  -e NODE_ENV=production \
+  -e FRONTEND_URL=https://app.example.com \
+  -e API_PUBLIC_URL=https://app.example.com/api \
+  mike-backend
+```
+
+To try the image on your own machine over plain `http`, pass
+`-e NODE_ENV=development` with `http://localhost` URLs instead. When required
+settings are missing, the fatal startup message lists each variable and
+repeats this choice.
+
 The repository includes Dockerfiles for the backend, frontend, and Word add-in.
 Build and run the production add-in host with its public URLs baked into the
 static bundle and its private backend origin supplied only at runtime:
@@ -506,8 +537,19 @@ of on the next fresh install.
 - Use production Supabase credentials rather than the local demo values.
 - Keep backend secrets out of `NEXT_PUBLIC_*` variables.
 - Configure spending limits for model-provider keys where supported.
-- Confirm LibreOffice is available on the backend process path if document
-  conversion is enabled.
+- Confirm LibreOffice is available to the backend and worker if document
+  conversion is enabled. The backend Docker image and `backend/nixpacks.toml`
+  install it; elsewhere the backend looks on `PATH`, in the usual Linux
+  locations, and in `/Applications/LibreOffice.app` on macOS. Set
+  `SOFFICE_BINARY_PATH` to the `soffice` executable for any other location.
+  Without it, Word and presentation uploads are kept without a PDF rendition
+  and the worker logs `conversion_unavailable` once per upload.
+- Confirm the backend can reach the object store with the configured `R2_*`
+  credentials before accepting uploads. When it cannot, completing an upload
+  answers 503 and the server log names the failing storage operation and the
+  store's own error (for example `ECONNREFUSED`, `InvalidAccessKeyId`, or
+  `NoSuchBucket`); clean-up deletes of temporary upload objects are reported
+  once per upload as warnings.
 - Review storage, logging, retention, and deletion behavior before processing
   confidential documents.
 

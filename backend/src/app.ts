@@ -323,7 +323,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // way to generate events, so leave it off once the DSN is confirmed working.
 if (process.env.SENTRY_ENABLE_TEST_ROUTE === "true") {
   app.get("/observability/sentry-test", () => {
-    throw new Error("Sentry backend test error (SENTRY_ENABLE_TEST_ROUTE)");
+    throw Object.assign(new Error("Sentry backend test error (SENTRY_ENABLE_TEST_ROUTE)"), { code: "sentry_test" });
   });
 }
 

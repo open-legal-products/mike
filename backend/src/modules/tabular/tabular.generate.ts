@@ -104,6 +104,40 @@ export async function prepareTabularGenerate(
     };
 }
 
+/**
+ * The gate for STOPPING a generation: the review exists, the caller can see
+ * it, and the caller may edit its contents. Nothing else.
+ *
+ * Stop deliberately does not reuse `prepareTabularGenerate`: that precheck also
+ * demands a non-empty column set and a model the CALLER holds a working key
+ * for, because starting a run will spend that key. Stopping spends nothing.
+ * The run may have been started by another editor with their keys, the
+ * review's model may no longer resolve for this caller, or the last column may
+ * have been deleted mid-run — none of that should leave a run that no socket
+ * can stop any more running to completion.
+ */
+export async function ensureReviewGenerateStopAccess(
+    db: Db,
+    args: { reviewId: string; userId: string; userEmail?: string },
+): Promise<
+    | { ok: true }
+    | { ok: false; kind: "not_found" }
+    | { ok: false; kind: "forbidden" }
+> {
+    const { reviewId, userId, userEmail } = args;
+    const { data: review, error: reviewError } = await db
+        .from("tabular_reviews")
+        .select("*")
+        .eq("id", reviewId)
+        .single();
+    if (reviewError || !review) return { ok: false, kind: "not_found" };
+    const access = await ensureReviewAccess(review, userId, userEmail, db);
+    if (!access.ok) return { ok: false, kind: "not_found" };
+    if (!can(access.projectRole, "content.edit"))
+        return { ok: false, kind: "forbidden" };
+    return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — post-lease work snapshot
 // ---------------------------------------------------------------------------

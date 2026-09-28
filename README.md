@@ -104,6 +104,7 @@ configure upload credentials.
 - [Manual and production deployment](docs/deployment.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [MCP connectors](docs/connectors.md)
+- [Google Drive integration](docs/google-drive.md)
 - [CourtListener integration](docs/courtlistener.md)
 - [Microsoft Word add-in](word-addin/README.md)
 - [Tamper-evident exports](docs/tamper-evident-exports.md)
@@ -122,3 +123,12 @@ packaged and synchronized with this application.
 ## License
 
 Mike is available under the [GNU Affero General Public License v3.0](LICENSE).
+
+## Gmail and Google Calendar
+
+Gmail and Calendar are separate, optional connections in **Settings → Connectors**.
+Google SSO never connects them automatically. Choose any permitted Google account
+for each service, including a different account from your Mike login. Read access
+is the default; write permissions require a separate consent flow, and every
+send/edit/delete proposal requires explicit approval of its exact contents.
+See [setup, technical approach, limits, and manual acceptance tests](docs/google-workspace.md).

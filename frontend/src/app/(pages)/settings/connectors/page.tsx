@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
+import { GoogleConnectionCard } from "@/app/components/settings/GoogleConnectionCard";
+import { GoogleWorkspacePanel } from "@/app/components/settings/GoogleWorkspacePanel";
 import { NewCustomMcpModal } from "@/app/components/settings/NewCustomMcpModal";
 import type { McpConnectorFormDraft } from "@/app/components/settings/McpConnectorForm";
 import {
@@ -16,16 +18,21 @@ import {
 } from "@/app/components/popups/MfaVerificationPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
+  type GoogleDriveStatus,
   type McpConnectorSummary,
   MikeApiError,
+  cancelGoogleDriveOAuth,
   isConnectorSetupError,
   createMcpConnector,
   deleteMcpConnector,
+  disconnectGoogleDrive,
+  getGoogleDriveStatus,
   getMcpConnector,
   isMfaRequiredError,
   listMcpConnectors,
   refreshMcpConnectorTools,
   setMcpToolEnabled,
+  startGoogleDriveOAuth,
   startMcpConnectorOAuth,
   updateMcpConnector,
 } from "@/app/lib/mikeApi";
@@ -42,6 +49,8 @@ import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 
 type PendingMfaAction =
   | { type: "create"; draft: AddDraft; surface: CreateSurface }
+  | { type: "drive-connect" }
+  | { type: "drive-disconnect" }
   | { type: "save"; connectorId: string }
   | { type: "clear-token"; connectorId: string }
   | { type: "delete"; connectorId: string }
@@ -131,10 +140,7 @@ function connectorSetupGuideUrl(serverUrl: string) {
     if (hostname === "slack.com" || hostname.endsWith(".slack.com")) {
       return `${CONNECTOR_SETUP_GUIDE_URL}#slack`;
     }
-    if (
-      hostname === "googleapis.com" ||
-      hostname.endsWith(".googleapis.com")
-    ) {
+    if (hostname === "googleapis.com" || hostname.endsWith(".googleapis.com")) {
       return `${CONNECTOR_SETUP_GUIDE_URL}#google-hosted-mcp-servers`;
     }
   } catch {
@@ -219,13 +225,285 @@ function ConnectorBrandIcon({ name }: { name: string }) {
   }
 
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-5 w-5 fill-black"
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 24 24" className="h-5 w-5 fill-black" aria-hidden="true">
       <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z" />
     </svg>
+  );
+}
+
+type GoogleDriveCardHandle = {
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void>;
+};
+
+class GoogleDriveFlowError extends Error {}
+
+function GoogleDriveCard({
+  runSensitiveAction,
+  handleRef,
+}: {
+  runSensitiveAction: (
+    action: PendingMfaAction,
+    fn: () => Promise<void>,
+  ) => Promise<void>;
+  handleRef: { current: GoogleDriveCardHandle | null };
+}) {
+  const [status, setStatus] = useState<GoogleDriveStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getGoogleDriveStatus()
+      .then((next) => {
+        if (!cancelled) setStatus(next);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError(
+            "Could not load Google Drive status. Please reload this page.",
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const connect = async () => {
+    setBusy(true);
+    setError(null);
+    const abortController = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = abortController;
+    let pendingState: string | null = null;
+    const popup = window.open(
+      "about:blank",
+      "mike_google_drive_oauth",
+      "popup,width=560,height=720,menubar=no,toolbar=no,location=no,status=no",
+    );
+    try {
+      await runSensitiveAction({ type: "drive-connect" }, async () => {
+        try {
+          const { authorizationUrl } = await startGoogleDriveOAuth();
+          pendingState = new URL(authorizationUrl).searchParams.get("state");
+          if (abortController.signal.aborted) {
+            throw new GoogleDriveFlowError("Authorization cancelled.");
+          }
+          if (!popup) {
+            pendingState = null;
+            window.location.assign(authorizationUrl);
+            return;
+          }
+          popup.location.href = authorizationUrl;
+
+          await new Promise<void>((resolve, reject) => {
+            let settled = false;
+            const started = Date.now();
+            let pollTimer = 0;
+            const finish = (action: () => void) => {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timeout);
+              window.clearTimeout(pollTimer);
+              abortController.signal.removeEventListener("abort", onAbort);
+              action();
+            };
+            const timeout = window.setTimeout(
+              () =>
+                finish(() =>
+                  reject(
+                    new GoogleDriveFlowError("Google authorization timed out."),
+                  ),
+                ),
+              5 * 60 * 1000,
+            );
+            const schedule = () => {
+              const delay = Date.now() - started < 60_000 ? 1500 : 5000;
+              pollTimer = window.setTimeout(runPoll, delay);
+            };
+            const runPoll = () => {
+              void getGoogleDriveStatus()
+                .then((next) => {
+                  if (settled) return;
+                  if (next.connected) {
+                    pendingState = null;
+                    setStatus(next);
+                    finish(resolve);
+                    return;
+                  }
+                  schedule();
+                })
+                .catch(() => {
+                  if (!settled) schedule();
+                });
+            };
+            const onAbort = () =>
+              finish(() =>
+                reject(new GoogleDriveFlowError("Authorization cancelled.")),
+              );
+            abortController.signal.addEventListener("abort", onAbort);
+            schedule();
+          });
+        } catch (cause) {
+          if (isMfaRequiredError(cause)) throw cause;
+          setError(
+            cause instanceof GoogleDriveFlowError
+              ? cause.message
+              : userFacingApiError(cause, "Failed to connect Google Drive."),
+          );
+        }
+      });
+    } finally {
+      if (pendingState) {
+        try {
+          await cancelGoogleDriveOAuth(pendingState);
+          setStatus(await getGoogleDriveStatus());
+        } catch {
+          setError(
+            "Could not cancel Google authorization. Close the Google window and reload this page.",
+          );
+        }
+      }
+      try {
+        popup?.close();
+      } catch {
+        // Google may sever the opener relationship; the popup then self-closes.
+      }
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await runSensitiveAction({ type: "drive-disconnect" }, async () => {
+        try {
+          await disconnectGoogleDrive();
+          setStatus((current) =>
+            current ? { ...current, connected: false, scope: null } : current,
+          );
+        } catch (cause) {
+          if (isMfaRequiredError(cause)) throw cause;
+          setError(
+            userFacingApiError(cause, "Failed to disconnect Google Drive."),
+          );
+        }
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    handleRef.current = { connect, disconnect };
+    return () => {
+      handleRef.current = null;
+    };
+  });
+
+  return (
+    <GoogleConnectionCard
+      provider="google-drive"
+      name="Google Drive"
+      connected={!!status?.connected}
+      loading={!status && !error}
+      onConnect={status?.configured && status.schemaReady !== false ? () => void connect() : undefined}
+      connecting={busy && !status?.connected}
+      error={error}
+      summary={
+        status
+          ? status.connected ? "Connected · Read-only" : "Not connected"
+          : error ? "Unavailable" : "Loading…"
+      }
+      onClose={() => abortRef.current?.abort()}
+    >
+      <section aria-label="Google Drive connection">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
+          <div className="min-w-0">
+            <SettingsLabel>Google Drive</SettingsLabel>
+            <SettingsDescription>
+              {status?.connected
+                ? "Connected — the assistant can search and read your Drive files (read-only)."
+                : "Let the assistant search and read your Google Drive files (read-only)."}
+            </SettingsDescription>
+          </div>
+          {status === null ? (
+            <span className="text-xs text-muted-foreground">
+              {error ? "Unavailable" : "Loading…"}
+            </span>
+          ) : status.connected ? (
+            <PillButtonUI
+              tone="white"
+              size="sm"
+              onClick={() => void disconnect()}
+              disabled={busy}
+            >
+              {busy ? "Disconnecting…" : "Disconnect"}
+            </PillButtonUI>
+          ) : (
+            <PillButtonUI
+              tone="blue"
+              size="sm"
+              onClick={() => void connect()}
+              disabled={
+                busy || !status.configured || status.schemaReady === false
+              }
+            >
+              {busy ? "Waiting for Google…" : "Connect"}
+            </PillButtonUI>
+          )}
+        </div>
+        {status !== null &&
+          !status.connected &&
+          status.schemaReady === false && (
+            <p className="pb-4 text-xs text-muted-foreground">
+              Not available on this server yet: the database is missing the
+              Google Drive migration
+              (backend/migrations/20260921_02_google_drive_integration.sql). The
+              administrator needs to apply it and restart.
+            </p>
+          )}
+        {status !== null &&
+          !status.connected &&
+          status.schemaReady !== false &&
+          !status.configured && (
+            <div className="pb-4 text-xs text-muted-foreground">
+              <p>
+                Not available on this server: the administrator needs to
+                configure a Google OAuth client (see &ldquo;Google Drive
+                Integration&rdquo; in the README).
+              </p>
+              {status.redirectUri && (
+                <p className="mt-1">
+                  Authorized redirect URI to register:{" "}
+                  <code className="break-all text-foreground">
+                    {status.redirectUri}
+                  </code>
+                </p>
+              )}
+            </div>
+          )}
+        {busy && !status?.connected && (
+          <PillButtonUI
+            tone="white"
+            size="xs"
+            onClick={() => abortRef.current?.abort()}
+            className="mb-4"
+          >
+            Cancel
+          </PillButtonUI>
+        )}
+        {error && (
+          <p className="pb-4 whitespace-pre-wrap text-xs text-destructive">
+            {error}
+          </p>
+        )}
+      </section>
+    </GoogleConnectionCard>
   );
 }
 
@@ -279,6 +557,7 @@ export default function ConnectorsPage() {
 
   const selectedConnector = selectedConnectorDetails;
   const initializedDetailConnectorIdRef = useRef<string | null>(null);
+  const googleDriveHandleRef = useRef<GoogleDriveCardHandle | null>(null);
 
   const loadConnectors = useCallback(async () => {
     setLoading(true);
@@ -318,7 +597,8 @@ export default function ConnectorsPage() {
       initializedDetailConnectorIdRef.current = null;
       return;
     }
-    if (initializedDetailConnectorIdRef.current === selectedConnector.id) return;
+    if (initializedDetailConnectorIdRef.current === selectedConnector.id)
+      return;
     initializedDetailConnectorIdRef.current = selectedConnector.id;
     setDetailDraft({
       name: selectedConnector.name,
@@ -953,7 +1233,9 @@ export default function ConnectorsPage() {
     });
   };
 
-  const handleAddPreset = async (preset: (typeof CONNECTOR_PRESETS)[number]) => {
+  const handleAddPreset = async (
+    preset: (typeof CONNECTOR_PRESETS)[number],
+  ) => {
     const draft = {
       ...emptyAddDraft,
       name: preset.name,
@@ -974,6 +1256,12 @@ export default function ConnectorsPage() {
     if (action.type === "create") {
       await handleCreate(action.draft, action.surface);
     }
+    if (action.type === "drive-connect") {
+      await googleDriveHandleRef.current?.connect();
+    }
+    if (action.type === "drive-disconnect") {
+      await googleDriveHandleRef.current?.disconnect();
+    }
     if (action.type === "save") await handleSaveSelectedConnector();
     if (action.type === "clear-token") {
       await handleClearBearerToken(action.connectorId);
@@ -993,7 +1281,7 @@ export default function ConnectorsPage() {
   };
 
   return (
-    <div>
+    <div className="@container">
       <div className="mb-4">
         <div className="flex items-center justify-between gap-3">
           <SettingsHeading>Installed</SettingsHeading>
@@ -1016,10 +1304,10 @@ export default function ConnectorsPage() {
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2">
         {!loading &&
           (connectors.length === 0 ? (
-            <div className="sm:col-span-2">
+            <div className="@min-[32rem]:col-span-2">
               <SettingsCard>
                 <div className="p-4">
                   <SettingsDescription>No connectors yet.</SettingsDescription>
@@ -1045,8 +1333,8 @@ export default function ConnectorsPage() {
             Discover
           </SettingsHeading>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {CONNECTOR_PRESETS.map((preset) => {
+        <GoogleWorkspacePanel
+          additionalConnectors={CONNECTOR_PRESETS.map((preset) => {
             const isAdded = connectors.some(
               (connector) =>
                 normalizedServerUrl(connector.serverUrl) ===
@@ -1065,14 +1353,17 @@ export default function ConnectorsPage() {
 
             return (
               <SettingsCard key={preset.serverUrl}>
-                <div className="flex items-center gap-3 p-4">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-                    <ConnectorBrandIcon name={preset.name} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <SettingsLabel>{preset.name}</SettingsLabel>
+                <div className="flex min-h-24 flex-wrap items-center gap-3 p-4">
+                  <div className="flex min-w-0 flex-[1_0_8rem] items-center gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+                      <ConnectorBrandIcon name={preset.name} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <SettingsLabel>{preset.name}</SettingsLabel>
+                    </div>
                   </div>
                   <PillButtonUI
+                    className="ml-auto"
                     tone="blue"
                     size="sm"
                     onClick={() => {
@@ -1080,9 +1371,7 @@ export default function ConnectorsPage() {
                       else void handleAddPreset(preset);
                     }}
                     disabled={
-                      loading ||
-                      isAdded ||
-                      (busyKey !== null && !isAuthorizing)
+                      loading || isAdded || (busyKey !== null && !isAuthorizing)
                     }
                     loading={isAdding && !isAuthorizing}
                     aria-label={
@@ -1090,7 +1379,7 @@ export default function ConnectorsPage() {
                         ? `${preset.name} connector added`
                         : isAuthorizing
                           ? `Cancel ${preset.name} authorization`
-                        : `Add ${preset.name} connector`
+                          : `Add ${preset.name} connector`
                     }
                   >
                     {isAdded
@@ -1105,7 +1394,12 @@ export default function ConnectorsPage() {
               </SettingsCard>
             );
           })}
-        </div>
+        >
+          <GoogleDriveCard
+            runSensitiveAction={runSensitiveAction}
+            handleRef={googleDriveHandleRef}
+          />
+        </GoogleWorkspacePanel>
       </section>
 
       <NewCustomMcpModal

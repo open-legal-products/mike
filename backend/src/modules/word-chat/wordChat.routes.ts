@@ -1,5 +1,10 @@
 import { sendInternalError } from "../../lib/httpError";
-import { openAssistantSse } from "../../lib/assistantSse";
+import {
+  attachAssistantTurnSse,
+  getActiveAssistantTurn,
+  getAssistantTurnRun,
+  startAssistantTurnRun,
+} from "../../lib/assistantTurnRuns";
 // HTTP layer for the word-chat module — the Word task pane's chat surface.
 //
 // Route handlers parse params/query/body, call the wordChat.service functions,
@@ -10,7 +15,7 @@ import { openAssistantSse } from "../../lib/assistantSse";
 // chat-activity write live in wordChat.service.ts.
 
 import { randomUUID } from "node:crypto";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
@@ -28,6 +33,7 @@ import {
   parseOptionalReasoning,
   createReservedAssistantMessageUpdater,
   createWordClientToolsAdapter,
+  isClientToolCallPending,
 
   reserveAssistantMessage,
   runLLMStream,
@@ -194,6 +200,63 @@ function parseProposedWordEdit(
   };
 }
 
+/**
+ * The run this caller may act on, or undefined.
+ *
+ * Everything a Word turn can be authorised by lives in the run: the user it
+ * belongs to and the embedded document the pane was attached to when it
+ * started. That is deliberate — a local chat has no server row, and a cloud
+ * chat's row says nothing about which run is live — so ownership is checked
+ * here rather than being inferred from the transcript.
+ */
+function wordTurnRunFor(
+  chatId: string,
+  turnId: string,
+  caller: { userId: string; clientDocumentId: string },
+) {
+  const run = getAssistantTurnRun(turnId, "word");
+  if (!run || run.chatId !== chatId) return undefined;
+  if (run.userId !== caller.userId) return undefined;
+  if (run.meta.clientDocumentId !== caller.clientDocumentId) return undefined;
+  return run;
+}
+
+/**
+ * The bridge id of a `client_tool_call` SSE record, or null for anything
+ * else (ordinary frames, and the `: tool-wait` keep-alive comments the
+ * adapter writes between them).
+ *
+ * The route recognises the frame by parsing it back rather than having the
+ * adapter announce it, because the adapter's contract is a plain
+ * `write(line)` — one that knows nothing about runs, replay predicates or
+ * which surface is streaming it.
+ */
+function clientToolCallIdOf(line: string): string | null {
+  if (!line.startsWith("data: ")) return null;
+  const payload = line.slice(6).trim();
+  if (!payload.includes('"client_tool_call"')) return null;
+  try {
+    const frame = JSON.parse(payload) as {
+      type?: unknown;
+      tool_call_id?: unknown;
+    };
+    return frame.type === "client_tool_call" &&
+      typeof frame.tool_call_id === "string"
+      ? frame.tool_call_id
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One answer for unknown, finished-and-forgotten, and not-yours. */
+function turnNotFound(res: Response): void {
+  res.status(404).json({
+    code: "turn_not_found",
+    detail: "This response is no longer being generated.",
+  });
+}
+
 // GET /word-chat?document_id=<embedded document UUID>&limit=10
 wordChatRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
   const userId = res.locals.userId as string;
@@ -244,8 +307,67 @@ wordChatRouter.get("/:chatId", requireAuth, asyncRoute(async (req, res) => {
     }
     return void res.status(500).json({ detail: "Failed to load Word chat" });
   }
-  res.json({ chat: result.chat, messages: result.messages });
+  res.json({
+    chat: result.chat,
+    messages: result.messages,
+    // A turn still generating into this chat, so a pane that has just
+    // reopened attaches to it instead of showing a transcript whose last
+    // answer is missing. (The reserved, still-null assistant row is filtered
+    // out of `messages`, so there is nothing to double up with.)
+    active_turn: getActiveAssistantTurn(req.params.chatId, "word"),
+  });
 }));
+
+// GET /word-chat/:chatId/turn/:turnId/stream?document_id=<uuid>&from=<seq>
+// Attach to a turn that is (or was, within the retention window) generating
+// into this chat: frames with a sequence number >= `from` are replayed, then
+// the live ones follow until the turn ends.
+//
+// Authorised from the RUN, not from a database row: a `storage: "local"` Word
+// chat is never persisted, so there is no row to check — the run knows whose
+// turn it is and which embedded document it belongs to, and that is exactly
+// the pair the pane presents.
+wordChatRouter.get(
+  "/:chatId/turn/:turnId/stream",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const parsedDocumentId = parseDocumentId(req.query.document_id);
+    if (!parsedDocumentId.ok) {
+      return void res.status(400).json({ detail: parsedDocumentId.detail });
+    }
+    const run = wordTurnRunFor(req.params.chatId, req.params.turnId, {
+      userId: res.locals.userId as string,
+      clientDocumentId: parsedDocumentId.value,
+    });
+    if (!run) return void turnNotFound(res);
+    const rawFrom = Number.parseInt(String(req.query.from ?? "1"), 10);
+    const from = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : 1;
+    attachAssistantTurnSse(res, run, from);
+  }),
+);
+
+// POST /word-chat/:chatId/turn/:turnId/stop?document_id=<uuid>
+// The one way to cut a Word answer short. Closing the SSE socket no longer
+// does it, so the pane's Stop control calls this first and only then drops
+// its own connection.
+wordChatRouter.post(
+  "/:chatId/turn/:turnId/stop",
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const parsedDocumentId = parseDocumentId(req.query.document_id);
+    if (!parsedDocumentId.ok) {
+      return void res.status(400).json({ detail: parsedDocumentId.detail });
+    }
+    const run = wordTurnRunFor(req.params.chatId, req.params.turnId, {
+      userId: res.locals.userId as string,
+      clientDocumentId: parsedDocumentId.value,
+    });
+    if (!run) return void turnNotFound(res);
+    if (run.finished) return void res.json({ stopped: false, finished: true });
+    run.stop();
+    res.json({ stopped: true, finished: false });
+  }),
+);
 
 // PATCH /word-chat/:chatId/model?document_id=<embedded document UUID>
 // Selection-time persistence for an existing cloud Word chat.
@@ -598,6 +720,28 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
   try {
   const assistantMessageId = randomUUID();
 
+  // The answer is a server-owned run from here on: it survives the pane's
+  // socket (the task pane closing, Word reloading it, a dropped connection)
+  // and only POST /word-chat/:chatId/turn/:turnId/stop aborts it. `chatId`
+  // always exists by now — a cloud row's id, or the UUID local storage was
+  // given — so every Word turn is keyed and resumable, local ones included.
+  const run = startAssistantTurnRun({
+    id: assistantMessageId,
+    chatId,
+    userId,
+    assistantMessageId,
+    surface: "word",
+    // What the resume endpoints authorise against; a local chat has no row.
+    clientDocumentId: parsedDocumentId.value,
+    persistChat,
+  });
+  if (!run) {
+    return void res.status(409).json({
+      code: "turn_in_progress",
+      detail: "A response is already being generated for this chat.",
+    });
+  }
+
   if (persistChat) {
     const error = await reserveAssistantMessage({
       db,
@@ -609,14 +753,29 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     });
     if (error) {
       console.error("[word-chat] failed to reserve assistant message", error);
+      run.finish();
       return void res
         .status(500)
         .json({ detail: "Failed to start Word assistant response" });
     }
   }
 
-  const stream = openAssistantSse(res);
+  const stream = attachAssistantTurnSse(res, run);
   const write = stream.write;
+  /**
+   * The adapter's writer, with one extra rule: a `client_tool_call` frame is
+   * replayed to a pane that attaches LATER only while the call is still
+   * pending. A pane closed mid-call reopens, is handed the call again, and
+   * answers the tool loop that has been waiting for it; a call that has been
+   * answered, timed out or cancelled is settled, and replaying it would apply
+   * the same edit twice. (Keep-alive comment lines are neither buffered nor
+   * numbered — see `streamRuns.write`.)
+   */
+  const writeClientToolFrame = (line: string): boolean => {
+    const callId = clientToolCallIdOf(line);
+    if (!callId) return write(line);
+    return run.write(line, { replay: () => isClientToolCallPending(callId) });
+  };
   const updateAssistantMessage = createReservedAssistantMessageUpdater({
     db,
     table: "word_chat_messages",
@@ -656,6 +815,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       `data: ${JSON.stringify({
         type: "chat_id",
         chatId,
+        turnId: run.id,
         assistantMessageId,
       })}\n\n`,
     );
@@ -675,7 +835,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         ? {
             clientTools: createWordClientToolsAdapter({
               userId,
-              write,
+              write: writeClientToolFrame,
               signal: stream.signal,
               nonce,
             }),
@@ -798,6 +958,10 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         }
       }
       await updateChatActivity();
+      // Readers still attached (Stop came from another pane, or this one is
+      // only watching) learn the outcome the way a reopen would.
+      write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+      write("data: [DONE]\n\n");
       return;
     }
     console.error("[word-chat] stream error", error);

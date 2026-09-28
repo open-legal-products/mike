@@ -60,6 +60,7 @@ export function ProjectAssistantTable({
     renameChatValue,
     currentUserId,
     onCreateChat,
+    canCreateChat,
     onOpenChat,
     onDeleteChat,
     onDeleteSelectedChats,
@@ -77,6 +78,7 @@ export function ProjectAssistantTable({
     renameChatValue: string;
     currentUserId?: string | null;
     onCreateChat: () => void;
+    canCreateChat: boolean;
     onOpenChat: (chatId: string) => void;
     onDeleteChat: (chat: Chat) => Promise<void> | void;
     onDeleteSelectedChats: () => Promise<void> | void;
@@ -268,6 +270,7 @@ export function ProjectAssistantTable({
                                 tone="black"
                                 size="sm"
                                 onClick={onCreateChat}
+                                disabled={!canCreateChat}
                             >
                                 Create
                             </PillButtonUI>

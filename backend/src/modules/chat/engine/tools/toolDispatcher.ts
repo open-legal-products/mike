@@ -1,3 +1,7 @@
+import {
+  isGoogleWorkspaceTool,
+  executeGoogleWorkspaceToolCall,
+} from "../../../../lib/integrations/googleWorkspace";
 import { createDocumentVersions } from "../../../documents/documents.service";
 import {
   getCourtlistenerCases,
@@ -11,6 +15,10 @@ import {
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
 import { executeMcpToolCall, type McpToolEvent } from "../../../../lib/mcpConnectors";
+import {
+  GOOGLE_DRIVE_TOOL_PREFIX,
+  executeGoogleDriveToolCall,
+} from "../../../../lib/integrations/googleDrive";
 import {
   type DocStore,
   type DocIndex,
@@ -433,6 +441,47 @@ export async function runToolCalls(
       args = JSON.parse(tc.function.arguments || "{}");
     } catch {
       /* ignore */
+    }
+
+    if (
+      tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
+      isGoogleWorkspaceTool(tc.function.name)
+    ) {
+      // Native Google tools reuse the MCP event surface so the UI renders
+      // them with the existing connector treatment.
+      write(
+        `data: ${JSON.stringify({
+          type: "mcp_tool_start",
+          name: tc.function.name,
+        })}\n\n`,
+      );
+      const executeGoogleTool = isGoogleWorkspaceTool(tc.function.name)
+        ? executeGoogleWorkspaceToolCall
+        : executeGoogleDriveToolCall;
+      const { content, event } = await executeGoogleTool(
+        userId,
+        tc.function.name,
+        args,
+        db,
+      );
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content,
+      });
+      mcpEvents.push(event);
+      write(
+        `data: ${JSON.stringify({
+          type: "mcp_tool_result",
+          name: tc.function.name,
+          connector_name: event.connector_name,
+          tool_name: event.tool_name,
+          status: event.status,
+          error: event.error,
+          google_action_id: event.google_action_id,
+        })}\n\n`,
+      );
+      continue;
     }
 
     if (tc.function.name.startsWith("mcp_")) {

@@ -31,23 +31,17 @@ export const CLAUDE_MODEL_LABEL = "Claude Sonnet 4.6";
  * ChatInput.handleSubmit then refuses to send. So every LLM spec has to switch
  * the model first.
  *
- * ModelToggle renders a Radix DropdownMenu: the trigger is a button whose title
- * is "Choose model" (current model available) or "API key missing for selected
- * model" (current model not available — the default-Gemini case).
+ * ModelToggle exposes a stable "Choose model" accessible name. Its tooltip
+ * includes the selection even in compact, icon-only project composers.
  */
 export async function selectClaudeModel(page: Page) {
-    const trigger = page
-        .locator(
-            'button[title="Choose model"], button[title="API key missing for selected model"]',
-        )
-        .first();
+    const trigger = page.getByRole("button", { name: "Choose model", exact: true });
     await expect(trigger).toBeVisible({ timeout: 10_000 });
     await trigger.click();
     await page.getByRole("menuitem", { name: CLAUDE_MODEL_LABEL }).click();
-    // After selection the trigger label reflects the chosen model.
-    await expect(
-        page.getByRole("button", { name: CLAUDE_MODEL_LABEL }),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(trigger).toHaveAttribute("title", `Choose model — ${CLAUDE_MODEL_LABEL}`, {
+        timeout: 5_000,
+    });
 }
 
 /**

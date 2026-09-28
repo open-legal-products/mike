@@ -35,6 +35,22 @@ export interface Chat {
   model?: string | null;
   reasoning_level?: import("./lib/wordChatTypes").ReasoningLevel | null;
   created_at: string;
+  /**
+   * A turn the server is still generating into this chat, so a pane opening
+   * it attaches instead of showing a transcript whose last answer is
+   * missing. A LOCAL chat carries the id alone (`active_turn_id`), because
+   * nothing about it is stored server-side to report it back.
+   */
+  active_turn_id?: string | null;
+}
+
+/** A turn still generating, as `GET /word-chat/:chatId` reports it. */
+export interface ActiveWordTurn {
+  id: string;
+  /** Frames emitted so far; a pane attaches from the next one it needs. */
+  seq: number;
+  /** The assistant row the answer is (or will be) stored in. */
+  assistant_message_id: string;
 }
 
 /** A document read the model completed during an assistant turn. */

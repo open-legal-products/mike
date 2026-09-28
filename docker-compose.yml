@@ -155,6 +155,8 @@ services:
       - ./backend/migrations/20260917_01_organization_access_followup.sql:/org-access-followup-migration.sql:ro
       - ./backend/migrations/20260917_02_memory_followup.sql:/memory-followup-migration.sql:ro
       - ./backend/migrations/20260921_01_chat_activity.sql:/chat-activity-migration.sql:ro
+      - ./backend/migrations/20260921_02_google_drive_integration.sql:/google-drive-migration.sql:ro
+      - ./backend/migrations/20260922_01_google_workspace.sql:/google-workspace-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -194,6 +196,8 @@ services:
         psql "$$DB" -v ON_ERROR_STOP=1 -f /org-access-followup-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /memory-followup-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /chat-activity-migration.sql;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /google-drive-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /google-workspace-migration.sql || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;

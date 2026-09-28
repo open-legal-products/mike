@@ -33,6 +33,7 @@ import {
   createFileReadStream,
   deleteFile,
   deleteFileBestEffort,
+  deleteFilesBestEffort,
   StorageOperationError,
   storageKey,
   uploadFileFromPath,
@@ -749,16 +750,13 @@ async function removeFailedCreatedDocument(
   file: UploadFileRow,
 ): Promise<void> {
   if (session.purpose !== "document_create") return;
-  await Promise.all([
-    deleteFileBestEffort(
+  await deleteFilesBestEffort(
+    [
       storageKey(session.user_id, file.resource_id, file.filename),
-      "failed-document-remove",
-    ),
-    deleteFileBestEffort(
       convertedPdfKey(session.user_id, file.resource_id),
-      "failed-document-remove",
-    ),
-  ]);
+    ],
+    "failed-document-remove",
+  );
   const { error } = await db
     .from("documents")
     .delete()
@@ -1081,14 +1079,11 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
       if (["uploaded", "processing", "completed"].includes(file.status)) {
         continue;
       }
-      await Promise.all([
-        file.staging_storage_path
-          ? deleteFileBestEffort(file.staging_storage_path, "session-expiry")
-          : Promise.resolve(),
-        file.sealed_storage_path
-          ? deleteFileBestEffort(file.sealed_storage_path, "session-expiry")
-          : Promise.resolve(),
-      ]);
+      // Null/empty paths are skipped inside; one warning per file at most.
+      await deleteFilesBestEffort(
+        [file.staging_storage_path, file.sealed_storage_path],
+        "session-expiry",
+      );
     }
     const { error } = await db
       .from("upload_sessions")

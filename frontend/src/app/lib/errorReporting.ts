@@ -97,6 +97,7 @@ export function reportApiFailure(failure: {
                 http_route: route,
                 request_id: failure.requestId,
                 error_code: failure.code,
+                ...(route === "/observability/sentry-test" ? { diagnostic_test: "true" } : {}),
             },
             extra: { path: failure.path },
             fingerprint: ["api-5xx", method, route, String(failure.status)],
@@ -109,25 +110,103 @@ export function reportApiFailure(failure: {
 }
 
 /**
- * The request never reached the server: the backend is down, the origin
- * is blocked, TLS failed, the network dropped. Not a bug in this code, but
- * it is the failure users see most and it was previously reported only
+ * When the page started to go away (reload, link to another document, tab
+ * close), or null while it is live. A browser rejects every fetch still in
+ * flight at that moment with the same bare "Failed to fetch" TypeError an
+ * unreachable server produces, and no AbortSignal is involved, so the
+ * request layer cannot tell the two apart from the error itself.
+ */
+let pageLeavingSince: number | null = null;
+/**
+ * `beforeunload` fires when a navigation starts but can be cancelled by a
+ * "leave site?" prompt (the memory editor installs one); after this long
+ * the page is treated as live again. `pagehide` is final until `pageshow`.
+ */
+const BEFOREUNLOAD_GRACE_MS = 3_000;
+const hasWindow = () =>
+    typeof window !== "undefined" && typeof window.addEventListener === "function";
+if (hasWindow()) {
+    window.addEventListener("pagehide", () => {
+        pageLeavingSince = Number.POSITIVE_INFINITY;
+    });
+    window.addEventListener("pageshow", () => {
+        pageLeavingSince = null;
+    });
+}
+
+const onBeforeUnload = () => {
+    pageLeavingSince = Date.now();
+};
+let pendingRequests = 0;
+/**
+ * Count a request as in flight until the returned release is called. The
+ * `beforeunload` listener exists only while something is pending: Firefox
+ * refuses to put a page with a `beforeunload` listener into its back/forward
+ * cache, so keeping one installed on every page would make every back and
+ * forward navigation rebuild the app. A page with no request in flight has
+ * nothing this listener could protect.
+ */
+export function trackPendingRequest(): () => void {
+    let released = false;
+    if (pendingRequests === 0 && hasWindow()) {
+        window.addEventListener("beforeunload", onBeforeUnload);
+    }
+    pendingRequests += 1;
+    return () => {
+        if (released) return;
+        released = true;
+        pendingRequests -= 1;
+        if (pendingRequests === 0 && hasWindow()) {
+            window.removeEventListener("beforeunload", onBeforeUnload);
+        }
+    };
+}
+
+function pageIsBeingLeft(): boolean {
+    if (pageLeavingSince === null) return false;
+    if (pageLeavingSince === Number.POSITIVE_INFINITY) return true;
+    return Date.now() - pageLeavingSince < BEFOREUNLOAD_GRACE_MS;
+}
+
+/**
+ * Fetch failed without an HTTP response. Browser errors alone cannot tell
+ * whether the request reached the server, or distinguish TLS, CORS, a dropped
+ * connection, and a failed response read. It was previously reported only
  * through the console bridge as one undifferentiated "Failed to fetch"
  * issue with no endpoint. Warning level, grouped per endpoint.
+ *
+ * Not reported while the page is being left: those are cancellations of the
+ * old page's requests, not failures anyone can act on. The error is still
+ * marked so a screen's later console.error of it is not bridged either.
  */
 export function reportNetworkFailure(
     error: unknown,
     request: { method: string; url: string },
 ): string | null {
     scrubber.markReported(error);
-    if (!Sentry.isEnabled()) return null;
+    if (!Sentry.isEnabled() || pageIsBeingLeft()) return null;
     const route = normalizeApiPath(request.url);
+    let networkState = "unknown";
+    let requestOrigin = "unknown";
+    try {
+        if (typeof navigator !== "undefined" && typeof navigator.onLine === "boolean") {
+            networkState = navigator.onLine ? "online" : "offline";
+        }
+        if (typeof window !== "undefined") {
+            requestOrigin = new URL(request.url, window.location.href).origin === window.location.origin
+                ? "same-origin" : "cross-origin";
+        }
+    } catch {
+        // Missing browser state or malformed URLs must not break reporting.
+    }
     return Sentry.withScope((scope) => {
         applyContext(scope, {
             level: "warning",
             tags: {
                 component: "mike-api",
                 network: true,
+                network_state: networkState,
+                request_origin: requestOrigin,
                 http_method: request.method,
                 http_route: route,
             },
@@ -175,11 +254,14 @@ export function browserSentryOptions(env: {
         // Session replay is deliberately NOT enabled: it would record
         // privileged document text on screen.
         sendDefaultPii: false,
+        attachStacktrace: true,
         integrations: [privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
         initialScope: {
             tags: {
                 service: "mike-frontend",
                 runtime: "browser",
+                build_mode: env.nodeEnv,
+                diagnostics_version: "2",
                 install: installKind(env.install),
             },
         },
@@ -205,10 +287,13 @@ export function serverSentryOptions(
         release: releaseName(env.SENTRY_RELEASE, env.GIT_SHA),
         tracesSampleRate: parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
         sendDefaultPii: false,
+        attachStacktrace: true,
         initialScope: {
             tags: {
                 service: "mike-frontend",
                 runtime,
+                build_mode: env.NODE_ENV,
+                diagnostics_version: "2",
                 install: installKind(env.SENTRY_INSTALL),
             },
         },

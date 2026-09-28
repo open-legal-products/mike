@@ -156,6 +156,7 @@ vi.mock("../../lib/access", () => ({
 }));
 
 import { app } from "../../app";
+import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { spotlight } from "../../modules/chat/engine/index";
 import { createServerSupabase } from "../../lib/supabase";
 
@@ -166,6 +167,7 @@ const VALID_BODY = {
 
 describe("POST /projects/:projectId/chat", () => {
     beforeEach(() => {
+        resetAssistantTurnRunsForTests();
         vi.clearAllMocks();
     dbInserts.length = 0;
         buildMessages.mockReturnValue([]);

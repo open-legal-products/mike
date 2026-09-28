@@ -155,6 +155,32 @@ practice the app uses the plain Tailwind radii directly: `rounded-full` (pills,
 icon buttons), `rounded-lg`/`rounded-md` (rows, list items), `rounded-xl`
 (inputs, cards), `rounded-2xl` (panels, dropdown surfaces).
 
+### Fit content before making a card compact
+
+Account identity, permission level, and action controls must remain readable at
+ordinary lengths. For example, `alex.morgan@example.com` and `Read-only` should
+both be visible without a tooltip, opening a dialog, or horizontal scrolling.
+
+- Give independent information its own line: service name, account email, then
+  permission/status. Do not concatenate everything into one truncated subtitle.
+- Use `min-w-0` on flexible children and `[overflow-wrap:anywhere]` for long
+  unbroken identifiers. Prefer natural wrapping and card growth to ellipsis,
+  clipping, smaller text, or fixed heights. Do not use `overflow-hidden` to hide
+  a layout defect.
+- Let action controls wrap and choose columns using the available container
+  width, including space consumed by application sidebars. Viewport width alone
+  does not describe a card's actual space.
+- A shared minimum height can align short cards and loading states; it must not
+  prevent longer content from increasing the height. Loading, connected, empty,
+  and error states use the same outer layout.
+- Verify realistic emails and deliberately long addresses at mobile, tablet,
+  and desktop widths in light and dark mode. Check the text nodes as well as
+  the outer card: a card can fit while its subtitle silently clips.
+
+Truncation is appropriate only when the omitted text is genuinely secondary and
+the user has an accessible way to inspect it. Account identity and permissions
+in connector cards are essential information.
+
 ## Elevation and the glass surface
 
 The signature surface combines a light fill, hairline border, inset highlight

@@ -8,7 +8,13 @@ import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
-import { flushSentry, reportError } from "./lib/observability/sentry";
+import { reportError } from "./lib/observability/sentry";
+import {
+  closeHttpServer,
+  createShutdown,
+  failBoot,
+  listenOrFail,
+} from "./lib/processLifecycle";
 
 const PORT = process.env.PORT ?? 3001;
 
@@ -22,17 +28,16 @@ const PORT = process.env.PORT ?? 3001;
 // bind the port or start a worker — a process that has already decided to
 // exit must not serve a request or claim a job in its last two seconds.
 async function validateBootConfiguration(): Promise<void> {
+  let stage = "runtime-config";
   try {
     validateRuntimeConfiguration();
+    stage = "manifest-key";
     const signingKey = manifestPublicKey();
     if (signingKey) {
       console.log(`Export manifests signed with key ${signingKey.key_id}`);
     }
   } catch (err) {
-    reportError(err, { tags: { component: "boot" }, level: "fatal" });
-    console.error(err instanceof Error ? err.message : String(err));
-    await flushSentry();
-    process.exit(1);
+    await failBoot(err, stage);
   }
 }
 
@@ -113,7 +118,7 @@ async function main(): Promise<void> {
   // cost of gating is one round trip of boot latency, never a crash loop.
   await enforceDocumentLifecycleMigration();
 
-  server = app.listen(PORT, () => {
+  server = listenOrFail(app, PORT, () => {
     console.log(
       `Mike backend running on port ${PORT} (workers: ${WORKERS_MODE})`,
     );
@@ -151,32 +156,14 @@ async function stopBackgroundWork(): Promise<void> {
   });
 }
 
-async function shutdown(signal: string) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log(`Shutting down gracefully (${signal})`);
-  const forceExit = setTimeout(() => {
-    console.error("Graceful shutdown timed out — forcing exit");
-    process.exit(1);
-  }, 15_000);
-  forceExit.unref();
-  try {
-    const listening = server;
-    if (listening)
-      await new Promise<void>((resolve, reject) =>
-        listening.close((err) => (err ? reject(err) : resolve())),
-      );
-    await stopBackgroundWork();
-    await flushSentry();
-    console.log("Shutdown complete");
-    process.exit(0);
-  } catch (err) {
-    reportError(err, { tags: { component: "shutdown" } });
-    console.error("Error during graceful shutdown", err);
-    await flushSentry();
-    process.exit(1);
-  }
-}
+const shutdown = createShutdown({
+  // Set before anything stops so the worker thread's exit is not respawned.
+  onStart: () => {
+    shuttingDown = true;
+  },
+  closeServer: () => closeHttpServer(server),
+  stopBackgroundWork,
+});
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));

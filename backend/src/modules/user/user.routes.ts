@@ -1,8 +1,20 @@
+import { GoogleWorkspaceError, workspaceStatus, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace } from "../../lib/integrations/googleWorkspaceAuth";
+import { listWorkspaceActions, approveWorkspaceAction, rejectWorkspaceAction } from "../../lib/integrations/googleWorkspace";
 // HTTP layer for the user module. Handlers parse params/query/body, call the
 // service functions behind user.service.ts, and map their typed results onto
 // status codes, headers, and JSON bodies. The MFA step-up guard
 // (requireMfaIfEnrolled) is applied here, per route — keep it on every
 // mutating /user route so the service layer never has to know about MFA.
+
+import { safeError } from "../../lib/safeError";
+import {
+    cancelGoogleDriveOAuth,
+    completeGoogleDriveOAuth,
+    disconnectGoogleDrive,
+    getGoogleDriveStatus,
+    startGoogleDriveOAuth,
+} from "../../lib/integrations/googleDrive";
+import { ConnectorSetupError } from "../../lib/mcp/errors";
 
 import crypto from "crypto";
 import { Router } from "express";
@@ -561,6 +573,428 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
             );
     }
 }));
+
+// ---------------------------------------------------------------------------
+// Native Google Drive integration (first-party, GA Drive REST API — no MCP
+// preview program required). One connection per user; the popup pages reuse
+// the MCP OAuth popup renderer.
+// ---------------------------------------------------------------------------
+
+// GET /user/integrations/google-drive
+userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    try {
+        // The card shows the exact redirect URI to register while the client
+        // is not configured yet, so the operator never has to guess it. In
+        // production backendPublicUrl throws without API_PUBLIC_URL; that is
+        // a deployment error to report as "unknown", not a status failure.
+        let redirectUri: string | null = null;
+        try {
+            redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
+        } catch {
+            redirectUri = null;
+        }
+        res.json({
+            ...(await getGoogleDriveStatus(userId, createServerSupabase())),
+            redirectUri,
+        });
+    } catch (err) {
+        console.error("[google-drive] status failed", {
+            userId,
+            error: safeError(err),
+        });
+        res.status(500).json({ detail: "Failed to load Google Drive status." });
+    }
+});
+
+// POST /user/integrations/google-drive/oauth/start
+userRouter.post(
+    "/integrations/google-drive/oauth/start",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        try {
+            const redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
+            const result = await startGoogleDriveOAuth(
+                userId,
+                redirectUri,
+                createServerSupabase(),
+            );
+            res.json(result);
+        } catch (err) {
+            console.error("[google-drive] oauth start failed", {
+                userId,
+                error: safeError(err),
+            });
+            // Same allowlist as the MCP start route: only the repo-authored
+            // setup instructions reach the browser verbatim. A DB or crypto
+            // failure here must not echo its message to the client.
+            if (err instanceof ConnectorSetupError) {
+                return void res
+                    .status(400)
+                    .json({ code: err.code, detail: err.message });
+            }
+            res.status(400).json({
+                detail: "Google Drive authorization could not be started.",
+            });
+        }
+    },
+);
+
+// Google may return to a separate API origin that cannot receive the web
+// session cookie. Relay only OAuth parameters to our fixed frontend gateway;
+// completion there requires the same authenticated Mike user who started it.
+for (const provider of ["google-drive", "gmail", "google-calendar"]) {
+    userRouter.get(`/integrations/${provider}/oauth/callback`, (req, res) => {
+        const finish = new URL(
+            frontendUrl(`/api/user/integrations/${provider}/oauth/finish`),
+        );
+        for (const key of ["state", "code", "error"]) {
+            if (typeof req.query[key] === "string")
+                finish.searchParams.set(key, req.query[key]);
+        }
+        res.set("Cache-Control", "no-store")
+            .set("Referrer-Policy", "no-referrer")
+            .redirect(303, finish.toString());
+    });
+    userRouter.use(`/integrations/${provider}/oauth/finish`, (_req, res, next) => {
+        res.set("Cache-Control", "no-store")
+            .set("Referrer-Policy", "no-referrer");
+        next();
+    });
+}
+
+// GET /user/integrations/google-drive/oauth/finish
+userRouter.get(
+    "/integrations/google-drive/oauth/finish",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (req, res) => {
+        const nonce = crypto.randomBytes(16).toString("base64");
+        const state =
+            typeof req.query.state === "string" ? req.query.state : "";
+        const code = typeof req.query.code === "string" ? req.query.code : "";
+        const error =
+            typeof req.query.error === "string" ? req.query.error : undefined;
+        try {
+            if (error) throw new Error(error);
+            if (!state || !code)
+                throw new Error("OAuth callback is missing state or code.");
+            await completeGoogleDriveOAuth(
+                res.locals.userId, state, code, createServerSupabase(),
+            );
+            res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+                .type("html")
+                .send(
+                    mcpOAuthPopupHtml(
+                        { success: true, connectorId: "google-drive" },
+                        nonce,
+                    ),
+                );
+        } catch (err) {
+            console.error("[google-drive] oauth callback failed", {
+                error: safeError(err),
+                hasCode: !!code,
+            });
+            res.status(400)
+                .set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+                .type("html")
+                .send(
+                    mcpOAuthPopupHtml(
+                        {
+                            success: false,
+                            detail: "Google Drive authorization could not be completed. Return to Mike and try again.",
+                        },
+                        nonce,
+                    ),
+                );
+        }
+    },
+);
+
+// DELETE /user/integrations/google-drive
+userRouter.delete(
+    "/integrations/google-drive",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (_req, res) => {
+        const userId = res.locals.userId as string;
+        try {
+            await disconnectGoogleDrive(userId, createServerSupabase());
+            res.status(204).end();
+        } catch (err) {
+            console.error("[google-drive] disconnect failed", {
+                userId,
+                error: safeError(err),
+            });
+            res.status(500).json({
+                detail: "Failed to disconnect Google Drive.",
+            });
+        }
+    },
+);
+
+// Cancel only this user's pending attempt; never disconnect an existing grant.
+userRouter.post(
+    "/integrations/google-drive/oauth/cancel",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const state = req.body?.state;
+        if (typeof state !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(state)) {
+            return void res
+                .status(400)
+                .json({
+                    detail: "Invalid Google Drive authorization attempt.",
+                });
+        }
+        try {
+            await cancelGoogleDriveOAuth(
+                res.locals.userId as string,
+                state,
+                createServerSupabase(),
+            );
+            res.status(204).end();
+        } catch (error) {
+            console.error(
+                "[google-drive] cancellation failed",
+                safeError(error),
+            );
+            res.status(500).json({
+                detail: "Google Drive authorization could not be cancelled. Close the Google window and try again.",
+            });
+        }
+    }),
+);
+
+
+// Gmail and Calendar are explicit integrations, independent of sign-in.
+for (const provider of ["gmail", "google-calendar"] as const) {
+    const path = `/integrations/${provider}`;
+    const callback = (req: Parameters<typeof backendPublicUrl>[0]) =>
+        `${backendPublicUrl(req)}/user${path}/oauth/callback`;
+    const report = (error: unknown) => {
+        console.error("[google-workspace] request failed", safeError(error));
+        return error instanceof GoogleWorkspaceError
+            ? error.message
+            : "Google integration request failed. Please try again.";
+    };
+    userRouter.get(
+        path,
+        requireAuth,
+        asyncRoute(async (req, res) => {
+            let redirectUri: string | null = null;
+            try {
+                redirectUri = callback(req);
+            } catch {
+                /* deployment config absent */
+            }
+            try {
+                res.json({
+                    ...(await workspaceStatus(
+                        createServerSupabase(),
+                        res.locals.userId,
+                        provider,
+                    )),
+                    redirectUri,
+                });
+            } catch (error) {
+                res.status(500).json({ detail: report(error) });
+            }
+        }),
+    );
+    userRouter.post(
+        `${path}/oauth/start`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            if (
+                req.body?.write !== undefined &&
+                typeof req.body.write !== "boolean"
+            )
+                return void res
+                    .status(400)
+                    .json({ detail: "write must be a boolean." });
+            try {
+                res.json(
+                    await startWorkspaceOAuth(
+                        createServerSupabase(),
+                        res.locals.userId,
+                        provider,
+                        callback(req),
+                        req.body?.write === true,
+                    ),
+                );
+            } catch (error) {
+                res.status(400).json({ detail: report(error) });
+            }
+        }),
+    );
+    userRouter.get(
+        `${path}/oauth/finish`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            const nonce = crypto.randomBytes(16).toString("base64");
+            res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce)).type(
+                "html",
+            );
+            try {
+                if (
+                    req.query.error ||
+                    typeof req.query.state !== "string" ||
+                    typeof req.query.code !== "string"
+                )
+                    throw new GoogleWorkspaceError(
+                        "Google authorization was cancelled or incomplete.",
+                    );
+                await completeWorkspaceOAuth(
+                    createServerSupabase(),
+                    res.locals.userId,
+                    provider,
+                    req.query.state,
+                    req.query.code,
+                );
+                res.send(
+                    mcpOAuthPopupHtml(
+                        { success: true, connectorId: provider },
+                        nonce,
+                    ),
+                );
+            } catch (error) {
+                report(error);
+                res.status(400).send(
+                    mcpOAuthPopupHtml(
+                        {
+                            success: false,
+                            detail: "Google authorization could not be completed. Return to Mike and try again.",
+                        },
+                        nonce,
+                    ),
+                );
+            }
+        }),
+    );
+    userRouter.post(
+        `${path}/oauth/cancel`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            if (
+                typeof req.body?.state !== "string" ||
+                !/^[A-Za-z0-9_-]{32}$/.test(req.body.state)
+            )
+                return void res
+                    .status(400)
+                    .json({ detail: "Invalid authorization attempt." });
+            try {
+                await cancelWorkspaceOAuth(
+                    createServerSupabase(),
+                    res.locals.userId,
+                    provider,
+                    req.body.state,
+                );
+                res.status(204).end();
+            } catch (error) {
+                res.status(500).json({ detail: report(error) });
+            }
+        }),
+    );
+    userRouter.delete(
+        path,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (_req, res) => {
+            try {
+                await disconnectWorkspace(
+                    createServerSupabase(),
+                    res.locals.userId,
+                    provider,
+                );
+                res.status(204).end();
+            } catch (error) {
+                res.status(500).json({ detail: report(error) });
+            }
+        }),
+    );
+}
+userRouter.get(
+    "/google-actions",
+    requireAuth,
+    asyncRoute(async (_req, res) => {
+        try {
+            res.json({
+                actions: await listWorkspaceActions(
+                    createServerSupabase(),
+                    res.locals.userId,
+                ),
+            });
+        } catch (error) {
+            console.error("[google-actions] list failed", safeError(error));
+            res.status(500).json({
+                detail: "Could not load Google action proposals.",
+            });
+        }
+    }),
+);
+for (const decision of ["approve", "reject"] as const) {
+    userRouter.post(
+        `/google-actions/:actionId/${decision}`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            const id = String(req.params.actionId);
+            if (
+                !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+                    id,
+                )
+            )
+                return void res
+                    .status(400)
+                    .json({ detail: "Invalid action ID." });
+            // The client supplies only the decision. Exact content comes from the
+            // immutable server-side proposal; no replacement payload is accepted.
+            if (req.body && Object.keys(req.body).length)
+                return void res
+                    .status(400)
+                    .json({
+                        detail: "Action content cannot be changed during approval.",
+                    });
+            try {
+                if (decision === "approve")
+                    res.json(
+                        await approveWorkspaceAction(
+                            createServerSupabase(),
+                            res.locals.userId,
+                            id,
+                        ),
+                    );
+                else {
+                    await rejectWorkspaceAction(
+                        createServerSupabase(),
+                        res.locals.userId,
+                        id,
+                    );
+                    res.status(204).end();
+                }
+            } catch (error) {
+                console.error(
+                    "[google-actions] decision failed",
+                    safeError(error),
+                );
+                res.status(
+                    error instanceof GoogleWorkspaceError ? 409 : 500,
+                ).json({
+                    detail:
+                        error instanceof GoogleWorkspaceError
+                            ? error.message
+                            : "Could not save the decision. Refresh and inspect the action status before trying again.",
+                });
+            }
+        }),
+    );
+}
 
 // POST /user/mcp-connectors/:connectorId/refresh-tools
 userRouter.post(

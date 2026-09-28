@@ -30,6 +30,7 @@ function renderTable(row: Chat) {
     const chats = [row];
     return render(
         <ProjectAssistantTable
+            canCreateChat={true}
             chats={chats}
             filteredChats={chats}
             selectedChatIds={[]}

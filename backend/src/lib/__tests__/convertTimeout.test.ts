@@ -1,12 +1,15 @@
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import fs, { existsSync } from "node:fs";
+import { diagnosticErrorTags } from "../observability/sentryPrivacy";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const timing = vi.hoisted(() => ({ timeoutMs: 200 }));
+
 vi.mock("../runtimeConfig", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtimeConfig")>();
-  return { ...actual, uploadConversionTimeoutMs: () => 200 };
+  return { ...actual, uploadConversionTimeoutMs: () => timing.timeoutMs };
 });
 
 let directory: string;
@@ -27,6 +30,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  timing.timeoutMs = 200;
   delete process.env.SOFFICE_BINARY_PATH;
   await rm(directory, { recursive: true, force: true });
 });
@@ -36,11 +41,44 @@ describe("office conversion deadline", () => {
     const outputDirectory = join(directory, "work");
     const startedAt = Date.now();
 
-    await expect(
-      officeFileToPdf(join(directory, "source.docx"), outputDirectory),
-    ).rejects.toThrow(/timed out after 200ms/);
+    const failure = await officeFileToPdf(
+      join(directory, "source.docx"),
+      outputDirectory,
+    ).catch((error) => error);
+    expect(failure.message).toMatch(/timed out after 200ms/);
+    expect(diagnosticErrorTags(failure)).toEqual({
+      failure_code: "conversion_timeout",
+    });
 
     expect(Date.now() - startedAt).toBeLessThan(10_000);
-    expect(existsSync(join(outputDirectory, "libreoffice-profile"))).toBe(false);
+    expect(existsSync(join(outputDirectory, "libreoffice-profile"))).toBe(
+      false,
+    );
+  });
+});
+
+it("distinguishes an unavailable converter from a rejected document without stderr", async () => {
+  timing.timeoutMs = 5000;
+  await writeFile(
+    join(directory, "soffice"),
+    '#!/bin/sh\necho "PRIVATE_DOCUMENT" >&2\nexit 1\n',
+  );
+  const failure = await officeFileToPdf(
+    join(directory, "PRIVATE_DOCUMENT.docx"),
+    join(directory, "work"),
+  ).catch((error) => error);
+  expect(diagnosticErrorTags(failure)).toEqual({
+    failure_code: "conversion_failed",
+  });
+  vi.resetModules();
+  vi.spyOn(fs, "accessSync").mockImplementation(() => {
+    throw new Error("missing");
+  });
+  const converter = await import("../convert.js");
+  const missing = await converter
+    .officeFileToPdf("PRIVATE_DOCUMENT.docx", directory)
+    .catch((error) => error);
+  expect(diagnosticErrorTags(missing)).toEqual({
+    failure_code: "conversion_unavailable",
   });
 });

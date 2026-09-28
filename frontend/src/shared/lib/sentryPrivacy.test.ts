@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { diagnosticEnvelope, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
+import { diagnosticEnvelope, diagnosticErrorTags, diagnosticEvent, diagnosticRoute, privacyBoundaryIntegration } from './sentryPrivacy';
 
 const id = '8f1c2a3e-1234-4bcd-9e0f-1234567890ab';
 const eventId = '1234567890abcdef1234567890abcdef';
@@ -96,4 +96,126 @@ describe('outbound telemetry privacy boundary', () => {
     expect(transport.flush).not.toHaveBeenCalled();
     expect(() => privacyBoundaryIntegration().setup({ getTransport: () => undefined })).not.toThrow();
   });
+});
+
+
+describe('bounded error diagnostics', () => {
+  it('finds network causes inside an AggregateError without private prose', () => {
+    const cause = Object.assign(new Error('private host / client document'), { code: 'ECONNREFUSED', address: 'private host' });
+    const error = new TypeError('fetch failed', { cause: new AggregateError([cause]) });
+    const tags = diagnosticErrorTags(error);
+    expect(tags).toEqual({ failure_code: 'ECONNREFUSED' });
+    expect(diagnosticEvent({ tags }).tags).toEqual(tags);
+    expect(JSON.stringify(diagnosticEvent({ tags }))).not.toContain('private');
+  });
+
+  it('keeps storage status and known database codes, drops arbitrary codes and metadata', () => {
+    const tags = diagnosticErrorTags({ name: 'AccessDenied', $metadata: { httpStatusCode: 403, requestId: 'private' } });
+    expect(diagnosticEvent({ tags }).tags).toEqual({ failure_code: 'AccessDenied', dependency_status: 403 });
+    expect(diagnosticErrorTags({ code: '42P01', message: 'private table' })).toEqual({ failure_code: '42P01' });
+    expect(diagnosticErrorTags({ code: 'private client', name: 'private client', status: 'private' })).toEqual({});
+    expect(diagnosticEvent({ tags: { failure_code: 'private', capture_source: 'private', file_type: 'private', dependency_status: 'private', diagnostic_test: 'private' } }).tags).toEqual({});
+  });
+
+  it('handles cyclic errors, huge aggregates and throwing accessors', () => {
+    const cyclic: { cause?: unknown } = {};
+    cyclic.cause = cyclic;
+    expect(diagnosticErrorTags(cyclic)).toEqual({});
+    expect(diagnosticErrorTags({ get code() { throw new Error('private'); } })).toEqual({});
+    expect(diagnosticErrorTags({ errors: Array(1000).fill(cyclic) })).toEqual({});
+  });
+
+  it('groups distinct known causes separately while unknown text never affects grouping', () => {
+    const fingerprint = (code: string) => diagnosticEvent({ tags: { failure_code: code } }).fingerprint;
+    expect(fingerprint('ECONNREFUSED')).not.toEqual(fingerprint('ENOTFOUND'));
+    expect(fingerprint('private A')).toEqual(fingerprint('private B'));
+  });
+});
+
+
+it('retains only known software names and numeric versions, never user-agent data', () => {
+  expect(diagnosticEvent({ contexts: {
+    browser: { name: 'Chrome', version: '152.0.0', userAgent: 'private' },
+    runtime: { name: 'node', version: 'v22.23.1', private: 'private' },
+    device: { name: 'private' },
+  } }).contexts).toEqual({ browser: { name: 'Chrome', version: '152.0.0' }, runtime: { name: 'node', version: 'v22.23.1' } });
+  expect(diagnosticEvent({ contexts: { browser: { name: 'private', version: '1.0' }, runtime: { name: 'node', version: 'private' } } }).contexts).toEqual({ runtime: { name: 'node' } });
+  expect(diagnosticErrorTags(new TypeError('Failed to fetch'))).toEqual({ failure_code: 'fetch_failed' });
+  expect(diagnosticErrorTags(new TypeError('Failed to fetch private document'))).toEqual({});
+});
+
+
+it('separates diagnostic probes and allowlists configuration field names', () => {
+  const probe = diagnosticEvent({ tags: diagnosticErrorTags({ code: 'sentry_test' }) });
+  expect(probe.tags).toEqual({ diagnostic_test: 'true' });
+  expect(probe.message).toBe('Diagnostic test in application');
+  expect(diagnosticErrorTags({ configurationFields: ['SUPABASE_URL', 'private-value', 'SUPABASE_URL'] })).toEqual({ configuration_fields: 'SUPABASE_URL' });
+  expect(diagnosticEvent({ tags: { configuration_fields: 'SUPABASE_URL,private' } }).tags).toEqual({});
+});
+
+
+it('retains a known storage operation and its dependency cause without object keys', () => {
+  const error = { name: 'StorageOperationError', operation: 'HEAD', key: 'private-document', cause: { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } } };
+  expect(diagnosticErrorTags(error)).toEqual({ storage_operation: 'HEAD', failure_code: 'AccessDenied', dependency_status: 403 });
+  expect(diagnosticErrorTags({ operation: 'private-document' })).toEqual({});
+});
+
+
+it('distinguishes real project endpoints while dropping IDs and query content', () => {
+  for (const operation of ['directory', 'people', 'access', 'memory']) {
+    expect(diagnosticRoute(`/projects/${id}/${operation}?private=value`)).toBe(`/projects/:id/${operation}`);
+  }
+});
+
+
+// attachStacktrace makes the SDK attach a synthetic exception to every
+// captureMessage(); the event must stay a message (title from `message`, as
+// the add-in e2e contract reads it) with the call site as its stacktrace.
+it('keeps a captureMessage event a message when attachStacktrace added a synthetic exception', () => {
+  const event = diagnosticEvent({
+    message: 'PRIVATE_MESSAGE_TEXT',
+    tags: { component: 'mike-api', http_method: 'GET', http_route: '/workflows', http_status: 500, error_code: 'internal_error' },
+    exception: { values: [{ type: 'Error', value: 'PRIVATE_MESSAGE_TEXT', mechanism: { type: 'generic', synthetic: true, handled: true }, stacktrace: { frames: [{ filename: 'src/taskpane/lib/errorReporting.ts', lineno: 213, colno: 5 }] } }] },
+  });
+  expect(event.message).toBe('Failure in mike-api / GET / /workflows / 500 / internal_error');
+  expect(event.exception).toBeUndefined();
+  expect(event.stacktrace).toEqual({ frames: [{ filename: 'src/taskpane/lib/errorReporting.ts', lineno: 213, colno: 5 }] });
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_');
+  // A real exception event is unaffected.
+  const thrown = diagnosticEvent({ exception: { values: [{ type: 'TypeError', mechanism: { type: 'generic', handled: false } }] } });
+  expect(thrown.exception).toBeDefined();
+  expect(thrown.message).toBeUndefined();
+});
+
+it('prefers the nested console Error throw site over the SDK synthetic message stack', () => {
+  const event = diagnosticEvent({
+    tags: { capture_source: 'console' },
+    exception: { values: [{ type: 'Error', stacktrace: { frames: [{ filename: 'src/logging.ts', lineno: 8 }] } }] },
+    extra: { error_stack: 'Error: PRIVATE_DOCUMENT\n    at failing (backend/src/operation.ts:42:7)' },
+  });
+  expect(event.exception).toMatchObject({ values: [{ stacktrace: { frames: [{ filename: 'backend/src/operation.ts', lineno: 42, colno: 7 }] } }] });
+  expect(JSON.stringify(event)).not.toContain('PRIVATE_DOCUMENT');
+});
+
+
+it('retains provider categories and retry status without response bodies or credentials', () => {
+  const api = { name: 'AI_APICallError', statusCode: 401, responseBody: 'PRIVATE_PROVIDER_RESPONSE', apiKey: 'PRIVATE_KEY', requestBodyValues: { prompt: 'PRIVATE_PROMPT' } };
+  const retry = { name: 'AI_RetryError', lastError: api };
+  const wrapped = { name: 'AssistantStreamError', cause: { name: 'InvalidApiKeyError', cause: retry } };
+  const tags = diagnosticErrorTags(wrapped);
+  expect(tags).toEqual({ provider_error: 'invalid_api_key', dependency_status: 401 });
+  expect(diagnosticErrorTags(retry)).toEqual({ provider_error: 'retry_exhausted', dependency_status: 401 });
+  expect(diagnosticErrorTags(api)).toEqual({ provider_error: 'api_call', dependency_status: 401 });
+  expect(JSON.stringify(diagnosticEvent({ tags, extra: api }))).not.toContain('PRIVATE_');
+  const cyclic: { lastError?: unknown } = {};
+  cyclic.lastError = cyclic;
+  expect(diagnosticErrorTags(cyclic)).toEqual({});
+});
+
+it('allows only bounded network context and known model endpoints', () => {
+  expect(diagnosticEvent({ tags: { network_state: 'offline', request_origin: 'cross-origin' } }).tags).toEqual({ network_state: 'offline', request_origin: 'cross-origin' });
+  expect(diagnosticEvent({ tags: { network_state: 'private-network', request_origin: 'https://private.example', provider_error: 'private' } }).tags).toEqual({});
+  for (const operation of ['configured', 'ollama', 'openrouter', 'vercel', 'opencode-go']) {
+    expect(diagnosticRoute(`/api/models/${operation}?key=private`)).toBe(`/api/models/${operation}`);
+  }
 });

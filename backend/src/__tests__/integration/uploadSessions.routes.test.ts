@@ -55,6 +55,8 @@ vi.mock("../../lib/storage", () => ({
   getSignedUploadUrl: mocks.getSignedUploadUrl,
   copyFile: vi.fn(),
   deleteFile: vi.fn(),
+  deleteFileBestEffort: vi.fn(async () => undefined),
+  deleteFilesBestEffort: vi.fn(async () => undefined),
   headFile: vi.fn(),
 }));
 

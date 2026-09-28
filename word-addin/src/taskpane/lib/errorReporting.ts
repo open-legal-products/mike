@@ -67,11 +67,14 @@ export function addinSentryOptions(
     tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
     // No session replay: the pane sits next to a privileged document.
     sendDefaultPii: false,
+    attachStacktrace: true,
     integrations: [privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
     initialScope: {
       tags: {
         service: "mike-word-addin",
         surface,
+        build_mode: env.nodeEnv,
+        diagnostics_version: "2",
         install: installKind(env.install),
       },
     },

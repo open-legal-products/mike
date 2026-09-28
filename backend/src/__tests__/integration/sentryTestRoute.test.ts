@@ -50,6 +50,7 @@ describe("GET /observability/sentry-test", () => {
       { tags: Record<string, unknown> },
     ];
     expect(error.message).toContain("Sentry backend test error");
+    expect(error).toHaveProperty("code", "sentry_test");
     expect(context.tags).toMatchObject({
       component: "http",
       http_status: 500,

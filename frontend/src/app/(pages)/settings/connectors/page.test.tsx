@@ -1,14 +1,22 @@
+vi.mock("@/app/components/settings/GoogleWorkspacePanel", () => ({
+    GoogleWorkspacePanel: ({ children, additionalConnectors }: { children: import("react").ReactNode; additionalConnectors?: import("react").ReactNode }) => <>{children}{additionalConnectors}</>,
+}));
+
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ConnectorsPage from "./page";
 import {
     MikeApiError,
     type McpConnectorSummary,
+    cancelGoogleDriveOAuth,
     createMcpConnector,
     deleteMcpConnector,
+    disconnectGoogleDrive,
+    getGoogleDriveStatus,
     getMcpConnector,
     listMcpConnectors,
     refreshMcpConnectorTools,
+    startGoogleDriveOAuth,
     startMcpConnectorOAuth,
     updateMcpConnector,
 } from "@/app/lib/mikeApi";
@@ -27,6 +35,10 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => {
         startMcpConnectorOAuth: vi.fn(),
         getMcpConnector: vi.fn(),
         updateMcpConnector: vi.fn(),
+        getGoogleDriveStatus: vi.fn(() => new Promise(() => {})),
+        startGoogleDriveOAuth: vi.fn(),
+        cancelGoogleDriveOAuth: vi.fn(),
+        disconnectGoogleDrive: vi.fn(),
     };
 });
 
@@ -772,5 +784,202 @@ describe("ConnectorsPage details autosave", () => {
             await flushMicrotasks();
         });
         expect(updateMcpConnector).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("Google Drive connection lifecycle", () => {
+    const ready = {
+        connected: false,
+        scope: null,
+        configured: true,
+        schemaReady: true,
+        redirectUri: null,
+    };
+    const state = "a".repeat(32);
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        vi.useFakeTimers();
+        vi.mocked(needsMfaVerification).mockResolvedValue(false);
+        vi.mocked(listMcpConnectors).mockResolvedValue([]);
+        vi.mocked(getGoogleDriveStatus).mockResolvedValue(ready);
+        vi.mocked(startGoogleDriveOAuth).mockResolvedValue({
+            authorizationUrl: `https://accounts.google.com/authorize?state=${state}`,
+        });
+        vi.mocked(cancelGoogleDriveOAuth).mockResolvedValue(undefined);
+        vi.mocked(disconnectGoogleDrive).mockResolvedValue(undefined);
+        vi.spyOn(window, "open").mockReturnValue({
+            location: { href: "" },
+            close: vi.fn(),
+            closed: false,
+        } as unknown as Window);
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    async function openCard() {
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        expect(screen.queryByRole("dialog", { name: "Google Drive" })).toBeNull();
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Add Google Drive" }));
+            await flushMicrotasks();
+        });
+    }
+
+    it("shows the redirect URI when Drive is not configured", async () => {
+        vi.mocked(getGoogleDriveStatus).mockResolvedValue({
+            ...ready,
+            configured: false,
+            redirectUri:
+                "http://localhost:3000/api/user/integrations/google-drive/oauth/callback",
+        });
+
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        fireEvent.click(screen.getByRole("button", { name: "Set up Google Drive" }));
+
+        expect(
+            screen.getByText(
+                /administrator needs to configure a Google OAuth client/i,
+            ),
+        ).toBeTruthy();
+        expect(
+            screen.getByText(
+                "http://localhost:3000/api/user/integrations/google-drive/oauth/callback",
+            ),
+        ).toBeTruthy();
+        expect(
+            (screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement)
+                .disabled,
+        ).toBe(true);
+    });
+
+    it("names the missing migration without blaming OAuth configuration", async () => {
+        vi.mocked(getGoogleDriveStatus).mockResolvedValue({
+            ...ready,
+            schemaReady: false,
+        });
+
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        fireEvent.click(screen.getByRole("button", { name: "Set up Google Drive" }));
+
+        expect(
+            screen.getByText(/missing the Google Drive migration/i),
+        ).toBeTruthy();
+        expect(
+            screen.queryByText(
+                /administrator needs to configure a Google OAuth client/i,
+            ),
+        ).toBeNull();
+        expect(
+            (screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement)
+                .disabled,
+        ).toBe(true);
+    });
+
+    it("polls successful consent and disconnects without leaving a pending attempt", async () => {
+        await openCard();
+        vi.mocked(getGoogleDriveStatus).mockResolvedValue({
+            ...ready,
+            connected: true,
+        });
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1500);
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Manage Google Drive" }));
+        expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+        expect(cancelGoogleDriveOAuth).not.toHaveBeenCalled();
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+            await flushMicrotasks();
+        });
+        expect(disconnectGoogleDrive).toHaveBeenCalledOnce();
+        expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+    });
+
+    it("cancels the server-side attempt and stops polling", async () => {
+        await openCard();
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Cancel Google Drive authorization" }));
+            await flushMicrotasks();
+        });
+        expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(state);
+        expect(screen.getByText("Authorization cancelled.")).toBeTruthy();
+        const count = vi.mocked(getGoogleDriveStatus).mock.calls.length;
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(10000);
+        });
+        expect(getGoogleDriveStatus).toHaveBeenCalledTimes(count);
+    });
+
+    it("starts OAuth directly and cancels pending consent from the card", async () => {
+        await openCard();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel Google Drive authorization" }));
+        await act(flushMicrotasks);
+        expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(state);
+        expect(screen.queryByRole("dialog", { name: "Google Drive" })).toBeNull();
+        expect(screen.getByRole("button", { name: "Add Google Drive" })).toBeEnabled();
+    });
+
+    it("honors cancellation while the start request is still in flight", async () => {
+        let resolveStart!: (value: { authorizationUrl: string }) => void;
+        vi.mocked(startGoogleDriveOAuth).mockReturnValue(
+            new Promise((resolve) => {
+                resolveStart = resolve;
+            }),
+        );
+        await openCard();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel Google Drive authorization" }));
+        await act(async () => {
+            resolveStart({
+                authorizationUrl: `https://accounts.google.com/authorize?state=${state}`,
+            });
+            await flushMicrotasks();
+        });
+        expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(state);
+        expect(screen.getByRole("button", { name: "Add Google Drive" })).toBeTruthy();
+    });
+
+    it("shows a completed connection if consent wins the cancellation race", async () => {
+        await openCard();
+        vi.mocked(getGoogleDriveStatus).mockResolvedValue({
+            ...ready,
+            connected: true,
+        });
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Cancel Google Drive authorization" }));
+            await flushMicrotasks();
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Manage Google Drive" }));
+        expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+    });
+
+    it("hides unexpected connection errors", async () => {
+        vi.mocked(startGoogleDriveOAuth).mockRejectedValue(
+            new Error("internal-sentinel"),
+        );
+        await openCard();
+        expect(screen.getByText("Failed to connect Google Drive.")).toBeTruthy();
+        expect(screen.queryByText(/internal-sentinel/)).toBeNull();
+    });
+
+    it("reports a status outage honestly", async () => {
+        vi.mocked(getGoogleDriveStatus).mockRejectedValue(
+            new Error("internal-sentinel"),
+        );
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        fireEvent.click(screen.getByRole("button", { name: "Set up Google Drive" }));
+        expect(
+            screen.getByText(/Could not load Google Drive status/),
+        ).toBeTruthy();
+        expect(screen.queryByText(/administrator needs to configure/)).toBeNull();
+        expect(screen.queryByText(/internal-sentinel/)).toBeNull();
     });
 });

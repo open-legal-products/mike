@@ -219,6 +219,24 @@ the backend, Next server/edge, browser, and all Word add-in entries.
   are absent. Correlation/domain IDs are allowed only under named keys and
   only in UUID format. IDs remain linkable to internal records; this is data
   minimization, not a claim of anonymity.
+- Finite failure codes, dependency HTTP status, storage operation, file type,
+  capture source, build mode and `diagnostics_version` remain. Wrapped and
+  aggregate causes and AI SDK `lastError` are inspected locally with bounded
+  traversal. Known provider error classes become a finite `provider_error`
+  category; response bodies, prompts and credentials are never retained.
+  Browser fetch failures include only `network_state` (online/offline/unknown)
+  and `request_origin` (same-origin/cross-origin/unknown), never the hostname.
+  Online means the browser reports connectivity, not that a server is reachable. Arbitrary
+  codes/names/messages and dependency metadata are not transmitted.
+- Invalid configuration reports may name approved environment **fields**, never
+  their values. Converter failures distinguish missing binary, timeout and
+  nonzero exit without sending stderr or document paths.
+- Browser/runtime contexts retain only approved software names and numeric
+  versions; user-agent strings, device identity and other context fields are
+  excluded. Message captures explicitly request stacks; the same path-only
+  filtering applies to those frames.
+- Opt-in pipeline probes carry `diagnostic_test:true` and a controlled test
+  title so they can be separated from real failures.
 - Controlled Office host/platform/version tags remain. Source-map debug IDs
   and code-file locations remain so uploaded source maps can resolve frames.
   Source-map uploads themselves are a separate operator-enabled transfer of

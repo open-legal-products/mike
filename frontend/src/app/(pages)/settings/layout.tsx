@@ -72,15 +72,15 @@ export default function SettingsLayout({
                 </h1>
             </header>
 
-            <main className="mx-auto w-full max-w-5xl flex-1 px-6 pb-10 pt-4 md:pt-6">
-                <div className="grid grid-cols-1 gap-y-6 md:grid-cols-[224px_minmax(0,1fr)] md:gap-x-10">
+            <main className="@container/settings mx-auto w-full max-w-5xl flex-1 px-6 pb-10 pt-4 md:pt-6">
+                <div className="grid grid-cols-1 gap-y-6 @min-[52rem]/settings:grid-cols-[224px_minmax(0,1fr)] @min-[52rem]/settings:gap-x-10">
                     <nav
                         aria-label="Settings"
-                        className="z-10 -ml-3 min-w-0 self-start md:sticky md:top-4"
+                        className="z-10 -ml-3 min-w-0 self-start @min-[52rem]/settings:sticky @min-[52rem]/settings:top-4"
                     >
                         <div className="-m-1 min-w-0 p-1">
                             <div className="-m-1 min-w-0 overflow-x-auto overflow-y-hidden p-1">
-                                <ul className="mb-0 flex gap-1 md:flex-col">
+                                <ul className="mb-0 flex gap-1 @min-[52rem]/settings:flex-col">
                                     {TABS.map((tab) => {
                                         const active =
                                             pathname === tab.href ||

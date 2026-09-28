@@ -1,3 +1,4 @@
+import { buildGoogleWorkspaceTools } from "../../../lib/integrations/googleWorkspace";
 import {
   streamChatWithTools,
   resolveModel,
@@ -11,6 +12,7 @@ import { reportError } from "../../../lib/observability/sentry";
 import type { Db } from "../../../lib/supabase";
 import { buildUserMcpTools, type McpToolEvent } from "../../../lib/mcpConnectors";
 import type { SourceDocument } from "../../../lib/sourceDocuments";
+import { buildGoogleDriveTools } from "../../../lib/integrations/googleDrive";
 import {
   COURTLISTENER_TOOLS,
   type CaseCitationEvent,
@@ -74,8 +76,13 @@ export class AssistantStreamError extends Error {
   fullText: string;
   events: AssistantEvent[];
 
-  constructor(message: string, fullText: string, events: AssistantEvent[]) {
-    super(message);
+  constructor(
+    message: string,
+    fullText: string,
+    events: AssistantEvent[],
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
     this.name = "AssistantStreamError";
     this.fullText = fullText;
     this.events = events;
@@ -282,6 +289,7 @@ export async function runLLMStream(params: {
     unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   const mcpTools = await buildUserMcpTools(userId, db);
+  const googleDriveTools = await buildGoogleDriveTools(userId, db);
   const conversationTools = includeAskInputs
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
@@ -289,6 +297,8 @@ export async function runLLMStream(params: {
   const advertisedTools = [
     ...baseTools,
     ...mcpTools,
+    ...googleDriveTools,
+    ...(await buildGoogleWorkspaceTools(userId, db)),
     ...(extraTools ?? []),
     ...(clientTools?.schemas ?? []),
   ];
@@ -717,15 +727,20 @@ export async function runLLMStream(params: {
     } else {
       flushPartialTurn();
       const safeToDisplay = err instanceof UserFacingError;
-      // A UserFacingError is a deliberate, explained refusal (missing API
-      // key, model not allowed) — the user's configuration, not our bug.
-      // Everything else mid-stream is: the response already started, so the
-      // HTTP 500 path never sees it and this is the only report.
-      if (!safeToDisplay) {
-        reportError(err, {
-          tags: { component: "chat-stream" },
-        });
-      }
+      // The response already started, so the HTTP 500 path never sees this:
+      // it is the one report of the turn's failure. Reporting it HERE, before
+      // any console.error, is what lets the console bridge recognise every
+      // later log of it — this line's, and the route's log of the
+      // AssistantStreamError below, whose `cause` is `err` — as already sent.
+      // A UserFacingError (rejected or missing API key, model not allowed)
+      // is the user's configuration rather than our bug: still one event, so
+      // operators see a rejected key with its provider_error tag, but a
+      // warning, not an error. (Left unreported, the console bridge filed it
+      // anyway, at error level, as MIKE-BACKEND-E.)
+      reportError(err, {
+        tags: { component: "chat-stream" },
+        ...(safeToDisplay ? { level: "warning" as const } : {}),
+      });
       console.error("[chat/stream] model stream failed", err);
       const message = safeToDisplay ? err.message : ASSISTANT_ERROR_MESSAGE;
       events.push({
@@ -742,6 +757,7 @@ export async function runLLMStream(params: {
         message,
         fullText,
         events.map(sanitizeAssistantEvent),
+        { cause: err },
       );
     }
   }

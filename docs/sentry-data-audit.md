@@ -12,7 +12,11 @@ descriptions. Request URLs, query strings, all headers, bodies, user objects,
 breadcrumbs, arbitrary context, free-form extras, function names, local
 variables and source snippets are omitted. Source-code paths/line numbers,
 source-map debug IDs, approved operation tags, UUID correlation/domain IDs,
-release/environment and severity remain. Client document names have no
+release/environment and severity remain. Bounded cause codes, provider error categories/status, browser network state
+and origin relation (never hosts), operation stages,
+approved configuration field names (never values), broad software names/numeric
+versions and capture provenance also remain; see the
+[2026-09-23 issue review](sentry-issue-review-2026-09-23.md). Client document names have no
 permitted outbound field. Domain IDs remain linkable to internal records.
 
 The real Node SDK was exercised against a local capture server in community

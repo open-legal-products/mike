@@ -26,20 +26,22 @@ const chats: Chat[] = [
     },
 ];
 
-function renderTable(selectedChatIds: string[]) {
+function renderTable(selectedChatIds: string[], canCreateChat = true, rows = chats) {
+    const onCreateChat = vi.fn();
     const onDeleteChat = vi.fn();
     const onDeleteSelectedChats = vi.fn();
     const onOpenChat = vi.fn();
     const setSelectedChatIds = vi.fn();
     render(
         <ProjectAssistantTable
-            chats={chats}
-            filteredChats={chats}
+            canCreateChat={canCreateChat}
+            chats={rows}
+            filteredChats={rows}
             selectedChatIds={selectedChatIds}
             renamingChatId={null}
             renameChatValue=""
             currentUserId="user-1"
-            onCreateChat={vi.fn()}
+            onCreateChat={onCreateChat}
             onOpenChat={onOpenChat}
             onDeleteChat={onDeleteChat}
             onDeleteSelectedChats={onDeleteSelectedChats}
@@ -51,6 +53,7 @@ function renderTable(selectedChatIds: string[]) {
         />,
     );
     return {
+        onCreateChat,
         onDeleteChat,
         onDeleteSelectedChats,
         onOpenChat,
@@ -59,6 +62,14 @@ function renderTable(selectedChatIds: string[]) {
 }
 
 describe("ProjectAssistantTable row context actions", () => {
+    it.each([false, true])("gates empty-state Create on resolved edit permission (%s)", (allowed) => {
+        const { onCreateChat } = renderTable([], allowed, []);
+        const button = screen.getByRole("button", { name: "Create" });
+        if (allowed) expect(button).toBeEnabled();
+        else expect(button).toBeDisabled();
+        fireEvent.click(button);
+        expect(onCreateChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    });
     it("deletes the whole selection when right-clicking a selected row", async () => {
         const user = userEvent.setup();
         const { onDeleteChat, onDeleteSelectedChats } = renderTable([

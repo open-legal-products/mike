@@ -14,6 +14,14 @@ function apiCallError(statusCode: number, responseBody = "") {
 }
 
 describe("toProviderStreamError", () => {
+  it.each([401, 402, 403, 404, 429])("retains the original %i provider failure internally", (status) => {
+    const original = apiCallError(status, "private provider response");
+    const error = toProviderStreamError(original, gemini);
+    expect(error.cause).toBe(original);
+    expect(error.message).not.toContain("private provider response");
+    expect(JSON.stringify(error)).not.toContain("private provider response");
+  });
+
   it("explains a free-tier key without access to the model", () => {
     const error = toProviderStreamError(
       apiCallError(

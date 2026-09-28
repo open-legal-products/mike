@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 
 const mocks = vi.hoisted(() => ({
   deleteFile: vi.fn(),
@@ -22,6 +23,12 @@ const mocks = vi.hoisted(() => ({
   createServerSupabase: vi.fn(),
   enqueueStorageCleanup: vi.fn(),
   requestDocumentCleanupDelivery: vi.fn(),
+  reportError: vi.fn((_error: unknown, _context?: unknown) => null),
+}));
+
+vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/observability/sentry")>()),
+  reportError: mocks.reportError,
 }));
 
 vi.mock("../../../lib/storage", async (importOriginal) => {
@@ -33,6 +40,11 @@ vi.mock("../../../lib/storage", async (importOriginal) => {
     // assertions on which objects were removed keep working.
     deleteFileBestEffort: (key: string) =>
       Promise.resolve(mocks.deleteFile(key)).catch(() => undefined),
+    deleteFilesBestEffort: async (keys: Array<string | null | undefined>) => {
+      for (const key of keys.filter(Boolean)) {
+        await Promise.resolve(mocks.deleteFile(key)).catch(() => undefined);
+      }
+    },
     createFileReadStream: mocks.createFileReadStream,
     copyFile: mocks.copyFile,
     uploadFileFromPath: mocks.uploadFileFromPath,
@@ -331,6 +343,47 @@ describe("upload processing", () => {
       expect.stringMatching(/source\.pdf$/),
       "application/pdf",
     );
+  });
+
+  it("keeps the upload and reports a missing LibreOffice once, as a warning grouped by file type", async () => {
+    // MIKE-BACKEND-9: the worker on a host without soffice.
+    const officeFile = {
+      ...baseFile,
+      filename: "PRIVATE_NAME.docx",
+      file_type: "docx",
+      content_type:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+    const document = {
+      id: officeFile.resource_id,
+      user_id: baseSession.user_id,
+      folder_id: null,
+      library_folder_id: null,
+    };
+    const db = fakeDb({ documents: [{ data: document, error: null }] });
+    mocks.officeFileToPdf.mockRejectedValue(
+      Object.assign(new Error("LibreOffice (soffice) was not found"), {
+        code: "conversion_unavailable",
+      }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await processUploadFile(db as never, baseSession, officeFile);
+
+    expect(result).toMatchObject({ id: officeFile.resource_id });
+    expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
+    expect(mocks.reportError).toHaveBeenCalledOnce();
+    const [error, context] = mocks.reportError.mock.calls[0]!;
+    expect(diagnosticErrorTags(error)).toEqual({
+      failure_code: "conversion_unavailable",
+    });
+    expect(context).toMatchObject({
+      level: "warning",
+      tags: { component: "upload-worker", stage: "conversion", file_type: "docx" },
+      fingerprint: ["upload-conversion-failed", "docx"],
+    });
+    // Extension only: the filename never reaches the report.
+    expect(JSON.stringify(context)).not.toContain("PRIVATE_NAME");
   });
 
   it("creates an idempotent workflow asset as a document using its reserved resource id", async () => {

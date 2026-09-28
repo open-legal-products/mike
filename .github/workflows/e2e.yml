@@ -149,9 +149,12 @@ jobs:
           supabase init --force --with-vscode-settings=false || supabase init --force
           # E2E uses Auth, Postgres, PostgREST, and Kong only. Document storage
           # is provided by RustFS above, and no spec reads local email. Excluding
-          # the unused services also avoids Inbucket claiming host port 54324,
+          # the unused services also avoids Mailpit claiming host port 54324,
           # which can collide with runner processes before Playwright starts.
-          supabase start -x studio,imgproxy,inbucket,analytics,vector,realtime,storage,edge-runtime,functions,meta
+          # setup-cli pins GHCR, disabling the CLI's ECR/GHCR/Docker Hub fallback.
+          # Allow the pinned CLI to recover when one public registry is throttled.
+          env -u SUPABASE_INTERNAL_IMAGE_REGISTRY supabase start \
+            -x studio,imgproxy,mailpit,logflare,vector,realtime,storage-api,edge-runtime,postgres-meta,supavisor
           DB_URL=$(supabase status -o json | jq -r '.DB_URL')
           # A fresh database runs the current schema exactly once. Historical
           # migrations only upgrade older deployments; replaying them on top of

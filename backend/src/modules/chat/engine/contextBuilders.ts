@@ -459,7 +459,11 @@ export function isMeaningfulTextlessAssistantOutput(
 ): boolean {
   // Preserve the existing convention: a failed research or MCP activity is
   // visible output even though its successful form is only intermediate work.
-  return "error" in event || COMPLETES_TEXTLESS_TURN[event.type];
+  return (
+    "error" in event ||
+    (event.type === "mcp_tool_call" && !!event.google_action_id) ||
+    COMPLETES_TEXTLESS_TURN[event.type]
+  );
 }
 
 function cleanAskInputResponseId(value: unknown) {

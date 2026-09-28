@@ -1,3 +1,4 @@
+import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, listGoogleWorkspaceActions, decideGoogleWorkspaceAction } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 
@@ -7,6 +8,7 @@ import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 const reportApiFailure = vi.hoisted(() => vi.fn());
 const reportNetworkFailure = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/errorReporting", () => ({
+    trackPendingRequest: () => () => {},
     reportApiFailure,
     reportNetworkFailure,
 }));
@@ -43,6 +45,8 @@ import {
     deleteWorkflow,
     deleteWorkflowAsset,
     deleteWorkflowShare,
+    cancelGoogleDriveOAuth,
+    disconnectGoogleDrive,
     downloadDocumentsZip,
     downloadUserExport,
     exportAccountData,
@@ -67,6 +71,7 @@ import {
     getLibraryFilterOptions,
     getLibraryFolderChildren,
     getLibraryFolderPath,
+    getGoogleDriveStatus,
     getMcpConnector,
     getOllamaModels,
     getOpenCodeGoModels,
@@ -160,11 +165,17 @@ import {
     setProjectMemoryEnabled,
     setUserMemoryEnabled,
     shareWorkflow,
+    startGoogleDriveOAuth,
     startMcpConnectorOAuth,
     startUserExport,
     streamChat,
+    streamChatTurn,
+    stopChatTurn,
     streamProjectChat,
     streamTabularChat,
+    streamTabularChatTurn,
+    stopTabularChatTurn,
+    stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
     syncUserPasswordSet,
@@ -482,6 +493,38 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
             requestId: null,
             error: expect.any(MikeApiError),
         });
+    });
+
+    // MIKE-FRONTEND-5/8: the browser-side "API 502" event must carry the id
+    // the Next gateway generated for its own api-gateway event, so the two
+    // halves of one outage can be joined with `request_id:<id>`.
+    it("correlates a gateway 502 with the gateway's own event by request id", async () => {
+        const gatewayId = "0b7c6a52-3a4e-4f59-9d0c-6f1e2a3b4c5d";
+        fetchMock.mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    detail: "The API is temporarily unavailable.",
+                    request_id: gatewayId,
+                }),
+                {
+                    status: 502,
+                    headers: {
+                        "content-type": "application/json",
+                        "x-request-id": gatewayId,
+                    },
+                },
+            ),
+        );
+
+        await expect(getUserProfile()).rejects.toMatchObject({
+            status: 502,
+            requestId: gatewayId,
+            message: "Something went wrong. Please try again.",
+        });
+        expect(reportApiFailure).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ status: 502, requestId: gatewayId }),
+        );
+        expect(reportNetworkFailure).not.toHaveBeenCalled();
     });
 
     it("reports the real HTTP method of a failed mutation", async () => {
@@ -810,6 +853,35 @@ describe("getChat message mapping", () => {
     });
 });
 
+describe("getChat active turn", () => {
+    const chat: Chat = {
+        id: "c1",
+        project_id: null,
+        user_id: "u1",
+        title: "T",
+        created_at: "2026-01-01",
+    };
+
+    it("passes through the turn the server is still generating", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({
+                chat,
+                messages: [],
+                active_turn: { id: "t1", seq: 4, assistant_message_id: "m9" },
+            }),
+        );
+        const detail = await getChat("c1");
+        expect(detail.active_turn).toEqual({ id: "t1", seq: 4, assistant_message_id: "m9" });
+    });
+
+    it("is null when the server reports none, or predates the field", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [] }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [], active_turn: null }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+    });
+});
+
 describe("mapTRMessages", () => {
     it("maps user and assistant rows including annotations", () => {
         const events: AssistantEvent[] = [{ type: "content", text: "Answer" }];
@@ -979,6 +1051,43 @@ describe("streamChat", () => {
     });
 });
 
+describe("streamChatTurn / stopChatTurn (server-owned turns)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+        await streamChatTurn({
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stream?from=7");
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        await streamChatTurn({ chatId: "c1", turnId: "t1" });
+        expect(lastFetchCall().url).toBe("/api/chat/c1/turn/t1/stream?from=1");
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+        await expect(stopChatTurn("c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
+    });
+});
+
 describe("streamProjectChat", () => {
     it("targets the project chat route and strips projectId/signal from the body", async () => {
         fetchMock.mockResolvedValue(streamResponse([]));
@@ -1072,6 +1181,83 @@ describe("streamTabularGenerationResume", () => {
         await streamTabularGenerationResume("r1");
 
         expect(lastFetchCall().init.signal).toBeUndefined();
+    });
+
+    it("resumes from a sequence number when the client has already seen frames", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularGenerationResume("r1", undefined, 12);
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/generate/stream?from=12",
+        );
+    });
+});
+
+describe("streamTabularChatTurn / stopTabularChatTurn (server-owned review chat)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+
+        const { url, init } = lastFetchCall();
+        expect(url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=7",
+        );
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+        });
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=1",
+        );
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularChatTurn("r1", "c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/chats/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
+    });
+});
+
+describe("stopTabularGeneration", () => {
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularGeneration("r1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/generate/stop");
+        expect(init.method).toBe("POST");
     });
 });
 
@@ -2233,6 +2419,42 @@ describe("thin endpoint wrappers", () => {
             method: "PATCH",
             body: { enabled: true },
         },
+        // Native Google Drive. Unlike the MCP connectors above these are
+        // first-party endpoints under /user/integrations, and the three verbs
+        // share one path — so the route/method pairing is what keeps
+        // "check status" from accidentally becoming "revoke my tokens".
+        {
+            name: "getGoogleDriveStatus",
+            call: () => getGoogleDriveStatus(),
+            url: "/user/integrations/google-drive",
+        },
+        {
+            name: "startGoogleDriveOAuth",
+            call: () => startGoogleDriveOAuth(),
+            url: "/user/integrations/google-drive/oauth/start",
+            method: "POST",
+        },
+        {
+            name: "cancelGoogleDriveOAuth",
+            call: () => cancelGoogleDriveOAuth("state-token"),
+            url: "/user/integrations/google-drive/oauth/cancel",
+            method: "POST",
+            body: { state: "state-token" },
+        },
+        {
+            name: "disconnectGoogleDrive",
+            call: () => disconnectGoogleDrive(),
+            url: "/user/integrations/google-drive",
+            method: "DELETE",
+        },
+        { name: "getGoogleWorkspaceStatus", call: () => getGoogleWorkspaceStatus("gmail"), url: "/user/integrations/gmail" },
+        { name: "startGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("gmail"), url: "/user/integrations/gmail/oauth/start", method: "POST", body: { write: false } },
+        { name: "upgradeGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("google-calendar", true), url: "/user/integrations/google-calendar/oauth/start", method: "POST", body: { write: true } },
+        { name: "cancelGoogleWorkspaceOAuth", call: () => cancelGoogleWorkspaceOAuth("gmail", "state"), url: "/user/integrations/gmail/oauth/cancel", method: "POST", body: { state: "state" } },
+        { name: "disconnectGoogleWorkspace", call: () => disconnectGoogleWorkspace("gmail"), url: "/user/integrations/gmail", method: "DELETE" },
+        { name: "listGoogleWorkspaceActions", call: () => listGoogleWorkspaceActions(), url: "/user/google-actions" },
+        { name: "approveGoogleWorkspaceAction", call: () => decideGoogleWorkspaceAction("a1", "approve"), url: "/user/google-actions/a1/approve", method: "POST" },
+        { name: "rejectGoogleWorkspaceAction", call: () => decideGoogleWorkspaceAction("a1", "reject"), url: "/user/google-actions/a1/reject", method: "POST" },
         // Projects
         {
             name: "getProject",

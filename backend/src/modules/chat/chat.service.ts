@@ -57,6 +57,7 @@ export {
   parseOptionalDocumentContext,
   createReservedAssistantMessageUpdater,
   createWordClientToolsAdapter,
+  isClientToolCallPending,
   reserveAssistantMessage,
   submitClientToolResult,
   ACTIVE_WORD_DOCUMENT_ID,
@@ -64,7 +65,7 @@ export {
   buildWordChatSystemPrompt,
   withoutEmptyAssistantReservations,
 } from "./engine/index";
-export { generateAssistantChatTitle } from "./chat.title";
+export { generateAssistantChatTitle, logChatTitleFailure } from "./chat.title";
 
 export {
   persistWordDocumentEdits,

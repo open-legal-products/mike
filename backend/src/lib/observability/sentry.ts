@@ -18,7 +18,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
-import { privacyBoundaryIntegration } from "./sentryPrivacy";
+import { diagnosticErrorTags, privacyBoundaryIntegration } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
 
@@ -347,6 +347,8 @@ const FILESYSTEM_PATH_PATTERN =
  * for browser bundles, and "[external]" for anything outside the project.
  */
 export function repoRelativePath(path: string): string {
+    // SDK integrations can already supply repository-relative locations.
+    if (/^(?:\.\/)?(?:backend|frontend|word-addin|packages|src|dist|node_modules|_next)\//.test(path)) return path;
   let idx = -1;
   for (const root of REPO_ROOTS) {
     const at = path.lastIndexOf(root);
@@ -482,6 +484,38 @@ export function minimiseForCommunity<T extends CommunityEvent>(event: T): T {
 
 /** Errors already sent via reportError(); the console bridge skips them. */
 const reportedErrors = new WeakSet<object>();
+
+/** How far down an Error's `cause` chain isReported() looks. */
+const CAUSE_CHAIN_DEPTH = 8;
+
+/**
+ * True when `value`, or any error in its `cause` chain, was already sent
+ * with reportError(). Wrapping a reported failure for the caller —
+ * `throw new AssistantStreamError(message, …, { cause: err })` — is the
+ * same failure, not a new one; without this walk a route logging the
+ * wrapper filed the failure a second time (MIKE-BACKEND-B). `cause` is a
+ * non-enumerable own property, so the Object.values() search in
+ * findNested() never sees it. Bounded and cycle-safe: `cause` is arbitrary
+ * user-settable data.
+ */
+function isReported(value: unknown): boolean {
+  const seen = new Set<object>();
+  let current = value;
+  for (let depth = 0; depth < CAUSE_CHAIN_DEPTH; depth++) {
+    if (!current || typeof current !== "object" || seen.has(current)) {
+      return false;
+    }
+    if (reportedErrors.has(current)) return true;
+    seen.add(current);
+    try {
+      current = (current as { cause?: unknown }).cause;
+    } catch {
+      // A throwing accessor carries no signal; reporting must not throw.
+      return false;
+    }
+  }
+  return false;
+}
 
 let initialized = false;
 /** What this process is; community installs get the minimised event shape. */
@@ -650,12 +684,7 @@ export function scrubEvent(
   const automatic =
     mechanism === CONSOLE_MECHANISM || mechanismInfo?.handled === false;
   const original = hint.originalException;
-  if (
-    automatic &&
-    original &&
-    typeof original === "object" &&
-    reportedErrors.has(original)
-  ) {
+  if (automatic && isReported(original)) {
     return null;
   }
 
@@ -667,7 +696,7 @@ export function scrubEvent(
   // name and text and group by label instead of by the serialised object.
   const args = event.logger === "console" ? consoleArguments(hint) : null;
   if (args) {
-    if (args.some((arg) => findNested(arg, (c) => reportedErrors.has(c)))) {
+    if (args.some((arg) => findNested(arg, isReported))) {
       return null;
     }
     // Positional payloads after the label are never titles or grouping keys.
@@ -686,6 +715,16 @@ export function scrubEvent(
     } else if (!event.exception?.values?.length) {
       event.message = label;
     }
+  }
+
+  event.tags = {
+    ...event.tags,
+    ...diagnosticErrorTags(original),
+    capture_source: event.logger === "console" ? "console" : mechanismInfo?.handled === false ? "unhandled" : event.exception?.values?.length ? "exception" : "message",
+  };
+  for (const arg of args ?? []) {
+    const nested = findNested(arg, c => c instanceof Error || 'code' in c);
+    Object.assign(event.tags, diagnosticErrorTags(nested));
   }
 
   // The title and the exception text are free text from libraries that
@@ -782,6 +821,7 @@ export function initSentry(
     debug: config.debug,
     tracesSampleRate: config.tracesSampleRate,
     sendDefaultPii: false,
+    attachStacktrace: true,
     // Bodies are stripped in beforeSend as well; not collecting them at all
     // means they never sit in memory on the event either.
     integrations: [
@@ -797,7 +837,7 @@ export function initSentry(
       Sentry.onUnhandledRejectionIntegration({ mode: "strict" }),
     ],
     initialScope: {
-      tags: { service: "mike-backend", role, install: config.install },
+      tags: { service: "mike-backend", role, install: config.install, build_mode: env.NODE_ENV, diagnostics_version: "2" },
     },
     beforeSend: scrubEvent,
   });
@@ -838,7 +878,7 @@ export function reportError(
       scope.setExtra(key, value);
     }
     return Sentry.captureException(
-      error instanceof Error ? error : new Error(describe(error)),
+      error instanceof Error ? error : new Error(describe(error), { cause: error }),
     );
   });
 }

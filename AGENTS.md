@@ -25,6 +25,13 @@ decorative pill badges unless a pill is specifically requested. This does not
 apply to established interactive pill controls such as `PillButton`,
 `TabPillButton`, and `OptionPill`.
 
+Keep ordinary account identifiers and their permission/status text fully visible.
+Do not truncate a normal-length email or hide its status to make a compact card
+fit. Put independent information on separate lines, allow long unbroken values
+to wrap, and let controls or cards reflow based on available container width.
+Verify both realistic and unusually long content at narrow widths; match loading
+states to the same layout. See the content-fitting rules in `docs/design-system.md`.
+
 Before creating UI markup, search these locations in order:
 
 1. `frontend/src/app/components/ui/` contains reusable web primitives such as

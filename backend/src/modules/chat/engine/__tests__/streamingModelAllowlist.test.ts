@@ -22,6 +22,8 @@ vi.mock("../../../../lib/mcpConnectors", () => ({
     buildUserMcpTools: vi.fn(async () => []),
 }));
 
+import { toProviderStreamError } from "../../../../lib/llm/providerErrors";
+
 import { AssistantStreamError, runLLMStream } from "../streaming";
 
 // Supabase mock that only has to serve getUserRouterModels' query chain.
@@ -73,6 +75,22 @@ beforeEach(() => {
 });
 
 describe("runLLMStream router-model allowlist", () => {
+    it("retains a provider failure internally without adding its cause to stream events", async () => {
+        const original = Object.assign(new Error("private-provider-response"), {
+            statusCode: 401,
+            responseBody: "private-provider-response",
+        });
+        const mapped = toProviderStreamError(original, { label: "Gemini", modelId: "gemini-2.5-pro" });
+        streamChatWithTools.mockRejectedValueOnce(mapped);
+        const error = await runStreamWithModel(routerModelsDb([]), "claude-fable-5").catch((err: unknown) => err);
+        expect(error).toBeInstanceOf(AssistantStreamError);
+        if (!(error instanceof AssistantStreamError)) throw error;
+        expect(error.cause).toBe(mapped);
+        expect(mapped.cause).toBe(original);
+        expect(error.events).toContainEqual(expect.objectContaining({ type: "error", code: "invalid_api_key", safe_to_display: true }));
+        expect(JSON.stringify(error.events)).not.toContain("private-provider-response");
+    });
+
     it("passes a saved router model through to the adapter", async () => {
         const db = routerModelsDb([{ model_id: "allowed/model" }]);
         await runStreamWithModel(db, "openrouter/allowed/model");

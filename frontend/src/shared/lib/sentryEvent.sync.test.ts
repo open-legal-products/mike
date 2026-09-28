@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { diagnosticRoute } from "./sentryPrivacy";
 
 /**
  * The redaction core is one privacy control mirrored into two files: the
@@ -35,4 +36,14 @@ describe("shared-redaction block", () => {
     it("is identical in the backend and the shared scrubber", () => {
         expect(sharedBlock(BACKEND)).toBe(sharedBlock(SHARED));
     });
+});
+
+
+it('retains the fixed vocabulary of every Express mount without parameter names', () => {
+    const app = readFileSync(path.resolve(__dirname, '../../../../backend/src/app.ts'), 'utf8');
+    const routes = [...app.matchAll(/app\.(?:use|get)\("([^"]+)"/g)].map(match => match[1]);
+    expect(routes.length).toBeGreaterThan(20);
+    for (const route of routes) {
+        expect(diagnosticRoute(route)).toBe(route.replace(/:[^/]+/g, ':id'));
+    }
 });

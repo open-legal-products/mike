@@ -42,6 +42,7 @@ import {
     serverSentryOptions,
     setReportingUser,
     reportNetworkFailure,
+    trackPendingRequest,
 } from "./errorReporting";
 import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
 
@@ -49,6 +50,7 @@ afterEach(() => {
     state.enabled = false;
     state.scopes.length = 0;
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
 });
 
 describe("reportError", () => {
@@ -199,6 +201,7 @@ describe("browserSentryOptions", () => {
             tags: {
                 service: "mike-frontend",
                 runtime: "browser",
+                diagnostics_version: "2",
                 install: "community",
             },
         });
@@ -256,7 +259,7 @@ describe("serverSentryOptions", () => {
         expect(options.release).toBe("r1");
         expect(options.tracesSampleRate).toBe(0.1);
         expect(options.initialScope).toEqual({
-            tags: { service: "mike-frontend", runtime: "edge", install: "community" },
+            tags: { service: "mike-frontend", runtime: "edge", install: "community", diagnostics_version: "2" },
         });
         expect(options.beforeSend).toBe(scrubEvent);
     });
@@ -324,5 +327,144 @@ describe("reportNetworkFailure", () => {
         ]);
         expect(scope.setTag).toHaveBeenCalledWith("network", true);
         expect(scope.setTag).toHaveBeenCalledWith("http_route", "/api/projects/:id/documents");
+    });
+});
+
+
+it('labels opt-in pipeline test failures separately from application incidents', () => {
+    state.enabled = true;
+    reportApiFailure({ path: '/observability/sentry-test', status: 500 });
+    expect(state.scopes[0].setTag).toHaveBeenCalledWith('diagnostic_test', 'true');
+});
+
+
+it.each([true, false])('reports only bounded browser network state (online=%s)', online => {
+    state.enabled = true;
+    vi.stubGlobal('navigator', { onLine: online });
+    vi.stubGlobal('window', { location: { href: 'https://private.example/documents/private', origin: 'https://private.example' } });
+    reportNetworkFailure(new TypeError('Failed to fetch'), { method: 'GET', url: '/api/models/configured?key=private' });
+    expect(state.scopes[0].setTag).toHaveBeenCalledWith('network_state', online ? 'online' : 'offline');
+    expect(state.scopes[0].setTag).toHaveBeenCalledWith('request_origin', 'same-origin');
+    reportNetworkFailure(new TypeError('Failed to fetch'), { method: 'GET', url: 'https://other-private.example/api/chat' });
+    expect(state.scopes[1].setTag).toHaveBeenCalledWith('request_origin', 'cross-origin');
+    expect(JSON.stringify(state.scopes.flatMap(scope => scope.setTag.mock.calls))).not.toContain('private');
+});
+
+it('tolerates unavailable browser network state', () => {
+    state.enabled = true;
+    vi.stubGlobal('navigator', undefined);
+    vi.stubGlobal('window', undefined);
+    reportNetworkFailure(new TypeError('Failed to fetch'), { method: 'GET', url: '/api/chat' });
+    expect(state.scopes[0].setTag).toHaveBeenCalledWith('network_state', 'unknown');
+    expect(state.scopes[0].setTag).toHaveBeenCalledWith('request_origin', 'unknown');
+});
+
+// MIKE-FRONTEND-B/C/D/E: all four mount-time requests of one page failed in
+// the same second, repeatedly, while the session request of that same page
+// had just succeeded. A browser rejects in-flight fetches with the same bare
+// "Failed to fetch" TypeError when the page is reloaded or left, so those
+// cancellations must not be filed as network incidents.
+describe("reportNetworkFailure while the page is being left", () => {
+    afterEach(() => {
+        window.dispatchEvent(new Event("pageshow"));
+        vi.useRealTimers();
+    });
+
+    it.each(["beforeunload", "pagehide"])(
+        "drops fetch failures after %s but still marks them for the console bridge",
+        (eventName) => {
+            state.enabled = true;
+            // The beforeunload listener exists only while a request is pending.
+            const release = trackPendingRequest();
+            window.dispatchEvent(new Event(eventName));
+            release();
+            const failure = new TypeError("Failed to fetch");
+
+            expect(
+                reportNetworkFailure(failure, { method: "GET", url: "/api/chat" }),
+            ).toBeNull();
+
+            expect(Sentry.captureException).not.toHaveBeenCalled();
+            expect(
+                scrubEvent(
+                    {
+                        logger: "console",
+                        exception: {
+                            values: [{ mechanism: { type: "auto.core.capture_console" } }],
+                        },
+                    },
+                    { originalException: failure },
+                ),
+            ).toBeNull();
+        },
+    );
+
+    it("reports again once the page is shown (bfcache restore)", () => {
+        state.enabled = true;
+        window.dispatchEvent(new Event("pagehide"));
+        window.dispatchEvent(new Event("pageshow"));
+
+        reportNetworkFailure(new TypeError("Failed to fetch"), {
+            method: "GET",
+            url: "/api/chat",
+        });
+
+        expect(Sentry.captureException).toHaveBeenCalledOnce();
+    });
+
+    // Firefox will not put a page with a beforeunload listener into its
+    // back/forward cache, so an idle page must not carry one.
+    it("listens for beforeunload only while a request is pending", () => {
+        state.enabled = true;
+        window.dispatchEvent(new Event("beforeunload"));
+        reportNetworkFailure(new TypeError("Failed to fetch"), {
+            method: "GET",
+            url: "/api/chat",
+        });
+        expect(Sentry.captureException).toHaveBeenCalledOnce();
+
+        const releaseA = trackPendingRequest();
+        const releaseB = trackPendingRequest();
+        releaseA();
+        window.dispatchEvent(new Event("beforeunload"));
+        releaseB();
+        expect(
+            reportNetworkFailure(new TypeError("Failed to fetch"), {
+                method: "GET",
+                url: "/api/chat",
+            }),
+        ).toBeNull();
+    });
+
+    it("tolerates a double release and a missing window", async () => {
+        const release = trackPendingRequest();
+        release();
+        release();
+        expect(() => release()).not.toThrow();
+
+        // Server-side render: no window to listen on, nothing to install.
+        vi.stubGlobal("window", undefined);
+        vi.resetModules();
+        const serverSide = await import("./errorReporting");
+        const serverRelease = serverSide.trackPendingRequest();
+        expect(() => serverRelease()).not.toThrow();
+        vi.unstubAllGlobals();
+        vi.resetModules();
+    });
+
+    it("reports again when a beforeunload prompt kept the user on the page", () => {
+        vi.useFakeTimers();
+        state.enabled = true;
+        const release = trackPendingRequest();
+        window.dispatchEvent(new Event("beforeunload"));
+        release();
+        vi.advanceTimersByTime(5_000);
+
+        reportNetworkFailure(new TypeError("Failed to fetch"), {
+            method: "GET",
+            url: "/api/chat",
+        });
+
+        expect(Sentry.captureException).toHaveBeenCalledOnce();
     });
 });

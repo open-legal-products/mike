@@ -59,7 +59,10 @@ jobs:
       - name: Start local Supabase stack
         run: |
           supabase init
-          supabase start -x studio,imgproxy,inbucket,analytics,vector,realtime,storage,edge-runtime,functions,meta
+          # setup-cli pins GHCR, disabling the CLI's ECR/GHCR/Docker Hub fallback.
+          # Allow the pinned CLI to recover when one public registry is throttled.
+          env -u SUPABASE_INTERNAL_IMAGE_REGISTRY supabase start \
+            -x studio,imgproxy,mailpit,logflare,vector,realtime,storage-api,edge-runtime,postgres-meta,supavisor
 
       # Derive the connection env vars from `supabase status -o json` exactly
       # as backend/scripts/test-stack.sh does (same JSON keys, same node

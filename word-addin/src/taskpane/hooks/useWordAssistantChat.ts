@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { streamAssistant, type WordClientToolCall } from "../api/stream";
+import {
+  resumeAssistant,
+  streamAssistant,
+  WordChatStreamInterrupted,
+  WordChatTerminalError,
+  type WordClientToolCall,
+  type WordTurnHandlers,
+} from "../api/stream";
 import { reportError } from "../lib/errorReporting";
-import { postWordChatToolResult } from "../api/mikeApi";
+import { postWordChatToolResult, stopWordChatTurn } from "../api/mikeApi";
 import { useWordDoc } from "./useWordDoc";
 import type {
   DocumentReadActivity,
@@ -11,7 +18,10 @@ import type {
 } from "../types";
 import type { RedlineEdit, WordEditFormat } from "../lib/redline";
 import { TOOL_EDIT_INDEX_BASE } from "../lib/wordTrackedEditKeys";
-import { saveLocalWordMessage } from "../lib/localWordChats";
+import {
+  saveLocalWordMessage,
+  setLocalWordChatActiveTurn,
+} from "../lib/localWordChats";
 import type { WordChatStorageMode } from "../lib/wordChatSettings";
 import { notifyWordChatHistoryChanged } from "../lib/wordChatHistoryEvents";
 import type {
@@ -35,6 +45,45 @@ import {
   upsertDocumentReadEvent,
 } from "../lib/wordChatEvents";
 import { readCurrentDocumentName } from "../lib/wordDocumentIdentity";
+
+/**
+ * What one run of the turn pipeline was asked to do. Sending and resuming
+ * differ only at the ends — a resume has no user message to append, no
+ * document snapshot to read and no POST to make — so they share one
+ * implementation rather than two copies of the tool loop and the saves.
+ */
+type WordTurnInput =
+  | {
+      kind: "send";
+      submission: WordChatSubmission;
+      options: WordChatSubmitOptions;
+    }
+  | { kind: "resume"; chatId: string; turnId: string };
+
+/** Where the pane is in the turn the server owns. */
+interface WordTurnCursor {
+  chatId: string | null;
+  turnId: string | null;
+  /** The sequence number of the last frame applied; a resume asks for +1. */
+  lastSeq: number;
+  /** The user explicitly asked the backend to stop this turn. */
+  stopRequested: boolean;
+}
+
+/**
+ * Is this failure worth rejoining the server's copy of the turn for?
+ *
+ * A dropped transport is: the answer is still being generated, and the pane
+ * can pick it up from the frame after the last one it applied. A pre-`[DONE]`
+ * `error` frame is not — the turn is over and the server said why.
+ */
+function isRejoinableStreamFailure(error: unknown): boolean {
+  return (
+    error instanceof WordChatStreamInterrupted ||
+    (error instanceof Error &&
+      (error.name === "TypeError" || error.name === "NetworkError"))
+  );
+}
 
 let localMessageSequence = 0;
 
@@ -138,6 +187,13 @@ export function useWordAssistantChat({
   const isResponseLoadingRef = useRef(isResponseLoading);
   isResponseLoadingRef.current = isResponseLoading;
   const abortRef = useRef<AbortController | null>(null);
+  // The turn currently being read, so Stop can name it to the server.
+  const activeTurnRef = useRef<WordTurnCursor | null>(null);
+  // The most recent local-storage write of a chat's active turn id. The
+  // clearing write in `runTurn`'s finally chains behind it (see onMetadata).
+  const localActiveTurnWriteRef = useRef<Promise<void | undefined>>(
+    Promise.resolve(),
+  );
   const mountedRef = useRef(true);
   const sessionGenerationRef = useRef(0);
   const sendSequenceRef = useRef(0);
@@ -158,6 +214,9 @@ export function useWordAssistantChat({
   useEffect(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    // This session no longer owns the in-memory cursor. Keep a LOCAL chat's
+    // persisted turn id so reopening it can resume the server-owned answer.
+    activeTurnRef.current = null;
     sendSequenceRef.current += 1;
     sendingRef.current = false;
     sessionGenerationRef.current += 1;
@@ -172,19 +231,46 @@ export function useWordAssistantChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey]);
 
-  const cancel = useCallback((): void => abortRef.current?.abort(), []);
+  const cancel = useCallback((): void => {
+    const cursor = activeTurnRef.current;
+    if (cursor?.chatId && cursor.turnId) {
+      cursor.stopRequested = true;
+      // Closing the stream is no longer how Stop works: it would detach this
+      // pane and leave the server answering into the transcript. Failures are
+      // ignored on purpose — the server may have forgotten the turn already,
+      // and the local abort below is still the right thing to do.
+      void stopWordChatTurn({
+        chatId: cursor.chatId,
+        turnId: cursor.turnId,
+        documentId: wordDocumentId,
+      }).catch(() => {});
+    }
+    // Then abort locally, exactly as before: that is the path that applies
+    // the sealed edits and saves the partial transcript.
+    abortRef.current?.abort();
+  }, [wordDocumentId]);
   const dismissRequestError = useCallback(
     (): void => setRequestError(null),
     [],
   );
 
-  const handleChat = useCallback(
-    async (
-      submission: WordChatSubmission,
-      options: WordChatSubmitOptions = {},
-    ): Promise<void> => {
-      const text = submission.content.trim();
-      if (!text || isResponseLoadingRef.current || sendingRef.current) return;
+  /**
+   * One turn, whichever end of it this pane is holding.
+   *
+   * `kind: "send"` posts a new turn; `kind: "resume"` reattaches to one the
+   * server is already generating (a reopened pane, a dropped connection).
+   * Everything between the two ends is shared — the transcript placeholder,
+   * the client tool loop, the redline projection, the terminal saves — so a
+   * reattached pane can answer a pending tool call and apply its edits
+   * exactly as the pane that started the turn would have.
+   */
+  const runTurn = useCallback(
+    async (input: WordTurnInput): Promise<void> => {
+      const submission = input.kind === "send" ? input.submission : null;
+      const options = input.kind === "send" ? input.options : {};
+      const text = submission ? submission.content.trim() : "";
+      if (isResponseLoadingRef.current || sendingRef.current) return;
+      if (input.kind === "send" && !text) return;
 
       const generation = sessionGenerationRef.current;
       const sendToken = sendSequenceRef.current + 1;
@@ -199,6 +285,8 @@ export function useWordAssistantChat({
       onChatStarted();
       let cleanupAssistantMessageId: string | null = null;
       let assistantEvents: WordAssistantEvent[] = [];
+      let runCursor: WordTurnCursor | null = null;
+      let turnIsTerminal = false;
 
       // Whether this send still owns the transcript. Cancellation is tracked
       // separately: an aborted stream is no longer current, but the sealed
@@ -211,34 +299,54 @@ export function useWordAssistantChat({
         !controller.signal.aborted && sendIsCurrent();
 
       try {
-        let documentContext: string;
-        try {
-          documentContext = await readDocumentMarkdown();
-        } catch (error) {
-          console.error("Failed to read the current Word document", error);
-          if (requestIsCurrent()) {
-            setRequestError(
-              "Mike couldn't read the current Word document. Please try again.",
-            );
+        // A resume asks Word for nothing: the server already holds the
+        // snapshot the turn started from, and there is no prompt to build.
+        let documentContext = "";
+        if (submission) {
+          try {
+            documentContext = await readDocumentMarkdown();
+          } catch (error) {
+            console.error("Failed to read the current Word document", error);
+            if (requestIsCurrent()) {
+              setRequestError(
+                "Mike couldn't read the current Word document. Please try again.",
+              );
+            }
+            return;
           }
-          return;
         }
         if (!requestIsCurrent()) return;
 
-        const userMessage: WordChatMessage = {
-          id: createMessageId("user"),
-          role: "user",
-          content: text,
-          files: submission.files,
-          workflow: submission.workflow,
-        };
-        const history = [...messagesRef.current, userMessage];
+        const userMessage: WordChatMessage | null = submission
+          ? {
+              id: createMessageId("user"),
+              role: "user",
+              content: text,
+              files: submission.files,
+              workflow: submission.workflow,
+            }
+          : null;
+        // A resume appends to the transcript as loaded: the user turn is
+        // already stored, and the assistant row only lands when the turn ends.
+        const history = userMessage
+          ? [...messagesRef.current, userMessage]
+          : [...messagesRef.current];
         const requestChatId =
-          chatId ??
-          (wordChatStorage === "local" ? crypto.randomUUID() : undefined);
+          input.kind === "resume"
+            ? input.chatId
+            : (chatId ??
+              (wordChatStorage === "local" ? crypto.randomUUID() : undefined));
         if (requestChatId && !chatId) {
           onChatIdChange(requestChatId);
         }
+        const cursor: WordTurnCursor = {
+          chatId: requestChatId ?? null,
+          turnId: input.kind === "resume" ? input.turnId : null,
+          lastSeq: 0,
+          stopRequested: false,
+        };
+        runCursor = cursor;
+        activeTurnRef.current = cursor;
 
         let assistantMessageId = createMessageId("assistant");
         cleanupAssistantMessageId = assistantMessageId;
@@ -252,8 +360,12 @@ export function useWordAssistantChat({
         // assistant is briefly treated as the active response while Office is
         // still producing the document snapshot.
         setIsResponseLoading(true);
-        setMessages([
-          ...history,
+        // Functional, not a rebuild from `history`: a resume runs in the same
+        // commit as the session reset that loads the stored transcript, so
+        // the render-synced mirror is still the PREVIOUS chat's. Appending to
+        // whatever React has queued is the only way to land after it.
+        setMessages((current) => [
+          ...(userMessage ? [...current, userMessage] : current),
           {
             id: assistantMessageId,
             role: "assistant",
@@ -546,39 +658,51 @@ export function useWordAssistantChat({
         };
 
         try {
-          if (wordChatStorage === "local" && requestChatId) {
+          if (wordChatStorage === "local" && requestChatId && userMessage) {
             await saveLocalWordMessage({
               documentId: wordDocumentId,
               ownerId: wordChatOwnerId,
               chatId: requestChatId,
               message: userMessage,
               title: text.slice(0, 120),
-              model: submission.model,
-              reasoningLevel: submission.reasoning,
+              model: submission?.model,
+              reasoningLevel: submission?.reasoning,
             });
           }
 
-          await streamAssistant(
-            {
-              messages: history.map((message) => ({
-                role: message.role,
-                content:
-                  message.role === "assistant"
-                    ? assistantContentForModel(message)
-                    : message.content,
-                files: message.files,
-                workflow: message.workflow,
-              })),
-              documentContext,
-              model: submission.model,
-              reasoning: submission.reasoning,
-              chatId: requestChatId,
-              wordDocumentId,
-              documentName: readCurrentDocumentName(),
-              wordChatStorage,
-              editApplyMode,
+          const handlers: WordTurnHandlers & { signal?: AbortSignal } = {
               signal: controller.signal,
+              onEventId: (seq) => {
+                cursor.lastSeq = seq;
+              },
               onMetadata: (metadata) => {
+                // The cursor is bookkeeping, not transcript state: record it
+                // even for a send this pane no longer owns, so Stop and a
+                // reconnect still have something to name.
+                if (metadata.chatId) cursor.chatId = metadata.chatId;
+                if (metadata.turnId && metadata.turnId !== cursor.turnId) {
+                  cursor.turnId = metadata.turnId;
+                  // A local chat has no server row, so the only record a
+                  // reopened pane will have of this turn is the one we write
+                  // here. Best-effort: losing it costs a resume, not the
+                  // answer.
+                  if (wordChatStorage === "local" && cursor.chatId) {
+                    // Each write opens its own IndexedDB transaction, and
+                    // nothing else orders them: on a short turn the clearing
+                    // write in `finally` could commit BEFORE this one and
+                    // leave the finished turn id behind, so the next open of
+                    // the chat would try to resume a dead run. Chain the
+                    // clear behind this write.
+                    localActiveTurnWriteRef.current = setLocalWordChatActiveTurn(
+                      {
+                        documentId: wordDocumentId,
+                        ownerId: wordChatOwnerId,
+                        chatId: cursor.chatId,
+                        activeTurnId: metadata.turnId,
+                      },
+                    ).catch(() => undefined);
+                  }
+                }
                 if (!requestIsCurrent()) return;
                 if (metadata.chatId) {
                   onChatIdChange(metadata.chatId);
@@ -643,15 +767,83 @@ export function useWordAssistantChat({
                 );
                 publishAssistantEvents();
               },
-            },
-            (chunk) => {
+          };
+          const onStreamText = (chunk: string): void => {
               if (!requestIsCurrent()) return;
               streamedContent += chunk;
               assistantEvents = appendAssistantContent(assistantEvents, chunk);
               redlineParsePending = true;
               publishAssistantEvents();
-            },
-          );
+          };
+
+          /**
+           * Read the turn to its end, rejoining the server's copy of it when
+           * the connection drops. A drop is no longer a cancellation — the
+           * answer is still being generated — so it is a transport failure to
+           * recover from, by resuming at the frame after the last one
+           * applied. An abort (Stop) is never retried, and neither is a turn
+           * whose id the pane never learned.
+           */
+          let opener: "post" | "resume" =
+            input.kind === "send" ? "post" : "resume";
+          for (let attempt = 0; ; attempt += 1) {
+            try {
+              if (opener === "post" && submission) {
+                await streamAssistant(
+                  {
+                    ...handlers,
+                    messages: history.map((message) => ({
+                      role: message.role,
+                      content:
+                        message.role === "assistant"
+                          ? assistantContentForModel(message)
+                          : message.content,
+                      files: message.files,
+                      workflow: message.workflow,
+                    })),
+                    documentContext,
+                    model: submission.model,
+                    reasoning: submission.reasoning,
+                    chatId: requestChatId,
+                    wordDocumentId,
+                    documentName: readCurrentDocumentName(),
+                    wordChatStorage,
+                    editApplyMode,
+                  },
+                  onStreamText,
+                );
+              } else if (cursor.chatId && cursor.turnId) {
+                await resumeAssistant(
+                  {
+                    ...handlers,
+                    chatId: cursor.chatId,
+                    turnId: cursor.turnId,
+                    documentId: wordDocumentId,
+                    from: cursor.lastSeq + 1,
+                  },
+                  onStreamText,
+                );
+              } else {
+                throw new Error("This response is no longer available.");
+              }
+              break;
+            } catch (error) {
+              opener = "resume";
+              if (
+                controller.signal.aborted ||
+                !cursor.chatId ||
+                !cursor.turnId ||
+                attempt >= 2 ||
+                !isRejoinableStreamFailure(error)
+              ) {
+                throw error;
+              }
+              await new Promise((resolve) =>
+                setTimeout(resolve, 400 * (attempt + 1)),
+              );
+              if (controller.signal.aborted) throw error;
+            }
+          }
           publishAssistantEventsNow();
           // readSSE deliberately resolves normally when cancelling its reader.
           // Route that clean cancellation through the same abort cleanup below
@@ -659,6 +851,7 @@ export function useWordAssistantChat({
           if (controller.signal.aborted) {
             throw new DOMException("The request was aborted.", "AbortError");
           }
+          turnIsTerminal = true;
           if (!requestIsCurrent()) return;
           if (!clientToolsSeen) {
             editController.processLiveRedlines(
@@ -691,6 +884,13 @@ export function useWordAssistantChat({
             notifyWordChatHistoryChanged();
           }
         } catch (error) {
+          if (error instanceof WordChatTerminalError) turnIsTerminal = true;
+          // Any local message saved below must observe the turn-id write. If
+          // the save raced it, the save could preserve the row's older null
+          // value and make a still-running turn impossible to resume.
+          if (wordChatStorage === "local" && cursor.turnId) {
+            await localActiveTurnWriteRef.current;
+          }
           // Commit whatever streamed before the failure so the terminal UI
           // state below always builds on the latest transcript.
           publishAssistantEventsNow();
@@ -773,6 +973,38 @@ export function useWordAssistantChat({
         }
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
+        // Only this invocation may clean up its cursor. A session change can
+        // start another turn before this async finally runs, and the old turn
+        // must never clear the newer one's Stop/resume state.
+        const finishedCursor = runCursor;
+        if (finishedCursor && activeTurnRef.current === finishedCursor) {
+          // A transport failure after the final retry is not terminal: the
+          // server-owned turn may still be generating. Keep its local id so a
+          // reopened chat can resume it. A terminal frame or explicit Stop is
+          // the evidence that makes clearing safe.
+          const shouldClearActiveTurn =
+            turnIsTerminal || finishedCursor.stopRequested;
+          if (
+            shouldClearActiveTurn &&
+            wordChatStorage === "local" &&
+            finishedCursor.chatId &&
+            finishedCursor.turnId
+          ) {
+            // After the write that recorded the turn, never racing it.
+            const clearedChatId = finishedCursor.chatId;
+            localActiveTurnWriteRef.current = localActiveTurnWriteRef.current
+              .then(() =>
+                setLocalWordChatActiveTurn({
+                  documentId: wordDocumentId,
+                  ownerId: wordChatOwnerId,
+                  chatId: clearedChatId,
+                  activeTurnId: null,
+                }),
+              )
+              .catch(() => undefined);
+          }
+          if (shouldClearActiveTurn) activeTurnRef.current = null;
+        }
         if (sendToken === sendSequenceRef.current) {
           sendingRef.current = false;
           if (
@@ -811,11 +1043,33 @@ export function useWordAssistantChat({
     ],
   );
 
+  const handleChat = useCallback(
+    (
+      submission: WordChatSubmission,
+      options: WordChatSubmitOptions = {},
+    ): Promise<void> => runTurn({ kind: "send", submission, options }),
+    [runTurn],
+  );
+
+  /**
+   * Attach to an answer the server is already generating into `chatId` — a
+   * pane that was closed and reopened, or a chat opened from history while
+   * its answer runs. The turn's frames, including any `client_tool_call`
+   * still pending, go through the same pipeline a fresh send uses, so a
+   * reattached pane can execute the call and apply the edits.
+   */
+  const resumeTurn = useCallback(
+    (args: { chatId: string; turnId: string }): Promise<void> =>
+      runTurn({ kind: "resume", chatId: args.chatId, turnId: args.turnId }),
+    [runTurn],
+  );
+
   return {
     messages,
     isResponseLoading,
     requestError,
     handleChat,
+    resumeTurn,
     cancel,
     dismissRequestError,
   };

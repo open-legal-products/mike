@@ -225,6 +225,7 @@ export default function ProjectAssistantPage({ params }: Props) {
                 currentUserId={user?.id}
                 loading={loading}
                 onCreateChat={() => void workspace.createChat()}
+                canCreateChat={workspace.canDo("content.edit")}
                 onOpenChat={(chatId) =>
                     router.push(
                         `/projects/${projectId}/assistant/chat/${chatId}`,

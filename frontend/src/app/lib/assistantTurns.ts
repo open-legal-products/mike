@@ -1,5 +1,14 @@
-import type { Message } from "@/app/components/shared/types";
-import { getChat } from "./mikeApi";
+import type {
+  ActiveAssistantTurn,
+  Message,
+} from "@/app/components/shared/types";
+import { getChat, stopChatTurn, streamChatTurn } from "./mikeApi";
+import {
+  createTurnCursor,
+  createTurnEventSink,
+  isAbortError,
+  readAssistantTurn,
+} from "./assistantTurnStream";
 
 /**
  * In-flight assistant turns, keyed by chat id, that survive same-tab
@@ -211,8 +220,64 @@ export function withLiveTurn(
 }
 
 /**
+ * Attach to a turn the server is generating for this chat that no hook in
+ * this page knows about — the page was reloaded, or this is a second tab.
+ * The record it creates is what every hook viewing the chat mirrors, so the
+ * answer resumes on screen exactly as if the request had been sent here.
+ * Stop from this page goes to the server's Stop endpoint like any other.
+ */
+export function resumeAssistantTurn(
+  chatId: string,
+  active: ActiveAssistantTurn,
+): void {
+  if (hasAssistantTurn(chatId)) return;
+  const controller = new AbortController();
+  const cursor = createTurnCursor(chatId);
+  cursor.turnId = active.id;
+  const handle = beginAssistantTurn(chatId, {
+    userMessage: null,
+    assistant: {
+      ...(active.assistant_message_id ? { id: active.assistant_message_id } : {}),
+      role: "assistant",
+      content: "",
+      citations: [],
+      events: [],
+    },
+    cancel: () => {
+      void stopChatTurn(chatId, active.id).catch(() => {});
+      controller.abort();
+      sink.appendCancellation();
+      handle.finish();
+    },
+  });
+  const sink = createTurnEventSink(handle, []);
+  void readAssistantTurn({
+    open: () =>
+      streamChatTurn({ chatId, turnId: active.id, from: 1, signal: controller.signal }),
+    turn: handle,
+    sink,
+    cursor,
+    signal: controller.signal,
+  })
+    .catch((error: unknown) => {
+      sink.finalizeStreamingContent();
+      if (isAbortError(error)) {
+        sink.appendCancellation();
+        return;
+      }
+      handle.update((message) => ({
+        ...message,
+        error: "Sorry, something went wrong.",
+      }));
+    })
+    .finally(() => handle.finish());
+}
+
+/**
  * Load a chat's history without waiting for a turn that is still streaming
- * into it; the caller overlays that turn with `withLiveTurn`. A turn that
+ * into it; the caller overlays that turn with `withLiveTurn`. A turn the
+ * server reports as still generating, and that no hook here started, is
+ * resumed from the server's copy before the history is handed back. A turn that
  * starts or finishes during the GET invalidates the read, because the
  * snapshot may predate the row it stored: the read is retried, and bounded
  * polling covers the window in which Stop has closed the socket before the
@@ -243,7 +308,10 @@ export async function loadAssistantChat(chatId: string) {
         const missingResponse = [...expectedMessages].some(
           (id) => !result.messages.some((message) => message.id === id),
         );
-        if (!missingResponse) return result;
+        if (!missingResponse) {
+          if (result.active_turn) resumeAssistantTurn(chatId, result.active_turn);
+          return result;
+        }
         if (Date.now() >= persistenceDeadline) {
           throw new Error("Chat response could not be loaded");
         }

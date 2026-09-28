@@ -17,6 +17,15 @@ function findApiCallError(error: unknown): ApiCallErrorLike | null {
   return lastError === undefined ? null : findApiCallError(lastError);
 }
 
+/**
+ * The HTTP status a model provider answered with, when `error` is the
+ * provider's answer (an AI SDK APICallError, or a RetryError around one);
+ * null for anything else — our own bugs, network failures, DB errors.
+ */
+export function providerFailureStatus(error: unknown): number | null {
+  return findApiCallError(error)?.statusCode ?? null;
+}
+
 // "The" rather than "your" key: requiredKey() may fall back to the
 // deployment's key, as noted on InvalidApiKeyError.
 function accessFailureMessage(
@@ -59,7 +68,7 @@ export function toProviderStreamError(
   const invalidKey = asInvalidApiKeyError(apiError ?? error, context.label);
   if (invalidKey) return invalidKey;
   const message = apiError && accessFailureMessage(apiError, context);
-  if (message) return new UserFacingError(message);
+  if (message) return new UserFacingError(message, { cause: error });
   if (error instanceof Error && error.message) return error;
-  return new Error(errorMessage(error, context.label));
+  return new Error(errorMessage(error, context.label), { cause: error });
 }

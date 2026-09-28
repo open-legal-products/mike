@@ -4,6 +4,7 @@ import React, {
     createContext,
     useContext,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useState,
     ReactNode,
@@ -250,15 +251,29 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
+    // A new signed-in user invalidates the shared model catalog. This runs as
+    // a LAYOUT effect on purpose: React runs a component's passive effects
+    // only after its descendants' passive effects, so the model pickers that
+    // mount in the same commit (ChatInput, ModelToggle) used to start their
+    // own request first and this provider then force-discarded it and sent
+    // a second one: /models/configured twice on every signed-in page load.
+    // Layout effects all run before any passive effect, so the provider's
+    // refresh now starts first and the pickers join its in-flight request.
+    useLayoutEffect(() => {
+        if (isAuthenticated && userId) {
+            void refreshConfiguredModels();
+        } else {
+            clearConfiguredModels();
+        }
+    }, [isAuthenticated, userId]);
+
     useEffect(() => {
         if (isAuthenticated && userId) {
             setLoading(true);
             loadProfile();
-            void refreshConfiguredModels();
         } else {
             setProfile(null);
             setLoading(false);
-            clearConfiguredModels();
         }
     }, [isAuthenticated, userId, loadProfile]);
 

@@ -1,3 +1,5 @@
+import { diagnosticErrorTags } from "./sentryPrivacy";
+
 /**
  * Sentry event hygiene shared by the web app (browser + Next server) and the
  * Word add-in. Framework-free on purpose: this file must not import from
@@ -330,6 +332,8 @@ const FILESYSTEM_PATH_PATTERN =
   * for browser bundles, and "[external]" for anything outside the project.
   */
 export function repoRelativePath(path: string): string {
+    // SDK integrations can already supply repository-relative locations.
+    if (/^(?:\.\/)?(?:backend|frontend|word-addin|packages|src|dist|node_modules|_next)\//.test(path)) return path;
     let idx = -1;
     for (const root of REPO_ROOTS) {
         const at = path.lastIndexOf(root);
@@ -653,6 +657,16 @@ export function createEventScrubber(options?: {
             } else if (!event.exception?.values?.length) {
                 event.message = label;
             }
+        }
+
+        event.tags = {
+            ...event.tags,
+            ...diagnosticErrorTags(original),
+            capture_source: event.logger === "console" ? "console" : mechanismInfo?.handled === false ? "unhandled" : event.exception?.values?.length ? "exception" : "message",
+        };
+        for (const arg of args ?? []) {
+            const nested = findNested(arg, c => c instanceof Error || 'code' in c);
+            Object.assign(event.tags, diagnosticErrorTags(nested));
         }
 
         // The title and the exception text are free text from libraries

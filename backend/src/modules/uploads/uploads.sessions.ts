@@ -21,6 +21,7 @@ import {
   copyFile,
   deleteFile,
   deleteFileBestEffort,
+  deleteFilesBestEffort,
   getSignedUploadUrl,
   headFile,
   StorageOperationError,
@@ -269,10 +270,11 @@ async function completeSessionFile(
       if (!recovered) return "in_progress";
     }
     if (file.status === "pending_upload" || file.status === "verifying") {
-      await Promise.all([
-        deleteFileBestEffort(file.staging_storage_path, "seal-recover"),
-        deleteFileBestEffort(file.sealed_storage_path, "seal-recover"),
-      ]);
+      // One operation, one warning if storage is down (not one per copy).
+      await deleteFilesBestEffort(
+        [file.staging_storage_path, file.sealed_storage_path],
+        "seal-recover",
+      );
       const { error } = await db
         .from("upload_session_files")
         .update({
@@ -620,10 +622,10 @@ export async function cancelUploadSession(
   }
 
   await mapWithConcurrency(files, 5, async (file) => {
-    await Promise.all([
-      deleteFileBestEffort(file.staging_storage_path, "session-cancel"),
-      deleteFileBestEffort(file.sealed_storage_path, "session-cancel"),
-    ]);
+    await deleteFilesBestEffort(
+      [file.staging_storage_path, file.sealed_storage_path],
+      "session-cancel",
+    );
   });
   const { error: cleanupError } = await db
     .from("upload_sessions")

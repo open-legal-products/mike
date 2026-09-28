@@ -68,11 +68,11 @@ function seedFromEnv(): Buffer | null {
     const raw = process.env.MANIFEST_SIGNING_KEY?.trim();
     if (!raw) return null;
     if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
-        throw new Error(
+        throw Object.assign(new Error(
             "MANIFEST_SIGNING_KEY must be a 32-byte hex string " +
                 "(generate with `openssl rand -hex 32`). Unset it to export " +
                 "unsigned manifests.",
-        );
+        ), { code: "signing_key_invalid" });
     }
     return Buffer.from(raw, "hex");
 }

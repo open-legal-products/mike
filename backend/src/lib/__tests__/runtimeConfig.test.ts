@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  diagnosticErrorTags,
+  diagnosticEvent,
+} from "../observability/sentryPrivacy";
+import {
   uploadConversionTimeoutMs,
   uploadJobWallClockMs,
   uploadProcessingConfiguration,
@@ -29,6 +33,51 @@ describe("runtime authentication configuration", () => {
         API_PUBLIC_URL: "http://app.example.test/api",
       }),
     ).toThrow(/FRONTEND_URL must use https in production/);
+  });
+
+  // MIKE-BACKEND-2: the backend image defaults NODE_ENV=production, so a bare
+  // `docker run` with no public URLs dies here. The message must name the
+  // variables AND the switch a local run actually needs.
+  it("tells a local run of the production image how to proceed", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        FRONTEND_URL: undefined,
+        API_PUBLIC_URL: undefined,
+      }),
+    ).toThrow(
+      /FRONTEND_URL is required in production\n- API_PUBLIC_URL is required in production\n\n.*set NODE_ENV=development/s,
+    );
+  });
+
+  it("does not suggest NODE_ENV when only non-production settings are wrong", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        SUPABASE_SECRET_KEY: undefined,
+      }),
+    ).toThrow(/^(?![\s\S]*NODE_ENV)[\s\S]*SUPABASE_SECRET_KEY is required$/);
+  });
+
+  it("does not weaken the https rule for production URLs", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        FRONTEND_URL: "http://localhost:3000",
+        API_PUBLIC_URL: "http://localhost:3000/api",
+      }),
+    ).toThrow(/FRONTEND_URL must use https in production/);
+  });
+
+  it("accepts local http URLs outside production", () => {
+    expect(() =>
+      validateRuntimeConfiguration({
+        ...validProduction,
+        NODE_ENV: "development",
+        FRONTEND_URL: "http://localhost:3000",
+        API_PUBLIC_URL: "http://localhost:3000/api",
+      }),
+    ).not.toThrow();
   });
 
   it("requires a handoff encryption secret when Word auth is enabled", () => {
@@ -151,9 +200,9 @@ describe("upload worker deadlines", () => {
     expect(uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "1" })).toBe(
       60_000,
     );
-    expect(uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "9999999999" })).toBe(
-      3_600_000,
-    );
+    expect(
+      uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "9999999999" }),
+    ).toBe(3_600_000);
   });
 
   it("falls back to the defaults for unparseable values", () => {
@@ -164,4 +213,24 @@ describe("upload worker deadlines", () => {
       900_000,
     );
   });
+});
+
+it("identifies invalid configuration fields without sending their values", () => {
+  let failure: unknown;
+  try {
+    validateRuntimeConfiguration({
+      NODE_ENV: "production",
+      SUPABASE_URL: "PRIVATE_URL",
+      SUPABASE_SECRET_KEY: "PRIVATE_KEY",
+    });
+  } catch (error) {
+    failure = error;
+  }
+  const event = diagnosticEvent({ tags: diagnosticErrorTags(failure) });
+  expect(event.tags).toEqual({
+    failure_code: "configuration_invalid",
+    configuration_fields:
+      "API_PUBLIC_URL,FRONTEND_URL,SUPABASE_PUBLISHABLE_KEY,SUPABASE_URL",
+  });
+  expect(JSON.stringify(event)).not.toContain("PRIVATE");
 });

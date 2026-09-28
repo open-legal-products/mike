@@ -53,6 +53,7 @@ vi.mock("@/app/components/projects/ProjectWorkspace", () => ({
         search: "",
         setOwnerOnlyAction,
         createChat: vi.fn(),
+        canDo: () => true,
     }),
 }));
 

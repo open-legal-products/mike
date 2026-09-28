@@ -212,7 +212,7 @@ describe("initSentry", () => {
     expect(options.environment).toBe("staging");
     expect(options.beforeSend).toBe(scrubEvent);
     expect(options.initialScope).toEqual({
-      tags: { service: "mike-backend", role: "worker", install: "community" },
+      tags: { service: "mike-backend", role: "worker", install: "community", build_mode: "test", diagnostics_version: "2" },
     });
     expect(sentryMock.httpIntegration).toHaveBeenCalledWith({
       maxIncomingRequestBodySize: "none",
@@ -293,6 +293,57 @@ describe("scrubEvent", () => {
     expect(
       scrubEvent(consoleEvent, { originalException: new Error("other") }),
     ).not.toBeNull();
+  });
+
+  it("drops the console bridge's copy of a wrapper whose cause chain holds a reported error (MIKE-BACKEND-B)", () => {
+    // runLLMStream reports the provider failure, then rethrows it wrapped
+    // for the route (AssistantStreamError { cause }); the route logs the
+    // wrapper. Same failure, so the bridge's copy must go.
+    const providerError = new Error("provider said no");
+    reportError(providerError);
+    const classified = new Error("key rejected", { cause: providerError });
+    const wrapper = new Error("stream failed", { cause: classified });
+    const consoleEvent = {
+      exception: {
+        values: [{ mechanism: { type: "auto.core.capture_console" } }],
+      },
+    } as Parameters<typeof scrubEvent>[0];
+
+    expect(scrubEvent(consoleEvent, { originalException: wrapper })).toBeNull();
+    // …also when the wrapper is nested inside a logged object.
+    expect(
+      scrubEvent({ logger: "console", message: "x" } as Parameters<typeof scrubEvent>[0], {
+        captureContext: {
+          extra: { arguments: ["[route] failed", { error: wrapper }] },
+        },
+      }),
+    ).toBeNull();
+    // A wrapper around something never reported is a new failure: kept.
+    expect(
+      scrubEvent(consoleEvent, {
+        originalException: new Error("save failed", { cause: new Error("db") }),
+      }),
+    ).not.toBeNull();
+  });
+
+  it("walks a cyclic or throwing cause chain without hanging or throwing", () => {
+    const a = new Error("a");
+    const b = new Error("b", { cause: a });
+    Object.defineProperty(a, "cause", { value: b });
+    const hostile = new Error("hostile");
+    Object.defineProperty(hostile, "cause", {
+      get() {
+        throw new Error("accessor");
+      },
+    });
+    const consoleEvent = {
+      exception: {
+        values: [{ mechanism: { type: "auto.core.capture_console" } }],
+      },
+    } as Parameters<typeof scrubEvent>[0];
+
+    expect(scrubEvent(consoleEvent, { originalException: b })).not.toBeNull();
+    expect(scrubEvent(consoleEvent, { originalException: hostile })).not.toBeNull();
   });
 
   it("drops a console message whose logged object wraps an already-reported error", () => {
@@ -800,7 +851,7 @@ describe("community install minimisation", () => {
     expect(out.server_name).toBeUndefined();
     expect(out.user).toBeUndefined();
     expect(out.breadcrumbs).toBeUndefined();
-    expect(out.tags).toEqual({ component: "http" });
+    expect(out.tags).toEqual({ component: "http", capture_source: "exception" });
     expect(out.request).toEqual({ method: "GET", url: "/projects/p-1" });
     expect(out.contexts).toEqual({
       os: { name: "macOS", version: "26.5" },

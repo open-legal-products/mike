@@ -1,4 +1,6 @@
-import * as Sentry from "@sentry/nextjs";
+import { randomUUID } from "node:crypto";
+import { reportError } from "@/app/lib/errorReporting";
+import { diagnosticRoute } from "@/shared/lib/sentryPrivacy";
 import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +25,8 @@ async function proxy(request: NextRequest, context: RouteContext) {
     const { path } = await context.params;
     const requestPath = `/${path.map(encodeURIComponent).join("/")}`;
 
+    const requestId = randomUUID();
+    let stage = "gateway-config";
     try {
         const upstreamUrl = new URL(`${backendOrigin()}${requestPath}`);
         upstreamUrl.search = request.nextUrl.search;
@@ -48,7 +52,9 @@ async function proxy(request: NextRequest, context: RouteContext) {
             init.duplex = "half";
         }
 
+        stage = "gateway-fetch";
         const upstream = await fetch(upstreamUrl, init);
+        stage = "gateway-response";
         const responseHeaders = new Headers(upstream.headers);
         // Fetch implementations may transparently decompress the response.
         responseHeaders.delete("content-encoding");
@@ -63,17 +69,24 @@ async function proxy(request: NextRequest, context: RouteContext) {
         // The backend was unreachable from the Next server: a deployment or
         // network fault rather than an application bug, but the browser only
         // sees a bare 502, so this is the one place it can be diagnosed.
-        Sentry.captureException(error, {
-            tags: { component: "api-gateway", http_method: request.method },
-            extra: { path: requestPath },
+        reportError(error, {
+            tags: {
+                component: "api-gateway", stage,
+                http_method: request.method,
+                http_route: diagnosticRoute(requestPath),
+                http_status: 502,
+                request_id: requestId,
+            },
         });
-        console.error("[api-gateway] upstream request failed", {
-            path: requestPath,
-            error: error instanceof Error ? error.message : String(error),
-        });
+        // The operator's own server log keeps the real cause (ECONNREFUSED,
+        // DNS, TLS): without it a self-hoster seeing 502s cannot tell a
+        // stopped backend from a wrong API_BASE_URL. Privacy is enforced at
+        // the Sentry transport, not here, and because reportError marked
+        // this error, a console bridge drops the nested copy as a duplicate.
+        console.error("[api-gateway] upstream request failed", { requestId, stage, error });
         return Response.json(
-            { detail: "The API is temporarily unavailable." },
-            { status: 502 },
+            { detail: "The API is temporarily unavailable.", request_id: requestId },
+            { status: 502, headers: { "x-request-id": requestId } },
         );
     }
 }
