@@ -303,6 +303,21 @@ async function startLocalStack(app, status = () => {}) {
         DOWNLOAD_SIGNING_SECRET: secrets.downloadSigningSecret,
         USER_API_KEYS_ENCRYPTION_SECRET: secrets.userApiKeysEncryptionSecret,
         OLLAMA_BASE_URL: "http://127.0.0.1:11434/v1",
+        // The backend's per-IP rate limits (backend/src/app.ts) are sized for
+        // a shared server where one IP is one client among many. Here every
+        // request is 127.0.0.1 and there is exactly one user, so the server
+        // defaults (300 general requests per 15 min, 30 chat turns per 15
+        // min) are hit by ordinary browsing — a page tour of the product
+        // drew 429s inside three minutes. Nothing on loopback needs DoS
+        // protection; the chat/upload/export lanes keep a generous ceiling
+        // as a guard against a runaway client burning the user's own key.
+        RATE_LIMIT_GENERAL_MAX: "100000",
+        RATE_LIMIT_BLOB_UPLOAD_MAX: "100000",
+        RATE_LIMIT_TOOL_RESULT_MAX: "100000",
+        RATE_LIMIT_CHAT_MAX: "600",
+        RATE_LIMIT_CHAT_CREATE_MAX: "600",
+        RATE_LIMIT_EXPORT_MAX: "100",
+        RATE_LIMIT_UPLOAD_MAX: "500",
         ...(soffice ? { SOFFICE_BINARY_PATH: soffice } : {}),
       },
     });
