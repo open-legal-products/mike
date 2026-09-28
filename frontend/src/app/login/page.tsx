@@ -19,6 +19,7 @@ import { SsoAuthButton } from "@/app/components/auth/SsoAuthButton";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
+import type { DesktopGuestCredentials as GuestCredentials } from "@/app/lib/desktopLocalModel";
 
 const LOGIN_ERROR_MESSAGES = {
     invalid_credentials: "The email or password is incorrect.",
@@ -30,15 +31,6 @@ const LOGIN_ERROR_MESSAGES = {
 // bridge doesn't exist, and against a hosted server it returns null — so
 // gating the guest button on the answer keeps this page byte-identical in
 // behavior everywhere else.
-type GuestCredentials = { email: string; password: string };
-declare global {
-    interface Window {
-        mikeDesktop?: {
-            guestCredentials?: () => Promise<GuestCredentials | null>;
-        };
-    }
-}
-
 export default function LoginPage() {
     const router = useRouter();
     const {

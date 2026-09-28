@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local AI · Mike</title>
+    <link rel="stylesheet" href="local-model.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">MIKE ON YOUR MAC</p>
+      <h1>Your workspace. Your model.</h1>
+      <p class="intro">Start with free, open-source AI on this Mac. Add a model when you're ready—no account, API key, or extra app required.</p>
+      <section class="surface" aria-labelledby="model-heading">
+        <div class="heading-row">
+          <div>
+            <h2 id="model-heading">Checking your Mac…</h2>
+            <p id="model-detail" class="muted">Choosing a small starter model for your hardware.</p>
+          </div>
+          <span class="text-status" id="state">Checking</span>
+        </div>
+        <p id="hardware" class="muted"></p>
+        <p>Useful for short drafting, summarising and extraction tasks. Review its answers against your sources; this starter is not a validated legal specialist.</p>
+        <p class="muted">The download needs internet. Once installed, inference runs on this Mac. External research is initially off; connecting other providers or tools can send data to those services.</p>
+        <div id="progress-area" hidden>
+          <label for="progress" id="progress-label">Preparing download…</label>
+          <progress id="progress" max="1" value="0"></progress>
+        </div>
+        <p id="status" role="status" aria-live="polite"></p>
+        <p id="error" role="alert" hidden></p>
+        <div class="actions">
+          <button id="install" type="button" class="primary" disabled>Checking availability…</button>
+          <button id="cancel" type="button" hidden>Cancel download</button>
+          <button id="continue" type="button">Continue without local AI</button>
+        </div>
+        <p class="small muted" id="no-model">Without a model, you can organise work or connect a provider in Settings. You can download local AI later from Mike → Local AI.</p>
+      </section>
+      <section id="measurement" class="surface" hidden aria-labelledby="check-heading">
+        <div class="heading-row">
+          <div><h2 id="check-heading">A baseline on this Mac</h2><p class="muted">A small synthetic extraction check, not a legal benchmark.</p></div>
+          <button id="benchmark" type="button">Run check</button>
+        </div>
+        <p id="results">Measure response time and whether the model extracts three known facts correctly.</p>
+        <p class="small muted">This checks the model on a short sample; actual chat and document tasks can take substantially longer. Measurements stay on this Mac and don't establish accuracy on your documents or compare this model with paid legal products.</p>
+      </section>
+      <details class="surface" id="growth">
+        <summary>Build toward your firm's own AI</summary>
+        <ol>
+          <li><strong>Start free.</strong> Use the local model and add your instructions and documents. Keep a record of answers you correct.</li>
+          <li><strong>Measure your work.</strong> Assemble reviewed examples with expected answers, citations and access requirements. Keep a separate evaluation set.</li>
+          <li><strong>Choose the next investment.</strong> Improve document retrieval and instructions first. If measurements show a gap, evaluate a larger model, a firm-owned private deployment, or supervised fine-tuning with our help.</li>
+        </ol>
+        <p>Conversations do not automatically train the model. Training should use examples your firm has reviewed and approved. This release runs base models; deployment and tuning services are the next guided step.</p>
+        <div class="actions">
+          <button id="export" type="button">Save a deployment brief</button>
+          <a href="https://github.com/Open-Legal-Products/mike/blob/main/docs/deployment.md" target="_blank" rel="noreferrer">Self-hosting guide</a>
+        </div>
+        <p id="export-status" role="status" class="small muted"></p>
+      </details>
+      <footer>
+        <a href="https://github.com/Open-Legal-Products/mike" target="_blank" rel="noreferrer">Mike source</a>
+        <span aria-hidden="true"> · </span>
+        <a href="https://huggingface.co/Qwen/Qwen3.5-2B" id="model-source" target="_blank" rel="noreferrer">Model &amp; Apache 2.0 license</a>
+        <span aria-hidden="true"> · </span>
+        <button id="server" type="button" class="text-button">Cloud or firm server</button>
+      </footer>
+    </main>
+    <script src="local-model.js"></script>
+  </body>
+</html>

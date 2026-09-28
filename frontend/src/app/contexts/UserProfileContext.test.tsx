@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -8,6 +8,7 @@ const {
     updateTabularChatModel,
     updateTabularChatReasoningLevel,
     updateLastSelectedChatSettings,
+    authState,
 } = vi.hoisted(() => ({
     getUserProfile: vi.fn(),
     updateUserProfile: vi.fn(),
@@ -15,13 +16,11 @@ const {
     updateTabularChatModel: vi.fn(),
     updateTabularChatReasoningLevel: vi.fn(),
     updateLastSelectedChatSettings: vi.fn(),
+    authState: { current: { user: { id: "u1" } as { id: string } | null, isAuthenticated: true } },
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
-    useAuth: () => ({
-        user: { id: "u1" },
-        isAuthenticated: true,
-    }),
+    useAuth: () => authState.current,
 }));
 
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
@@ -85,15 +84,32 @@ function ThemeControls() {
 }
 
 function LastSelectedModel() {
-    const { profile, persistChatModelSelection } = useUserProfile();
+    const { profile, persistChatModelSelection, reloadProfile, updateLegalResearchUs } = useUserProfile();
     return (
         <>
             <span>{profile?.lastSelectedChatModel ?? "none"}</span>
+            <span data-testid="research">{String(profile?.legalResearchUs)}</span>
+            <span data-testid="display-name">{profile?.displayName}</span>
+            <button onClick={() => void reloadProfile()}>Reload profile</button>
+            <button onClick={() => void updateLegalResearchUs(true)}>Enable research</button>
             <button
                 onClick={() => void persistChatModelSelection("gpt-5.6-luna")}
             >
                 Select model
             </button>
+        </>
+    );
+}
+
+function ProfileLoadState() {
+    const { loading, apiKeysDegraded, profile, reloadProfile } = useUserProfile();
+    return (
+        <>
+            <span data-testid="profile-state">
+                {loading ? "loading" : apiKeysDegraded ? "degraded" : "ready"}
+            </span>
+            <span data-testid="profile-tier">{profile?.tier}</span>
+            <button onClick={() => void reloadProfile()}>Reload profile</button>
         </>
     );
 }
@@ -123,6 +139,8 @@ function TabularChatSettings() {
 }
 
 beforeEach(() => {
+    authState.current = { user: { id: "u1" }, isAuthenticated: true };
+    delete window.mikeDesktop;
     getUserProfile.mockResolvedValue(apiProfile(true));
     updateUserProfile.mockImplementation(
         ({ darkMode = true }: { darkMode?: boolean }) =>
@@ -134,9 +152,186 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    delete window.mikeDesktop;
     document.documentElement.classList.remove("dark");
     document.documentElement.style.colorScheme = "";
     vi.clearAllMocks();
+});
+
+describe("UserProfileProvider desktop starter", () => {
+    it.each(["initial load", "reload"])(
+        "degrades a malformed profile on %s without crashing the provider",
+        async (phase) => {
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+            const readyLocalModel = vi.fn(async () => null);
+            window.mikeDesktop = { readyLocalModel };
+            try {
+                if (phase === "initial load") {
+                    getUserProfile.mockResolvedValue({ models: [] });
+                }
+                render(<UserProfileProvider><ProfileLoadState /></UserProfileProvider>);
+                if (phase === "reload") {
+                    await waitFor(() => expect(screen.getByTestId("profile-state")).toHaveTextContent("ready"));
+                    readyLocalModel.mockClear();
+                    getUserProfile.mockResolvedValue({ models: [] });
+                    fireEvent.click(screen.getByRole("button", { name: "Reload profile" }));
+                }
+                await waitFor(() => expect(screen.getByTestId("profile-state")).toHaveTextContent("degraded"));
+                expect(screen.getByTestId("profile-tier")).toHaveTextContent("Free");
+                expect(readyLocalModel).not.toHaveBeenCalled();
+                expect(warn).toHaveBeenCalled();
+            } finally {
+                warn.mockRestore();
+            }
+        },
+    );
+
+    it("initializes an installed local model and disables online research", async () => {
+        window.mikeDesktop = { readyLocalModel: async () => "ollama/qwen3.5:4b" };
+        updateUserProfile.mockResolvedValue({ ...apiProfile(true), lastSelectedChatModel: "ollama/qwen3.5:4b", legalResearchUs: false });
+        render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        expect(await screen.findByText("ollama/qwen3.5:4b")).toBeInTheDocument();
+        expect(screen.getByTestId("research")).toHaveTextContent("false");
+    });
+
+    it("keeps an explicit selection made while runtime readiness is pending", async () => {
+        let ready!: (model: string) => void;
+        window.mikeDesktop = { readyLocalModel: () => new Promise((resolve) => { ready = resolve; }) };
+        render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(ready).toBeTypeOf("function"));
+        fireEvent.click(screen.getByRole("button", { name: "Select model" }));
+        expect(await screen.findByText("gpt-5.6-luna")).toBeInTheDocument();
+        await act(async () => { ready("ollama/qwen3.5:4b"); });
+        expect(updateUserProfile).not.toHaveBeenCalled();
+        expect(screen.getByText("gpt-5.6-luna")).toBeInTheDocument();
+    });
+
+    it("orders an explicit model write after an already-started starter write", async () => {
+        let saved!: (value: Omit<ReturnType<typeof apiProfile>, "lastSelectedChatModel"> & { lastSelectedChatModel: string | null }) => void;
+        window.mikeDesktop = { readyLocalModel: async () => "ollama/qwen3.5:4b" };
+        updateUserProfile.mockImplementation(() => new Promise((resolve) => { saved = resolve; }));
+        render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(saved).toBeTypeOf("function"));
+        fireEvent.click(screen.getByRole("button", { name: "Select model" }));
+        expect(updateLastSelectedChatSettings).not.toHaveBeenCalled();
+        await act(async () => { saved({ ...apiProfile(true), lastSelectedChatModel: "ollama/qwen3.5:4b" }); });
+        expect(await screen.findByText("gpt-5.6-luna")).toBeInTheDocument();
+        expect(updateLastSelectedChatSettings).toHaveBeenCalledWith({ lastSelectedChatModel: "gpt-5.6-luna" });
+    });
+
+    it("does not replace a selected model with a stale profile reload", async () => {
+        render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(screen.getByTestId("research")).toHaveTextContent("true"));
+        let loaded!: (value: ReturnType<typeof apiProfile>) => void;
+        getUserProfile.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve; }));
+        fireEvent.click(screen.getByRole("button", { name: "Reload profile" }));
+        fireEvent.click(screen.getByRole("button", { name: "Select model" }));
+        expect(await screen.findByText("gpt-5.6-luna")).toBeInTheDocument();
+        await act(async () => { loaded(apiProfile(true)); });
+        expect(screen.getByText("gpt-5.6-luna")).toBeInTheDocument();
+    });
+
+    it("retains a selection that completes before the initial profile fetch", async () => {
+        let loaded!: (value: ReturnType<typeof apiProfile>) => void;
+        getUserProfile.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve; }));
+        render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        fireEvent.click(screen.getByRole("button", { name: "Select model" }));
+        expect(await screen.findByText("gpt-5.6-luna")).toBeInTheDocument();
+        await act(async () => { loaded(apiProfile(true)); });
+        expect(screen.getByText("gpt-5.6-luna")).toBeInTheDocument();
+    });
+
+    it("shares an in-flight starter write when another profile load begins", async () => {
+        let saved!: (value: ReturnType<typeof apiProfile>) => void;
+        window.mikeDesktop = { readyLocalModel: vi.fn(async () => "ollama/qwen3.5:4b") };
+        updateUserProfile.mockImplementation(() => new Promise((resolve) => { saved = resolve; }));
+        render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(saved).toBeTypeOf("function"));
+        fireEvent.click(screen.getByRole("button", { name: "Reload profile" }));
+        await waitFor(() => expect(window.mikeDesktop?.readyLocalModel).toHaveBeenCalledTimes(2));
+        expect(updateUserProfile).toHaveBeenCalledTimes(1);
+        await act(async () => { saved(apiProfile(true)); });
+    });
+
+    it("does not share a pending starter profile with a different signed-in account", async () => {
+        let savedFirst!: (profile: ReturnType<typeof apiProfile>) => void;
+        window.mikeDesktop = { readyLocalModel: async () => "ollama/qwen3.5:4b" };
+        updateUserProfile.mockImplementationOnce(() => new Promise((resolve) => { savedFirst = resolve; }));
+        const { rerender } = render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(savedFirst).toBeTypeOf("function"));
+
+        authState.current = { user: { id: "u2" }, isAuthenticated: true };
+        getUserProfile.mockResolvedValue({ ...apiProfile(false), displayName: "Bob" });
+        updateUserProfile.mockResolvedValue({ ...apiProfile(false), displayName: "Bob", lastSelectedChatModel: "ollama/qwen3.5:4b", legalResearchUs: false });
+        rerender(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(updateUserProfile).toHaveBeenCalledTimes(2));
+        expect(await screen.findByText("ollama/qwen3.5:4b")).toBeInTheDocument();
+        await act(async () => { savedFirst({ ...apiProfile(true), displayName: "Alice private profile" }); });
+        expect(screen.getByTestId("display-name")).toHaveTextContent("Bob");
+        expect(screen.getByTestId("research")).toHaveTextContent("false");
+        expect(screen.getByText("ollama/qwen3.5:4b")).toBeInTheDocument();
+    });
+
+    it.each(["Select model", "Enable research"])("does not submit a queued %s action after the account changes", async (action) => {
+        let savedFirst!: (profile: ReturnType<typeof apiProfile>) => void;
+        window.mikeDesktop = { readyLocalModel: async () => "ollama/qwen3.5:4b" };
+        updateUserProfile.mockImplementationOnce(() => new Promise((resolve) => { savedFirst = resolve; }));
+        const { rerender } = render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(savedFirst).toBeTypeOf("function"));
+        fireEvent.click(screen.getByRole("button", { name: action }));
+
+        authState.current = { user: { id: "u2" }, isAuthenticated: true };
+        getUserProfile.mockResolvedValue({ ...apiProfile(false), displayName: "Bob", lastSelectedChatModel: "gpt-existing", legalResearchUs: false });
+        rerender(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        expect(await screen.findByText("gpt-existing")).toBeInTheDocument();
+        await act(async () => { savedFirst(apiProfile(true)); });
+        expect(updateLastSelectedChatSettings).not.toHaveBeenCalled();
+        expect(updateUserProfile).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("display-name")).toHaveTextContent("Bob");
+        expect(screen.getByText("gpt-existing")).toBeInTheDocument();
+        expect(screen.getByTestId("research")).toHaveTextContent("false");
+    });
+
+    it.each(["Select model", "Enable research"])("discards an in-flight %s response after the account changes", async (action) => {
+        let savedFirst!: (profile: ReturnType<typeof apiProfile>) => void;
+        const mutation = action === "Select model" ? updateLastSelectedChatSettings : updateUserProfile;
+        mutation.mockImplementationOnce(() => new Promise((resolve) => { savedFirst = resolve; }));
+        const { rerender } = render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(screen.getByTestId("display-name")).toHaveTextContent("Ada"));
+        fireEvent.click(screen.getByRole("button", { name: action }));
+        await waitFor(() => expect(savedFirst).toBeTypeOf("function"));
+
+        authState.current = { user: { id: "u2" }, isAuthenticated: true };
+        getUserProfile.mockResolvedValue({ ...apiProfile(false), displayName: "Bob", lastSelectedChatModel: "gpt-existing", legalResearchUs: false });
+        rerender(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        expect(await screen.findByText("gpt-existing")).toBeInTheDocument();
+        await act(async () => { savedFirst(apiProfile(true)); });
+        expect(screen.getByTestId("display-name")).toHaveTextContent("Bob");
+        expect(screen.getByText("gpt-existing")).toBeInTheDocument();
+        expect(screen.getByTestId("research")).toHaveTextContent("false");
+    });
+
+    it("does not save a runtime reply after the provider unmounts", async () => {
+        let ready!: (model: string) => void;
+        window.mikeDesktop = { readyLocalModel: () => new Promise((resolve) => { ready = resolve; }) };
+        const { unmount } = render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(ready).toBeTypeOf("function"));
+        unmount();
+        await act(async () => { ready("ollama/qwen3.5:4b"); });
+        expect(updateUserProfile).not.toHaveBeenCalled();
+    });
+
+    it("does not submit a queued model selection after the provider unmounts", async () => {
+        let saved!: (profile: ReturnType<typeof apiProfile>) => void;
+        window.mikeDesktop = { readyLocalModel: async () => "ollama/qwen3.5:4b" };
+        updateUserProfile.mockImplementationOnce(() => new Promise((resolve) => { saved = resolve; }));
+        const { unmount } = render(<UserProfileProvider><LastSelectedModel /></UserProfileProvider>);
+        await waitFor(() => expect(saved).toBeTypeOf("function"));
+        fireEvent.click(screen.getByRole("button", { name: "Select model" }));
+        unmount();
+        await act(async () => { saved(apiProfile(true)); });
+        expect(updateLastSelectedChatSettings).not.toHaveBeenCalled();
+    });
 });
 
 describe("UserProfileProvider dark mode", () => {

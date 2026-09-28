@@ -1,0 +1,42 @@
+name: Mac app
+
+on:
+  pull_request:
+    paths:
+      - desktop/**
+      - backend/**
+      - frontend/**
+      - .github/workflows/desktop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-services:
+    name: Local services and model lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+      # Pure Node tests use fake runtimes and disposable loopback services.
+      # No model weights, API keys, GPUs or npm dependencies are required.
+      - run: npm test --prefix desktop
+
+  onboarding:
+    name: Native onboarding and IPC isolation
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --prefix desktop
+      # Real Electron main/preload/renderer with a fake model backend. Actual
+      # hardware/inference acceptance remains an explicit release check.
+      - run: npm run e2e:models --prefix desktop

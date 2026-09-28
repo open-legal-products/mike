@@ -229,6 +229,8 @@ describe("POST /projects/:projectId/chat", () => {
       }),
     );
     const systemPromptExtra = buildMessages.mock.calls[0]?.[2] as string;
+    expect(buildMessages.mock.calls[0]?.[6]).toBe("append");
+    expect(buildMessages.mock.calls[0]?.[7]).toBe(runLLMStream.mock.calls[0]?.[0].model);
         expect(systemPromptExtra).toContain("USER PERSONALISATION");
         expect(systemPromptExtra).toContain('"organisation": "Acme LLP"');
     expect(beginMemoryConversationTurn).toHaveBeenCalledWith({

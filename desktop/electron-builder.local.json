@@ -16,9 +16,10 @@
     }
   ],
   "mac": {
+    "minimumSystemVersion": "14.0.0",
     "category": "public.app-category.productivity",
     "target": [
-      "dir"
+      { "target": "dir", "arch": ["arm64"] }
     ],
     "identity": null,
     "icon": "assets/icon.icns"

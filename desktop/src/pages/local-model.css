@@ -1,0 +1,36 @@
+/* The standalone shell cannot import React primitives. These surface/color
+   roles mirror docs/design-system.md; native controls keep this page offline. */
+:root { color-scheme: light dark; --app-background:#f9fafb; --app-surface:#fdfdfe; --foreground:#171717; --muted:#666; --ring:#0088ff; --destructive:#b42318; }
+@media (prefers-color-scheme:dark) { :root { --app-background:#141417; --app-surface:#202024; --foreground:#f3f3f4; --muted:#b0b0b8; --ring:#70b8ff; --destructive:#ffb4ab; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--app-background); color:var(--foreground); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+body::before { content:""; height:36px; position:fixed; inset:0 0 auto; -webkit-app-region:drag; z-index:1; }
+main { max-width:820px; margin:0 auto; padding:52px 28px 28px; }
+h1 { font:500 32px/1.2 Georgia,serif; margin:8px 0 14px; }
+h2 { font-size:17px; font-weight:600; margin:0 0 4px; }
+p { margin:10px 0; }
+.intro { max-width:650px; margin-bottom:24px; color:var(--muted); }
+.eyebrow { font-size:11px; letter-spacing:.12em; color:var(--muted); }
+.surface { background:var(--app-surface); border-radius:18px; padding:24px; margin:16px 0; box-shadow:0 8px 28px rgb(0 0 0 / .06); }
+.heading-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.heading-row p { margin:0; }
+.muted { color:var(--muted); }
+.small { font-size:12px; }
+.text-status { white-space:nowrap; font-size:12px; color:var(--muted); }
+.actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:20px 0 4px; }
+button { font:inherit; color:var(--foreground); border:1px solid color-mix(in srgb,var(--foreground) 16%,transparent); border-radius:999px; padding:9px 18px; background:transparent; cursor:pointer; }
+button.primary { color:var(--app-background); background:var(--foreground); border-color:transparent; }
+button:disabled { opacity:.5; cursor:default; }
+button:not(:disabled):hover { filter:brightness(.88); }
+button:focus-visible,a:focus-visible,summary:focus-visible { outline:3px solid var(--ring); outline-offset:4px; }
+a { color:var(--ring); text-underline-offset:3px; }
+.text-button { padding:0; border:0; border-radius:0; color:var(--ring); text-decoration:underline; text-underline-offset:3px; }
+summary { cursor:pointer; font-weight:600; }
+li { padding:5px 0; }
+ol { padding-left:20px; }
+progress { width:100%; display:block; height:9px; margin:8px 0; accent-color:var(--ring); }
+#progress-area { margin-top:20px; }
+#error { color:var(--destructive); }
+footer { margin:24px 0 4px; color:var(--muted); font-size:12px; }
+[hidden] { display:none !important; }
+@media (max-width:650px) { .heading-row { align-items:flex-start; flex-direction:column; } main { padding:44px 20px 20px; } }

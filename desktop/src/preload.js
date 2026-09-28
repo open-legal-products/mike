@@ -16,6 +16,19 @@ contextBridge.exposeInMainWorld("mikeDesktop", {
   startLocal: () => ipcRenderer.invoke("mike:start-local"),
   chooseCloud: () => ipcRenderer.invoke("mike:choose-cloud"),
   guestCredentials: () => ipcRenderer.invoke("mike:guest-credentials"),
+  // Read-only, local main-frame only. Used once to initialize an unset choice.
+  readyLocalModel: () => ipcRenderer.invoke("mike:ready-local-model"),
+  localModelStatus: () => ipcRenderer.invoke("mike:local-model-status"),
+  installLocalModel: () => ipcRenderer.invoke("mike:install-local-model"),
+  cancelLocalModel: () => ipcRenderer.invoke("mike:cancel-local-model"),
+  benchmarkLocalModel: () => ipcRenderer.invoke("mike:benchmark-local-model"),
+  openLocalWorkspace: () => ipcRenderer.invoke("mike:open-local-workspace"),
+  exportLocalModelBrief: () => ipcRenderer.invoke("mike:export-local-model-brief"),
+  onLocalModelStatus: (cb) => {
+    const listener = (_event, state) => cb(state);
+    ipcRenderer.on("mike:local-model-status", listener);
+    return () => ipcRenderer.removeListener("mike:local-model-status", listener);
+  },
   openConnect: () => ipcRenderer.invoke("mike:open-connect"),
   onLocalStatus: (cb) =>
     ipcRenderer.on("mike:local-status", (_event, msg) => cb(String(msg))),
