@@ -159,20 +159,16 @@ function mcpOAuthPopupHtml(payload: {
 </html>`;
 }
 
-function mcpOAuthPopupCsp(nonce: string) {
-    return [
-        "default-src 'none'",
-        `script-src 'nonce-${nonce}'`,
-        "style-src 'unsafe-inline'",
-        "base-uri 'none'",
-        "form-action 'none'",
-        "frame-ancestors 'none'",
-    ].join("; ");
-}
-
 function mcpOAuthPopupHeaders(nonce: string) {
     return {
-        "Content-Security-Policy": mcpOAuthPopupCsp(nonce),
+        "Content-Security-Policy": [
+            "default-src 'none'",
+            `script-src 'nonce-${nonce}'`,
+            "style-src 'unsafe-inline'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+        ].join("; "),
         // The whole popup hand-off hinges on window.opener surviving until
         // this page has posted its result back to the app. Helmet's default
         // Cross-Origin-Opener-Policy of same-origin would move this document
@@ -766,7 +762,7 @@ userRouter.get(
             await completeGoogleDriveOAuth(
                 res.locals.userId, state, code, createServerSupabase(),
             );
-            res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+            res.set(mcpOAuthPopupHeaders(nonce))
                 .type("html")
                 .send(
                     mcpOAuthPopupHtml(
@@ -780,7 +776,7 @@ userRouter.get(
                 hasCode: !!code,
             });
             res.status(400)
-                .set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+                .set(mcpOAuthPopupHeaders(nonce))
                 .type("html")
                 .send(
                     mcpOAuthPopupHtml(
@@ -984,7 +980,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
             const nonce = crypto.randomBytes(16).toString("base64");
-            res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce)).type(
+            res.set(mcpOAuthPopupHeaders(nonce)).type(
                 "html",
             );
             try {
