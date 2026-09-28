@@ -496,16 +496,16 @@ try {
   // Part 1: the real UI — upload to the library, then row menu → Download.
   await step("library upload + row-menu Download stays in-shell", page, async () => {
     await page.goto(`${SERVER_URL}/library`);
-    // PageHeader action button carries aria-label "Add Files"
-    // (frontend/src/app/components/shared/PageHeader.tsx:254); the library
-    // passes no renderAddDocumentsModal, so the click opens the hidden file
-    // input directly (DocTable.openAddDocuments).
-    const addBtn = page.getByRole("button", { name: "Add Files" });
+    // The library's "Upload" menu (same selectors as local.e2e.mjs step 4):
+    // "Upload files" opens the hidden file input. The old "Add Files"
+    // PageHeader button this step used to click no longer exists.
+    const addBtn = page.getByRole("button", { name: "Upload", exact: true }).first();
     await addBtn.waitFor({ timeout: 15_000 });
     const chooserPromise = page.waitForEvent("filechooser", {
       timeout: 10_000,
     });
     await addBtn.click();
+    await page.getByRole("menuitem", { name: "Upload files", exact: true }).click();
     const chooser = await chooserPromise;
     await chooser.setFiles({
       name: DOC_NAME,
@@ -517,19 +517,19 @@ try {
       .first()
       .waitFor({ timeout: 30_000 });
 
-    // Row actions ("···") stay hidden while doc.status is pending/processing
-    // (DocTable.tsx:1617); the table doesn't necessarily poll, so reload
+    // Row actions ("Open row actions") stay hidden while doc.status is
+    // pending/processing; the table doesn't necessarily poll, so reload
     // while waiting for ingestion to settle.
     const rowFor = () =>
       page
         .locator("div")
         .filter({ hasText: DOC_BASE })
-        .filter({ has: page.getByRole("button", { name: "···" }) })
+        .filter({ has: page.getByRole("button", { name: "Open row actions" }) })
         .last();
     let menuBtn = null;
     const deadline = Date.now() + 90_000;
     while (Date.now() < deadline) {
-      const candidate = rowFor().getByRole("button", { name: "···" }).first();
+      const candidate = rowFor().getByRole("button", { name: "Open row actions" }).first();
       if (await candidate.isVisible().catch(() => false)) {
         menuBtn = candidate;
         break;
@@ -575,27 +575,16 @@ try {
     const before = readDownloadLog().length;
     const result = await page.evaluate(
       async ({ api, docBase, pdfB64 }) => {
-        // Auth exactly as mikeApi.getAuthHeader does, minus the supabase
-        // client: the session (with access_token) lives in localStorage under
-        // sb-<ref>-auth-token (supabase-js default storage).
-        let token = null;
-        for (const key of Object.keys(localStorage)) {
-          if (!/^sb-.*-auth-token$/.test(key)) continue;
-          try {
-            const parsed = JSON.parse(localStorage.getItem(key));
-            token =
-              parsed?.access_token ?? parsed?.currentSession?.access_token;
-            if (token) break;
-          } catch {
-            /* not a session blob */
-          }
-        }
-        if (!token) return { error: "no supabase access token in localStorage" };
-        const headers = { Authorization: `Bearer ${token}` };
+        // Auth exactly as mikeApi does since the cookie-session rework: the
+        // session is an httpOnly cookie, and requests go through the
+        // frontend's same-origin /api gateway with credentials — there is no
+        // token in localStorage any more.
+        const headers = {};
+        const credentials = "include";
 
         // Reuse the doc uploaded by the UI step; upload one ourselves if that
         // step didn't get that far.
-        const listRes = await fetch(`${api}/single-documents`, { headers });
+        const listRes = await fetch(`${api}/single-documents`, { headers, credentials });
         if (!listRes.ok)
           return { error: `list documents: HTTP ${listRes.status}` };
         const docs = await listRes.json();
@@ -612,6 +601,7 @@ try {
           const upRes = await fetch(`${api}/single-documents`, {
             method: "POST",
             headers,
+            credentials,
             body: form,
           });
           if (!upRes.ok) return { error: `upload: HTTP ${upRes.status}` };
@@ -622,6 +612,7 @@ try {
         // foreign origin.
         const urlRes = await fetch(`${api}/single-documents/${doc.id}/url`, {
           headers,
+          credentials,
         });
         if (!urlRes.ok)
           return { error: `presigned url: HTTP ${urlRes.status}` };
@@ -635,7 +626,9 @@ try {
         return { url, filename };
       },
       {
-        api: API_URL,
+        // Same-origin gateway, not the backend origin: cookies only travel
+        // first-party.
+        api: `${SERVER_URL}/api`,
         docBase: DOC_BASE,
         pdfB64: readFileSync(PDF_FIXTURE).toString("base64"),
       },
