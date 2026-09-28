@@ -39,6 +39,17 @@ function log(dirs, name) {
   return file;
 }
 
+// A child that handled SIGTERM and returned exits with a code; a child the
+// signal simply killed (PostgREST, or anything macOS terminates) exits with
+// `exitCode === null` and `signalCode` set. Both are "gone". Testing only
+// exitCode made stopLocalStack wait its full 10 s deadline on every quit
+// (PostgREST always dies by signal) and let waitFor keep polling a
+// signal-killed child for the whole 60 s boot timeout instead of failing
+// fast.
+function hasExited(proc) {
+  return proc.exitCode !== null || proc.signalCode !== null;
+}
+
 function spawnService(name, bin, args, { env, cwd, dirs }) {
   const out = log(dirs, name);
   const proc = spawn(bin, args, {
@@ -63,9 +74,10 @@ async function waitFor(name, probe, { timeoutMs = 60_000, intervalMs = 400 } = {
     }
     // A crashed child never becomes healthy — fail fast with its name so the
     // error page can point at the right log file.
-    const dead = children.find((c) => c.proc.exitCode !== null);
+    const dead = children.find((c) => hasExited(c.proc));
     if (dead) {
-      throw new Error(`${dead.name} exited with code ${dead.proc.exitCode} while waiting for ${name}`);
+      const how = dead.proc.signalCode ? `on ${dead.proc.signalCode}` : `with code ${dead.proc.exitCode}`;
+      throw new Error(`${dead.name} exited ${how} while waiting for ${name}`);
     }
     await sleep(intervalMs);
   }
@@ -355,7 +367,7 @@ async function stopLocalStack(paths) {
   }
   // Reverse boot order; postgres last so nothing loses its database mid-write.
   for (const { name, proc } of [...children].reverse()) {
-    if (proc.exitCode !== null) continue;
+    if (hasExited(proc)) continue;
     try {
       // SIGINT is postgres "fast shutdown" (rollback + clean stop) and a
       // normal terminate for the Node/Go services.
@@ -363,11 +375,11 @@ async function stopLocalStack(paths) {
     } catch { /* already gone */ }
   }
   const deadline = Date.now() + 10_000;
-  while (children.some((c) => c.proc.exitCode === null) && Date.now() < deadline) {
-    await sleep(150);
+  while (children.some((c) => !hasExited(c.proc)) && Date.now() < deadline) {
+    await sleep(50);
   }
   for (const { proc } of children) {
-    if (proc.exitCode === null) {
+    if (!hasExited(proc)) {
       try { proc.kill("SIGKILL"); } catch { /* already gone */ }
     }
   }
@@ -378,4 +390,4 @@ function localStackRunning() {
   return running;
 }
 
-module.exports = { startLocalStack, stopLocalStack, localStackRunning };
+module.exports = { startLocalStack, stopLocalStack, localStackRunning, hasExited };
