@@ -21,10 +21,15 @@ import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
  * `max_tokens`), which a single shared number cannot track. Operators who want
  * a backstop set `LLM_MAX_OUTPUT_TOKENS`; an unusable value is ignored rather
  * than sent upstream.
+ *
+ * OpenCode Go keeps the previous 16,384: its Messages models (MiniMax, Qwen)
+ * go through the Anthropic adapter, which does not recognise them and would
+ * otherwise fall back to 4,096.
  */
-export function configuredMaxOutputTokens(): number | undefined {
+export function maxOutputTokensFor(provider: Provider): number | undefined {
   const value = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  if (Number.isSafeInteger(value) && value > 0) return value;
+  return provider === "opencode-go" ? 16_384 : undefined;
 }
 
 /**
@@ -422,7 +427,7 @@ export async function streamAiSdk(
         ? { providerOptions: cacheHints.providerOptions }
         : {}),
       tools,
-      maxOutputTokens: configuredMaxOutputTokens(),
+      maxOutputTokens: maxOutputTokensFor(config.provider),
       stopWhen: sdk.stepCountIs(maxIterations),
       abortSignal: internalAbort.signal,
       reasoning:
