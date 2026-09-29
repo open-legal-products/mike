@@ -162,8 +162,8 @@ from Sentry; it does not change error-reporting policy.
 | Six web streaming scenarios | General assistant, project assistant and tabular chat; each content + reasoning; eight saved exchanges, four content follow-ups or eight reasoning follow-ups; requested 1ms deltas, 4x CPU; live expand/collapse and 480px resize | All six passed, no console errors/uncaught exceptions, 7.4 minutes with two isolated workers |
 | Web history/hydration browser | Sixteen A/B selections while long histories are held; reverse completion; immediate session resolution; development Strict Mode request replay; 480px resize | Passed, 40.4 seconds |
 | Full web production stack, initial expanded profile | Disposable Supabase, Express and object storage; auth/accessibility, project/file operations, tabular reviews, workflows/settings, Google UI mocks, cold chat loads and original streaming regressions | 45 passed; four live-provider tests skipped |
-| Full web matrix with all new scenarios | Same disposable stack, production + development; development adds 4x CPU and loop-diagnostic assertions | Final-head CI validation tracked on PR #557 |
-| Frontend unit/component suite | All suites, plus frame scheduling, 300 refreshes, reversed history completion and hydration regressions | Final full-suite results tracked on PR #557 |
+| Full web matrix with all new scenarios | Same disposable stack, production + development; development adds 4x CPU and loop-diagnostic assertions | CI validation and exact code revision tracked on PR #557 |
+| Frontend unit/component suite | All suites, plus frame scheduling, 300 refreshes, reversed history completion and hydration regressions | 1,785 tests passed in 217 suites, 119 seconds locally |
 
 The Word counts include its parser/contract cases as well as UI flows. These are
 all **currently defined test flows**, not every possible product interaction.

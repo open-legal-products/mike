@@ -7,9 +7,9 @@
 # this job "e2e / playwright" as a required status check in branch protection —
 # see docs/e2e-ci.md ("Make it merge-blocking").
 #
-# The suite is green with NO secret: of the 31 specs, the 4 LLM-dependent ones
+# The suite is green with NO secret: the four live-LLM-dependent cases
 # (chat + critical path) skip themselves when ANTHROPIC_API_KEY is absent (see
-# e2e/llm.ts), so a keyless run passes the other 27 specs. Mike supports local
+# e2e/llm.ts), while all keyless cases still run. Mike supports local
 # Ollama models without a provider key, but this job does not provision Ollama;
 # the gate is not caused by the best-effort title-generation call. To run and
 # enforce those 4, set the ANTHROPIC_API_KEY repository secret; exact steps, the
@@ -115,7 +115,7 @@ jobs:
       # specs can skip themselves when no key is present — see e2e/llm.ts. When the
       # secret is set they run and are enforced; when absent they skip, so a keyless
       # run (e.g. a fork PR, which never receives this secret) is still green on
-      # the other 27 of the 31 specs. Setup: docs/e2e-ci.md, "Enable the LLM specs".
+      # all other cases. Setup: docs/e2e-ci.md, "Enable the LLM specs".
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v7.0.1

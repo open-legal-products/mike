@@ -74,7 +74,7 @@ screenshots, and step-by-step traces of what the browser did.
 
 | Secret | What it unlocks | Without it |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | The 4 LLM-dependent specs (chat rename/delete/submit, critical-path "ask a question") send a message and assert a **streamed** answer. With the key set they run and are enforced. | Those 4 specs **skip** (see `e2e/llm.ts`) instead of hanging, so the run is still green on the other 27 specs. |
+| `ANTHROPIC_API_KEY` | The 4 LLM-dependent specs (chat rename/delete/submit, critical-path "ask a question") send a message and assert a **streamed** answer. With the key set they run and are enforced. | Those 4 specs **skip** (see `e2e/llm.ts`) instead of hanging, the remaining keyless cases still run. |
 
 The suite is green **without** any secret — the LLM specs skip themselves via
 `test.skip(!process.env.ANTHROPIC_API_KEY, …)`, which keeps keyless runs (local,
@@ -130,10 +130,10 @@ few cents per run — negligible next to the CI minutes.
 
 Open the **Run Playwright** step in the Actions log:
 
-- **Keyless run:** the summary ends with `4 skipped` / `27 passed`, and each
+- **Keyless run:** the summary includes `4 skipped`, and each
   skipped spec carries the reason
   `requires a model key — set the ANTHROPIC_API_KEY secret to run LLM-dependent specs`.
-- **With the secret:** the summary shows `31 passed` and **no `skipped` line**;
+- **With the secret:** all cases pass with **no `skipped` line**;
   searching the log for `requires a model key` finds nothing.
 
 The uploaded `playwright-report` artifact shows the same per-spec statuses.
