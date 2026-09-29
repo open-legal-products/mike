@@ -12,7 +12,9 @@ export function docxRevisionElements(
     const exact = id == null ? [] : candidates.filter(
         (element) => element.dataset.revisionId === id,
     );
-    if (exact.length) return exact;
+    // An unpainted page can hide the requested ID while an unrelated revision
+    // with the same wording is visible. Let the viewer reveal the exact ID.
+    if (id != null) return exact;
     const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
     const target = normalize(text ?? "");
     if (!target) return [];

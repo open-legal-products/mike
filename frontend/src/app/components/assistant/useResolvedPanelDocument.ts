@@ -42,54 +42,65 @@ export function useResolvedPanelDocument(document: PanelDocument): {
     error: string | null;
     retry: () => void;
 } {
-    const [resolvedDocument, setResolvedDocument] =
-        useState<PanelDocument>(document);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const documentId = document.document_id;
+    const needsHydration =
+        document.type === "case" && !document.subdocuments?.length;
+    const [request, setRequest] = useState<{
+        documentId: string;
+        loaded: PanelDocument | null;
+        loading: boolean;
+        error: string | null;
+    } | null>(null);
     const [requestVersion, setRequestVersion] = useState(0);
-
-    const retry = useCallback(() => {
-        setRequestVersion((current) => current + 1);
-    }, []);
+    const retry = useCallback(
+        () => setRequestVersion((current) => current + 1),
+        [],
+    );
 
     useEffect(() => {
-        const needsHydration =
-            document.type === "case" && !document.subdocuments?.length;
-        if (!needsHydration) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize a new panel input before rendering its viewer
-            setResolvedDocument(document);
-            setIsLoading(false);
-            setError(null);
-            return;
-        }
-
+        if (!needsHydration) return;
         let cancelled = false;
-        setResolvedDocument(document);
-        setIsLoading(true);
-        setError(null);
-        void getPanelDocument(document.document_id)
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- start the request for a new case or explicit retry
+        setRequest({ documentId, loaded: null, loading: true, error: null });
+        void getPanelDocument(documentId)
             .then((loaded) => {
-                if (!cancelled) {
-                    setResolvedDocument(mergePanelDocuments(document, loaded));
-                }
+                if (!cancelled)
+                    setRequest({
+                        documentId,
+                        loaded,
+                        loading: false,
+                        error: null,
+                    });
             })
             .catch((reason: unknown) => {
-                if (!cancelled) {
-                    setError(
-                        reason instanceof Error
-                            ? friendlyDocumentError(reason.message)
-                            : "Could not load this document.",
-                    );
-                }
-            })
-            .finally(() => {
-                if (!cancelled) setIsLoading(false);
+                if (!cancelled)
+                    setRequest({
+                        documentId,
+                        loaded: null,
+                        loading: false,
+                        error:
+                            reason instanceof Error
+                                ? friendlyDocumentError(reason.message)
+                                : "Could not load this document.",
+                    });
             });
-
         return () => {
             cancelled = true;
         };
-    }, [document, requestVersion]);
+    }, [documentId, needsHydration, requestVersion]);
 
-    return { document: resolvedDocument, isLoading, error, retry };
+    // File metadata is complete: pass the current version through synchronously
+    // with its refetch key. Case hydration is keyed by identity, not by incoming
+    // summary objects, which can change on every chat token or quote selection.
+    if (!needsHydration)
+        return { document, isLoading: false, error: null, retry };
+    const currentRequest = request?.documentId === documentId ? request : null;
+    return {
+        document: currentRequest?.loaded
+            ? mergePanelDocuments(document, currentRequest.loaded)
+            : document,
+        isLoading: currentRequest?.loading ?? true,
+        error: currentRequest?.error ?? null,
+        retry,
+    };
 }

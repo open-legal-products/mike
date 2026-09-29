@@ -1,4 +1,4 @@
-export type DocxMode = "view" | "edit";
+export type DocxMode = "view" | "edit" | "suggesting";
 
 export interface DocxSaveState {
     ready: boolean;
@@ -10,6 +10,8 @@ export interface DocxSaveState {
 export interface DocxSurface {
     content: HTMLElement;
     scroll: HTMLElement;
+    /** Reveal an unpainted tracked change by its OOXML revision IDs. */
+    revealRevision?: (ids: readonly string[]) => boolean;
     /** Materialize an off-screen match in engines that virtualize pages. */
     revealText?: (text: string) => boolean;
     /** Select and reveal a citation using the editor's native selection. */
@@ -22,7 +24,10 @@ export interface DocxSurface {
 export interface DocxRendererProps {
     bytes: ArrayBuffer;
     mode: DocxMode;
+    /** Toolbar visibility does not change editing mode or reload the document. */
+    toolbarVisible?: boolean;
     filename?: string;
+    author?: string;
     onChange?: () => void;
     onSave?: (bytes?: ArrayBuffer) => void;
     onReady: (surface: DocxSurface) => void;

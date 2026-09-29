@@ -478,7 +478,7 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                 folders.length === 0 &&
                 uploadingDocuments.length === 0 &&
                 creatingIn === undefined && (
-                    <li className="px-4 py-2 text-xs text-gray-400">
+                    <li className="px-2 py-2 text-xs text-gray-400">
                         No documents in this project.
                     </li>
                 )}

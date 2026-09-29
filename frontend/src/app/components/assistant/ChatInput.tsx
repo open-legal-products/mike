@@ -535,13 +535,27 @@ function ChatInputForChatImpl(
         };
     }, [composerOpen, enableGlobalFileDrop, handleDroppedFiles]);
 
-    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setValue(e.target.value);
+    const updateInput = (el: HTMLTextAreaElement) => {
+        setValue(el.value);
         setActiveSlashIndex(0);
         setSlashMenuDismissed(false);
-        const el = e.target;
         el.style.height = "auto";
         el.style.height = `${el.scrollHeight}px`;
+    };
+
+    const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const el = event.currentTarget;
+        if (!composerOpen || event.clipboardData.files.length > 0) return;
+        // Preserve spacing when inserting into an existing sentence or code.
+        const replacesMessage = !el.value.trim()
+            || (el.selectionStart === 0 && el.selectionEnd === el.value.length);
+        if (!replacesMessage) return;
+        const pasted = event.clipboardData.getData("text/plain");
+        const trimmed = pasted.trim();
+        if (!pasted || pasted === trimmed) return;
+        event.preventDefault();
+        el.setRangeText(trimmed, 0, el.value.length, "end");
+        updateInput(el);
     };
 
     const submitMessage = (
@@ -786,7 +800,8 @@ function ChatInputForChatImpl(
                                 isLoading,
                             })}
                             value={value}
-                            onChange={handleChange}
+                            onChange={(event) => updateInput(event.target)}
+                            onPaste={handlePaste}
                             onKeyDown={handleKeyDown}
                             role="combobox"
                             aria-autocomplete="list"
@@ -801,7 +816,7 @@ function ChatInputForChatImpl(
                                     ? `${WORKFLOW_SLASH_MENU_ID}-${resolvedSlashIndex}`
                                     : undefined
                             }
-                            className="w-full resize-none text-sm overflow-hidden border-0 text-base p-0 bg-transparent outline-none placeholder:text-gray-400 leading-6 max-h-48"
+                            className="w-full resize-none text-sm overflow-x-hidden overflow-y-auto border-0 text-base p-0 bg-transparent outline-none placeholder:text-gray-400 leading-6 max-h-48"
                         />
                     </div>
 

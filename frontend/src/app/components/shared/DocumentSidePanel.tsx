@@ -135,6 +135,9 @@ export function DocumentSidePanel({
         "document",
     );
     const panelRef = useRef<HTMLDivElement>(null);
+    // Menus and popups opened from the panel portal outside its DOM, but their
+    // events still propagate through the panel's React tree.
+    const panelEvents = useRef(new WeakSet<Event>());
     const fileInputRef = useRef<HTMLInputElement>(null);
     const replaceFileInputRef = useRef<HTMLInputElement>(null);
     const dragStartX = useRef(0);
@@ -183,7 +186,8 @@ export function DocumentSidePanel({
             const target = event.target;
             if (
                 !(target instanceof Node) ||
-                panelRef.current?.contains(target)
+                panelRef.current?.contains(target) ||
+                panelEvents.current.has(event)
             ) {
                 return;
             }
@@ -468,6 +472,9 @@ export function DocumentSidePanel({
     return createPortal(
         <div
             ref={panelRef}
+            onPointerDownCapture={(event) =>
+                panelEvents.current.add(event.nativeEvent)
+            }
             className={cn(
                 "fixed z-[190] flex flex-col",
                 LIQUID_FLOAT_PANEL_SURFACE_CLASS,
@@ -480,16 +487,7 @@ export function DocumentSidePanel({
                 className="absolute inset-y-0 left-0 z-20 hidden w-1 cursor-col-resize bg-transparent transition-colors hover:bg-blue-400/60 md:block"
                 title="Resize document view"
             />
-            <div className="mx-3 flex min-h-11 shrink-0 items-center justify-between gap-3 py-2 md:h-11 md:py-0">
-                <div className="flex min-w-0 items-center gap-2">
-                    <FileTypeIcon
-                        fileType={selectedFileType ?? selectedFilename}
-                        className="h-4 w-4"
-                    />
-                    <div className="min-w-0 truncate text-sm font-medium text-gray-700">
-                        {selectedFilename}
-                    </div>
-                </div>
+            <div className="flex shrink-0 justify-end px-3 py-2 md:absolute md:right-3 md:top-3 md:z-20 md:p-0">
                 <div className="flex shrink-0 items-center gap-1.5">
                     <div className="flex h-7 items-center rounded-full bg-gray-200/70 p-0.5 md:hidden">
                         <button
@@ -533,7 +531,7 @@ export function DocumentSidePanel({
             >
                 <section
                     className={cn(
-                        "min-h-0 min-w-0 p-3 pt-0 md:flex md:pr-0",
+                        "min-h-0 min-w-0 p-3 pt-0 md:flex md:pt-3 md:pr-0",
                         mobilePane === "document" ? "flex" : "hidden",
                     )}
                 >
@@ -578,12 +576,12 @@ export function DocumentSidePanel({
 
                 <aside
                     className={cn(
-                        "mt-2 mr-3 ml-5 min-h-0 flex-col",
+                        "mt-2 mr-3 ml-5 min-h-0 flex-col md:mt-3",
                         mobilePane === "details" ? "flex" : "hidden md:flex",
                     )}
                 >
                     <div className="mb-4 shrink-0">
-                        <div className="mb-3 text-xs font-medium text-gray-900">
+                        <div className="mb-3 pr-9 text-xs font-medium text-gray-900">
                             Name
                         </div>
                         {editingName ? (

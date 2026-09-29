@@ -18,6 +18,8 @@
 @source "../../../frontend/src/shared/ui/PillButtonUI.tsx";
 @source "../../../frontend/src/shared/ui/PillButtonUI.styles.ts";
 @source "../../../frontend/src/shared/ui/TabPillButtonUI.tsx";
+@source "../../../frontend/src/shared/ui/TextButtonUI.tsx";
+@source "../../../frontend/src/shared/ui/TextButtonUI.styles.ts";
 @source "../../../frontend/src/shared/ui/TextSlabUI.tsx";
 @source "../../../frontend/src/shared/ui/ToggleSwitchUI.tsx";
 @source "../../../frontend/src/shared/ui/DropdownUI.tsx";

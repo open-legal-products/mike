@@ -5,10 +5,12 @@ import { useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
 import { getDocumentFile } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
+import { TextButtonUI } from "@/shared/ui/TextButtonUI";
+import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
 import { WarningPopup } from "../popups/WarningPopup";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { DocumentVersionPicker } from "./DocumentVersionPicker";
+import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
 import type { PanelDocument } from "./types";
 import type { DocxSaveState } from "./views/DocxRenderer.types";
@@ -25,6 +27,9 @@ export function DocumentTitleRow({
     compactActions,
     onDownload,
     saveState,
+    onVersionChange,
+    toolbarVisible,
+    onToggleToolbar,
 }: {
     document: PanelDocument;
     isReloading: boolean;
@@ -32,6 +37,9 @@ export function DocumentTitleRow({
     /** Export live editor bytes when available; undefined falls back to the server version. */
     onDownload?: () => Promise<void> | undefined;
     saveState?: DocxSaveState | null;
+    onVersionChange?: (version: DocumentVersion) => void;
+    toolbarVisible?: boolean;
+    onToggleToolbar?: () => void;
 }) {
     const isFile =
         document.type === "docx" ||
@@ -44,8 +52,8 @@ export function DocumentTitleRow({
             {/* Centred against the actions: they are taller than the title,
                 so top-aligning left the title floating above them. */}
             <div className="flex items-center gap-3">
-                <div className="flex min-w-0 flex-1 items-start gap-2">
-                    <span className="mt-0.5 shrink-0">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="shrink-0">
                         {document.type === "case" ||
                         document.type === "legislation" ? (
                             <Image
@@ -56,32 +64,70 @@ export function DocumentTitleRow({
                                 }
                                 alt=""
                                 aria-hidden="true"
-                                width={16}
-                                height={16}
-                                className="h-4 w-4 shrink-0 object-contain"
+                                width={14}
+                                height={14}
+                                className="h-3.5 w-3.5 shrink-0 object-contain"
                             />
                         ) : (
                             <FileTypeIcon
                                 fileType={document.title}
-                                className="h-4 w-4"
+                                className="h-3.5 w-3.5"
                             />
                         )}
                     </span>
                     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                         <h2
-                            className="min-w-0 break-words text-sm font-medium text-gray-800"
+                            className="min-w-0 break-words text-xs font-normal text-foreground"
                             title={document.title}
                         >
                             {document.title}
                         </h2>
-                        <VersionChip n={versionNumber} />
+                        {isFile && onVersionChange ? (
+                            <DocumentVersionPicker
+                                key={document.document_id}
+                                documentId={document.document_id}
+                                versionId={document.version_id}
+                                versionNumber={versionNumber}
+                                onSelect={onVersionChange}
+                                disabled={
+                                    isReloading ||
+                                    !!saveState?.dirty ||
+                                    saveState?.status === "saving"
+                                }
+                            />
+                        ) : (
+                            <VersionChip n={versionNumber} />
+                        )}
                     </div>
                 </div>
                 <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
                     {document.type === "docx" && saveState?.ready && (
-                        <span role="status" aria-live="polite" className="mr-2 text-xs text-muted-foreground">
-                            {saveState.error ? "Not saved" : saveState.dirty || saveState.status === "saving" ? "Saving…" : "Saved"}
+                        <span
+                            role="status"
+                            aria-live="polite"
+                            className="mr-2 text-xs text-muted-foreground"
+                        >
+                            {saveState.error
+                                ? "Not saved"
+                                : saveState.dirty ||
+                                    saveState.status === "saving"
+                                  ? "Saving…"
+                                  : "Saved"}
                         </span>
+                    )}
+                    {onToggleToolbar && (
+                        <TextButtonUI
+                            size="sm"
+                            aria-expanded={toolbarVisible}
+                            title={
+                                toolbarVisible
+                                    ? "Hide editing toolbar"
+                                    : "Show editing toolbar"
+                            }
+                            onClick={onToggleToolbar}
+                        >
+                            Edit
+                        </TextButtonUI>
                     )}
                     {isFile && (
                         <DownloadButton
@@ -115,7 +161,9 @@ export function DocumentTitleRow({
                 </div>
             </div>
             {document.type === "docx" && saveState?.error && (
-                <p role="alert" className="mt-1 text-xs text-destructive">{saveState.error}</p>
+                <p role="alert" className="mt-1 text-xs text-destructive">
+                    {saveState.error}
+                </p>
             )}
             {document.metadata.length > 0 && (
                 <div className="mt-1 flex w-full flex-wrap items-center gap-x-3 gap-y-1 font-serif text-sm text-gray-600">
@@ -164,12 +212,11 @@ function UrlDownloadButton({
             download
             aria-label="Download"
             title="Download"
-            className={pillButtonUIClassName({
-                tone: "white",
+            className={textButtonUIClassName({
                 size: compact ? "icon-xs" : "sm",
             })}
         >
-            <Download className="h-3.5 w-3.5" />
+            <Download aria-hidden="true" className="h-3.5 w-3.5" />
             <span className={compact ? "sr-only" : undefined}>Download</span>
         </a>
     );
@@ -189,12 +236,11 @@ function ExternalSourceLinkButton({
             rel="noopener noreferrer"
             aria-label={link.title}
             title={link.title}
-            className={pillButtonUIClassName({
-                tone: "white",
+            className={textButtonUIClassName({
                 size: compact ? "icon-xs" : "sm",
             })}
         >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ExternalLink aria-hidden="true" className="h-3.5 w-3.5" />
             <span className={compact ? "sr-only" : undefined}>
                 {link.label}
             </span>
@@ -263,18 +309,16 @@ function DownloadButton({
                 message={error}
                 onClose={() => setError(null)}
             />
-            <PillButtonUI
-                tone="white"
+            <TextButtonUI
                 size={compact ? "icon-xs" : "sm"}
                 onClick={handleClick}
-                disabled={spinning}
-                loading={spinning}
+                loading={!!spinning}
             >
-                <Download className="h-3.5 w-3.5" />
+                <Download aria-hidden="true" className="h-3.5 w-3.5" />
                 <span className={compact ? "sr-only" : undefined}>
                     Download
                 </span>
-            </PillButtonUI>
+            </TextButtonUI>
         </>
     );
 }

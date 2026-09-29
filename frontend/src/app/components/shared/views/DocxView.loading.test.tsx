@@ -7,6 +7,8 @@ import { DocxView } from "./DocxView";
 import { webcrypto } from "node:crypto";
 
 const exportDocx = vi.hoisted(() => vi.fn());
+const revealRevision = vi.hoisted(() => vi.fn());
+const revealText = vi.hoisted(() => vi.fn());
 const selectText = vi.hoisted(() => vi.fn());
 const clearTextSelection = vi.hoisted(() => vi.fn());
 const replaceVersion = vi.hoisted(() => vi.fn());
@@ -22,17 +24,17 @@ vi.mock("./EigenpalDocxRenderer", () => ({
     default: (props: DocxRendererProps) => <MockRenderer {...props} />,
 }));
 
-function MockRenderer({ bytes, mode, onChange, onReady, onError, onSave }: DocxRendererProps) {
+function MockRenderer({ bytes, mode, toolbarVisible = true, onChange, onReady, onError, onSave }: DocxRendererProps) {
     const scroll = useRef<HTMLDivElement>(null);
     const content = useRef<HTMLDivElement>(null);
     const revision = new Uint8Array(bytes)[0];
     useEffect(() => {
         if (revision === 99) onError();
-        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current, exportDocx, selectText, clearTextSelection });
+        else if (scroll.current && content.current) onReady({ scroll: scroll.current, content: content.current, exportDocx, selectText, clearTextSelection, revealRevision, revealText });
     }, [bytes, onReady, onError, revision]);
     return (
         <div ref={scroll} data-testid="renderer-scroll" data-mode={mode}>
-            {mode === "edit" && <div role="toolbar" aria-label="Document formatting"><button onClick={onChange}>Change document</button></div>}
+            {mode === "edit" && <div role="toolbar" aria-label="Document formatting" hidden={!toolbarVisible}><button onClick={onChange}>Change document</button></div>}
             <button onClick={() => void onSave?.()}>Save document</button>
             <div ref={content}>
                 <p>EigenPal preview</p><p>Document revision {revision}</p>
@@ -49,6 +51,8 @@ beforeEach(() => {
     vi.stubGlobal("crypto", webcrypto);
     replaceVersion.mockReset().mockResolvedValue({ id: "v1" });
     exportDocx.mockReset().mockResolvedValue(new Uint8Array([42]).buffer);
+    revealRevision.mockReset().mockReturnValue(false);
+    revealText.mockReset().mockReturnValue(false);
     selectText.mockReset().mockReturnValue(true);
     clearTextSelection.mockReset();
     vi.mocked(authenticatedFetch).mockReset();
@@ -58,6 +62,24 @@ beforeEach(() => {
     });
 });
 afterEach(() => { HTMLElement.prototype.scrollTo = originalScrollTo; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it("toggles the toolbar without replacing the editor, refetching bytes, or changing its mode", async () => {
+    const view = (toolbarVisible: boolean) => <DocxView documentId="toolbar-toggle" cacheBytes={false} defaultMode="edit" toolbarVisible={toolbarVisible} />;
+    const { rerender } = render(view(true));
+    const editor = await screen.findByTestId("renderer-scroll");
+    const toolbar = screen.getByRole("toolbar");
+    editor.scrollTop = 420;
+    const calls = vi.mocked(authenticatedFetch).mock.calls.length;
+    rerender(view(false));
+    expect(toolbar).not.toBeVisible();
+    expect(screen.getByTestId("renderer-scroll")).toBe(editor);
+    expect(editor.scrollTop).toBe(420);
+    expect(editor).toHaveAttribute("data-mode", "edit");
+    rerender(view(true));
+    expect(toolbar).toBeVisible();
+    expect(screen.getByTestId("renderer-scroll")).toBe(editor);
+    expect(authenticatedFetch).toHaveBeenCalledTimes(calls);
+});
 
 it("keeps the document visible during refresh, hides it on failure, and recovers", async () => {
     let fileResponse = () => Promise.resolve(new Response(new Uint8Array([1])));
@@ -170,6 +192,7 @@ it("keeps edits after a failed export and downloads the edited bytes on retry", 
         onSaveStateChange={onSaveStateChange}
         onDownloadReady={(handler) => { download = handler; }} />);
     await screen.findByText("EigenPal preview");
+    await waitFor(() => expect(download).toEqual(expect.any(Function)));
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     await act(async () => download?.());
     expect(await screen.findByText(/Your edits are still open/)).toBeVisible();
@@ -233,4 +256,20 @@ it("keeps the live editor through metadata refreshes after local editing begins"
     await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId("renderer-scroll")).toBe(editor);
     expect(screen.getByText("Document revision 1")).toBeVisible();
+});
+
+
+it("reveals unpainted edits by revision ID before attempting a text fallback", async () => {
+    revealRevision.mockReturnValue(true);
+    const edit = { key: "later-edit", ins_w_id: "80", del_w_id: "70", inserted_text: "Repeated edit" };
+    const { rerender } = render(<DocxView documentId="later-revision" cacheBytes={false} highlightEdit={edit} />);
+    await screen.findByText("EigenPal preview");
+    await waitFor(() => expect(revealRevision).toHaveBeenCalledWith(["80", "70"]));
+    expect(revealText).not.toHaveBeenCalled();
+    expect(selectText).not.toHaveBeenCalled();
+    // Legacy documents can still fall back to text when no ID is resolvable.
+    revealRevision.mockReturnValue(false);
+    revealText.mockReturnValue(true);
+    rerender(<DocxView documentId="later-revision" cacheBytes={false} highlightEdit={{ ...edit, key: "retry" }} />);
+    await waitFor(() => expect(revealText).toHaveBeenCalledWith("Repeated edit"));
 });

@@ -475,7 +475,7 @@ export function SpreadsheetView({
                 const curLeft = sbX.scrollLeft;
                 const curTop = sbY.scrollTop;
                 const viewW = sbX.clientWidth;
-                const viewH = sbY.clientHeight;
+                const viewH = Math.max(24, sbY.clientHeight);
                 const visible =
                     rect.x >= curLeft &&
                     rect.x + rect.w <= curLeft + viewW &&

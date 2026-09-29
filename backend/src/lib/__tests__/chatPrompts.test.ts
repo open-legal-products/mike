@@ -33,6 +33,23 @@ describe("buildSystemPrompt", () => {
         }
     });
 
+    it("requires renderable tables and formulas", () => {
+        for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
+            expect(prompt).toContain("RESPONSE FORMATTING:");
+            // The chat renders GFM pipe tables; grid tables show as raw text.
+            expect(prompt).toContain("use Markdown pipe tables only");
+            expect(prompt).toContain("Never draw tables with +, -, and | borders");
+            // Single-dollar math is disabled in the renderer so prices stay text.
+            expect(prompt).toContain("Do not use LaTeX for them.");
+            expect(prompt).toContain(
+                "wrap it in double dollar signs ($$ ... $$), never single dollar signs",
+            );
+            expect(prompt).toContain(
+                String.raw`$$\text{Price} = \frac{\$7{,}000{,}000}{\text{Shares}}$$`,
+            );
+        }
+    });
+
     it("never instructs the model to fabricate citation quotes", () => {
         for (const prompt of [buildSystemPrompt(true), buildSystemPrompt(false)]) {
             expect(prompt).not.toContain("TESTING ONLY");

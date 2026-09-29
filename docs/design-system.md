@@ -70,7 +70,9 @@ Dropdown primitives use `theme-dropdown-item` and
 `theme-dropdown-selected`. They consume the same general liquid-glass hover
 and selected color tokens as the liquid-glass state classes, so menu and
 surface interactions remain visually consistent without copied palette
-utilities.
+utilities. Text inputs and search fields inside `theme-dropdown-surface` use
+a flat grey fill with no glass shadow or blur, retaining their keyboard focus
+rings. The treatment applies to dropdowns and submenus in both web and add-in.
 
 ### shadcn semantic tokens
 
@@ -242,6 +244,7 @@ Compose the material classes through the established primitives and constants:
 | Primitive | Location | Use it for |
 | --- | --- | --- |
 | `PillButtonUI` | `shared/ui` | Primary action button (`tone`: black/white/blue/danger). |
+| `TextButtonUI` | `shared/ui` | Background-free actions, with optional icons and loading state. Use `textButtonUIClassName` from `TextButtonUI.styles` for links. No background, border, or shadow; hover changes text color. |
 | `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. |
 | `GlassIconButtonUI` | `shared/ui` | Circular glass icon button — modal close, panel dismiss. Requires `aria-label`. |
 | `GlassCardUI` | `shared/ui` | Canonical liquid-glass card surface. |

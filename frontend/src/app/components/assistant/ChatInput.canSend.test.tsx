@@ -1,5 +1,6 @@
 import { createRef } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import {
@@ -86,6 +87,43 @@ describe("ChatInput canSend gating", () => {
         window.localStorage.clear();
         vi.stubGlobal("ResizeObserver", ResizeObserverMock);
         mockProfile();
+    });
+
+    it.each(["", "  \n\t", "Replace this draft"])(
+        "trims pasted message edges while preserving internal formatting (draft: %j)",
+        async (draft) => {
+            const user = userEvent.setup();
+            renderInput(true);
+            const input = screen.getByRole("combobox") as HTMLTextAreaElement;
+            fireEvent.change(input, { target: { value: draft } });
+            await user.click(input);
+            input.setSelectionRange(0, draft.length);
+            await user.paste(" \n\tFirst paragraph\n\n    Indented line\nLast paragraph\n  ");
+            expect(input).toHaveValue("First paragraph\n\n    Indented line\nLast paragraph");
+            expect(input.selectionStart).toBe(input.value.length);
+            expect(input.selectionEnd).toBe(input.value.length);
+        },
+    );
+
+    it("preserves pasted spacing when inserting into an existing message", async () => {
+        const user = userEvent.setup();
+        renderInput(true);
+        const input = screen.getByRole("combobox") as HTMLTextAreaElement;
+        fireEvent.change(input, { target: { value: "Reviewclause" } });
+        await user.click(input);
+        input.setSelectionRange(6, 6);
+        await user.paste(" this ");
+        expect(input).toHaveValue("Review this clause");
+    });
+
+    it("ignores whitespace-only pasted messages and leaves Send disabled", async () => {
+        const user = userEvent.setup();
+        renderInput(true);
+        const input = screen.getByRole("combobox");
+        await user.click(input);
+        await user.paste(" \n\t ");
+        expect(input).toHaveValue("");
+        expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     });
 
     it("renders a read-only composer when canSend is false", () => {

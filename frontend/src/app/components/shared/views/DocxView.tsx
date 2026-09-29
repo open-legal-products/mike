@@ -29,7 +29,10 @@ interface Props {
     documentId: string;
     /** Initial mode for each document; the reader can change it in the viewer. */
     defaultMode?: DocxMode;
+    toolbarVisible?: boolean;
     filename?: string;
+    /** Explicit author for standalone previews; app viewers use the signed-in profile. */
+    author?: string;
     versionId?: string | null;
     displayUrl?: string | null;
     onReady?: () => void;
@@ -67,6 +70,10 @@ function focusHighlights(surface: DocxSurface, props: Props, scrollToMatch = tru
     if (!scrollToMatch) return revisions.length > 0;
     const anchor = revisions[0];
     if (!anchor) {
+        const revisionIds = [edit?.ins_w_id, edit?.del_w_id].filter(
+            (id): id is string => id != null,
+        );
+        if (revisionIds.length && surface.revealRevision?.(revisionIds)) return true;
         const text = edit?.inserted_text || edit?.deleted_text;
         if (text && surface.revealText?.(text)) {
             return true;
@@ -264,7 +271,7 @@ function DocxViewContent(props: Props) {
                     {bytes && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>
                             <Suspense fallback={null}>
-                                <DocxRenderer bytes={bytes} mode={initialMode} filename={props.filename} onChange={onChange} onSave={displayUrl ? download : autosave.save} onReady={onReady} onError={onError} />
+                                <DocxRenderer bytes={bytes} mode={initialMode} toolbarVisible={props.toolbarVisible} filename={props.filename} author={props.author} onChange={onChange} onSave={displayUrl ? download : autosave.save} onReady={onReady} onError={onError} />
                             </Suspense>
                         </DocxRenderBoundary>
                     )}

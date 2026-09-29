@@ -69,6 +69,7 @@ import { ProjectDocumentTabs } from "@/app/components/projects/ProjectDocumentTa
 import {
     ProjectDocumentPanels,
     type ProjectDocumentTab,
+    type ProjectDocumentAnnotation,
 } from "@/app/components/projects/ProjectDocumentPanels";
 import { useProjectDocumentRefresh } from "@/app/hooks/useProjectDocumentRefresh";
 import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
@@ -91,18 +92,21 @@ import { useSidebar } from "@/app/contexts/SidebarContext";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import type {
     Chat,
-    CitationQuote,
+    AssistantEvent,
+    PanelDocument,
     Citation,
     Document,
     EditAnnotation,
     Message,
     Project,
 } from "@/app/components/shared/types";
-import { expandCitationToEntries } from "@/app/components/shared/types";
+import { panelDocumentFromCitation, panelDocumentFromCaseEvent, panelDocumentType } from "@/app/components/shared/types";
+import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
+import { resolvePanelDocumentVersionResult } from "@/app/components/assistant/panelDocumentVersion";
+import type { DocumentContentMode } from "@/app/components/shared/DocumentContent";
 import {
     INITIAL_FOLDER_DELETE_DIALOG_STATE,
     clearDeletedDocumentId,
-    clearDeletedDocumentTarget,
     folderDeleteDialogReducer,
     removeDeletedDocumentTabs,
 } from "@/app/lib/folderDeleteState";
@@ -122,15 +126,6 @@ import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 interface Props {
     params: Promise<{ id: string; chatId?: string }>;
 }
-
-type EditScrollTarget = {
-    key: string;
-    documentId: string;
-    inserted_text?: string;
-    deleted_text?: string;
-    ins_w_id?: string | null;
-    del_w_id?: string | null;
-};
 
 const ICON_SIZE = 28;
 const GAP = 14;
@@ -356,15 +351,19 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // Tabs
     const [tabs, setTabs] = useState<ProjectDocumentTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
-    const [activeQuotes, setActiveQuotes] = useState<CitationQuote[] | null>(
-        null,
-    );
-    const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
     const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
-    const [editScrollTarget, setEditScrollTarget] =
-        useState<EditScrollTarget | null>(null);
-
+    const [resolvingEdits, setResolvingEdits] = useState<
+        Record<string, string>
+    >({});
+    const [resolvedEditStatuses, setResolvedEditStatuses] = useState<
+        Record<string, "accepted" | "rejected">
+    >({});
+    const openRequest = useRef(0);
     const activeTab = tabs.find((t) => t.documentId === activeTabId) ?? null;
+    const activeCitation =
+        activeTab?.annotation?.kind === "citation"
+            ? activeTab.annotation.citation
+            : null;
     const chatInputRef = useRef<ChatInputHandle | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
@@ -434,7 +433,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     Date.parse(chatActivityAt(existing) ?? "")
             ) {
                 byId.set(chat.id, chat);
-        }
+            }
         }
         return sortChatsByActivity(Array.from(byId.values()));
     }, [chats, projectChats, projectId]);
@@ -527,43 +526,42 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [activeChatId]);
 
     useEffect(() => {
-        if (activeTabId) return;
-        setActiveQuotes(null);
-        setActiveCitation(null);
-        setEditScrollTarget(null);
-    }, [activeTabId]);
-
-    useEffect(() => {
         setSidebarOpen(false);
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const projectRequestGeneration = useRef(0);
-    const refreshProject = useCallback(async (documentIdToRefresh?: string) => {
-        const generation = ++projectRequestGeneration.current;
-        try {
-            const loaded = await getProject(projectId);
-            if (generation === projectRequestGeneration.current) {
-                setProject(loaded);
+    const refreshProject = useCallback(
+        async (documentIdToRefresh?: string) => {
+            const generation = ++projectRequestGeneration.current;
+            try {
+                const loaded = await getProject(projectId);
+                if (generation === projectRequestGeneration.current) {
+                    setProject(loaded);
+                }
+            } catch {
+                // Keep the current workspace usable when a background check fails.
+            } finally {
+                // Settled either way: a failed fetch leaves the role unknown, and
+                // the composer should come back read-only rather than stay hidden.
+                if (generation === projectRequestGeneration.current) {
+                    setProjectLoaded(true);
+                }
+                if (documentIdToRefresh) {
+                    setTabs((current) =>
+                        current.map((tab) =>
+                            tab.documentId === documentIdToRefresh
+                                ? {
+                                      ...tab,
+                                      refetchKey: (tab.refetchKey ?? 0) + 1,
+                                  }
+                                : tab,
+                        ),
+                    );
+                }
             }
-        } catch {
-            // Keep the current workspace usable when a background check fails.
-        } finally {
-            // Settled either way: a failed fetch leaves the role unknown, and
-            // the composer should come back read-only rather than stay hidden.
-            if (generation === projectRequestGeneration.current) {
-                setProjectLoaded(true);
-            }
-            if (documentIdToRefresh) {
-                setTabs((current) =>
-                    current.map((tab) =>
-                        tab.documentId === documentIdToRefresh
-                            ? { ...tab, refetchKey: (tab.refetchKey ?? 0) + 1 }
-                            : tab,
-                    ),
-                );
-            }
-        }
-    }, [projectId]);
+        },
+        [projectId],
+    );
     useEffect(() => {
         return () => {
             projectRequestGeneration.current += 1;
@@ -738,67 +736,77 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     function openTab(
         docId: string,
         filename: string,
-        quotes?: CitationQuote[],
+        annotation?: ProjectDocumentAnnotation,
         versionId?: string | null,
         fileType?: string | null,
+        sourceDocument?: PanelDocument,
     ) {
+        openRequest.current += 1;
         setTabs((prev) => {
             const existing = prev.find((t) => t.documentId === docId);
             if (existing) {
-                if (
-                    (versionId !== undefined &&
-                        existing.versionId !== versionId) ||
-                    (fileType !== undefined && existing.fileType !== fileType)
-                ) {
-                    return prev.map((t) =>
-                        t.documentId === docId
-                            ? {
-                                  ...t,
-                                  versionId:
-                                      versionId === undefined
-                                          ? t.versionId
-                                          : versionId,
-                                  fileType: fileType ?? t.fileType,
-                              }
-                            : t,
-                    );
-                }
-                return prev;
+                const versionChanged =
+                    versionId !== undefined && existing.versionId !== versionId;
+                return prev.map((tab) =>
+                    tab.documentId === docId
+                        ? {
+                              ...tab,
+                              filename,
+                              versionId:
+                                  versionId === undefined
+                                      ? tab.versionId
+                                      : versionId,
+                              fileType: fileType ?? tab.fileType,
+                              sourceDocument:
+                                  sourceDocument ??
+                                  (versionChanged
+                                      ? undefined
+                                      : tab.sourceDocument),
+                              annotation,
+                              warning: versionChanged ? null : tab.warning,
+                          }
+                        : tab,
+                );
             }
             return [
                 ...prev,
-                { documentId: docId, filename, versionId, fileType },
+                {
+                    documentId: docId,
+                    filename,
+                    versionId,
+                    fileType,
+                    sourceDocument,
+                    annotation,
+                },
             ];
         });
         setActiveTabId(docId);
-        setActiveQuotes(quotes && quotes.length ? quotes : null);
-        setActiveCitation(null);
         setSelectedDocId(docId);
     }
 
     function closeTab(docId: string) {
+        openRequest.current += 1;
         if (activeTabId === docId) {
             const idx = tabs.findIndex((tab) => tab.documentId === docId);
-            const fallback = idx < 0 ? null : tabs[idx + 1] ?? tabs[idx - 1] ?? null;
+            const fallback =
+                idx < 0 ? null : (tabs[idx + 1] ?? tabs[idx - 1] ?? null);
             setActiveTabId(fallback?.documentId ?? null);
-            setActiveQuotes(null);
-            setActiveCitation(null);
             setSelectedDocId(fallback?.documentId ?? null);
         }
         setTabs((prev) => prev.filter((tab) => tab.documentId !== docId));
     }
 
     function switchTab(docId: string) {
+        openRequest.current += 1;
         setActiveTabId(docId);
-        setActiveQuotes(null);
-        setActiveCitation(null);
         setSelectedDocId(docId);
     }
 
     // ── Handlers ──────────────────────────────────────────────────────────────
     const handleSubmit = useCallback(
         (message: Message, options?: Parameters<typeof handleChat>[1]) => {
-            if (!activeTab) return handleChat(message, options);
+            if (!activeTab || activeTab.sourceDocument?.type === "case")
+                return handleChat(message, options);
             return handleChat(message, {
                 ...options,
                 displayedDoc: {
@@ -814,19 +822,62 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         openTab(doc.id, doc.filename, undefined, null, doc.file_type);
     };
 
-    const handleCitationClick = (citation: Citation) => {
-        if (activeCitation === citation) {
-            setActiveCitation(null);
-            setActiveQuotes(null);
+    const handleCloseAnnotation = (documentId: string) => {
+        openRequest.current += 1;
+        setTabs((current) =>
+            current.map((tab) =>
+                tab.documentId === documentId
+                    ? { ...tab, annotation: undefined }
+                    : tab,
+            ),
+        );
+    };
+
+    const handleCitationClick = async (
+        citation: Citation,
+        showQuotes = true,
+    ) => {
+        if (showQuotes && activeCitation === citation && activeTab) {
+            handleCloseAnnotation(activeTab.documentId);
             return;
         }
-        if (citation.kind === "case") return;
-        openTab(
-            citation.document_id,
-            citation.filename,
-            expandCitationToEntries(citation),
+        const request = ++openRequest.current;
+        const result = await resolvePanelDocumentVersionResult(
+            panelDocumentFromCitation(citation, showQuotes),
         );
-        setActiveCitation(citation);
+        if (request !== openRequest.current) return;
+        if (result.status !== "resolved") {
+            setDocumentDropError(
+                result.status === "denied"
+                    ? "This document is no longer available."
+                    : "This document could not be opened. Please try again.",
+            );
+            return;
+        }
+        const document = result.document;
+        openTab(
+            document.document_id,
+            document.title,
+            showQuotes ? { kind: "citation", citation } : undefined,
+            document.version_id,
+            document.type,
+            document,
+        );
+    };
+
+    const handleCaseClick = (
+        event: Extract<AssistantEvent, { type: "case_citation" }>,
+    ) => {
+        const document = panelDocumentFromCaseEvent(event);
+        if (document)
+            openTab(
+                document.document_id,
+                document.title,
+                undefined,
+                null,
+                document.type,
+                document,
+            );
     };
 
     const handleOpenDocument = (args: {
@@ -835,19 +886,49 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         versionId: string | null;
         versionNumber: number | null;
     }) => {
-        openTab(args.documentId, args.filename, undefined, args.versionId);
+        openTab(
+            args.documentId,
+            args.filename,
+            undefined,
+            args.versionId,
+            undefined,
+            {
+                document_id: args.documentId,
+                title: args.filename,
+                type: panelDocumentType(args.filename),
+                version_id: args.versionId,
+                version_number: args.versionNumber,
+                quotes: [],
+                metadata: [],
+            },
+        );
     };
 
-    const handleEditViewClick = (ann: EditAnnotation, filename: string) => {
-        openTab(ann.document_id, filename, undefined, ann.version_id ?? null);
-        setEditScrollTarget({
-            key: `${ann.edit_id}-${Date.now()}`,
-            documentId: ann.document_id,
-            inserted_text: ann.inserted_text,
-            deleted_text: ann.deleted_text,
-            ins_w_id: ann.ins_w_id ?? null,
-            del_w_id: ann.del_w_id ?? null,
-        });
+    const handleEditViewClick = (
+        ann: EditAnnotation,
+        filename: string,
+        changeNumber?: number,
+    ) => {
+        const edit = {
+            ...ann,
+            status: resolvedEditStatuses[ann.edit_id] ?? ann.status,
+        };
+        openTab(
+            ann.document_id,
+            filename,
+            { kind: "edit", edit, changeNumber },
+            ann.version_id ?? null,
+            undefined,
+            {
+                document_id: ann.document_id,
+                title: filename,
+                type: panelDocumentType(filename),
+                version_id: ann.version_id,
+                version_number: ann.version_number,
+                metadata: [],
+                quotes: [],
+            },
+        );
     };
 
     const patchTab = useCallback(
@@ -861,7 +942,27 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         [],
     );
 
-    const handleEditError = (args: { documentId: string; message: string }) => {
+    const finishResolvingEdit = (editId: string) =>
+        setResolvingEdits((current) => {
+            const next = { ...current };
+            delete next[editId];
+            return next;
+        });
+    const handleEditResolveStart = (args: {
+        editId: string;
+        documentId: string;
+    }) => {
+        setResolvingEdits((current) => ({
+            ...current,
+            [args.editId]: args.documentId,
+        }));
+    };
+    const handleEditError = (args: {
+        editId: string;
+        documentId: string;
+        message: string;
+    }) => {
+        finishResolvingEdit(args.editId);
         patchTab(args.documentId, { warning: args.message });
     };
 
@@ -872,7 +973,31 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         [patchTab],
     );
 
-    const handleEditResolved = (args: { documentId: string }) => {
+    const handleEditResolved: NonNullable<
+        Extract<DocumentContentMode, { kind: "edit" }>["onResolved"]
+    > = (args) => {
+        finishResolvingEdit(args.editId);
+        setResolvedEditStatuses((current) => ({
+            ...current,
+            [args.editId]: args.status,
+        }));
+        setTabs((current) =>
+            current.map((tab) =>
+                tab.annotation?.kind === "edit" &&
+                tab.annotation.edit.edit_id === args.editId
+                    ? {
+                          ...tab,
+                          annotation: {
+                              ...tab.annotation,
+                              edit: {
+                                  ...tab.annotation.edit,
+                                  status: args.status,
+                              },
+                          },
+                      }
+                    : tab,
+            ),
+        );
         invalidateDocxBytes(args.documentId);
         // Apply metadata and the forced refresh together to avoid downloading twice.
         void refreshProject(args.documentId);
@@ -1397,9 +1522,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             setSelectedDocId((currentId) =>
                 clearDeletedDocumentId(currentId, deletedDocumentIds),
             );
-            setEditScrollTarget((currentTarget) =>
-                clearDeletedDocumentTarget(currentTarget, deletedDocumentIds),
-            );
             dispatchFolderDeleteDialog({
                 type: "complete",
                 folderId: pending.folder.id,
@@ -1489,10 +1611,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         setTabs((prev) => prev.filter((t) => t.documentId !== docId));
         if (activeTabId === docId) {
             setActiveTabId(null);
-            setActiveQuotes(null);
-            setActiveCitation(null);
             setSelectedDocId(null);
-            setEditScrollTarget(null);
         }
     };
 
@@ -1756,8 +1875,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 folders={project?.folders ?? []}
                                 selectedDocId={selectedDocId}
                                 onDocClick={handleDocClick}
-                                onDownloadDoc={explorerDownload.downloadDocument}
-                                onDownloadFolder={explorerDownload.downloadFolder}
+                                onDownloadDoc={
+                                    explorerDownload.downloadDocument
+                                }
+                                onDownloadFolder={
+                                    explorerDownload.downloadFolder
+                                }
                                 downloading={explorerDownload.downloading}
                                 onAddToChat={(document) =>
                                     chatInputRef.current?.addDoc(document)
@@ -1840,11 +1963,17 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                 )}
                 <ProjectDocumentTabs
-                    onAddToChat={(document) => chatInputRef.current?.addDoc(document)}
+                    onAddToChat={(document) =>
+                        chatInputRef.current?.addDoc(document)
+                    }
                     addToChatDisabled={!canSendChat}
                     onDownloadDoc={(document) => {
-                        const download = documentDownloads.current.get(document.id);
-                        return download ? download() : explorerDownload.downloadDocument(document);
+                        const download = documentDownloads.current.get(
+                            document.id,
+                        );
+                        return download
+                            ? download()
+                            : explorerDownload.downloadDocument(document, tabs.find((tab) => tab.documentId === document.id)?.versionId);
                     }}
                     downloading={explorerDownload.downloading}
                     onRenameDoc={handleRenameDoc}
@@ -1868,14 +1997,48 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 />
                 <ProjectDocumentPanels
                     onDownloadReady={(documentId, download) => {
-                        if (download) documentDownloads.current.set(documentId, download);
+                        if (download)
+                            documentDownloads.current.set(documentId, download);
                         else documentDownloads.current.delete(documentId);
                     }}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
-                    quotes={activeQuotes ?? undefined}
-                    highlightEdit={editScrollTarget}
+                    onVersionChange={(documentId, version) => {
+                        openRequest.current += 1;
+                        setTabs((current) =>
+                            current.map((tab) => {
+                                if (tab.documentId !== documentId) return tab;
+                                const document = panelDocumentAtVersion(
+                                    tab.sourceDocument ?? {
+                                        document_id: documentId,
+                                        title: tab.filename,
+                                        type: panelDocumentType(tab.filename),
+                                        metadata: [],
+                                        quotes: [],
+                                    },
+                                    version,
+                                );
+                                return {
+                                    ...tab,
+                                    filename: document.title,
+                                    fileType: document.type,
+                                    versionId: version.id,
+                                    sourceDocument: document,
+                                    annotation: undefined,
+                                    warning: null,
+                                };
+                            }),
+                        );
+                    }}
+                    onCloseAnnotation={handleCloseAnnotation}
+                    isDocumentReloading={(documentId) =>
+                        Object.values(resolvingEdits).includes(documentId)
+                    }
+                    isEditReloading={(editId) => !!resolvingEdits[editId]}
+                    onEditResolveStart={handleEditResolveStart}
+                    onEditResolved={handleEditResolved}
+                    onEditError={handleEditError}
                     onWarningDismiss={dismissTabWarning}
                 />
             </div>
@@ -1953,7 +2116,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                             <HeaderActionsMenu
                                 triggerClassName="h-6 w-6"
                                 onCloseAutoFocus={(event) => {
-                                    if (editingChatTitle) event.preventDefault();
+                                    if (editingChatTitle)
+                                        event.preventDefault();
                                 }}
                                 items={[
                                     {
@@ -1986,7 +2150,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         variant: "danger" as const,
                                     },
                                 ].filter((item) =>
-                                    activeChatId ? true : item.label === "Memory",
+                                    activeChatId
+                                        ? true
+                                        : item.label === "Memory",
                                 )}
                             />
                         }
@@ -2077,12 +2243,33 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         citationStatus={msg.citationStatus}
                                         activeCitation={activeCitation}
                                         onCitationClick={handleCitationClick}
+                                        onCaseClick={handleCaseClick}
+                                        onOpenCitationSource={(citation) => {
+                                            void handleCitationClick(
+                                                citation,
+                                                false,
+                                            );
+                                        }}
                                         minHeight={
                                             i === lastAssistantIdx
                                                 ? minHeight
                                                 : "0px"
                                         }
                                         onEditViewClick={handleEditViewClick}
+                                        onEditResolveStart={
+                                            handleEditResolveStart
+                                        }
+                                        isEditReloading={(editId) =>
+                                            !!resolvingEdits[editId]
+                                        }
+                                        isDocReloading={(documentId) =>
+                                            Object.values(
+                                                resolvingEdits,
+                                            ).includes(documentId)
+                                        }
+                                        resolvedEditStatuses={
+                                            resolvedEditStatuses
+                                        }
                                         onOpenDocument={handleOpenDocument}
                                         onEditError={handleEditError}
                                         onEditResolved={handleEditResolved}

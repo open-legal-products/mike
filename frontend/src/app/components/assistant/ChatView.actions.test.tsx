@@ -182,6 +182,18 @@ beforeEach(() => {
     vi.clearAllMocks();
     spreadsheet.id = "excel-1";
     spreadsheet.filename = "Budget.xlsx";
+    vi.mocked(listDocumentVersions).mockResolvedValue({
+        current_version_id: "excel-v4",
+        versions: [
+            {
+                id: "excel-v4",
+                version_number: 4,
+                filename: "Budget.xlsx",
+                source: "upload",
+                created_at: "2026-09-26",
+            },
+        ],
+    });
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
         configurable: true,
@@ -344,7 +356,7 @@ describe("Excel attachment previews", () => {
             expect(viewer).toHaveAttribute("data-document-id", "excel-1");
             expect(viewer).toHaveAttribute("data-version-id", "excel-v4");
             expect(screen.queryByTestId("pdf-viewer")).not.toBeInTheDocument();
-            expect(listDocumentVersions).not.toHaveBeenCalled();
+            expect(listDocumentVersions).toHaveBeenCalledWith("excel-1");
             // Repeated pill clicks activate the existing tab.
             fireEvent.click(
                 screen.getByRole("button", { name: "Open Budget.xlsx" }),

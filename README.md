@@ -111,6 +111,7 @@ configure upload credentials.
 - [Safe local testing](docs/safe-local-testing.md)
 - [End-to-end testing and CI](docs/e2e-ci.md)
 - [Contributing](CONTRIBUTING.md)
+- [Open-source credits](CREDITS.md)
 - [Security policy](SECURITY.md)
 
 ## System workflows

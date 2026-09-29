@@ -56,6 +56,7 @@ vi.mock("@fortune-sheet/react", () => ({
                     getAllSheets: () => [{ ...data[0], zoomRatio: zoom }],
                     getSelection: () => [{ row: [2, 2], column: [3, 3] }],
                     setSelection: vi.fn(),
+                    activateSheet: vi.fn(),
                     scroll: ({
                         scrollLeft,
                         scrollTop,
@@ -109,6 +110,30 @@ beforeEach(() => {
     );
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("scrolls a cited cell into the available canvas without remounting the workbook", async () => {
+    const highlights = [{ sheet: "Budget", cell: "B21" }];
+    const view = (selected = false) => (
+        <SpreadsheetView documentId="sheet" highlightCells={selected ? highlights : undefined} />
+    );
+    const { rerender } = render(view());
+    await screen.findByText("Zoom 1");
+    const x = screen.getByTestId("x");
+    const y = screen.getByTestId("y");
+    Object.defineProperty(x, "clientWidth", {
+        configurable: true,
+        value: 1000,
+    });
+    Object.defineProperty(y, "clientHeight", {
+        configurable: true,
+        value: 300,
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 220)));
+    expect(y.scrollTop).toBe(0);
+    rerender(view(true));
+    await waitFor(() => expect(y.scrollTop).toBe(240));
+    expect(state.mounts).toHaveBeenCalledOnce();
+});
 
 it("retains parsed data and viewport, and removes global workbook input handlers while inactive", async () => {
     const { rerender } = render(<SpreadsheetView documentId="sheet" />);

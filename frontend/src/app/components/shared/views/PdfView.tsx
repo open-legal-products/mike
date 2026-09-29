@@ -777,6 +777,7 @@ export function PdfView({
         >
             <div
                 ref={scrollContainerRef}
+                data-document-scroll-viewport
                 className="flex-1 overflow-auto px-3 pt-5 pb-3 [scrollbar-gutter:stable]"
             >
                 {loading && (

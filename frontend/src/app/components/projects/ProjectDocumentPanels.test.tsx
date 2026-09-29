@@ -1,22 +1,16 @@
 import { useEffect, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { getDocumentFile } from "@/app/lib/mikeApi";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import { useFetchSingleDoc } from "@/app/hooks/useFetchSingleDoc";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import type { Document } from "@/app/components/shared/types";
-import type { DocxSaveState } from "@/app/components/shared/views/DocxRenderer.types";
 import {
     ProjectDocumentPanels,
     type ProjectDocumentTab,
 } from "./ProjectDocumentPanels";
 
 const localExport = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock("@/app/lib/mikeApi", async (original) => ({
-    ...await original<typeof import("@/app/lib/mikeApi")>(),
-    getDocumentFile: vi.fn(),
-}));
 vi.mock("@/app/lib/authEvents", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("./ProjectWorkspaceTips", () => ({
     ProjectWorkspaceTips: () => <p>Open a document</p>,
@@ -75,7 +69,6 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         cacheBytes,
         defaultMode,
         onDownloadReady,
-        onSaveStateChange,
     }: {
         documentId: string;
         versionId?: string | null;
@@ -83,7 +76,6 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         cacheBytes: boolean;
         defaultMode: string;
         onDownloadReady?: (download: (() => Promise<void>) | null) => void;
-        onSaveStateChange?: (id: string, state: DocxSaveState | null) => void;
     }) => {
         const { bytes } = useFetchDocxBytes(
             documentId,
@@ -97,11 +89,6 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
             onDownloadReady?.(localExport);
             return () => onDownloadReady?.(null);
         }, [bytes, onDownloadReady]);
-        useEffect(() => {
-            if (!bytes) return;
-            onSaveStateChange?.(documentId, { ready: true, dirty: true, status: "pending", error: null });
-            return () => onSaveStateChange?.(documentId, null);
-        }, [bytes, documentId, onSaveStateChange]);
         return <div data-testid="docx-mode" data-mode={defaultMode}><Viewer id={documentId} loaded={!!bytes} /></div>;
     },
 }));
@@ -120,7 +107,6 @@ const documents = tabs.map((tab) => ({
 const dismiss = vi.fn();
 beforeEach(() => {
     localExport.mockClear();
-    vi.mocked(getDocumentFile).mockReset();
     vi.mocked(authenticatedFetch)
         .mockReset()
         .mockImplementation(
@@ -273,41 +259,20 @@ it("detects content changes to the same current version, including a pinned curr
 });
 
 
-it.each(["Draft.docx", "Brief.pdf", "Budget.xlsx", "Slides.pptx", "Legacy.doc"])("shows the shared compact title bar for %s", (filename) => {
+it.each(["Draft.docx", "Brief.pdf", "Budget.xlsx", "Slides.pptx", "Legacy.doc"])("renders %s with the shared compact title bar", (filename) => {
     render(panels([{ documentId: "file", filename }], "file"));
-    expect(screen.getByRole("heading", { name: filename })).toHaveClass("text-sm", "font-medium");
+    expect(screen.getByRole("heading", { name: filename })).toHaveClass("text-xs", "font-normal");
     expect(screen.getByRole("button", { name: "Download" })).toBeVisible();
-    expect(screen.getByRole("tabpanel").querySelector('img[src*="/icons/file-types/"]')).not.toBeNull();
+    expect(screen.getByRole("tabpanel").querySelector('img[src*="/icons/file-types/"]')).toHaveClass("h-3.5", "w-3.5");
 });
 
-it("exports open DOCX edits from the title bar instead of downloading server bytes", async () => {
-    render(panels(tabs, "docx"));
-    await waitFor(() => expect(screen.getAllByText("Loaded")).toHaveLength(3));
+it("retains the live DOCX export for the title and tab download actions", async () => {
+    const onDownloadReady = vi.fn();
+    render(<ProjectDocumentPanels tabs={tabs} documents={documents} activeTabId="docx"
+        onWarningDismiss={dismiss} onDownloadReady={onDownloadReady} />);
+    await waitFor(() => expect(onDownloadReady).toHaveBeenCalledWith("docx", localExport));
+    await onDownloadReady.mock.calls.find(([id, download]) => id === "docx" && download)?.[1]();
+    expect(localExport).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    await waitFor(() => expect(localExport).toHaveBeenCalledOnce());
-    expect(getDocumentFile).not.toHaveBeenCalled();
-    expect(screen.getByRole("status")).toHaveTextContent("Saving…");
-    expect(screen.getByRole("status").parentElement).toBe(screen.getByRole("button", { name: "Download" }).parentElement);
-    expect(screen.queryByRole("button", { name: /sav/i })).toBeNull();
-});
-
-it("downloads the PDF version shown in the viewer's title bar", async () => {
-    vi.mocked(getDocumentFile).mockResolvedValue({ blob: new Blob(["synthetic"]), filename: "Historical.pdf" });
-    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:document");
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    render(panels([{ documentId: "pdf", filename: "Historical.pdf", versionId: "historical" }], "pdf"));
-    fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    await waitFor(() => expect(click).toHaveBeenCalledOnce());
-    expect(getDocumentFile).toHaveBeenCalledWith("pdf", "historical");
-    expect(createUrl).toHaveBeenCalledWith(expect.any(Blob));
-    expect(click.mock.instances[0]).toHaveAttribute("download", "Historical.pdf");
-});
-
-it("keeps the title and shows a safe message when a download fails", async () => {
-    vi.mocked(getDocumentFile).mockRejectedValue(new Error("private storage details"));
-    render(panels(tabs, "pdf"));
-    fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("This file could not be downloaded. Please try again.");
-    expect(screen.queryByText("private storage details")).toBeNull();
-    expect(screen.getByRole("heading", { name: "Brief.pdf" })).toBeVisible();
+    await waitFor(() => expect(localExport).toHaveBeenCalledTimes(2));
 });
