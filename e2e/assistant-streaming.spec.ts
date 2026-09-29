@@ -143,15 +143,15 @@ for (const scope of ["assistant", "project", "tabular"] as const) {
             }
 
             if (scope === "assistant") {
-            const content = page.locator('[data-slot="chat-messages-content"]');
-            await content.evaluate((element) => {
-                const viewport = element.parentElement!;
-                viewport.scrollTop = 0;
-                viewport.dispatchEvent(new Event("scroll"));
-            });
-            await expect(page.getByRole("button", { name: "Scroll to bottom", exact: true })).toBeVisible();
-            await page.getByRole("button", { name: "Scroll to bottom", exact: true }).click();
-            await expect(page.getByRole("button", { name: "Scroll to bottom", exact: true })).toBeHidden();
+                const content = page.locator('[data-slot="chat-messages-content"]');
+                await content.evaluate((element) => {
+                    const viewport = element.parentElement!;
+                    viewport.scrollTop = 0;
+                    viewport.dispatchEvent(new Event("scroll"));
+                });
+                await expect(page.getByRole("button", { name: "Scroll to bottom", exact: true })).toBeVisible();
+                await page.getByRole("button", { name: "Scroll to bottom", exact: true }).click();
+                await expect(page.getByRole("button", { name: "Scroll to bottom", exact: true })).toBeHidden();
             }
             expect(errors).toEqual([]);
         });

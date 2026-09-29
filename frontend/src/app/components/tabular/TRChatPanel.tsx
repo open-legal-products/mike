@@ -678,7 +678,12 @@ export function TRChatPanel({
     // retires a manually selected history request when the panel unmounts.
     useEffect(() => {
         if (initialChatId) void loadHistory(initialChatId);
-        return () => { historyRequestGeneration.current++; };
+        return () => {
+            // Retire the latest request, including selections made since mount.
+            // This ref is a counter, not a DOM node captured for cleanup.
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            historyRequestGeneration.current++;
+        };
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Fill in title once chats list arrives

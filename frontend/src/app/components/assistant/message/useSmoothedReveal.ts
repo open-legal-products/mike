@@ -72,8 +72,8 @@ export function useSmoothedReveal(text: string, active: boolean): string {
         };
     }, []);
 
-    // Once the stream ends, render the authoritative text immediately. Return the
-    // authoritative value on this render, before the effect syncs the cursor.
+    // Once the stream ends, render the authoritative text immediately, before
+    // the effect synchronizes the animation cursor.
     if (!active) return text;
 
     return text.slice(0, Math.min(revealedInt, text.length));
