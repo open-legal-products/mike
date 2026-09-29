@@ -1,5 +1,32 @@
-import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_ITERATIONS, stopNotice } from "./aiSdk";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_MAX_ITERATIONS,
+  configuredMaxOutputTokens,
+  stopNotice,
+} from "./aiSdk";
+
+describe("configuredMaxOutputTokens", () => {
+  afterEach(() => {
+    delete process.env.LLM_MAX_OUTPUT_TOKENS;
+  });
+
+  it("leaves the limit to the provider when unset", () => {
+    delete process.env.LLM_MAX_OUTPUT_TOKENS;
+    expect(configuredMaxOutputTokens()).toBeUndefined();
+  });
+
+  it("uses an operator-set limit", () => {
+    process.env.LLM_MAX_OUTPUT_TOKENS = "32000";
+    expect(configuredMaxOutputTokens()).toBe(32_000);
+  });
+
+  it("ignores an unusable value rather than sending it upstream", () => {
+    for (const value of ["", "0", "-1", "banana", "1.5"]) {
+      process.env.LLM_MAX_OUTPUT_TOKENS = value;
+      expect(configuredMaxOutputTokens()).toBeUndefined();
+    }
+  });
+});
 
 describe("stopNotice", () => {
   it("says nothing when the model finished on its own", () => {

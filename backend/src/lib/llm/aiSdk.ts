@@ -13,7 +13,19 @@ import type {
 import { toProviderStreamError } from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
-const MAX_OUTPUT_TOKENS = 16_384;
+/**
+ * Per-step output limit, or undefined to leave it to the provider.
+ *
+ * Unset by default: each provider applies its own model-aware ceiling
+ * (`@ai-sdk/anthropic` fills in the model's maximum for the required
+ * `max_tokens`), which a single shared number cannot track. Operators who want
+ * a backstop set `LLM_MAX_OUTPUT_TOKENS`; an unusable value is ignored rather
+ * than sent upstream.
+ */
+export function configuredMaxOutputTokens(): number | undefined {
+  const value = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
 
 /**
  * Tool-call rounds allowed per turn before `stopWhen` halts the run.
@@ -410,7 +422,7 @@ export async function streamAiSdk(
         ? { providerOptions: cacheHints.providerOptions }
         : {}),
       tools,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens: configuredMaxOutputTokens(),
       stopWhen: sdk.stepCountIs(maxIterations),
       abortSignal: internalAbort.signal,
       reasoning:
