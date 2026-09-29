@@ -28,7 +28,8 @@ export default defineConfig({
   retries: process.env.REACT_STRESS === "1" ? 0 : process.env.CI ? 2 : 0,
   timeout: process.env.REACT_STRESS === "1" ? 90_000 : 30_000,
   expect: { timeout: process.env.REACT_STRESS === "1" ? 10_000 : 5_000 },
-  reporter: process.env.CI ? "github" : "list",
+  // Keep per-test progress visible during the longer development stress run.
+  reporter: process.env.CI ? [["github"], ["list"]] : "list",
 
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? BASE_URL,

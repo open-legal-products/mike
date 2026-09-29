@@ -31,7 +31,7 @@ export default defineConfig({
        HTML report; `open: "never"` stops the reporter from trying to launch a
        browser on the CI box after the run. */
     reporter: process.env.CI
-        ? [["github"], ["html", { open: "never" }]]
+        ? [["github"], ["list"], ["html", { open: "never" }]]
         : "list",
     /* Shared settings for all the projects below */
     use: {
