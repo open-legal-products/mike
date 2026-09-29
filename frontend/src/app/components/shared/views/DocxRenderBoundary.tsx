@@ -20,4 +20,3 @@ export class DocxRenderBoundary extends Component<
         return this.state.failed ? null : this.props.children;
     }
 }
-
