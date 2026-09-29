@@ -24,7 +24,8 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  // A timing-dependent stress failure must not become green on retry.
+  retries: process.env.REACT_STRESS === "1" ? 0 : process.env.CI ? 2 : 0,
   timeout: process.env.REACT_STRESS === "1" ? 90_000 : 30_000,
   expect: { timeout: process.env.REACT_STRESS === "1" ? 10_000 : 5_000 },
   reporter: process.env.CI ? "github" : "list",
@@ -32,7 +33,7 @@ export default defineConfig({
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? BASE_URL,
     screenshot: "only-on-failure",
-    trace: "on-first-retry",
+    trace: process.env.REACT_STRESS === "1" ? "retain-on-failure" : "on-first-retry",
     // PW_VIDEO=1 records a webm per test (for demo/review reels); off by
     // default because videos slow the suite and bloat CI artifacts.
     video: process.env.PW_VIDEO === "1" ? "on" : "off",

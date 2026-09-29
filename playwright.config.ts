@@ -22,8 +22,8 @@ export default defineConfig({
        default: new assertions inherit it, and only genuinely slower waits need
        to spell out an override. */
     expect: { timeout: 10_000 },
-    /* Retry on CI only */
-    retries: process.env.CI ? 2 : 0,
+    /* Stress failures must remain failures even if their timing is intermittent. */
+    retries: process.env.REACT_STRESS === "1" ? 0 : process.env.CI ? 2 : 0,
     /* Reporter. On CI, "github" alone would REPLACE Playwright's default html
        reporter, so playwright-report/ would never be written and the workflow's
        artifact upload (docs/e2e-ci.md, "Failure artifacts") would have nothing
@@ -36,7 +36,7 @@ export default defineConfig({
     /* Shared settings for all the projects below */
     use: {
         baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
-        trace: "on-first-retry",
+        trace: process.env.REACT_STRESS === "1" ? "retain-on-failure" : "on-first-retry",
         screenshot: "only-on-failure",
     },
 

@@ -129,6 +129,8 @@ diagnostics. Word runs its complete hermetic suite in both build modes and both
 engines; WebKit has no equivalent CDP CPU-throttling control. Existing error-path
 tests may intentionally log other errors; the focused streaming/history tests
 additionally fail on every console error and uncaught exception.
+Stress mode disables retries and retains failed traces, so an intermittent loop
+cannot become a passing check merely because a retry uses different timing.
 
 `e2e/tabular-chat-lifecycle.spec.ts` switches sixteen times while history requests
 are held, then releases long transcripts in reverse order. The latest selection

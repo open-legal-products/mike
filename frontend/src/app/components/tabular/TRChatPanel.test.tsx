@@ -133,6 +133,49 @@ describe("TRChatPanel header", () => {
         expect(screen.queryByText("Selection 0")).not.toBeInTheDocument();
     });
 
+    it("ignores an old history failure while the latest selection is still loading", async () => {
+        type History = Awaited<ReturnType<typeof getTabularChatMessages>>;
+        let rejectInitial!: (error: Error) => void;
+        let resolveLatest!: (messages: History) => void;
+        vi.mocked(getTabularChatMessages)
+            .mockReturnValueOnce(new Promise<History>((_resolve, reject) => { rejectInitial = reject; }))
+            .mockReturnValueOnce(new Promise<History>((resolve) => { resolveLatest = resolve; }));
+        render(<TRChatPanel reviewId="review-1" initialChatId="chat-1" onCitationClick={vi.fn()} />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByRole("button", { name: "Current draft" }));
+        await user.click(screen.getByRole("menuitem", { name: /Earlier advice/ }));
+        await act(async () => rejectInitial(new Error("Old request failed")));
+        expect(screen.queryByText("Chat unavailable")).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        // An obsolete finally handler must not clear the latest loading state.
+        expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveAttribute("aria-disabled", "true");
+        await user.keyboard("{Escape}");
+        await act(async () => resolveLatest([{ id: "current", chat_id: "chat-2", role: "user", content: "Latest history", created_at: "2026-09-29" }]));
+        expect(screen.getByText("Latest history")).toBeInTheDocument();
+    });
+
+    it.each(["success", "failure"] as const)("keeps a new chat empty after the previous history returns %s", async (outcome) => {
+        type History = Awaited<ReturnType<typeof getTabularChatMessages>>;
+        let resolveHistory!: (messages: History) => void;
+        let rejectHistory!: (error: Error) => void;
+        vi.mocked(getTabularChatMessages).mockReturnValueOnce(new Promise<History>((resolve, reject) => {
+            resolveHistory = resolve;
+            rejectHistory = reject;
+        }));
+        render(<TRChatPanel reviewId="review-1" initialChatId="chat-1" onCitationClick={vi.fn()} />);
+        const user = userEvent.setup();
+        await screen.findByRole("button", { name: "Current draft" });
+        await user.click(screen.getByRole("button", { name: "New chat" }));
+        await act(async () => {
+            if (outcome === "success") resolveHistory([{ id: "old", chat_id: "chat-1", role: "user", content: "Retired history", created_at: "2026-09-29" }]);
+            else rejectHistory(new Error("Retired request failed"));
+        });
+        expect(screen.queryByText("Retired history")).not.toBeInTheDocument();
+        expect(screen.queryByText("Chat unavailable")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "New Chat", exact: true })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Actions" })).not.toBeInTheDocument();
+    });
+
     it("positions loaded history below the header and remeasures equal-length threads", async () => {
         let resolveMessages!: (
             messages: Awaited<ReturnType<typeof getTabularChatMessages>>,

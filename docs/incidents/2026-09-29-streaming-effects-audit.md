@@ -109,6 +109,21 @@ streamed text. It preserves SSR markup and does not delay requests with an
 arbitrary timeout. The hydration unit regression passes; the browser check also
 exercises Strict Mode's replayed initial history requests.
 
+### The full stress suite also exposed a scroll-test setup race
+
+The first complete Word development CI run passed 359 cases and failed one
+existing scroll-button check. Its history fixture used strings for assistant
+event content, so those answers rendered empty. It then tried to click an arrow
+visible during initial positioning without actually scrolling up. The arrow
+could disappear between the visibility check and click.
+
+The fixture now supplies valid assistant events, waits for the restored latest
+turn's position, wheels to the top and clicks the arrow normally. Waiting only
+for opacity was insufficient in WebKit: event tracing showed restoration still
+moving the transcript after the wheel input. The test now verifies observable
+geometry rather than inserting a sleep. This is a test correction; it does not
+change the application's scroll behavior or relax its assertions.
+
 ## Scope of exploration
 
 An AST-assisted inventory found 375 effects across 405 web/shared/add-in source
@@ -161,9 +176,10 @@ from Sentry; it does not change error-reporting policy.
 | Complete Word suite | Development bundle; Chromium UI fixtures at 4x CPU; Chromium and WebKit; auth, model setup, workflows/quick actions, history/persistence, tools/edits, citations, stop/rejoin, transport/error recovery, layout | 360 cases passed, zero retries/skips, 10.1 minutes locally |
 | Six web streaming scenarios | General assistant, project assistant and tabular chat; each content + reasoning; eight saved exchanges, four content follow-ups or eight reasoning follow-ups; requested 1ms deltas, 4x CPU; live expand/collapse and 480px resize | All six passed, no console errors/uncaught exceptions, 7.4 minutes with two isolated workers |
 | Web history/hydration browser | Sixteen A/B selections while long histories are held; reverse completion; immediate session resolution; development Strict Mode request replay; 480px resize | Passed, 40.4 seconds |
-| Full web production stack, initial expanded profile | Disposable Supabase, Express and object storage; auth/accessibility, project/file operations, tabular reviews, workflows/settings, Google UI mocks, cold chat loads and original streaming regressions | 45 passed; four live-provider tests skipped |
+| Full web production stack, final expanded profile | Disposable Supabase, Express and object storage; auth/accessibility, project/file operations, tabular reviews, workflows/settings, Google UI mocks, cold chat loads and all new streaming/history regressions | 50 passed; four live-provider tests skipped |
 | Full web matrix with all new scenarios | Same disposable stack, production + development; development adds 4x CPU and loop-diagnostic assertions | CI validation and exact code revision tracked on PR #557 |
 | Frontend unit/component suite | All suites, plus frame scheduling, 300 refreshes, reversed history completion and hydration regressions | 1,785 tests passed in 217 suites, 119 seconds locally |
+| Additional history failure paths | An obsolete rejection while the latest selection loads; old history success/failure after New chat | Three new cases passed; complete affected file 18 passed |
 
 The Word counts include its parser/contract cases as well as UI flows. These are
 all **currently defined test flows**, not every possible product interaction.
