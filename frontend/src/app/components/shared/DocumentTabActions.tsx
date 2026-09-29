@@ -145,6 +145,7 @@ function RenameInput({
                 }}
                 onKeyDown={(event) => {
                     event.stopPropagation();
+                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
                     if (event.key === "Enter") {
                         event.preventDefault();
                         void commit();

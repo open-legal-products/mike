@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { docxModules } from "@/app/lib/docxReviewModule";
@@ -232,4 +232,24 @@ it("selects across table cells, scrolls to the first cell, and clears the comple
     editor.exec.mockReturnValueOnce({ ok: false });
     expect(surface.selectText("P1 4 hours")).toBe(false);
     expect(editor.selectMatch).toHaveBeenLastCalledWith({ ...first, length: 0 });
+});
+
+it("keeps font failures non-fatal and permits dismissing their warning", () => {
+    const props = { bytes: new ArrayBuffer(1), mode: "edit" as const, onReady: vi.fn(), onError: vi.fn() };
+    render(<DocxRenderer {...props} />);
+    const document = state.props.document;
+    act(() => (state.props.onFontError as (error: Error) => void)(new Error("private font URL")));
+    expect(screen.getByRole("status")).toHaveTextContent("Some document fonts could not be loaded");
+    expect(screen.queryByText("private font URL")).toBeNull();
+    expect(props.onError).not.toHaveBeenCalled();
+    expect(state.props.document).toBe(document);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(state.props.document).toBe(document);
+    act(() => (state.props.onReady as (editor: unknown) => void)({
+        snapshot: () => ({ parseError: new Error("invalid file"), reviewPaneOpen: false }),
+        on: vi.fn().mockReturnValue(vi.fn()),
+    }));
+    expect(props.onError).toHaveBeenCalledOnce();
+    expect(props.onReady).not.toHaveBeenCalled();
 });

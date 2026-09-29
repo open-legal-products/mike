@@ -105,7 +105,22 @@ function DocxViewContent(props: Props) {
         enabled: !displayUrl,
         exportDocx: () => surfaceRef.current?.exportDocx?.(),
     });
-    const { markChanged } = autosave;
+    const { markChanged, adoptSnapshot, captureSnapshotRevision } = autosave;
+    const fetchRevision = useRef(0);
+    useEffect(() => {
+        // Match the fetch hook's request identity. A read that spans a local
+        // change/save cannot replace the editor with an earlier server snapshot.
+        fetchRevision.current = captureSnapshotRevision();
+    }, [documentId, versionId, refetchKey, displayUrl, cacheBytes, captureSnapshotRevision]);
+    const seenFetchedBytes = useRef(fetched.bytes);
+    useEffect(() => {
+        if (seenFetchedBytes.current === fetched.bytes) return;
+        seenFetchedBytes.current = fetched.bytes;
+        if (editedBytes && fetched.bytes && adoptSnapshot(fetched.bytes, fetchRevision.current)) {
+            // Reset the save baseline and replace the clean editor together.
+            setEditedBytes(fetched.bytes);
+        }
+    }, [fetched.bytes, editedBytes, adoptSnapshot]);
     const { dirty, status, error: saveError } = autosave;
     const saveReady = !!bytes && !error && !displayUrl && readyKey === renderKey && failedKey !== renderKey;
     useEffect(() => {

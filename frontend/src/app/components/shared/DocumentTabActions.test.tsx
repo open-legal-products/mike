@@ -161,6 +161,19 @@ describe.each(["project", "assistant"] as const)(
             expect(screen.queryByRole("textbox")).toBeNull();
         });
 
+        it.each([{ isComposing: true }, { keyCode: 229 }])("does not rename while confirming an IME candidate (%j)", async (composition) => {
+            const rename = vi.fn().mockResolvedValue(undefined);
+            render(<Harness surface={surface} rename={rename} action={vi.fn()} />);
+            fireEvent.click(within(menuFor()).getByText("Rename"));
+            const input = await screen.findByRole("textbox");
+            fireEvent.change(input, { target: { value: "合同.docx" } });
+            fireEvent.keyDown(input, { key: "Enter", ...composition });
+            expect(rename).not.toHaveBeenCalled();
+            expect(input).toHaveFocus();
+            fireEvent.keyDown(input, { key: "Enter" });
+            await waitFor(() => expect(rename).toHaveBeenCalledExactlyOnceWith("second", "合同.docx"));
+        });
+
         it("cancels on Escape and commits a changed name on blur", async () => {
             const rename = vi.fn().mockResolvedValue(undefined);
             render(

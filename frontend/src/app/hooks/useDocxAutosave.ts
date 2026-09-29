@@ -29,6 +29,8 @@ export function useDocxAutosave(options: Options) {
     useEffect(() => { latest.current = options; });
     const sequence = useRef(0);
     const savedSequence = useRef(0);
+    const snapshotRevision = useRef(0);
+    const savedBytes = useRef<ArrayBuffer | null>(null);
     const expectedHash = useRef<Promise<string> | null>(null);
     const targetVersion = useRef<string | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -74,6 +76,8 @@ export function useDocxAutosave(options: Options) {
                     });
                     expectedHash.current = Promise.resolve(nextHash);
                     savedSequence.current = savingSequence;
+                    savedBytes.current = bytes;
+                    snapshotRevision.current += 1;
                     invalidateDocxBytes(current.documentId);
                     if (mounted.current && sequence.current === savingSequence) {
                         setDirty(false);
@@ -99,8 +103,29 @@ export function useDocxAutosave(options: Options) {
         return pending.current;
     }, []);
 
+    // Consider each server snapshot once, at arrival. A response received while
+    // dirty/saving must not be replayed after a later save and revert local edits.
+    const captureSnapshotRevision = useCallback(() => snapshotRevision.current, []);
+    const adoptSnapshot = useCallback((bytes: ArrayBuffer, revision: number): boolean => {
+        if (revision !== snapshotRevision.current || pending.current || sequence.current !== savedSequence.current) return false;
+        const baseline = savedBytes.current ?? latest.current.bytes;
+        if (baseline) {
+            const previous = new Uint8Array(baseline);
+            const next = new Uint8Array(bytes);
+            // A refresh of our own save must retain the editor and its undo stack.
+            if (previous.length === next.length && previous.every((byte, index) => byte === next[index])) return false;
+        }
+        expectedHash.current = null;
+        savedBytes.current = bytes;
+        snapshotRevision.current += 1;
+        latest.current = { ...latest.current, bytes };
+        setStatus("idle");
+        return true;
+    }, []);
+
     const markChanged = useCallback(() => {
         sequence.current += 1;
+        snapshotRevision.current += 1;
         setDirty(true);
         if (!latest.current.enabled || failed.current) return;
         if (!pending.current) setStatus("pending");
@@ -135,5 +160,5 @@ export function useDocxAutosave(options: Options) {
         return () => window.removeEventListener("beforeunload", warn);
     }, [dirty]);
 
-    return { dirty, status, error, markChanged, save };
+    return { dirty, status, error, markChanged, save, adoptSnapshot, captureSnapshotRevision };
 }

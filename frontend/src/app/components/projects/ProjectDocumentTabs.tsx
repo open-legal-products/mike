@@ -73,6 +73,7 @@ export function ProjectDocumentTabs({
                     title: tab.filename,
                     versionNumber:
                         tab.sourceDocument?.version_number ??
+                        document?.active_version_number ??
                         document?.latest_version_number,
                     actions: {
                         onAddToChat:

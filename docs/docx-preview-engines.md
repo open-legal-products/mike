@@ -55,7 +55,10 @@ generate a PDF; it invalidates the previous PDF rendition. Content hashes protec
 against overwriting another editor's newer file. **Download** exports the live
 document, and **Ctrl/Cmd+S** requests an immediate save. Standalone previews using
 `displayUrl`, including the catalog story, only export locally. Native mode
-switching preserves edits. Reloading with unsaved edits triggers a leave-page
+switching preserves edits. A fresh server snapshot replaces a clean editor and
+resets its save baseline; pending edits, in-flight saves, and refreshes of the
+editor's own saved bytes retain the current editor and undo history. Reads that
+span a local edit or save cannot replace it with stale content. Reloading with unsaved edits triggers a leave-page
 warning. Existing Mike edit cards still resolve through the backend.
 
 ## Version and behavior
@@ -64,7 +67,9 @@ warning. Existing Mike edit cards still resolve through the backend.
 `@docx-editor.dev/fonts` are pinned to **2.21.1**. The editor uses packaged,
 metric-compatible fonts and fits the page width to the panel. Rendering happens
 in the browser; the existing authenticated document fetch and shared byte cache
-supply the file. The editor is loaded lazily.
+supply the file. The editor is loaded lazily. Failed font loads show a dismissible warning while
+keeping the document and unsaved edits available; parse/load failures remain
+fatal.
 
 This installation uses only EigenPal's open-source packages. Mike registers
 `docxReviewModule` through the public `EditorModule` contract. It composes

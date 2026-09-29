@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { Document, PanelDocument } from "../shared/types";
 import { reorderTabs } from "@/app/lib/reorderTabs";
 import { ProjectDocumentTabs } from "./ProjectDocumentTabs";
 import { AssistantSidePanel } from "../assistant/AssistantSidePanel";
@@ -214,3 +215,18 @@ describe.each(["project", "assistant"] as const)(
         });
     },
 );
+
+it.each([
+    [undefined, 3, 2, "V3"],
+    [4, 3, 2, "V4"],
+    [undefined, null, 2, "V2"],
+] as const)("uses pinned, active, then legacy version numbers (%s, %s, %s)", (pinned, active, legacy, expected) => {
+    render(<ProjectDocumentTabs
+        tabs={[{ documentId: "a", filename: "First.docx", sourceDocument: pinned == null ? undefined : {
+            document_id: "a", title: "First.docx", type: "docx", quotes: [], metadata: [], version_number: pinned,
+        } satisfies PanelDocument }]}
+        documents={[{ id: "a", filename: "First.docx", active_version_number: active, latest_version_number: legacy } as Document]}
+        activeTabId="a" onActivate={vi.fn()} onClose={vi.fn()} onReorder={vi.fn()}
+    />);
+    expect(screen.getByText(expected)).toBeVisible();
+});

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { DocxEditor } from "@docx-editor.dev/react";
 import type { TextMatch } from "@docx-editor.dev/core";
 import type { Editor, ReviewPosition, ReviewRevisionPlacement } from "@docx-editor.dev/core/contracts/editor";
@@ -44,6 +45,7 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
     const [reviewRail, setReviewRail] = useState<HTMLElement | null>(null);
     const [toolbar, setToolbar] = useState<HTMLElement | null>(null);
     const [navigationOpen, setNavigationOpen] = useState(false);
+    const [fontWarning, setFontWarning] = useState(false);
     const activeRevision = useRef<string | null>(null);
     const revisionSelection = useRef<{ anchor: ReviewPosition; text: string } | null>(null);
     const citationMatch = useRef<{ match: TextMatch; text: string } | null>(null);
@@ -51,7 +53,7 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
     const document = useMemo(() => new Uint8Array(bytes), [bytes]);
     useEffect(() => () => unsubscribe.current?.(), []);
     return (
-        <div ref={host} className={`${styles.host} relative h-full min-h-0`} data-docx-renderer="eigenpal"
+        <div ref={host} className={`${styles.host} relative flex h-full min-h-0 flex-col`} data-docx-renderer="eigenpal"
             data-toolbar-visible={toolbarVisible}
             onKeyDownCapture={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
@@ -60,6 +62,12 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
                     void onSave?.();
                 }
             }}>
+            {fontWarning && (
+                <div role="status" className="flex shrink-0 items-start gap-2 px-3 py-2 text-xs text-muted-foreground">
+                    <span className="min-w-0 flex-1">Some document fonts could not be loaded. Text may look different.</span>
+                    <TextButtonUI onClick={() => setFontWarning(false)}>Dismiss</TextButtonUI>
+                </div>
+            )}
             <DocxEditor
                 document={document}
                 i18n={editorLabels}
@@ -75,9 +83,9 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
                 navigation={{ toggle: false, open: navigationOpen, onOpenChange: setNavigationOpen }}
                 rulers={false}
                 contextMenu
-                className="h-full min-h-0 overflow-auto"
+                className="min-h-0 flex-1 overflow-auto"
                 zoomMode={{ type: "fit", fit: "pageWidth", minZoom: 0.1, maxZoom: 1 }}
-                onFontError={onError}
+                onFontError={() => setFontWarning(true)}
                 onReady={(editor) => {
                     // Preserve the unobstructed document view on open; the native
                     // Comments button controls Mike's comment panel.

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { DocxRendererProps } from "./DocxRenderer.types";
 import { DocxView } from "./DocxView";
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 
 const exportDocx = vi.hoisted(() => vi.fn());
 const activateRevision = vi.hoisted(() => vi.fn());
@@ -285,4 +285,92 @@ it("reveals unpainted edits by revision ID before attempting a text fallback", a
 
     rerender(<DocxView documentId="later-revision" cacheBytes={false} highlightEdit={{ ...edit, key: "retry" }} />);
     await waitFor(() => expect(selectText).toHaveBeenCalledWith("Repeated edit"));
+});
+
+it("adopts a server refresh after saving and uses the refreshed content hash for the next save", async () => {
+    const saveState = vi.fn();
+    const view = (refetchKey: number) => <DocxView documentId="clean-refresh" versionId="v1" cacheBytes={false}
+        defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
+    const { rerender } = render(view(0));
+    await screen.findByText("Document revision 1");
+    const originalEditor = screen.getByTestId("renderer-scroll");
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await waitFor(() => expect(saveState).toHaveBeenLastCalledWith("clean-refresh", expect.objectContaining({ dirty: false, status: "saved" })));
+    vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([3])));
+    rerender(view(1));
+    await screen.findByText("Document revision 3");
+    expect(screen.getByTestId("renderer-scroll")).not.toBe(originalEditor);
+    exportDocx.mockResolvedValue(new Uint8Array([43]).buffer);
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await waitFor(() => expect(replaceVersion).toHaveBeenCalledTimes(2));
+    expect(replaceVersion.mock.calls[1][4]).toEqual({
+        expectedContentSha256: createHash("sha256").update(new Uint8Array([3])).digest("hex"), generatePdf: false,
+    });
+});
+
+it("retains the live editor and save baseline when a refresh contains its own saved bytes", async () => {
+    const saveState = vi.fn();
+    const view = (refetchKey: number) => <DocxView documentId="own-save-refresh" versionId="v1" cacheBytes={false}
+        defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
+    const { rerender } = render(view(0));
+    await screen.findByText("Document revision 1");
+    const originalEditor = screen.getByTestId("renderer-scroll");
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await waitFor(() => expect(saveState).toHaveBeenLastCalledWith("own-save-refresh", expect.objectContaining({ dirty: false, status: "saved" })));
+    vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([42])));
+    await act(async () => { rerender(view(1)); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(authenticatedFetch).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("renderer-scroll")).toBe(originalEditor);
+    expect(screen.getByText("Document revision 1")).toBeVisible();
+    exportDocx.mockResolvedValue(new Uint8Array([43]).buffer);
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await waitFor(() => expect(replaceVersion).toHaveBeenCalledTimes(2));
+    expect(replaceVersion.mock.calls[1][4]).toEqual({
+        expectedContentSha256: createHash("sha256").update(new Uint8Array([42])).digest("hex"), generatePdf: false,
+    });
+});
+
+it("does not replay a snapshot received during a save after that save completes", async () => {
+    let finish!: () => void;
+    replaceVersion.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ id: "v1" }); }));
+    const saveState = vi.fn();
+    const view = (refetchKey: number) => <DocxView documentId="inflight-refresh" versionId="v1" cacheBytes={false}
+        defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
+    const { rerender } = render(view(0));
+    await screen.findByText("Document revision 1");
+    const originalEditor = screen.getByTestId("renderer-scroll");
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await waitFor(() => expect(replaceVersion).toHaveBeenCalledOnce());
+    vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([2])));
+    await act(async () => { rerender(view(1)); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(authenticatedFetch).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("renderer-scroll")).toBe(originalEditor);
+    await act(async () => finish());
+    await waitFor(() => expect(saveState).toHaveBeenLastCalledWith("inflight-refresh", expect.objectContaining({ dirty: false, status: "saved" })));
+    expect(screen.getByTestId("renderer-scroll")).toBe(originalEditor);
+    expect(screen.getByText("Document revision 1")).toBeVisible();
+});
+
+it("ignores a server read started before a local save even if it arrives after the save", async () => {
+    const saveState = vi.fn();
+    const view = (refetchKey: number) => <DocxView documentId="late-refresh" versionId="v1" cacheBytes={false}
+        defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
+    const { rerender } = render(view(0));
+    await screen.findByText("Document revision 1");
+    const originalEditor = screen.getByTestId("renderer-scroll");
+    let finishRead!: (response: Response) => void;
+    vi.mocked(authenticatedFetch).mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    rerender(view(1));
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await waitFor(() => expect(saveState).toHaveBeenLastCalledWith("late-refresh", expect.objectContaining({ dirty: false, status: "saved" })));
+    await act(async () => finishRead(new Response(new Uint8Array([2]))));
+    expect(screen.getByTestId("renderer-scroll")).toBe(originalEditor);
+    expect(screen.getByText("Document revision 1")).toBeVisible();
 });
