@@ -62,11 +62,14 @@ that backlog is cleared. The scans need no LLM key and run on every trigger.
 
 ## Failure artifacts
 
-Playwright retries failed specs up to twice on CI and records a **trace** on the
-first retry (`retries` / `trace: "on-first-retry"` in `playwright.config.ts`).
-On pass, fail, or timeout, the job uploads `playwright-report/` and
-`test-results/` as the **`playwright-report`** artifact (14-day retention): from
-the failed run's page in the Actions tab, download it, then
+The production suite retries failed specs up to twice on CI and records a
+**trace** on the first retry. Development stress uses **zero retries** and
+retains traces on failure, so an intermittent loop cannot pass on a retry.
+On pass, fail, or timeout, each full-stack job uploads `playwright-report/`,
+`test-results/` and the web-server log as **`playwright-report-production`** or
+**`playwright-report-development`** (14-day retention). The focused development
+job uploads **`assistant-streaming-development`** with the same failure evidence.
+From the failed run's page in the Actions tab, download its artifact, then
 `npx playwright show-report playwright-report` locally to see per-spec results,
 screenshots, and step-by-step traces of what the browser did.
 
@@ -136,7 +139,8 @@ Open the **Run Playwright** step in the Actions log:
 - **With the secret:** all cases pass with **no `skipped` line**;
   searching the log for `requires a model key` finds nothing.
 
-The uploaded `playwright-report` artifact shows the same per-spec statuses.
+The uploaded `playwright-report-production` and `playwright-report-development`
+artifacts show the same per-spec statuses.
 
 ### Model selection
 
@@ -156,23 +160,18 @@ suite go green a few times (it is environment-sensitive by nature):
    `main`).
 2. Enable **Require status checks to pass before merging**.
 3. Enable **Require branches to be up to date before merging**.
-4. In the checks search box add **`e2e / playwright`** (the job appears in the
-   list after it has run at least once on a PR).
-5. Recommended alongside it: the unit/build check `backend` and the `license/cla`
-   check.
+4. In the checks search box add **`e2e / playwright`**,
+   **`e2e / Playwright (development stress)`** and
+   **`e2e / Assistant streaming (development)`**. Jobs appear in the list after
+   they have run at least once on a PR. Require both Word jobs too:
+   **`Word add-in / Typecheck and Playwright (chromium + webkit)`** and
+   **`Word add-in / Development stress (chromium + webkit)`**.
+5. Keep the existing unit/build, security and `license/cla` requirements.
 6. Save. From now on a red e2e run blocks the **Merge** button.
 
-Equivalent via the GitHub CLI (repo admin token required):
-
-```bash
-gh api -X PUT repos/OWNER/REPO/branches/main/protection \
-  -H "Accept: application/vnd.github+json" \
-  -f 'required_status_checks[strict]=true' \
-  -f 'required_status_checks[contexts][]=e2e / playwright' \
-  -f 'enforce_admins=true' \
-  -f 'required_pull_request_reviews[required_approving_review_count]=1' \
-  -f 'restrictions='
-```
+This PR adds workflow checks; it does not edit repository protection settings.
+When configuring them through an API, first read and preserve the existing
+requirements and use the exact check contexts reported by the repository.
 
 ## Running the suite locally
 

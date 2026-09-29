@@ -289,14 +289,9 @@ jobs:
           npm run build --prefix backend
           npm run sync:workflows --prefix backend
 
-      # Serve a PRODUCTION build, not `next dev`. Two reasons the dev server makes
-      # this suite flaky: (1) its on-demand route compilation makes the first hit
-      # of each page arbitrarily slow (20s waitForResponse assertions time out),
-      # and (2) its hydration-error overlay injects DOM (nextjs__container_errors…)
-      # that pollutes text locators — e.g. getByText('All') matched the overlay's
-      # "Call Stack"/"…fallback" text and failed strict mode. A production build has
-      # neither: no overlay, no JIT compile. Verified locally — flipping dev→start
-      # took the suite from intermittent overlay/timeout failures to green.
+      # Keep release-build coverage alongside development diagnostics. The dev
+      # job warms routes below so on-demand compilation does not consume UI
+      # assertion budgets; its error overlay deliberately remains observable.
       - name: Build web (production)
         if: matrix.renderer == 'production'
         run: npm run build --prefix frontend

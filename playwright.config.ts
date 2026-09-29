@@ -27,8 +27,8 @@ export default defineConfig({
     /* Reporter. On CI, "github" alone would REPLACE Playwright's default html
        reporter, so playwright-report/ would never be written and the workflow's
        artifact upload (docs/e2e-ci.md, "Failure artifacts") would have nothing
-       to ship. Listing both keeps the inline PR annotations AND generates the
-       HTML report; `open: "never"` stops the reporter from trying to launch a
+       to ship. Include annotations, per-test progress and the HTML report;
+       `open: "never"` stops the reporter from trying to launch a
        browser on the CI box after the run. */
     reporter: process.env.CI
         ? [["github"], ["list"], ["html", { open: "never" }]]
