@@ -36,6 +36,9 @@ export default defineConfig({
     /* Shared settings for all the projects below */
     use: {
         baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
+        video: process.env.PW_VIDEO === "1"
+            ? { mode: "on", size: { width: 1280, height: 720 } }
+            : "off",
         trace: process.env.REACT_STRESS === "1" ? "retain-on-failure" : "on-first-retry",
         screenshot: "only-on-failure",
     },

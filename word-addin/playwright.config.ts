@@ -37,7 +37,9 @@ export default defineConfig({
     trace: process.env.REACT_STRESS === "1" ? "retain-on-failure" : "on-first-retry",
     // PW_VIDEO=1 records a webm per test (for demo/review reels); off by
     // default because videos slow the suite and bloat CI artifacts.
-    video: process.env.PW_VIDEO === "1" ? "on" : "off",
+    video: process.env.PW_VIDEO === "1"
+      ? { mode: "on", size: { width: 1280, height: 720 } }
+      : "off",
   },
 
   projects: [

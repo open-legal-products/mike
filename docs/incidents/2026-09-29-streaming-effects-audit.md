@@ -1,10 +1,10 @@
 # Streaming effect audit, 2026-09-29
 
 This follows [the assistant update-depth investigation](2026-09-29-assistant-update-depth.md)
-and [PR #556](https://github.com/open-legal-products/mike/pull/556). The audit branch
-starts at that fix, so the failures below are additional to the scroll-button
-effect already fixed there. All reproduction data is synthetic; no provider,
-customer account or production database is used.
+and is consolidated into [PR #556](https://github.com/open-legal-products/mike/pull/556).
+The failures below were reproduced with the original scroll-button fix already
+applied. All reproduction data is synthetic; no provider, customer account or
+production database is used.
 
 ## Confirmed failures
 
@@ -198,3 +198,13 @@ have component tests; this run does not claim every file format and document-siz
 combination was stress-tested in a real browser. Four existing live-provider web
 cases remain key-gated. Production behavior and development warnings are both
 checked, but a finite matrix cannot establish the absence of all future loops.
+
+## Recorded regression evidence
+
+[Four GIFs and recording commands](../test-evidence/streaming-effects-2026-09-29/README.md)
+show passing development-browser checks for assistant content, reasoning with
+disclosure/resize, reversed tabular histories and sixteen Word exchanges. They
+use the same synthetic fixtures and 4x Chromium CPU profile. The web recording
+run passed all three selected cases; the Word recording passed its long-chat
+case. The GIFs are edited excerpts; console/state assertions come from the full
+tests, not visual inspection alone.
