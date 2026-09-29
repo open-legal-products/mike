@@ -57,7 +57,7 @@ describe("TRSidePanel", () => {
                 cell={cell}
                 row={row}
                 rows={[row]}
-                document={document}
+                documentId={document.id}
                 documents={[document]}
                 column={column}
                 columns={[column]}
@@ -109,7 +109,7 @@ describe("TRSidePanel", () => {
             status: "done",
             content: {
                 summary:
-                    "Answer [[document:doc-2||page:4||quote:Exact language]]",
+                    "Answer [[document:doc-2||page:4||quote:Exact language]] [[document:missing||page:3||quote:Unavailable source quote]]",
                 flag: "grey",
                 reasoning: "",
             },
@@ -157,6 +157,10 @@ describe("TRSidePanel", () => {
             onClose={vi.fn()} onNavigate={vi.fn()} />);
         expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
         expect(screen.getByText(/New source quote/)).toBeInTheDocument();
+        fireEvent.click(screen.getByTitle('Page 3: "Unavailable source quote"'));
+        expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
+        expect(screen.getByText(/New source quote/)).toBeInTheDocument();
+        expect(screen.queryByText(/Unavailable source quote/)).not.toBeInTheDocument();
     });
 });
 
@@ -171,7 +175,7 @@ it("preserves the chosen grouped source and collapsed pane through 300 row refre
     const column = { index: 0, name: "Clause", prompt: "Extract" } as ColumnConfig;
     const cell = { id: "cell-1", row_id: row.id, column_index: 0, status: "done",
         content: { summary: "Answer", flag: "grey", reasoning: "" } } as TabularCell;
-    const props = { cell, row, rows: [row], documents, document: documents[0],
+    const props = { cell, row, rows: [row], documents, documentId: documents[0].id,
         column, columns: [column], displayDocument: true, onClose: vi.fn(), onNavigate: vi.fn() };
     const view = render(<TRSidePanel {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Closing" }));
@@ -180,7 +184,7 @@ it("preserves the chosen grouped source and collapsed pane through 300 row refre
     for (let i = 0; i < 300; i++) {
         view.rerender(<TRSidePanel {...props} row={{ ...row }}
             documents={documents.map((document) => ({ ...document }))}
-            document={{ ...documents[0] }} />);
+            documentId={documents[0].id} />);
     }
     expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Collapse document pane" }));
@@ -233,7 +237,7 @@ it.each([true, false])("falls back from a removed source while preserving pane o
     const column = { index: 0, name: "Clause", prompt: "Extract" } as ColumnConfig;
     const cell = { id: "cell-1", row_id: row.id, column_index: 0, status: "done",
         content: { summary: "Answer", flag: "grey", reasoning: "" } } as TabularCell;
-    const props = { cell, row, rows: [row], documents, document: documents[0],
+    const props = { cell, row, rows: [row], documents, documentId: documents[0].id,
         column, columns: [column], displayDocument: true, onClose: vi.fn(), onNavigate: vi.fn() };
     const view = render(<TRSidePanel {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Closing" }));
@@ -246,4 +250,32 @@ it.each([true, false])("falls back from a removed source while preserving pane o
         .toHaveAttribute("aria-pressed", String(open));
     if (!open) fireEvent.click(screen.getByRole("button", { name: "Expand document pane" }));
     expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
+});
+
+it.each(["membership", "document"] as const)("does not render an initial source removed from the %s list", (removedFrom) => {
+    const documents = [
+        { id: "doc-1", filename: "First.pdf", file_type: "pdf" },
+        { id: "doc-2", filename: "Second.pdf", file_type: "pdf" },
+    ] as Document[];
+    const row = { id: "row-1", label: "Closing", row_type: "folder",
+        document_id: null, source_document_ids: ["doc-1", "doc-2"] } as TabularReviewRow;
+    const column = { index: 0, name: "Clause", prompt: "Extract" } as ColumnConfig;
+    const cell = { id: "cell-1", row_id: row.id, column_index: 0, status: "done",
+        content: { summary: "Answer", flag: "grey", reasoning: "" } } as TabularCell;
+    const props = { cell, row, rows: [row], documents, documentId: documents[0].id,
+        column, columns: [column], displayDocument: true, onClose: vi.fn(), onNavigate: vi.fn() };
+    const view = render(<TRSidePanel {...props} />);
+    expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
+    const removed = { ...props,
+        row: removedFrom === "membership" ? { ...row, source_document_ids: ["doc-2"] } : row,
+        documents: removedFrom === "document" ? [documents[1]] : documents };
+    view.rerender(<TRSidePanel {...removed} />);
+    expect(screen.queryByText("PDF doc-1")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Collapse document pane" })).not.toBeInTheDocument();
+    // A missing default must not displace another valid user-selected source.
+    fireEvent.click(screen.getByRole("button", { name: "Closing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Second.pdf" }));
+    view.rerender(<TRSidePanel {...props} />);
+    view.rerender(<TRSidePanel {...removed} />);
+    expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
 });

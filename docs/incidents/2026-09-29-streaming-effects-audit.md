@@ -92,6 +92,15 @@ its citation and preserves the pane's open/collapsed choice when falling back.
 It uses primitive IDs and runs before navigation resets, so equivalent refreshes
 remain inert and a new citation arriving with removal still takes precedence.
 
+The initial-source variant also reproduced in two regressions: the caller could
+still supply an initial document after it left the row's source list. The panel
+now receives a navigation ID and the authoritative document collection, and
+resolves every displayed source against current row membership. Availability
+changes cannot be mistaken for a new navigation request or displace another
+valid user selection. Clicking a citation for an unavailable source also leaves
+the currently displayed document and quote together; that additional assertion
+failed before moving citation publication inside the successful source lookup.
+
 ### Out-of-order tabular histories replace the selected conversation
 
 The initial history effect and manual history loader both published responses
