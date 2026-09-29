@@ -228,17 +228,36 @@ describe("ChatView header actions", () => {
         expect(push).toHaveBeenCalledWith("/assistant");
     });
 
-    it("reduces the final assistant minimum height by the added header clearance", async () => {
-        renderView(vi.fn(), [
-            { id: "m1", role: "user", content: "Question" },
-            { id: "m2", role: "assistant", content: "Answer" },
-        ]);
+    it("sizes the final response from the scroll viewport so the latest question lands at the top offset", async () => {
+        // An 800px scroll viewport and a 44px user message. Scrolled to the
+        // bottom, the question must sit 76px below the top: 800 - 76 - 44 -
+        // two 32px list gaps (response, trailing anchor) - 116px padding.
+        const clientHeight = vi
+            .spyOn(HTMLElement.prototype, "clientHeight", "get")
+            .mockImplementation(function (this: HTMLElement) {
+                return this.firstElementChild?.getAttribute("data-slot") ===
+                    "chat-messages-content"
+                    ? 800
+                    : 0;
+            });
+        const offsetHeight = vi
+            .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+            .mockReturnValue(44);
+        try {
+            renderView(vi.fn(), [
+                { id: "m1", role: "user", content: "Question" },
+                { id: "m2", role: "assistant", content: "Answer" },
+            ]);
 
-        await waitFor(() =>
-            expect(screen.getByTestId("assistant-message")).toHaveStyle({
-                minHeight: "calc(100dvh - 224px)",
-            }),
-        );
+            await waitFor(() =>
+                expect(screen.getByTestId("assistant-message")).toHaveStyle({
+                    minHeight: "500px",
+                }),
+            );
+        } finally {
+            clientHeight.mockRestore();
+            offsetHeight.mockRestore();
+        }
     });
 
     it("positions a detached chat after its full history replaces the live overlay", async () => {

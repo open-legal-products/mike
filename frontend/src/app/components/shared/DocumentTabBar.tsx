@@ -16,6 +16,7 @@ import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { VersionChip } from "@/app/components/shared/VersionChip";
 import type { TabDropPosition } from "@/app/lib/reorderTabs";
 import { cn } from "@/app/lib/utils";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 
 export interface DocumentTabItem {
     id: string;
@@ -343,15 +344,16 @@ export function DocumentTabBar({
                 )}
             </div>
             {onClosePanel && (
-                <button
-                    type="button"
+                <PillButtonUI
+                    tone="white"
+                    size="icon-xs"
                     onClick={onClosePanel}
                     aria-label="Close panel"
                     title="Close panel"
-                    className="mr-1 shrink-0 rounded-lg p-1.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="mt-2 ml-2 mr-2 h-4 w-4 shrink-0 self-start"
                 >
-                    <X aria-hidden="true" className="h-4 w-4" />
-                </button>
+                    <X aria-hidden="true" className="h-2.5 w-2.5" />
+                </PillButtonUI>
             )}
         </div>
     );

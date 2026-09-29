@@ -127,30 +127,34 @@ afterEach(() => vi.unstubAllGlobals());
 describe.each(["assistant", "project"] as const)(
     "%s shared content",
     (surface) => {
-        it("offers the toolbar toggle only in the assistant and retains its state per panel", () => {
+        it("offers Edit in both surfaces with their defaults and retains its state per panel", () => {
             const { rerender } = render(content(surface, { kind: "document" }));
-            if (surface === "project") {
-                expect(
-                    screen.queryByRole("button", { name: "Edit" }),
-                ).toBeNull();
-                expect(viewerProps().toolbarVisible).toBe(true);
-                return;
-            }
             const button = screen.getByRole("button", { name: "Edit" });
-            const initialVisibility = viewerProps().toolbarVisible;
-            expect(button).toHaveClass("bg-transparent", "shadow-none");
-            expect(button).toHaveAttribute(
-                "aria-expanded",
-                String(initialVisibility),
-            );
+            if (surface === "project") {
+                expect(viewerProps().toolbarVisible).toBe(true);
+                expect(button).toHaveAttribute("aria-pressed", "true");
+                fireEvent.click(button);
+            }
+            expect(viewerProps().toolbarVisible).toBe(false);
+            expect(button).toHaveClass("bg-transparent", "shadow-none", "text-muted-foreground");
+            expect(button).toHaveAttribute("aria-expanded", "false");
+            expect(button).toHaveAttribute("aria-pressed", "false");
             fireEvent.click(button);
-            expect(viewerProps().toolbarVisible).toBe(!initialVisibility);
+            expect(viewerProps().toolbarVisible).toBe(true);
+            expect(button).toHaveAttribute("aria-expanded", "true");
+            expect(button).toHaveAttribute("aria-pressed", "true");
+            expect(button).toHaveClass("text-foreground");
+            expect(button).not.toHaveClass("text-muted-foreground");
             expect(viewerProps().defaultMode).toBe("edit");
             rerender(content(surface, { kind: "document" }, false));
             rerender(content(surface, { kind: "citation", citation }));
-            expect(viewerProps().toolbarVisible).toBe(!initialVisibility);
+            expect(viewerProps().toolbarVisible).toBe(true);
             fireEvent.click(button);
-            expect(viewerProps().toolbarVisible).toBe(initialVisibility);
+            expect(viewerProps().toolbarVisible).toBe(false);
+            expect(button).toHaveAttribute("aria-expanded", "false");
+            expect(button).toHaveAttribute("aria-pressed", "false");
+            expect(button).toHaveClass("text-muted-foreground");
+            expect(button).not.toHaveClass("text-foreground");
         });
 
         it("shows citation quotes, selects and deselects highlights, and reopens after dismissal", () => {
@@ -184,12 +188,12 @@ describe.each(["assistant", "project"] as const)(
             fireEvent.click(screen.getByRole("button", { name: "View" }));
             expect(viewerProps().quotes).toEqual([]);
             fireEvent.click(
-                screen.getByRole("button", { name: "Close citation" }),
+                screen.getByRole("button", { name: "Close" }),
             );
             expect(onClose).toHaveBeenCalledOnce();
             rerender(content(surface, { kind: "document" }));
             expect(
-                screen.queryByRole("button", { name: "Close citation" }),
+                screen.queryByRole("button", { name: "Close" }),
             ).toBeNull();
             expect(viewerProps().quotes).toBeUndefined();
             rerender(content(surface, mode));
@@ -239,7 +243,7 @@ describe.each(["assistant", "project"] as const)(
             expect(viewerProps().quotes).toEqual([]);
         });
 
-        it("uses compact title actions at narrow widths on both surfaces", () => {
+        it("keeps Download icon-only at narrow and wide widths on both surfaces", () => {
             let resize: ResizeObserverCallback;
             const disconnect = vi.fn();
             vi.stubGlobal(
@@ -270,7 +274,7 @@ describe.each(["assistant", "project"] as const)(
             );
             expect(
                 screen.getByRole("button", { name: "Download" }),
-            ).not.toHaveClass("w-6");
+            ).toHaveClass("w-6");
             unmount();
             expect(disconnect).toHaveBeenCalledOnce();
         });

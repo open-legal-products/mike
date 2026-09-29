@@ -14,7 +14,10 @@ it.each(["docx", "pdf", "spreadsheet"] as const)("keeps the assistant title bar 
         document_id: "document-1", title: "Agreement", type, metadata: [], quotes: [],
     }} />);
     expect(screen.getByRole("heading", { name: "Agreement" })).toBeVisible();
-    expect(screen.getByRole("button", { name: /download/i })).toBeVisible();
+    const download = screen.getByRole("button", { name: "Download" });
+    expect(download).toBeVisible();
+    expect(download).toHaveAttribute("title", "Download");
+    expect(download.textContent).toBe("");
     if (type === "docx") expect(screen.getByTestId("docx-editor")).toHaveAttribute("data-mode", "edit");
     else expect(screen.getByTestId(`${type}-view`)).toBeVisible();
 });
@@ -75,11 +78,9 @@ describe("DocumentTitleRow", () => {
         );
 
         expect(screen.getByRole("link", { name: "Download" })).toHaveClass(
-            "h-6",
             "w-6",
         );
         expect(screen.getByRole("link", { name: "Source" })).toHaveClass(
-            "h-6",
             "w-6",
         );
     });

@@ -5,10 +5,10 @@ import { Loader2 } from "lucide-react";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { useDocxAutosave } from "@/app/hooks/useDocxAutosave";
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
+import { DocxSaveErrorPopup } from "./DocxSaveErrorPopup";
 import type { DocxMode, DocxSaveState, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { docxRevisionElements } from "./docxRevisionElements";
 
 const DocxRenderer = lazy(() => import("./EigenpalDocxRenderer"));
 const RENDER_ERROR = "This document could not be displayed. Please download it to view it.";
@@ -56,43 +56,23 @@ interface Props {
     rounded?: boolean;
 }
 
-function focusHighlights(surface: DocxSurface, props: Props, scrollToMatch = true): boolean {
-    const { content, scroll } = surface;
-    content.querySelectorAll(".docx-edit-flash").forEach((element) => element.classList.remove("docx-edit-flash"));
+function focusHighlights(surface: DocxSurface, props: Props): boolean {
     const edit = props.highlightEdit;
-    const revisions = edit ? [
-        ...docxRevisionElements(content, "ins", edit.ins_w_id, edit.inserted_text),
-        ...docxRevisionElements(content, "del", edit.del_w_id, edit.deleted_text),
-    ] : [];
-    revisions.forEach((element) => element.classList.add("docx-edit-flash"));
-    // Repaints may restore revision flashes, but must not overwrite the user's
-    // current selection. EigenPal owns citation selection and its painting.
-    if (!scrollToMatch) return revisions.length > 0;
-    const anchor = revisions[0];
-    if (!anchor) {
-        const revisionIds = [edit?.ins_w_id, edit?.del_w_id].filter(
-            (id): id is string => id != null,
-        );
-        if (revisionIds.length && surface.revealRevision?.(revisionIds)) return true;
-        const text = edit?.inserted_text || edit?.deleted_text;
-        if (text && surface.revealText?.(text)) {
-            return true;
+    if (edit && (edit.ins_w_id != null || edit.del_w_id != null)
+        && surface.activateRevision?.({ ins: edit.ins_w_id, del: edit.del_w_id })) return true;
+    surface.clearRevisionHighlight?.();
+    const text = edit?.inserted_text || edit?.deleted_text;
+    if (text && surface.selectText?.(text)) return true;
+    // Native selection holds one contiguous range. Select the first matching
+    // quote segment, including when its page has not been painted yet.
+    for (const quote of props.quotes ?? []) {
+        for (const segment of quote.quote.split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)) {
+            const text = segment.trim();
+            if (text && surface.selectText?.(text)) return true;
         }
-        // Native selection holds one contiguous range. Select the first matching
-        // quote segment, including when its page has not been painted yet.
-        for (const quote of props.quotes ?? []) {
-            for (const segment of quote.quote.split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)) {
-                const text = segment.trim();
-                if (text && surface.selectText?.(text)) return true;
-            }
-        }
-        surface.clearTextSelection?.();
-        return false;
     }
-    const offset = anchor.getBoundingClientRect().top - scroll.getBoundingClientRect().top
-        + scroll.scrollTop - scroll.clientHeight / 2;
-    scroll.scrollTo({ top: Math.max(0, offset), behavior: "instant" });
-    return true;
+    surface.clearTextSelection?.();
+    return false;
 }
 
 /** DOCX view/edit surface shared by the assistant panel and project IDE. */
@@ -135,28 +115,14 @@ function DocxViewContent(props: Props) {
     const lastScrollTop = useRef(props.initialScrollTop ?? 0);
     const propsRef = useRef(props);
     const scrollFrame = useRef(0);
-    const focusFrame = useRef(0);
 
     useEffect(() => { propsRef.current = props; });
     useEffect(() => () => {
         cancelAnimationFrame(scrollFrame.current);
-        cancelAnimationFrame(focusFrame.current);
     }, []);
 
-    const focusSurface = useCallback((surface: DocxSurface) => {
-        cancelAnimationFrame(focusFrame.current);
-        const focused = focusHighlights(surface, propsRef.current);
-        // Long jumps materialize pages and can trigger the engine's own scroll
-        // restoration. Re-center once after that paint, using the current props.
-        if (focused && propsRef.current.highlightEdit) focusFrame.current = requestAnimationFrame(() => {
-            focusFrame.current = requestAnimationFrame(() => {
-                if (surfaceRef.current === surface && surface.content.isConnected) {
-                    focusHighlights(surface, propsRef.current);
-                }
-            });
-        });
-        return focused;
-    }, []);
+    const focusSurface = useCallback((surface: DocxSurface) =>
+        focusHighlights(surface, propsRef.current), []);
 
     const onReady = useCallback((surface: DocxSurface) => {
         const firstMount = surfaceRef.current?.content !== surface.content
@@ -212,27 +178,6 @@ function DocxViewContent(props: Props) {
         }
     }, [bytes, readyKey, renderKey, quoteKey, props.quoteFocusKey, props.highlightEdit?.key, focusSurface]);
 
-    // Font loading, fitting and page virtualization can replace the engine's
-    // painted runs. Restore revision flashes without changing native selection.
-    useEffect(() => {
-        const surface = surfaceRef.current;
-        if (!surface || readyKey !== renderKey) return;
-        let frame = 0;
-        const observer = new MutationObserver((records) => {
-            const repainted = records.some((record) => Array.from(record.addedNodes).some(
-                (node) => node instanceof Element && (
-                    node.matches(".docx-page")
-                    || node.querySelector(".docx-page")
-                ),
-            ));
-            if (!repainted) return;
-            cancelAnimationFrame(frame);
-            frame = requestAnimationFrame(() => focusHighlights(surface, propsRef.current, false));
-        });
-        observer.observe(surface.content, { childList: true, subtree: true });
-        return () => { observer.disconnect(); cancelAnimationFrame(frame); };
-    }, [readyKey, renderKey]);
-
     const renderError = bytes && failedKey === renderKey ? RENDER_ERROR : null;
     const message = error || renderError;
     const pending = !message && (loading && !bytes || bytes && readyKey !== renderKey);
@@ -266,7 +211,7 @@ function DocxViewContent(props: Props) {
                     </div>
                 )}
                 {message && <div role="alert" className="flex h-full items-center justify-center p-5 text-sm text-destructive">{message}</div>}
-                {!onSaveStateChange && saveError && <p role="alert" className="px-3 py-1 text-xs text-destructive">{saveError}</p>}
+                {!onSaveStateChange && <DocxSaveErrorPopup error={saveError} />}
                 <div className="docx-view-container min-h-0 flex-1" hidden={!!message}>
                     {bytes && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>

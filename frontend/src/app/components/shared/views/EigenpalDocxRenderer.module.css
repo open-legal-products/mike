@@ -20,11 +20,11 @@
     background: transparent !important;
 }
 
-/* Reclaim the native left gutter without changing the engine's page reservation. */
+/* Inset the navigation pane while keeping its right edge and page reservation. */
 .host :global(.docx-editor) :global(.docx-nav__panel-shell) {
     background: transparent;
-    inset-inline-start: 0;
-    width: calc(var(--docx-nav-width, 280px) + var(--docx-nav-inset, 32px));
+    inset-inline-start: 0.75rem;
+    width: calc(var(--docx-nav-width, 280px) + var(--docx-nav-inset, 32px) - 0.75rem);
 }
 
 /* EigenPal shifts the page by the pane plus a 16px gap, and the page keeps its

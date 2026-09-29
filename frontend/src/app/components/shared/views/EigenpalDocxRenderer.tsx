@@ -1,17 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { ListTree } from "lucide-react";
 import { DocxEditor } from "@docx-editor.dev/react";
 import type { TextMatch } from "@docx-editor.dev/core";
-import type { Editor } from "@docx-editor.dev/core/contracts/editor";
+import type { Editor, ReviewPosition, ReviewRevisionPlacement } from "@docx-editor.dev/core/contracts/editor";
 import { packagedFonts } from "@docx-editor.dev/fonts";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { useOptionalAuth } from "@/app/contexts/AuthContext";
 import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
 import { docxModules } from "@/app/lib/docxReviewModule";
 import { DocxReviewPanel } from "./DocxReviewPanel";
+import { DocxNavigationMenu } from "./DocxNavigationMenu";
 import { findDocxQuote } from "./docxQuoteSelection";
 import "@docx-editor.dev/core/styles/editor.css";
 import styles from "./EigenpalDocxRenderer.module.css";
@@ -20,6 +18,20 @@ import type { DocxRendererProps } from "./DocxRenderer.types";
 // Use packaged, metric-compatible fonts; document text never goes to a conversion service.
 const fonts = packagedFonts();
 const editorLabels = { formattingBar: { commentsAndChanges: "Comments" } };
+const BODY_PART = "/word/document.xml";
+
+/**
+ * The ranges of a native review item that belong to one Mike edit. A native
+ * replacement can pair this edit with a neighbouring revision; its leading
+ * `replacedRangeCount` ranges are the deletion and the rest the insertion.
+ */
+function editRanges(revision: ReviewRevisionPlacement, ins?: string | null, del?: string | null) {
+    const { item } = revision;
+    const split = item.replacedRangeCount;
+    const owns = (id?: string | null) => id != null && item.addresses.some((address) => address.id === id);
+    if (item.revisionKind !== "replace" || split == null || (owns(ins) && owns(del))) return item.ranges;
+    return owns(del) ? item.ranges.slice(0, split) : item.ranges.slice(split);
+}
 
 export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filename, author, onChange, onSave, onReady, onError }: DocxRendererProps) {
     const auth = useOptionalAuth();
@@ -32,6 +44,8 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
     const [reviewRail, setReviewRail] = useState<HTMLElement | null>(null);
     const [toolbar, setToolbar] = useState<HTMLElement | null>(null);
     const [navigationOpen, setNavigationOpen] = useState(false);
+    const activeRevision = useRef<string | null>(null);
+    const revisionSelection = useRef<{ anchor: ReviewPosition; text: string } | null>(null);
     const citationMatch = useRef<{ match: TextMatch; text: string } | null>(null);
     const unsubscribe = useRef<(() => void) | undefined>(undefined);
     const document = useMemo(() => new Uint8Array(bytes), [bytes]);
@@ -50,7 +64,7 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
                 document={document}
                 i18n={editorLabels}
                 fonts={fonts}
-                mode={mode}
+                mode={toolbarVisible ? mode : "view"}
                 modules={docxModules}
                 author={reviewAuthor}
                 chrome
@@ -84,23 +98,63 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
                     const scroll = host.current?.querySelector<HTMLElement>(".docx-editor__scroll-container");
                     if (content && scroll) onReady({
                         content, scroll, exportDocx: () => editor.save(),
-                        revealRevision: (ids) => {
+                        activateRevision: ({ ins, del }) => {
+                            const ids = [ins, del].filter((id): id is string => id != null);
                             // The review model includes unpainted pages. Text search
                             // can land on identical wording earlier in the document.
-                            const revision = editor.getReviewItems().find((item) =>
+                            const revisions = editor.getReviewItems({ placement: false }).filter((item): item is ReviewRevisionPlacement =>
                                 item.kind === "revision"
-                                && item.item.ranges.some((range) => range.partName === "/word/document.xml")
+                                && item.item.ranges.some((range) => range.partName === BODY_PART)
                                 && item.item.addresses.some((address) => ids.includes(address.id)),
                             );
-                            if (revision?.kind !== "revision") return false;
-                            const range = revision.item.ranges.find((entry) =>
-                                entry.partName === "/word/document.xml",
-                            );
-                            return range ? editor.scrollToBlock(range.start.paragraphId) : false;
+                            if (!revisions.length) return false;
+                            const owned = (revision: ReviewRevisionPlacement) =>
+                                revision.item.addresses.every((address) => ids.includes(address.id));
+                            if (revisions.length === 1 && owned(revisions[0])) {
+                                const revision = revisions[0];
+                                const result = editor.setActiveReviewItem(revision.key, { reveal: "center" });
+                                if (!result.ok) return false;
+                                activeRevision.current = revision.key;
+                                revisionSelection.current = null;
+                                citationMatch.current = null;
+                                return true;
+                            }
+                            // Only one review item can be active. A gap can split the edit
+                            // into separate native items, and EigenPal pairs a deletion
+                            // with an adjacent insertion even when they are different
+                            // edits, so select just this edit's ranges in document order.
+                            const ranges = revisions.flatMap((revision) => editRanges(revision, ins, del))
+                                .filter((range) => range.partName === BODY_PART);
+                            if (!ranges.length) return false;
+                            const first = ranges[0].start;
+                            const last = ranges[ranges.length - 1].end;
+                            const anchor = { ...first, offset: Math.min(...ranges
+                                .filter((range) => range.start.paragraphId === first.paragraphId)
+                                .map((range) => range.start.offset)) };
+                            const head = { ...last, offset: Math.max(...ranges
+                                .filter((range) => range.end.paragraphId === last.paragraphId)
+                                .map((range) => range.end.offset)) };
+                            // Enter the body story and reveal the edit before selecting.
+                            if (!editor.setActiveReviewItem(revisions[0].key, { reveal: "center" }).ok) return false;
+                            editor.setActiveReviewItem(null);
+                            activeRevision.current = null;
+                            if (!editor.exec({ type: "setSelection", range: { anchor, head } }).ok) return false;
+                            revisionSelection.current = { anchor, text: editor.query({ type: "selectedText" }) };
+                            citationMatch.current = null;
+                            return true;
                         },
-                        revealText: (text) => {
-                            const match = editor.findMatches(text)[0];
-                            return match ? editor.scrollToBlock(match.blockId) : false;
+                        clearRevisionHighlight: () => {
+                            const selection = revisionSelection.current;
+                            revisionSelection.current = null;
+                            if (selection && editor.query({ type: "selectedText" }) === selection.text) {
+                                editor.exec({ type: "setSelection", range: { anchor: selection.anchor, head: selection.anchor } });
+                            }
+                            const key = activeRevision.current;
+                            activeRevision.current = null;
+                            // Do not dismiss a different review item the user opened.
+                            if (key && editor.getReviewItems().some((item) => item.key === key && item.isActive)) {
+                                editor.setActiveReviewItem(null);
+                            }
                         },
                         selectText: (text) => {
                             const match = findDocxQuote(editor, text);
@@ -135,24 +189,8 @@ export default function DocxRenderer({ bytes, mode, toolbarVisible = true, filen
             >
                 <DocxReviewPanel editor={reviewEditor} author={reviewAuthor} toolbar={toolbar} surface={reviewSurface} rail={reviewRail} />
             </DocxEditor>
-            {toolbar && createPortal(
-                // data-toolbar-fixed makes EigenPal reserve this width before
-                // moving its own controls into More. Padding, not margin, so
-                // the spacing is part of the measured width.
-                <span data-toolbar-fixed="" className="order-last flex flex-none items-center pr-2">
-                    <TextButtonUI
-                        size="icon-xs"
-                        aria-label="Document navigation"
-                        title="Document navigation"
-                        aria-expanded={navigationOpen}
-                        className="h-6"
-                        onClick={() => setNavigationOpen((open) => !open)}
-                    >
-                        <ListTree aria-hidden="true" className="h-4 w-4" />
-                    </TextButtonUI>
-                </span>,
-                toolbar,
-            )}
+            {toolbar && <DocxNavigationMenu toolbar={toolbar} open={navigationOpen}
+                onToggle={() => setNavigationOpen((open) => !open)} />}
         </div>
     );
 }

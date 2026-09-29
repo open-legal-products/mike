@@ -30,8 +30,8 @@ function cacheKey(
 }
 
 /**
- * Fetch the raw .docx bytes for a document, optionally targeting a specific
- * tracked-changes version. Results are cached so the DocxView can re-render
+ * Fetch a document's raw source bytes from /file (used for .docx and
+ * spreadsheets), optionally targeting a specific version. Results are cached so the DocxView can re-render
  * cheaply when switching between versions, and tab switches don't refetch.
  */
 export function useFetchDocxBytes(

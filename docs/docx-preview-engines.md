@@ -1,10 +1,16 @@
 # DOCX editor
 
 `DocxView` uses EigenPal for the assistant document panel, IDE document viewer,
-and document side panels. There is no rendering-engine selector or Mike
-View/Edit toggle. EigenPal's native toolbar owns mode switching and remains
-visible in Viewing mode so readers can return to Editing without reopening the
-file. The assistant side panel and IDE viewer share a compact file title row with
+and document side panels. There is no rendering-engine selector. The formatting
+toolbar starts hidden in the assistant side panel and visible in the IDE.
+The title-row **Edit** button controls editing and toolbar visibility in both
+surfaces, with darker text while active. When off, EigenPal enforces read-only
+mode: typing, pasting, formatting, and native review mutations are locked.
+The assistant starts locked; the IDE starts with Edit active. Toggling keeps
+the mounted editor, unsaved changes, and undo history. Each panel retains its
+choice when switching tabs or annotations. While Edit is active, EigenPal's
+native mode picker offers Viewing, Editing, and Suggesting modes.
+The assistant side panel and IDE viewer share a compact file title row with
 12px regular text, a 14px icon, Download, and plain-text autosave status. Both
 surfaces share `DocumentContent`: the title row, citation quotes, edit cards,
 loading and error states, and the file-type viewer. Both retain each tab's
@@ -35,7 +41,13 @@ edits the tab label in place (Enter or blur to save, Escape to cancel).
 `DocxView` accepts `defaultMode` (view-only when omitted). The assistant document
 panel, IDE viewer, and document side panel set `defaultMode="edit"`. This is an
 initial mode: parent rerenders do not override the reader's native toolbar
-choice. Opening another document or version creates a new editor.
+choice while Edit is active. Turning Edit off overrides it with read-only mode;
+turning it on returns to the initial mode. Opening another document or version
+creates a new editor.
+
+Open **… → Navigation pane** to show or hide the document outline and search.
+The action shares EigenPal's overflow menu; a More menu remains available when
+all formatting controls fit. The navigation pane has a 12px left inset.
 
 Edits autosave to the open stored version after a short pause (1.5 seconds).
 Tracked edits and review decisions use that same save path. Autosave does not
@@ -120,7 +132,11 @@ the review tests when upgrading the editor packages, since this integration
 depends on their public module and store exports.
 
 Mike's citation highlights use the native search and reveal API for off-screen
-text. Revision highlights match native revision IDs across rendered runs.
+text. Tracked changes activate the matching native review item by revision ID.
+EigenPal owns the revision highlight, scrolling, and repainting. If the insertion
+and deletion belong to separate review items, a native text selection spans both
+parts, including the unchanged text between them. Dismissing Mike's edit card
+clears its highlight while preserving a subsequent user selection or activation.
 
 ## Try the editor without backend services
 

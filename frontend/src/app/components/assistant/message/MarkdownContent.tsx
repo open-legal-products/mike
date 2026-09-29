@@ -61,6 +61,12 @@ export function MarkdownContent({
                     /^us-case-\d+$/.test(url) ? url : defaultUrlTransform(url)
                 }
                 components={{
+                    pre: (props) => (
+                        <pre
+                            className="max-w-full overflow-x-auto"
+                            {...withoutMarkdownNode(props)}
+                        />
+                    ),
                     table: (props) => (
                         <div className="overflow-x-auto my-4 rounded-lg">
                             <table

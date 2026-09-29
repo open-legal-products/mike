@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 
-/** Shared panel header above the viewer toolbar. Long annotations scroll within
- * the header, leaving the document canvas available beneath them. */
+/** Shared panel header above the viewer toolbar. The annotation (citation
+ * quotes or a tracked change) is never clipped here: its quoted or changed
+ * text scrolls within the card past a fixed height, keeping the card's
+ * actions and the document canvas in view. */
 export function DocumentAnnotationLayer({
     children,
     title,
@@ -18,15 +20,11 @@ export function DocumentAnnotationLayer({
         >
             <div
                 data-document-panel-header
-                className="flex max-h-[40%] shrink-0 flex-col"
+                className="flex shrink-0 flex-col"
             >
                 {title}
                 {annotation && (
-                    <div
-                        role="region"
-                        aria-label="Document annotation"
-                        className="min-h-0 overflow-y-auto overscroll-contain"
-                    >
+                    <div role="region" aria-label="Document annotation">
                         {annotation}
                     </div>
                 )}

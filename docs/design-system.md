@@ -292,6 +292,11 @@ These are the rules the primitives already follow. Match them in new work.
   `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40
   focus-visible:ring-offset-2`. If you write `outline-none` you owe the element a
   replacement indicator in the same class string.
+- **Text fields may hide the ring after a click.** Browsers match
+  `:focus-visible` on a focused text field even when it was clicked. Add
+  `keyboard-focus-ring` (defined in `globals.css`, driven by
+  `useInputModality`) to keep the ring for Tab navigation only; the caret still
+  shows focus after a click.
 - **A background tint is not a focus indicator** when the tint is a small
   luminance step. `liquid-dropdown` items pair the semantic focus tint with a
   ring for this reason.

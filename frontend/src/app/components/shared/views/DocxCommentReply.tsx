@@ -8,6 +8,7 @@ import { useEditorSnapshot } from "@docx-editor.dev/react";
 import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FORM_CONTROL_GLASS_CLASS } from "@/app/components/ui/form-field";
+import { cn } from "@/app/lib/utils";
 
 export function DocxCommentReply({
     editor,
@@ -81,7 +82,10 @@ export function DocxCommentReply({
                 rows={3}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
-                className={`${FORM_CONTROL_GLASS_CLASS} min-h-20 resize-y py-2`}
+                className={cn(
+                    FORM_CONTROL_GLASS_CLASS,
+                    "keyboard-focus-ring min-h-24 resize-y py-2 text-xs",
+                )}
                 placeholder="Write a reply…"
             />
             {error && (

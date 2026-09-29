@@ -436,12 +436,18 @@ export function DocDownloadBlock({
 
     const spinning = busy || isReloading;
 
+    // Scale with the chat column rather than the viewport: a docked panel
+    // can be narrow on a wide screen. The name truncates beside the download
+    // button; the full name stays available as a tooltip.
     const body = (
-        <div className="flex items-center gap-3 px-4 py-3 min-w-0 flex-1">
-            <FileTypeIcon fileType={filename} className="h-4 w-4" />
+        <div className="flex items-center gap-2 px-3 py-2.5 min-w-0 flex-1 @md:gap-3 @md:px-4 @md:py-3">
+            <FileTypeIcon fileType={filename} className="h-3.5 w-3.5 @md:h-4 @md:w-4" />
             <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 min-w-0">
-                    <p className="text-lg font-serif text-gray-900 text-wrap">
+                    <p
+                        title={basename}
+                        className="min-w-0 truncate text-sm font-serif text-gray-900 @md:text-lg"
+                    >
                         {basename}
                     </p>
                     <VersionChip n={versionNumber} size="lg" />
@@ -453,24 +459,25 @@ export function DocDownloadBlock({
     const downloadIcon = spinning ? (
         <div
             aria-disabled
-            className="shrink-0 flex items-center bg-white/25 px-6 text-gray-400 cursor-not-allowed"
+            className="shrink-0 flex items-center bg-white/25 px-4 text-gray-400 cursor-not-allowed @md:px-6"
         >
-            <Loader2 size={13} className="animate-spin" />
+            <Loader2 className="size-3 animate-spin @md:size-[13px]" />
         </div>
     ) : (
         <button
             type="button"
             onClick={handleDownload}
-            className="shrink-0 flex items-center bg-white/25 px-6 text-gray-500 transition-colors hover:bg-white/55 hover:text-gray-700 cursor-pointer"
+            aria-label={`Download ${filename}`}
+            className="shrink-0 flex items-center bg-white/25 px-4 text-gray-500 transition-colors hover:bg-white/55 hover:text-gray-700 cursor-pointer @md:px-6"
         >
-            <Download size={13} />
+            <Download className="size-3 @md:size-[13px]" />
         </button>
     );
 
     if (onOpen) {
         return (
             <div
-                className={`flex items-stretch overflow-hidden w-full font-serif ${RESPONSE_GLASS_SURFACE}`}
+                className={`@container flex items-stretch overflow-hidden w-full font-serif ${RESPONSE_GLASS_SURFACE}`}
             >
                 <button
                     type="button"
@@ -487,7 +494,7 @@ export function DocDownloadBlock({
     if (spinning) {
         return (
             <div
-                className={`flex items-stretch overflow-hidden w-full font-serif ${RESPONSE_GLASS_SURFACE}`}
+                className={`@container flex items-stretch overflow-hidden w-full font-serif ${RESPONSE_GLASS_SURFACE}`}
             >
                 {body}
                 {downloadIcon}
@@ -497,7 +504,7 @@ export function DocDownloadBlock({
 
     return (
         <div
-            className={`flex items-stretch overflow-hidden w-full font-serif ${RESPONSE_GLASS_SURFACE}`}
+            className={`@container flex items-stretch overflow-hidden w-full font-serif ${RESPONSE_GLASS_SURFACE}`}
         >
             <button
                 type="button"

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
 import { getDocumentFile } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
@@ -14,6 +14,7 @@ import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
 import type { PanelDocument } from "./types";
 import type { DocxSaveState } from "./views/DocxRenderer.types";
+import { DocxSaveErrorPopup } from "./views/DocxSaveErrorPopup";
 
 type ExternalSourceLink = {
     href: string;
@@ -102,27 +103,21 @@ export function DocumentTitleRow({
                 </div>
                 <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-2">
                     {document.type === "docx" && saveState?.ready && (
-                        <span
-                            role="status"
-                            aria-live="polite"
-                            className="mr-2 text-xs text-muted-foreground"
-                        >
-                            {saveState.error
-                                ? "Not saved"
-                                : saveState.dirty ||
-                                    saveState.status === "saving"
-                                  ? "Saving…"
-                                  : "Saved"}
-                        </span>
+                        <DocxSaveStatus state={saveState} />
+                    )}
+                    {document.type === "docx" && (
+                        <DocxSaveErrorPopup error={saveState?.error ?? null} />
                     )}
                     {onToggleToolbar && (
                         <TextButtonUI
                             size="sm"
                             aria-expanded={toolbarVisible}
+                            aria-pressed={toolbarVisible}
+                            className={toolbarVisible ? "text-foreground" : undefined}
                             title={
                                 toolbarVisible
-                                    ? "Hide editing toolbar"
-                                    : "Show editing toolbar"
+                                    ? "Stop editing"
+                                    : "Enable editing"
                             }
                             onClick={onToggleToolbar}
                         >
@@ -135,7 +130,6 @@ export function DocumentTitleRow({
                             versionId={document.version_id ?? null}
                             filename={document.title}
                             isReloading={isReloading}
-                            compact={compactActions}
                             onDownload={onDownload}
                         />
                     )}
@@ -144,7 +138,6 @@ export function DocumentTitleRow({
                             <UrlDownloadButton
                                 key={`${action.type}:${action.url}:${index}`}
                                 href={action.url}
-                                compact={compactActions}
                             />
                         ) : (
                             <ExternalSourceLinkButton
@@ -160,11 +153,6 @@ export function DocumentTitleRow({
                     )}
                 </div>
             </div>
-            {document.type === "docx" && saveState?.error && (
-                <p role="alert" className="mt-1 text-xs text-destructive">
-                    {saveState.error}
-                </p>
-            )}
             {document.metadata.length > 0 && (
                 <div className="mt-1 flex w-full flex-wrap items-center gap-x-3 gap-y-1 font-serif text-sm text-gray-600">
                     {document.metadata.map((item, index) => (
@@ -175,6 +163,41 @@ export function DocumentTitleRow({
                 </div>
             )}
         </div>
+    );
+}
+
+/** How long "Saved" confirms a completed autosave before clearing. */
+const SAVED_VISIBLE_MS = 1000;
+
+/**
+ * Autosave status: "Saving…" while edits are pending or uploading, then
+ * "Saved" briefly, then nothing. Each save produces a new state object, so a
+ * later save shows "Saved" again. The live region stays mounted while empty
+ * so status changes are still announced.
+ */
+function DocxSaveStatus({ state }: { state: DocxSaveState }) {
+    const [expired, setExpired] = useState<DocxSaveState | null>(null);
+    const saved = !state.error && !state.dirty && state.status === "saved";
+    useEffect(() => {
+        if (!saved) return;
+        const timer = setTimeout(() => setExpired(state), SAVED_VISIBLE_MS);
+        return () => clearTimeout(timer);
+    }, [saved, state]);
+    const label = state.error
+        ? "Not saved"
+        : state.dirty || state.status === "saving"
+          ? "Saving…"
+          : saved && expired !== state
+            ? "Saved"
+            : null;
+    return (
+        <span
+            role="status"
+            aria-live="polite"
+            className={label ? "mr-2 text-xs text-muted-foreground" : "sr-only"}
+        >
+            {label}
+        </span>
     );
 }
 
@@ -199,10 +222,8 @@ function formatMetadataValue(item: PanelDocument["metadata"][number]): string {
 
 function UrlDownloadButton({
     href,
-    compact,
 }: {
     href: string;
-    compact: boolean;
 }) {
     return (
         <a
@@ -213,11 +234,10 @@ function UrlDownloadButton({
             aria-label="Download"
             title="Download"
             className={textButtonUIClassName({
-                size: compact ? "icon-xs" : "sm",
+                size: "icon-xs",
             })}
         >
             <Download aria-hidden="true" className="h-3.5 w-3.5" />
-            <span className={compact ? "sr-only" : undefined}>Download</span>
         </a>
     );
 }
@@ -253,14 +273,12 @@ function DownloadButton({
     versionId,
     filename,
     isReloading,
-    compact,
     onDownload,
 }: {
     documentId: string;
     versionId: string | null;
     filename: string;
     isReloading?: boolean;
-    compact: boolean;
     onDownload?: () => Promise<void> | undefined;
 }) {
     const [busy, setBusy] = useState(false);
@@ -310,14 +328,13 @@ function DownloadButton({
                 onClose={() => setError(null)}
             />
             <TextButtonUI
-                size={compact ? "icon-xs" : "sm"}
+                size="icon-xs"
+                aria-label="Download"
+                title="Download"
                 onClick={handleClick}
                 loading={!!spinning}
             >
                 <Download aria-hidden="true" className="h-3.5 w-3.5" />
-                <span className={compact ? "sr-only" : undefined}>
-                    Download
-                </span>
             </TextButtonUI>
         </>
     );

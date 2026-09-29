@@ -7,13 +7,19 @@ export interface DocxSaveState {
     error: string | null;
 }
 
+/** The `w:id`s of one Mike edit's insertion and deletion halves. */
+export interface DocxRevisionIds {
+    ins?: string | null;
+    del?: string | null;
+}
+
 export interface DocxSurface {
     content: HTMLElement;
     scroll: HTMLElement;
-    /** Reveal an unpainted tracked change by its OOXML revision IDs. */
-    revealRevision?: (ids: readonly string[]) => boolean;
-    /** Materialize an off-screen match in engines that virtualize pages. */
-    revealText?: (text: string) => boolean;
+    /** Activate and reveal a tracked change using the native review highlight. */
+    activateRevision?: (ids: DocxRevisionIds) => boolean;
+    /** Dismiss only the revision activated by this viewer. */
+    clearRevisionHighlight?: () => void;
     /** Select and reveal a citation using the editor's native selection. */
     selectText?: (text: string) => boolean;
     /** Clear the citation selection without removing document content. */
@@ -24,7 +30,7 @@ export interface DocxSurface {
 export interface DocxRendererProps {
     bytes: ArrayBuffer;
     mode: DocxMode;
-    /** Toolbar visibility does not change editing mode or reload the document. */
+    /** False hides formatting controls and enforces native read-only mode without reloading. */
     toolbarVisible?: boolean;
     filename?: string;
     author?: string;

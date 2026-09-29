@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { docxModules } from "@/app/lib/docxReviewModule";
 import DocxRenderer from "./EigenpalDocxRenderer";
@@ -34,7 +35,23 @@ it("registers the open-source review module and updates author without replacing
 });
 
 
-it("toggles native navigation from the toolbar and follows the panel close action", () => {
+it("locks the native editor when Edit is off without replacing its document", () => {
+    const props = { bytes: new ArrayBuffer(1), mode: "edit" as const, onReady: vi.fn(), onError: vi.fn() };
+    const { rerender } = render(<DocxRenderer {...props} toolbarVisible={false} />);
+    const document = state.props.document;
+    expect(state.props.mode).toBe("view");
+    rerender(<DocxRenderer {...props} toolbarVisible />);
+    expect(state.props.mode).toBe("edit");
+    expect(state.props.document).toBe(document);
+    rerender(<DocxRenderer {...props} toolbarVisible={false} />);
+    expect(state.props.mode).toBe("view");
+    expect(state.props.document).toBe(document);
+    rerender(<DocxRenderer {...props} mode="view" toolbarVisible />);
+    expect(state.props.mode).toBe("view");
+});
+
+it("toggles navigation from More and follows the panel close action", async () => {
+    const user = userEvent.setup();
     const props = { bytes: new ArrayBuffer(1), mode: "edit" as const, onReady: vi.fn(), onError: vi.fn() };
     const { unmount } = render(<DocxRenderer {...props} />);
     const editor = {
@@ -43,29 +60,34 @@ it("toggles native navigation from the toolbar and follows the panel close actio
     };
     act(() => (state.props.onReady as (editor: unknown) => void)(editor));
     const navigation = () => state.props.navigation as { toggle: boolean; open: boolean; onOpenChange: (open: boolean) => void };
-    const button = within(screen.getByRole("toolbar")).getByRole("button", { name: "Document navigation" });
+    const more = within(screen.getByRole("toolbar")).getByRole("button", { name: "More" });
     expect(navigation().toggle).toBe(false);
     expect(navigation().open).toBe(false);
-    expect(button).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(button);
+    expect(screen.queryByRole("button", { name: "Document navigation" })).toBeNull();
+    await user.click(more);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Navigation pane" })).toHaveAttribute("aria-checked", "false");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Navigation pane" }));
     expect(navigation().open).toBe(true);
-    expect(button).toHaveAttribute("aria-expanded", "true");
-    fireEvent.click(button);
+    await user.click(more);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Navigation pane" })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Navigation pane" }));
     expect(navigation().open).toBe(false);
-    fireEvent.click(button);
+    await user.click(more);
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Navigation pane" }));
     act(() => navigation().onOpenChange(false));
-    expect(button).toHaveAttribute("aria-expanded", "false");
+    await user.click(more);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Navigation pane" })).toHaveAttribute("aria-checked", "false");
     expect(props.onError).not.toHaveBeenCalled();
     unmount();
-    expect(screen.queryByRole("button", { name: "Document navigation" })).toBeNull();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Navigation pane" })).toBeNull();
 });
 
 
-it("reveals the exact unpainted body revision, including paired replacements, instead of searching repeated text", () => {
+it("activates the exact native body revision, including paired replacements, and clears only its own highlight", () => {
     const onReady = vi.fn();
     render(<DocxRenderer bytes={new ArrayBuffer(1)} mode="edit" onReady={onReady} onError={vi.fn()} />);
     const revision = (key: string, ids: string[], partName: string, paragraphId: string) => ({
-        kind: "revision", key,
+        kind: "revision", key, isActive: false,
         item: { addresses: ids.map((id) => ({ id })), ranges: [{ partName, start: { paragraphId } }] },
     });
     const editor = {
@@ -76,18 +98,101 @@ it("reveals the exact unpainted body revision, including paired replacements, in
             revision("other", ["18"], "/word/document.xml", "first-page"),
             revision("replacement", ["7", "8"], "/word/document.xml", "third-page"),
         ],
-        scrollToBlock: vi.fn().mockReturnValue(true),
+        setActiveReviewItem: vi.fn().mockReturnValue({ ok: true }),
         findMatches: vi.fn(),
     };
     act(() => (state.props.onReady as (editor: unknown) => void)(editor));
     const surface = onReady.mock.calls[0][0];
-    expect(surface.revealRevision(["8"])).toBe(true);
-    expect(editor.scrollToBlock).toHaveBeenLastCalledWith("third-page");
-    expect(surface.revealRevision(["7"])).toBe(true);
-    expect(editor.scrollToBlock).toHaveBeenLastCalledWith("third-page");
-    expect(surface.revealRevision(["missing"])).toBe(false);
-    expect(editor.scrollToBlock).toHaveBeenCalledTimes(2);
+    expect(surface.activateRevision({ ins: "8", del: "7" })).toBe(true);
+    expect(editor.setActiveReviewItem).toHaveBeenLastCalledWith("replacement", { reveal: "center" });
+    expect(surface.activateRevision({ ins: "18" })).toBe(true);
+    expect(editor.setActiveReviewItem).toHaveBeenLastCalledWith("other", { reveal: "center" });
+    expect(surface.activateRevision({ ins: "missing" })).toBe(false);
+    expect(editor.setActiveReviewItem).toHaveBeenCalledTimes(2);
     expect(editor.findMatches).not.toHaveBeenCalled();
+    // A user moving to another review item must retain that activation.
+    surface.clearRevisionHighlight();
+    expect(editor.setActiveReviewItem).toHaveBeenCalledTimes(2);
+    surface.activateRevision({ ins: "8", del: "7" });
+    vi.spyOn(editor, "getReviewItems").mockReturnValue([
+        { ...revision("replacement", ["7", "8"], "/word/document.xml", "third-page"), isActive: true },
+    ]);
+    surface.clearRevisionHighlight();
+    expect(editor.setActiveReviewItem).toHaveBeenLastCalledWith(null);
+    editor.setActiveReviewItem.mockReturnValueOnce({ ok: false });
+    expect(surface.activateRevision({ ins: "8", del: "7" })).toBe(false);
+
+});
+
+it.each([
+    { ids: { ins: "8" }, anchor: 12, head: 20 },
+    { ids: { del: "7" }, anchor: 4, head: 12 },
+])("selects only the $ids half of a native replacement that pairs it with another edit", ({ ids, anchor, head }) => {
+    const onReady = vi.fn();
+    render(<DocxRenderer bytes={new ArrayBuffer(1)} mode="edit" onReady={onReady} onError={vi.fn()} />);
+    const position = (offset: number) => ({ paragraphId: "p", offset });
+    const range = (start: number, end: number) => ({ partName: "/word/document.xml", start: position(start), end: position(end) });
+    const editor = {
+        snapshot: () => ({ reviewPaneOpen: false }),
+        on: vi.fn().mockReturnValue(vi.fn()),
+        // An unrelated deletion directly before this insertion, with no space between them.
+        getReviewItems: () => [{
+            kind: "revision", key: "paired", isActive: false,
+            item: {
+                revisionKind: "replace", replacedRangeCount: 1,
+                addresses: [{ id: "7" }, { id: "8" }], ranges: [range(4, 12), range(12, 20)],
+            },
+        }],
+        setActiveReviewItem: vi.fn().mockReturnValue({ ok: true }),
+        exec: vi.fn().mockReturnValue({ ok: true }),
+        query: vi.fn(() => "edit"),
+    };
+    act(() => (state.props.onReady as (editor: unknown) => void)(editor));
+    const surface = onReady.mock.calls[0][0];
+    expect(surface.activateRevision(ids)).toBe(true);
+    expect(editor.setActiveReviewItem).toHaveBeenLastCalledWith(null);
+    expect(editor.exec).toHaveBeenLastCalledWith({ type: "setSelection", range: { anchor: position(anchor), head: position(head) } });
+});
+
+it.each([false, true])("selects both separated revision ranges across paragraphs=%s and preserves subsequent user selection", (crossParagraphs) => {
+    const onReady = vi.fn();
+    render(<DocxRenderer bytes={new ArrayBuffer(1)} mode="edit" onReady={onReady} onError={vi.fn()} />);
+    const anchor = { paragraphId: "first", offset: 7 };
+    const head = { paragraphId: crossParagraphs ? "last" : "first", offset: 80 };
+    const revision = (key: string, id: string, start: typeof anchor, end: typeof anchor) => ({
+        kind: "revision", key, isActive: false,
+        item: { addresses: [{ id }], ranges: [{ partName: "/word/document.xml", start, end }] },
+    });
+    let selectedText = "";
+    const editor = {
+        snapshot: () => ({ reviewPaneOpen: false }),
+        on: vi.fn().mockReturnValue(vi.fn()),
+        // Native document order, independent of the caller's insertion/deletion ID order.
+        getReviewItems: () => [
+            revision("deletion", "7", anchor, { ...anchor, offset: 35 }),
+            revision("insertion", "8", { ...head, offset: 50 }, head),
+        ],
+        setActiveReviewItem: vi.fn().mockReturnValue({ ok: true }),
+        exec: vi.fn(() => { selectedText = "deleted text with a gap then inserted text"; return { ok: true }; }),
+        query: vi.fn(() => selectedText),
+        findMatches: vi.fn(),
+    };
+    act(() => (state.props.onReady as (editor: unknown) => void)(editor));
+    const surface = onReady.mock.calls[0][0];
+    expect(surface.activateRevision({ ins: "8", del: "7" })).toBe(true);
+    expect(editor.setActiveReviewItem).toHaveBeenCalledWith("deletion", { reveal: "center" });
+    expect(editor.setActiveReviewItem).toHaveBeenLastCalledWith(null);
+    expect(editor.exec).toHaveBeenLastCalledWith({ type: "setSelection", range: { anchor, head } });
+    expect(editor.findMatches).not.toHaveBeenCalled();
+    surface.clearRevisionHighlight();
+    expect(editor.exec).toHaveBeenLastCalledWith({ type: "setSelection", range: { anchor, head: anchor } });
+    surface.activateRevision({ ins: "8", del: "7" });
+    selectedText = "A later user selection";
+    editor.exec.mockClear();
+    surface.clearRevisionHighlight();
+    expect(editor.exec).not.toHaveBeenCalled();
+    editor.exec.mockReturnValueOnce({ ok: false });
+    expect(surface.activateRevision({ ins: "8", del: "7" })).toBe(false);
 });
 
 it("selects across table cells, scrolls to the first cell, and clears the complete citation on deselect", () => {

@@ -16,7 +16,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/app/components/ui/popover";
-import { FORM_CONTROL_GLASS_CLASS } from "@/app/components/ui/form-field";
 
 /** Mike-owned comment UI, using only the public open-source Editor contract. */
 export function DocxCommentComposer({
@@ -34,7 +33,6 @@ export function DocxCommentComposer({
   useEditorSnapshot(editor);
   const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [anchorText, setAnchorText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [anchorBox, setAnchorBox] = useState<AnchorBox | null>(null);
@@ -115,7 +113,6 @@ export function DocxCommentComposer({
     pin.current = retained;
     anchorRange.current = JSON.stringify(range);
     setAnchorBox(surface ? docxSelectionAnchor(surface) : null);
-    setAnchorText(editor.query({ type: "selectedText" }));
     setError(null);
     setStatus("");
     setComposing(true);
@@ -222,20 +219,12 @@ export function DocxCommentComposer({
                     <label htmlFor={id} className="block font-medium">
                       New comment
                     </label>
-                    {anchorText && (
-                      <p
-                        className="line-clamp-2 break-words text-muted-foreground"
-                        title={anchorText}
-                      >
-                        On: “{anchorText}”
-                      </p>
-                    )}
                     <textarea
                       id={id}
                       ref={input}
                       rows={3}
                       value={draft}
-                      className={`${FORM_CONTROL_GLASS_CLASS} min-h-20 max-h-48 resize-y py-2`}
+                      className="keyboard-focus-ring w-full min-h-24 max-h-48 resize-y rounded-xl bg-[var(--dropdown-input-background)] px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2"
                       placeholder="Write a comment…"
                       onChange={(event) => setDraft(event.target.value)}
                       onKeyDown={(event) => {

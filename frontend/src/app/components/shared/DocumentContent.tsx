@@ -64,7 +64,7 @@ export interface DocumentContentProps {
     mode: DocumentContentMode;
     isReloading?: boolean;
     compactActions?: boolean;
-    /** Assistant-only control for showing the DOCX formatting toolbar. */
+    /** Assistant default: start with editing locked and the DOCX toolbar hidden. */
     showToolbarToggle?: boolean;
     active?: boolean;
     warning?: string | null;
@@ -105,7 +105,7 @@ export function DocumentContent({
 }: DocumentContentProps) {
     const contentRef = useRef<HTMLDivElement>(null);
     const [narrow, setNarrow] = useState(false);
-    const [toolbarVisible, setToolbarVisible] = useState(true);
+    const [toolbarVisible, setToolbarVisible] = useState(!showToolbarToggle);
     useEffect(() => {
         const element = contentRef.current;
         if (!element || typeof ResizeObserver === "undefined") return;
@@ -238,7 +238,7 @@ export function DocumentContent({
                         onDownload={() => localDownload.current?.()}
                         toolbarVisible={toolbarVisible}
                         onToggleToolbar={
-                            showToolbarToggle && viewType === "docx"
+                            viewType === "docx"
                                 ? () => setToolbarVisible((visible) => !visible)
                                 : undefined
                         }
@@ -309,7 +309,7 @@ export function DocumentContent({
                         cacheBytes={cacheBytes}
                         refetchKey={refetchKey}
                         defaultMode="edit"
-                        toolbarVisible={!showToolbarToggle || toolbarVisible}
+                        toolbarVisible={toolbarVisible}
                         filename={resolvedDocument.title}
                         documentId={documentId}
                         versionId={versionId ?? undefined}

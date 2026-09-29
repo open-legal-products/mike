@@ -565,11 +565,6 @@
     box-decoration-break: clone;
 }
 
-.docx-view-container .docx-edit-flash {
-    animation: docxEditFlash 2s ease-out;
-    border-radius: 2px;
-}
-
 /* Optimistic Accept/Reject: instantly hide rejected side / de-style kept side.
    These are ephemeral DOM mutations; the real re-render replaces the markup. */
 .docx-view-container .docx-edit-hidden {
@@ -581,17 +576,6 @@
     background-color: transparent !important;
     text-decoration: none !important;
     border-bottom: none !important;
-}
-
-@keyframes docxEditFlash {
-    0%, 20% {
-        background-color: rgba(59, 130, 246, 0.45);
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.45);
-    }
-    100% {
-        background-color: rgba(59, 130, 246, 0);
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0);
-    }
 }
 
 .uploading-ellipsis {
@@ -655,4 +639,14 @@
     .uploading-ellipsis-two {
         opacity: 0;
     }
+}
+
+/* Text fields always match :focus-visible, even after a click. Keep the
+   Tailwind focus ring for keyboard navigation only; useInputModality sets the
+   attribute. Clears only the ring, not the field's own shadows. Unlayered on
+   purpose: EigenPal's unlayered `.docx-editor .focus-visible\:ring-2` rules
+   would otherwise win inside the editor chrome (comment column, composer). */
+:root[data-input-modality="pointer"] .keyboard-focus-ring:focus-visible {
+    --tw-ring-shadow: 0 0 #0000;
+    --tw-ring-offset-shadow: 0 0 #0000;
 }

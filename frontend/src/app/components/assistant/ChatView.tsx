@@ -126,8 +126,6 @@ const ASSISTANT_PANEL_TRANSITION_MS = 500;
 const MOBILE_BREAKPOINT_PX = 768;
 const DEFAULT_ASSISTANT_BOTTOM_PADDING = 116;
 const CHAT_MESSAGE_TOP_PADDING = 76;
-const DEFAULT_MOBILE_MESSAGE_TOP_PADDING = 24;
-const DEFAULT_DESKTOP_MESSAGE_TOP_PADDING = 32;
 const SCROLL_BUTTON_INPUT_GAP = 16;
 const CHAT_INPUT_BOTTOM_OFFSET = 12;
 
@@ -709,21 +707,34 @@ export function ChatView({
     }, [accessResolved]);
 
     useEffect(() => {
-        if (latestUserMessageRef.current) {
-            const mobile = window.innerWidth < MOBILE_BREAKPOINT_PX;
-            const headerHeight = mobile ? 56 : 0;
-            const messageGap = mobile ? 24 : 32;
-            const addedHeaderClearance =
-                CHAT_MESSAGE_TOP_PADDING -
-                (mobile
-                    ? DEFAULT_MOBILE_MESSAGE_TOP_PADDING
-                    : DEFAULT_DESKTOP_MESSAGE_TOP_PADDING);
-            const paddingBottom = DEFAULT_ASSISTANT_BOTTOM_PADDING;
-            const userMessageHeight = latestUserMessageRef.current.offsetHeight;
+        const container = messagesContainerRef.current;
+        const userMessage = latestUserMessageRef.current;
+        if (!container || !userMessage) return;
+        // Size the latest response so that, scrolled to the bottom, the latest
+        // user message sits CHAT_MESSAGE_TOP_PADDING below the viewport top —
+        // the same place scrollLatestUserToTop puts it. Measure the real
+        // scroll viewport: it is not the full dynamic viewport height.
+        const update = () => {
+            const messageGap =
+                window.innerWidth < MOBILE_BREAKPOINT_PX ? 24 : 32;
             setMinHeight(
-                `calc(100dvh - ${headerHeight + messageGap * 2 + userMessageHeight + paddingBottom + addedHeaderClearance}px)`,
+                `${Math.max(
+                    0,
+                    container.clientHeight -
+                        CHAT_MESSAGE_TOP_PADDING -
+                        userMessage.offsetHeight -
+                        // One list gap before the response and one before
+                        // the trailing scroll anchor (messagesEndRef).
+                        messageGap * 2 -
+                        DEFAULT_ASSISTANT_BOTTOM_PADDING,
+                )}px`,
             );
-        }
+        };
+        update();
+        const observer = new ResizeObserver(update);
+        observer.observe(container);
+        observer.observe(userMessage);
+        return () => observer.disconnect();
     }, [messages.length]);
 
     const updateScrollButton = useCallback(() => {

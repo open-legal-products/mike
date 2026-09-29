@@ -57,7 +57,7 @@ it("pins the selected passage while typing and creates one authored comment", as
     const textbox = screen.getByRole("textbox", { name: "New comment" });
     expect(textbox).toHaveFocus();
     expect(editor.retainSelection).toHaveBeenCalledOnce();
-    expect(screen.getByText(/The selected clause/)).toBeVisible();
+    expect(screen.queryByText(/The selected clause/)).toBeNull();
     expect(screen.getByRole("button", { name: "Add comment" })).toBeDisabled();
     await user.type(textbox, "Please clarify this clause.");
     expect(editor.addComment).not.toHaveBeenCalled();

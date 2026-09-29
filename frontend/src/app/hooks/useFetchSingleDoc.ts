@@ -5,24 +5,15 @@ import { API_BASE } from "@/app/lib/mikeApi";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 
 /**
- * /display returns PDF bytes (when the active version has a PDF rendition),
- * raw spreadsheet bytes (xlsx/xlsm/xls — never converted to PDF), or raw DOCX
- * bytes otherwise. Reporting the type lets the caller swap between PdfView
- * (PDF.js), SpreadsheetView (Fortune-sheet), and DocxView (DOCX engines).
+ * PdfView's loader. /display returns PDF bytes (a stored or on-demand PDF
+ * rendition) for the files PdfView shows. Anything else is reported as
+ * "docx" so a caller can route it to DocxView. Spreadsheets and .docx files
+ * read their raw bytes from /file instead (see useFetchDocxBytes).
  */
 export type DocResult =
     | { type: "pdf"; buffer: ArrayBuffer }
-    | { type: "spreadsheet"; buffer: ArrayBuffer }
     | { type: "docx" }
     | null;
-
-/** Office spreadsheet content types served raw by /display. */
-function isSpreadsheetContentType(contentType: string): boolean {
-    return (
-        contentType.includes("spreadsheetml") || // .xlsx
-        contentType.includes("ms-excel") // .xls / .xlsm
-    );
-}
 
 export function useFetchSingleDoc(
     documentId: string | null | undefined,
@@ -67,12 +58,9 @@ export function useFetchSingleDoc(
                 if (contentType.includes("application/pdf")) {
                     const buffer = await response.arrayBuffer();
                     if (!cancelled) setResult({ type: "pdf", buffer });
-                } else if (isSpreadsheetContentType(contentType)) {
-                    const buffer = await response.arrayBuffer();
-                    if (!cancelled) setResult({ type: "spreadsheet", buffer });
                 } else {
                     // Drain the body so the connection is reusable, but the
-                    // bytes are useless to PDF/spreadsheet viewers. Callers
+                    // bytes are useless to the PDF viewer. Callers
                     // should route DOC/DOCX files to DocxView directly.
                     await response.arrayBuffer().catch(() => {});
                     if (!cancelled) setResult({ type: "docx" });
