@@ -172,7 +172,7 @@ describe("TRChatPanel header", () => {
         });
         expect(screen.queryByText("Retired history")).not.toBeInTheDocument();
         expect(screen.queryByText("Chat unavailable")).not.toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "New Chat", exact: true })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "New Chat" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Actions" })).not.toBeInTheDocument();
     });
 
