@@ -191,6 +191,17 @@ export function TRSidePanel({
           )?.id
         : initialDocument?.id;
 
+    const resolvedDocumentId = doc?.id;
+    useEffect(() => {
+        if (!activeDocumentId || activeDocumentId === resolvedDocumentId) return;
+        // A removed secondary source must not stay selected and reappear on a
+        // later refresh. Primitive IDs keep equivalent refreshes inert. Run
+        // before the navigation reset below so a new citation takes precedence.
+        setActiveDocumentId(requestedDocumentId);
+        setDocCitation(undefined);
+        setDocumentPaneOpen((open) => open && !!requestedDocumentId);
+    }, [activeDocumentId, resolvedDocumentId, requestedDocumentId]);
+
     // Reset on navigation intent, not on refreshed row/document object identity.
     // Background review updates must preserve a source picked inside the panel.
     useEffect(() => {

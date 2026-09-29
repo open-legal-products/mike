@@ -84,6 +84,14 @@ collapsed. A 300-refresh regression failed before the fix. The reset now depends
 on cell/row/document identities and citation values; genuine navigation still
 resets the view.
 
+Review also exposed a distinct removal case: a selected secondary source could
+remain in state after leaving the row's source list or the document collection,
+and unexpectedly reopen if restored later. Four regressions failed before the
+follow-up fix. Reconciliation now retires only an unavailable selection, clears
+its citation and preserves the pane's open/collapsed choice when falling back.
+It uses primitive IDs and runs before navigation resets, so equivalent refreshes
+remain inert and a new citation arriving with removal still takes precedence.
+
 ### Out-of-order tabular histories replace the selected conversation
 
 The initial history effect and manual history loader both published responses
