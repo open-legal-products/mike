@@ -7,9 +7,9 @@
 # this job "e2e / playwright" as a required status check in branch protection —
 # see docs/e2e-ci.md ("Make it merge-blocking").
 #
-# The suite is green with NO secret: of the 31 specs, the 4 LLM-dependent ones
+# The suite is green with NO secret: the four live-LLM-dependent cases
 # (chat + critical path) skip themselves when ANTHROPIC_API_KEY is absent (see
-# e2e/llm.ts), so a keyless run passes the other 27 specs. Mike supports local
+# e2e/llm.ts), while all keyless cases still run. Mike supports local
 # Ollama models without a provider key, but this job does not provision Ollama;
 # the gate is not caused by the best-effort title-generation call. To run and
 # enforce those 4, set the ANTHROPIC_API_KEY repository secret; exact steps, the
@@ -49,7 +49,7 @@ jobs:
     # React's passive-update warning is development-only. Keep the focused,
     # keyless streaming regression on next dev as well as the production suite.
     name: Assistant streaming (development)
-    timeout-minutes: 20
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     env:
       PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
@@ -86,7 +86,7 @@ jobs:
             cat /tmp/assistant-streaming-next.log
             exit 1
           fi
-          npx playwright test e2e/assistant-streaming.spec.ts --project=chromium --no-deps --retries=0 --trace=retain-on-failure
+          npx playwright test e2e/assistant-streaming.spec.ts e2e/tabular-chat-lifecycle.spec.ts --project=chromium --no-deps --retries=0 --trace=retain-on-failure
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -99,17 +99,23 @@ jobs:
           if-no-files-found: ignore
 
   playwright:
-    timeout-minutes: 30
+    name: ${{ matrix.renderer == 'production' && 'playwright' || 'Playwright (development stress)' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        renderer: [production, development]
     runs-on: ubuntu-latest
     env:
       # Defaults match e2e/auth.setup.ts; overriding the password here would break
       # the valid-login specs, so only the base URL is pinned.
       PLAYWRIGHT_BASE_URL: http://localhost:3000
+      REACT_STRESS: ${{ matrix.renderer == 'development' && '1' || '0' }}
       # Exposed to the Playwright process (not just backend/.env) so the LLM-gated
       # specs can skip themselves when no key is present — see e2e/llm.ts. When the
       # secret is set they run and are enforced; when absent they skip, so a keyless
       # run (e.g. a fork PR, which never receives this secret) is still green on
-      # the other 27 of the 31 specs. Setup: docs/e2e-ci.md, "Enable the LLM specs".
+      # all other cases. Setup: docs/e2e-ci.md, "Enable the LLM specs".
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -292,15 +298,30 @@ jobs:
       # neither: no overlay, no JIT compile. Verified locally — flipping dev→start
       # took the suite from intermittent overlay/timeout failures to green.
       - name: Build web (production)
+        if: matrix.renderer == 'production'
         run: npm run build --prefix frontend
 
       - name: Start backend API
         run: npm run dev --prefix backend &
-      - name: Start web (production server)
-        run: npm run start --prefix frontend &
+      - name: Start web
+        run: |
+          if [ "${{ matrix.renderer }}" = "development" ]; then
+            npm run dev --prefix frontend > /tmp/e2e-next.log 2>&1 &
+          else
+            npm run start --prefix frontend > /tmp/e2e-next.log 2>&1 &
+          fi
 
       - name: Wait for servers
         run: npx wait-on http://localhost:3001/health http://localhost:3000 --timeout 120000
+
+      # Precompile static routes so cold Turbopack work does not consume UI
+      # assertion budgets. Development overlays remain visible to the tests.
+      - name: Warm development routes
+        if: matrix.renderer == 'development'
+        run: |
+          for route in login assistant projects tabular-reviews workflows settings; do
+            curl --fail --silent --max-time 120 "http://localhost:3000/$route" > /dev/null
+          done
 
       # playwright.config.ts sets webServer to undefined when CI=true, so the job
       # is responsible for the servers above; Playwright just drives them.
@@ -312,9 +333,10 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.renderer }}
           path: |
             playwright-report/
             test-results/
+            /tmp/e2e-next.log
           retention-days: 14
           if-no-files-found: ignore

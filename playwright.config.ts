@@ -13,6 +13,7 @@ export default defineConfig({
        detection. So we run strictly one test at a time. */
     fullyParallel: false,
     workers: 1,
+    timeout: process.env.REACT_STRESS === "1" ? 90_000 : 30_000,
     /* Fail the build on CI if you accidentally left test.only in the source */
     forbidOnly: !!process.env.CI,
     /* Playwright's assertion default is 5s, which is tight for this app's first
@@ -21,8 +22,8 @@ export default defineConfig({
        default: new assertions inherit it, and only genuinely slower waits need
        to spell out an override. */
     expect: { timeout: 10_000 },
-    /* Retry on CI only */
-    retries: process.env.CI ? 2 : 0,
+    /* Stress failures must remain failures even if their timing is intermittent. */
+    retries: process.env.REACT_STRESS === "1" ? 0 : process.env.CI ? 2 : 0,
     /* Reporter. On CI, "github" alone would REPLACE Playwright's default html
        reporter, so playwright-report/ would never be written and the workflow's
        artifact upload (docs/e2e-ci.md, "Failure artifacts") would have nothing
@@ -30,12 +31,15 @@ export default defineConfig({
        HTML report; `open: "never"` stops the reporter from trying to launch a
        browser on the CI box after the run. */
     reporter: process.env.CI
-        ? [["github"], ["html", { open: "never" }]]
+        ? [["github"], ["list"], ["html", { open: "never" }]]
         : "list",
     /* Shared settings for all the projects below */
     use: {
         baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
-        trace: "on-first-retry",
+        video: process.env.PW_VIDEO === "1"
+            ? { mode: "on", size: { width: 1280, height: 720 } }
+            : "off",
+        trace: process.env.REACT_STRESS === "1" ? "retain-on-failure" : "on-first-retry",
         screenshot: "only-on-failure",
     },
 

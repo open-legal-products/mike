@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // Exercise the real page with deterministic auth and Google endpoints. No
 // live Google permissions, mail, or calendars are needed or changed.

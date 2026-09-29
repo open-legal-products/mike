@@ -95,6 +95,87 @@ describe("TRChatPanel header", () => {
         vi.restoreAllMocks();
     });
 
+    it("ignores an initial history response after switching to another thread", async () => {
+        type History = Awaited<ReturnType<typeof getTabularChatMessages>>;
+        let resolveInitial!: (messages: History) => void;
+        vi.mocked(getTabularChatMessages).mockImplementation(async (_reviewId, chatId) => {
+            if (chatId === "chat-1") return new Promise<History>((resolve) => { resolveInitial = resolve; });
+            return [{ id: "new-message", chat_id: chatId, role: "user", content: "Newly selected thread", created_at: "2026-09-29" }];
+        });
+        render(<TRChatPanel reviewId="review-1" initialChatId="chat-1" onCitationClick={vi.fn()} />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByRole("button", { name: "Current draft" }));
+        await user.click(screen.getByRole("menuitem", { name: /Earlier advice/ }));
+        expect(await screen.findByText("Newly selected thread")).toBeInTheDocument();
+        await act(async () => resolveInitial([{ id: "stale", chat_id: "chat-1", role: "user", content: "Stale initial history", created_at: "2026-09-29" }]));
+        expect(screen.queryByText("Stale initial history")).not.toBeInTheDocument();
+        expect(screen.getByText("Newly selected thread")).toBeInTheDocument();
+    });
+
+    it("keeps the latest of sixteen rapid history selections when requests finish backwards", async () => {
+        type History = Awaited<ReturnType<typeof getTabularChatMessages>>;
+        const pending: { chatId: string; resolve: (messages: History) => void }[] = [];
+        vi.mocked(getTabularChatMessages).mockImplementation((_reviewId, chatId) =>
+            new Promise<History>((resolve) => pending.push({ chatId, resolve })));
+        render(<TRChatPanel reviewId="review-1" initialChatId="chat-1" onCitationClick={vi.fn()} />);
+        const user = userEvent.setup();
+        await screen.findByRole("button", { name: "Current draft" });
+        for (let i = 0; i < 16; i++) {
+            await user.click(screen.getByRole("button", { name: i % 2 ? "Earlier advice" : "Current draft" }));
+            await user.click(screen.getByRole("menuitem", { name: i % 2 ? /Current draft/ : /Earlier advice/ }));
+        }
+        expect(pending).toHaveLength(17);
+        for (let i = pending.length - 1; i >= 0; i--) {
+            await act(async () => pending[i].resolve([{ id: `m-${i}`, chat_id: pending[i].chatId,
+                role: "user", content: `Selection ${i}`, created_at: "2026-09-29" }]));
+        }
+        expect(screen.getByText("Selection 16")).toBeInTheDocument();
+        expect(screen.queryByText("Selection 0")).not.toBeInTheDocument();
+    });
+
+    it("ignores an old history failure while the latest selection is still loading", async () => {
+        type History = Awaited<ReturnType<typeof getTabularChatMessages>>;
+        let rejectInitial!: (error: Error) => void;
+        let resolveLatest!: (messages: History) => void;
+        vi.mocked(getTabularChatMessages)
+            .mockReturnValueOnce(new Promise<History>((_resolve, reject) => { rejectInitial = reject; }))
+            .mockReturnValueOnce(new Promise<History>((resolve) => { resolveLatest = resolve; }));
+        render(<TRChatPanel reviewId="review-1" initialChatId="chat-1" onCitationClick={vi.fn()} />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByRole("button", { name: "Current draft" }));
+        await user.click(screen.getByRole("menuitem", { name: /Earlier advice/ }));
+        await act(async () => rejectInitial(new Error("Old request failed")));
+        expect(screen.queryByText("Chat unavailable")).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        // An obsolete finally handler must not clear the latest loading state.
+        expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveAttribute("aria-disabled", "true");
+        await user.keyboard("{Escape}");
+        await act(async () => resolveLatest([{ id: "current", chat_id: "chat-2", role: "user", content: "Latest history", created_at: "2026-09-29" }]));
+        expect(screen.getByText("Latest history")).toBeInTheDocument();
+    });
+
+    it.each(["success", "failure"] as const)("keeps a new chat empty after the previous history returns %s", async (outcome) => {
+        type History = Awaited<ReturnType<typeof getTabularChatMessages>>;
+        let resolveHistory!: (messages: History) => void;
+        let rejectHistory!: (error: Error) => void;
+        vi.mocked(getTabularChatMessages).mockReturnValueOnce(new Promise<History>((resolve, reject) => {
+            resolveHistory = resolve;
+            rejectHistory = reject;
+        }));
+        render(<TRChatPanel reviewId="review-1" initialChatId="chat-1" onCitationClick={vi.fn()} />);
+        const user = userEvent.setup();
+        await screen.findByRole("button", { name: "Current draft" });
+        await user.click(screen.getByRole("button", { name: "New chat" }));
+        await act(async () => {
+            if (outcome === "success") resolveHistory([{ id: "old", chat_id: "chat-1", role: "user", content: "Retired history", created_at: "2026-09-29" }]);
+            else rejectHistory(new Error("Retired request failed"));
+        });
+        expect(screen.queryByText("Retired history")).not.toBeInTheDocument();
+        expect(screen.queryByText("Chat unavailable")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "New Chat" })).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Actions" })).not.toBeInTheDocument();
+    });
+
     it("positions loaded history below the header and remeasures equal-length threads", async () => {
         let resolveMessages!: (
             messages: Awaited<ReturnType<typeof getTabularChatMessages>>,
@@ -503,8 +584,45 @@ describe("TRChatPanel server-owned turns", () => {
         });
     });
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+    });
+
+    it("reveals resumed history while chunks keep arriving faster than the positioning delay", async () => {
+        vi.useFakeTimers();
+        const stream = controlledStream();
+        vi.mocked(getTabularChats).mockResolvedValue([{
+            id: "chat-1",
+            title: "Ongoing review",
+            created_at: new Date().toISOString(),
+            active_turn: { id: "turn-1", seq: 1, assistant_message_id: "answer-1" },
+        }] as TRChat[]);
+        vi.mocked(getTabularChatMessages).mockResolvedValue([
+            { id: "q1", chat_id: "chat-1", role: "user", content: "Earlier question" },
+            { id: "a1", chat_id: "chat-1", role: "assistant", content: [{ type: "content", text: "Earlier answer" }] },
+            { id: "q2", chat_id: "chat-1", role: "user", content: "Still answering this question" },
+        ] as Awaited<ReturnType<typeof getTabularChatMessages>>);
+        vi.mocked(streamTabularChatTurn).mockResolvedValue(stream.response);
+        const view = render(<TRChatPanel reviewId="review-1" initialChatId="chat-1" onCitationClick={vi.fn()} />);
+        stubViewportScroll(view.container);
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(streamTabularChatTurn).toHaveBeenCalledTimes(1);
+        try {
+            for (let i = 0; i < 50; i++) {
+                await act(async () => {
+                    stream.push(`data: ${JSON.stringify({ type: "content_delta", text: `Chunk ${i}. ` })}\n\n`);
+                    await vi.advanceTimersByTimeAsync(20);
+                });
+            }
+            // Waiting until DONE hides this starvation: every chunk used to
+            // cancel and restart the 100ms timer, keeping loaded history blank.
+            expect(view.container.querySelector(".transition-opacity")).toHaveStyle({ opacity: "1" });
+            expect(screen.getByText(/Chunk 0/)).toBeInTheDocument();
+        } finally {
+            await act(async () => { stream.push("data: [DONE]\n\n"); stream.close(); });
+            view.unmount();
+        }
     });
 
     it("stops through the endpoint instead of dropping the connection", async () => {

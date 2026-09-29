@@ -13,7 +13,7 @@
  *  - settings/layout.tsx: h1 "Settings" in layout header
  *  - settings/models/page.tsx: h2 "API Keys"; label texts include "Anthropic (Claude) API Key" etc.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 
 /**
  * Create an assistant workflow from an already-open NewWorkflowModal and wait

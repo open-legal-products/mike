@@ -183,7 +183,16 @@ export function TRSidePanel({
             : undefined,
     );
 
-    // Re-sync when the panel opens for a different cell or citation
+    const requestedDocumentId = citationDocumentId
+        ? documents.find(
+              (document) =>
+                  document.id === citationDocumentId &&
+                  row.source_document_ids.includes(document.id),
+          )?.id
+        : initialDocument?.id;
+
+    // Reset on navigation intent, not on refreshed row/document object identity.
+    // Background review updates must preserve a source picked inside the panel.
     useEffect(() => {
         setDocCitation(
             displayDocument && citationQuote
@@ -197,17 +206,11 @@ export function TRSidePanel({
                   }
                 : undefined,
         );
-        const nextDocument = citationDocumentId
-            ? documents.find(
-                  (document) =>
-                      document.id === citationDocumentId &&
-                      row.source_document_ids.includes(document.id),
-              )
-            : initialDocument;
-        setActiveDocumentId(nextDocument?.id);
-        setDocumentPaneOpen(displayDocument && !!nextDocument);
+        setActiveDocumentId(requestedDocumentId);
+        setDocumentPaneOpen(displayDocument && !!requestedDocumentId);
     }, [
         cell.id,
+        row.id,
         displayDocument,
         citationCell,
         citationDocumentId,
@@ -215,9 +218,7 @@ export function TRSidePanel({
         citationQuote,
         citationRef,
         citationSheet,
-        documents,
-        initialDocument,
-        row,
+        requestedDocumentId,
     ]);
 
     useEffect(

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // Real Next gateway, Express auth and local database, with deliberately invalid
 // state/code. No Google consent, token exchange or account access is performed.

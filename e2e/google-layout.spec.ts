@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // Real browser layout, deterministic synthetic provider data. This does not
 // grant Google access or establish live provider acceptance.

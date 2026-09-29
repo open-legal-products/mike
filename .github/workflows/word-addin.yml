@@ -48,6 +48,36 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
+  streaming-development:
+    name: Development stress (chromium + webkit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: word-addin
+    env:
+      WORD_E2E_DEVELOPMENT: "1"
+      REACT_STRESS: "1"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: word-addin/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium webkit
+      # Production React omits the passive-update-depth warning. Exercise the
+      # real development bundle too, using the same hermetic Office/API mocks.
+      - run: npx playwright test --retries=0 --trace=retain-on-failure
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: word-addin-streaming-development
+          path: word-addin/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
   playwright:
     name: Typecheck and Playwright (chromium + webkit)
     runs-on: ubuntu-latest

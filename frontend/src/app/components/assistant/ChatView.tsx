@@ -814,6 +814,10 @@ export function ChatView({
             return scrollLatestUserToTop();
     }, [chatLoading, isResponseLoading, scrollLatestUserToTop]);
 
+    const hasMessages = messages.length > 0;
+    const userMessageCount = messages.filter(
+        (message) => message.role === "user",
+    ).length;
     /* eslint-disable react-hooks/set-state-in-effect -- visibility is synchronized with completion of the selected chat's DOM positioning */
     useEffect(() => {
         const viewingUnpositionedChat = positionedChatRef.current !== chatId;
@@ -825,16 +829,13 @@ export function ChatView({
             setMessagesVisible(false);
             return;
         }
-        if (messages.length === 0) {
+        if (!hasMessages) {
             hasScrolledRef.current = false;
             positionedChatRef.current = undefined;
             setMessagesVisible(false);
         } else if (!hasScrolledRef.current || viewingUnpositionedChat) {
-            const userMsgCount = messages.filter(
-                (m) => m.role === "user",
-            ).length;
             if (
-                userMsgCount >= 2 &&
+                userMessageCount >= 2 &&
                 latestUserMessageRef.current &&
                 messagesContainerRef.current
             ) {
@@ -849,7 +850,15 @@ export function ChatView({
                 setMessagesVisible(true);
             }
         }
-    }, [chatId, chatLoading, messages, scrollLatestUserToTop]);
+        // Keep the two-frame positioning operation alive while text streams.
+        // Depending on messages would cancel it before its reveal callback.
+    }, [
+        chatId,
+        chatLoading,
+        hasMessages,
+        userMessageCount,
+        scrollLatestUserToTop,
+    ]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
     useEffect(() => {

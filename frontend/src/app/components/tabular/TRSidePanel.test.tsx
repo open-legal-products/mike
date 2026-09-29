@@ -150,3 +150,35 @@ describe("TRSidePanel", () => {
         expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
     });
 });
+
+
+it("preserves the chosen grouped source and collapsed pane through 300 row refreshes", () => {
+    const documents = [
+        { id: "doc-1", filename: "First.pdf", file_type: "pdf" },
+        { id: "doc-2", filename: "Second.pdf", file_type: "pdf" },
+    ] as Document[];
+    const row = { id: "row-1", label: "Closing", row_type: "folder",
+        document_id: null, source_document_ids: ["doc-1", "doc-2"] } as TabularReviewRow;
+    const column = { index: 0, name: "Clause", prompt: "Extract" } as ColumnConfig;
+    const cell = { id: "cell-1", row_id: row.id, column_index: 0, status: "done",
+        content: { summary: "Answer", flag: "grey", reasoning: "" } } as TabularCell;
+    const props = { cell, row, rows: [row], documents, document: documents[0],
+        column, columns: [column], displayDocument: true, onClose: vi.fn(), onNavigate: vi.fn() };
+    const view = render(<TRSidePanel {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Closing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Second.pdf" }));
+    expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
+    for (let i = 0; i < 300; i++) {
+        view.rerender(<TRSidePanel {...props} row={{ ...row }}
+            documents={documents.map((document) => ({ ...document }))}
+            document={{ ...documents[0] }} />);
+    }
+    expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse document pane" }));
+    view.rerender(<TRSidePanel {...props} row={{ ...row }} />);
+    expect(screen.queryByText("PDF doc-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("PDF doc-2")).not.toBeInTheDocument();
+    // Actual navigation still resets to the next cell's requested source.
+    view.rerender(<TRSidePanel {...props} cell={{ ...cell, id: "cell-2" }} />);
+    expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
+});

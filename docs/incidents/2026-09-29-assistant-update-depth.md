@@ -5,6 +5,11 @@ messages in one conversation, with a stack pointing to `useSmoothedReveal`.
 The reproduction used main `54e66261c3d1528564fe3eba2876a7849ad832e3`, including
 its locked Next.js 16.3.5 and React 19.3.0 dependencies.
 
+This records the original scroll-effect diagnosis. The subsequent
+[class audit](2026-09-29-streaming-effects-audit.md) adds six related fixes,
+including reveal scheduling, and expands the regression matrix. Both are
+consolidated in [PR #556](https://github.com/open-legal-products/mike/pull/556).
+
 ## Reproduction and cause
 
 Short streamed replies did not reliably trigger the warning, even after more
@@ -30,8 +35,9 @@ built up the count.
 The fix measures actual content/viewport resizing and scroll events, coalesces
 measurements with `requestAnimationFrame`, and checks visibility before calling
 the state setter. It observes the revealed content as well as the viewport and
-cleans up the observer, listener and pending animation frame. The reveal hook's
-animation behavior is unchanged.
+cleans up the observer, listener and pending animation frame. That initial fix
+did not change reveal animation; the subsequent audit separately reproduced and
+fixed reveal starvation and idle scheduling.
 
 ## Production impact
 

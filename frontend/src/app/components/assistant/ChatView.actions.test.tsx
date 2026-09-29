@@ -230,6 +230,35 @@ describe("ChatView streaming scroll controls", () => {
         return { content, viewport, size, readHeight };
     }
 
+    it("reveals a resumed transcript even when every animation frame receives another chunk", () => {
+        const transcript = (chunk: string, chatLoading = false) => (
+            <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+                <ChatView
+                    chatId="chat-1"
+                    chatLoading={chatLoading}
+                    chat={activeChat}
+                    messages={[
+                        { id: "old-user", role: "user", content: "Earlier question" },
+                        { id: "old-answer", role: "assistant", content: "Earlier answer" },
+                        { id: "latest-user", role: "user", content: "Current question" },
+                        { id: "live-answer", role: "assistant", content: chunk },
+                    ]}
+                    isResponseLoading
+                    handleChat={vi.fn()}
+                    cancel={vi.fn()}
+                    detach={vi.fn()}
+                />
+            </PageChromeContext.Provider>
+        );
+        const { rerender } = render(transcript("First chunk", true));
+        rerender(transcript("First chunk"));
+        for (let chunk = 0; chunk < 120; chunk++) {
+            flushFrame();
+            rerender(transcript(`Chunk ${chunk}`));
+        }
+        expect(document.querySelector('[data-slot="chat-messages-content"] .transition-opacity')).toHaveStyle({ opacity: "1" });
+    });
+
     it("updates for revealed content, viewport resizing and scrolling without a new message", () => {
         render(view());
         const { content, viewport, size } = geometry();
