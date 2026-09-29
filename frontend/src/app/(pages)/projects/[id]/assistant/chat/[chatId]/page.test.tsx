@@ -54,6 +54,10 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
         documents: [{ id: "doc1", filename: "Draft.docx" }],
         folders: [],
     }),
+    listDocumentVersions: vi.fn().mockResolvedValue({
+        current_version_id: "v1",
+        versions: [{ id: "v1", version_number: 1, filename: "Draft.docx" }],
+    }),
     getChat: state.getChat,
     getDocument: state.getDocument,
     uploadProjectDocuments: state.uploadProjectDocuments,
@@ -500,8 +504,8 @@ describe("project chat workspace lifecycle", () => {
         });
         expect(pill).toHaveAttribute("data-active", "false");
         fireEvent.click(pill);
-        expect(pill).toHaveAttribute("data-active", "true");
-        expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language"));
+        await waitFor(() => expect(pill).toHaveAttribute("data-active", "true"));
+        await waitFor(() => expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language")));
 
         fireEvent.click(pill);
         expect(pill).toHaveAttribute("data-active", "false");
@@ -509,8 +513,8 @@ describe("project chat workspace lifecycle", () => {
         expect(screen.getByTestId("draft-viewer")).toBeVisible();
 
         fireEvent.click(pill);
-        expect(pill).toHaveAttribute("data-active", "true");
-        expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language"));
+        await waitFor(() => expect(pill).toHaveAttribute("data-active", "true"));
+        await waitFor(() => expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language")));
 
         fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
         expect(pill).toHaveAttribute("data-active", "false");

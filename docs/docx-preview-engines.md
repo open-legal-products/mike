@@ -95,8 +95,8 @@ edits would render stale cached values.
 To add a comment, select document text and choose **New comment** in the toolbar.
 The composer opens directly below the selected passage and scrolls with it; if
 the selection is not painted (a virtualized page), it opens beside the toolbar
-button instead. Mike retains that selection while the composer has focus, shows
-the selected passage, and uses the signed-in author. **Add comment** (or
+button instead. Mike retains that selection while the composer has focus and uses the signed-in
+author. The composer uses a flat grey field without a selected-text preview. **Add comment** (or
 Cmd/Ctrl+Enter) writes through the public core's `addComment`; its
 document-change event feeds the existing autosave pipeline without PDF
 conversion. A failed write retains the draft, and changing the selection

@@ -235,6 +235,8 @@ it("leaves native revision painting alone during page repaints and clears it on 
         highlightEdit={{ key: "edit-8", ins_w_id: "8" }} />);
     await screen.findByText("EigenPal preview");
     await waitFor(() => expect(screen.queryByRole("status", { name: "Loading document" })).toBeNull());
+    // Finish the initial ready-state effects before observing a later repaint.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
     activateRevision.mockClear();
     clearRevisionHighlight.mockClear();
     const page = document.createElement("div");

@@ -18,7 +18,9 @@ const exportDocx = vi.fn<() => Promise<ArrayBuffer>>();
 const options = () => ({ documentId: "doc", versionId: "v1", filename: "Agreement.docx", bytes: original, enabled: true, exportDocx });
 beforeEach(() => {
     vi.useFakeTimers();
-    vi.stubGlobal("crypto", webcrypto);
+    // jsdom buffers belong to a different realm than Node's WebCrypto.
+    vi.stubGlobal("crypto", { subtle: { digest: (algorithm: string, bytes: ArrayBuffer) =>
+        webcrypto.subtle.digest(algorithm, Buffer.from(new Uint8Array(bytes))) } });
     vi.clearAllMocks();
     exportDocx.mockResolvedValue(edited);
     vi.mocked(replaceDocumentVersionFile).mockResolvedValue({ id: "v1", version_number: 1, source: "user_upload", created_at: "", filename: "Agreement.docx" });
