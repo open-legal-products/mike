@@ -249,6 +249,7 @@ describe("ChatView streaming scroll controls", () => {
                     isResponseLoading
                     handleChat={vi.fn()}
                     cancel={vi.fn()}
+                    onNewChat={vi.fn()}
                     onInitialSubmit={initial ? vi.fn() : undefined}
                 />
             </PageChromeContext.Provider>
@@ -283,6 +284,7 @@ describe("ChatView streaming scroll controls", () => {
                     isResponseLoading
                     handleChat={vi.fn()}
                     cancel={vi.fn()}
+                    onNewChat={vi.fn()}
                 />
             </PageChromeContext.Provider>
         );
