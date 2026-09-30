@@ -83,7 +83,7 @@ export interface Project {
 }
 
 export interface Document {
-  /** Server-computed permissions on GET /documents/:id; absent fails closed. */
+  /** Server-computed permissions on GET /single-documents/:id; absent fails closed. */
   can_edit?: boolean;
   can_delete?: boolean;
   id: string;
