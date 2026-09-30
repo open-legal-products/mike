@@ -3,11 +3,22 @@
 import { useCallback, useMemo, useState, useRef, useEffect } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
-import { ArrowDown, Pencil, Plus, Trash2, Users } from "lucide-react";
+import {
+    ArrowDown,
+    PanelRight,
+    Pencil,
+    Plus,
+    Trash2,
+    Users,
+    Zap,
+} from "lucide-react";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
 import { ChatInput } from "./ChatInput";
 import { InitialView } from "./InitialView";
+import { QuickActionsModal } from "./QuickActionsModal";
+import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
+import { useQuickActions } from "@/app/hooks/useQuickActions";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatInputPrompt } from "./ChatInputPrompt";
@@ -42,7 +53,10 @@ import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
 import { resolvePanelDocumentVersionResult } from "./panelDocumentVersion";
 import { LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS } from "@/app/components/ui/liquid-surface";
 import { HeaderButtonUI, HeaderButtonsUI } from "@/shared/ui/HeaderButtonsUI";
-import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
+import {
+    HeaderActionsMenu,
+    type HeaderActionsMenuItem,
+} from "@/app/components/shared/HeaderActionsMenu";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
@@ -88,11 +102,6 @@ interface Props {
     rejectedApiKey?: { model: string | null } | null;
     onDismissInvalidApiKey?: () => void;
     /**
-     * Leave the turn in flight running (New chat). The server persists the
-     * finished answer; only `cancel` may cut it short.
-     */
-    detach: () => void;
-    /**
      * Whether the caller may write in this chat. The server serves the
      * standing on GET /chat/:id; surfaces that know it must pass it, so a
      * read-only caller gets the disabled composer instead of a 403 on send.
@@ -120,6 +129,8 @@ interface Props {
     chatLoading?: boolean;
     /** Shares document previews with the initial composer before a chat exists. */
     onInitialSubmit?: (message: Message) => void;
+    /** Leaves this chat for the new-chat view, without cancelling its answer. */
+    onNewChat: () => void;
 }
 
 const ASSISTANT_PANEL_TRANSITION_MS = 500;
@@ -147,11 +158,11 @@ export function ChatView({
     cancel,
     rejectedApiKey = null,
     onDismissInvalidApiKey,
-    detach,
     canSend,
     accessResolved = true,
     chatLoading,
     onInitialSubmit,
+    onNewChat,
 }: Props) {
     const router = useRouter();
     // The model is what we asked for, so it identifies whose key was rejected.
@@ -168,6 +179,13 @@ export function ChatView({
     const [panelVisible, setPanelVisible] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
     const [shareOpen, setShareOpen] = useState(false);
+    const [openDocumentsModalOpen, setOpenDocumentsModalOpen] = useState(false);
+    const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false);
+    // A new chat shows the quick actions; a started one only edits them.
+    const isNewChat = !!onInitialSubmit;
+    const { quickActions, saveQuickAction, addQuickAction } = useQuickActions(
+        isNewChat || quickActionsModalOpen,
+    );
     const [actionGate, setActionGate] = useState<{
         action: string;
         requiredRole: "owner" | "editor";
@@ -199,8 +217,6 @@ export function ChatView({
         chats,
         renameChat,
         deleteChat,
-        setCurrentChatId,
-        setNewChatMessages,
     } = useChatHistoryContext();
     const activeChat =
         (chatId ? chats?.find((entry) => entry.id === chatId) : null) ??
@@ -280,17 +296,10 @@ export function ChatView({
 
     const closeTab = useCallback(
         (id: string) => {
+            // Closing the last tab leaves the panel open on its "Open Documents"
+            // placeholder; only the panel's own close control dismisses it.
             setTabs((prev) => {
                 const next = prev.filter((t) => t.id !== id);
-                if (next.length === 0) {
-                    hidePanel(() =>
-                        unmountPanel(() => {
-                            setActiveTabId(null);
-                            setTabs([]);
-                        }),
-                    );
-                    return prev;
-                }
                 if (activeTabId === id) {
                     const idx = prev.findIndex((t) => t.id === id);
                     const neighbour = next[idx] ?? next[idx - 1] ?? next[0];
@@ -299,7 +308,7 @@ export function ChatView({
                 return next;
             });
         },
-        [activeTabId, hidePanel, unmountPanel],
+        [activeTabId],
     );
 
     const reorderTabs = useCallback(
@@ -854,13 +863,6 @@ export function ChatView({
         };
     }, [panelMounted]);
 
-    const handleNewChat = () => {
-        detach();
-        setCurrentChatId(null);
-        setNewChatMessages(null);
-        router.push("/assistant");
-    };
-
     const handleShareChat = () => {
         if (!activeChat) return;
         if (!can(activeChatRole, "access.manage")) {
@@ -923,41 +925,77 @@ export function ChatView({
         }
     };
 
+    const chatActionItems: HeaderActionsMenuItem[] = [
+        {
+            label: "Share",
+            icon: Users,
+            onSelect: handleShareChat,
+            disabled: !activeChat,
+        },
+        {
+            label: "Rename",
+            icon: Pencil,
+            onSelect: () => void handleRenameChat(),
+            disabled: !activeChat,
+        },
+        {
+            label: "Delete",
+            icon: Trash2,
+            onSelect: () => void handleDeleteChat(),
+            disabled: !activeChat,
+            variant: "danger",
+        },
+    ];
+
     const renderChatHeaderActions = () => (
         <HeaderButtonsUI className="pointer-events-auto">
-            <HeaderButtonUI
-                iconOnly
-                aria-label="New chat"
-                title="New chat"
-                onClick={handleNewChat}
-            >
-                <Plus className="h-4 w-4" />
-            </HeaderButtonUI>
+            {!isNewChat && (
+                <HeaderButtonUI
+                    iconOnly
+                    aria-label="New chat"
+                    title="New chat"
+                    onClick={onNewChat}
+                >
+                    <Plus className="h-4 w-4" />
+                </HeaderButtonUI>
+            )}
             <HeaderActionsMenu
                 title="Chat actions"
                 items={[
                     {
-                        label: "Share",
-                        icon: Users,
-                        onSelect: handleShareChat,
-                        disabled: !activeChat,
+                        label: "Open side panel",
+                        icon: PanelRight,
+                        onSelect: showPanel,
                     },
                     {
-                        label: "Rename",
-                        icon: Pencil,
-                        onSelect: () => void handleRenameChat(),
-                        disabled: !activeChat,
+                        label: "Edit quick actions",
+                        icon: Zap,
+                        onSelect: () => setQuickActionsModalOpen(true),
                     },
-                    {
-                        label: "Delete",
-                        icon: Trash2,
-                        onSelect: () => void handleDeleteChat(),
-                        disabled: !activeChat,
-                        variant: "danger",
-                    },
+                    ...(isNewChat ? [] : chatActionItems),
                 ]}
             />
         </HeaderButtonsUI>
+    );
+
+    const renderHeaderActionSlots = () => (
+        <>
+            <div
+                data-slot="chat-header-actions"
+                className="pointer-events-none absolute right-4 top-4.5 z-30 hidden md:block md:right-8"
+            >
+                {renderChatHeaderActions()}
+            </div>
+
+            {mobileActionsContainer
+                ? createPortal(
+                      <div className="flex min-w-0 items-center justify-end overflow-visible py-2 -my-2">
+                          {renderChatHeaderActions()}
+                      </div>,
+                      mobileActionsContainer,
+                  )
+                : null}
+        </>
     );
 
     const messagesBottomPadding = DEFAULT_ASSISTANT_BOTTOM_PADDING;
@@ -966,29 +1004,19 @@ export function ChatView({
         <div className="h-full w-full flex relative">
             {/* Chat column */}
             <div className="flex min-w-0 flex-col h-full flex-1 relative">
+                {renderHeaderActionSlots()}
                 {onInitialSubmit ? (
                     <InitialView
                         inputRef={chatInputRef}
                         onSubmit={onInitialSubmit}
                         onDocumentClick={handleAttachedDocumentClick}
+                        quickActions={quickActions}
+                        onEditQuickActions={() =>
+                            setQuickActionsModalOpen(true)
+                        }
                     />
                 ) : (
                     <>
-                        <div
-                            data-slot="chat-header-actions"
-                            className="pointer-events-none absolute right-4 top-4.5 z-30 hidden md:block md:right-8"
-                        >
-                            {renderChatHeaderActions()}
-                        </div>
-
-                        {mobileActionsContainer
-                            ? createPortal(
-                                  <div className="flex min-w-0 items-center justify-end overflow-visible py-2 -my-2">
-                                      {renderChatHeaderActions()}
-                                  </div>,
-                                  mobileActionsContainer,
-                              )
-                            : null}
 
                         {/* Scrollable messages */}
                         <div
@@ -1345,14 +1373,10 @@ export function ChatView({
                                             tab.document.document_id !==
                                             document.document_id,
                                     );
-                                    if (!remaining.length) {
-                                        closeAllTabs();
-                                        return current;
-                                    }
                                     setActiveTabId((id) =>
                                         remaining.some((tab) => tab.id === id)
                                             ? id
-                                            : remaining[0].id,
+                                            : (remaining[0]?.id ?? null),
                                     );
                                     return remaining;
                                 });
@@ -1377,9 +1401,28 @@ export function ChatView({
                         onWarningDismiss={handleWarningDismiss}
                         onCloseAnnotation={handleCloseAnnotation}
                         onScrollChange={handleScrollChange}
+                        onOpenDocuments={() => setOpenDocumentsModalOpen(true)}
                     />
                 </div>
             )}
+
+            <AddDocumentsModal
+                open={openDocumentsModalOpen}
+                onClose={() => setOpenDocumentsModalOpen(false)}
+                onSelect={(documents) => {
+                    setOpenDocumentsModalOpen(false);
+                    documents.forEach(handleAttachedDocumentClick);
+                }}
+                breadcrumb={["Assistant", "Open Documents"]}
+                uploadStateId="assistant-side-panel"
+            />
+            <QuickActionsModal
+                open={quickActionsModalOpen}
+                onClose={() => setQuickActionsModalOpen(false)}
+                actions={quickActions}
+                onSave={saveQuickAction}
+                onCreate={addQuickAction}
+            />
         </div>
     );
 }

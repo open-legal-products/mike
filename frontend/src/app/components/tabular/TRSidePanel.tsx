@@ -18,7 +18,6 @@ import {
     Loader2,
     PanelLeft,
     RefreshCw,
-    X,
 } from "lucide-react";
 import type {
     ColumnConfig,
@@ -32,6 +31,7 @@ import { PdfView } from "../shared/views/PdfView";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
 import { DocxView } from "../shared/views/DocxView";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
+import { DocumentPaneTitle } from "../shared/DocumentPaneTitle";
 import { SubfolderSvgIcon } from "../shared/FolderSvgIcon";
 import { CitationQuotesSection } from "../assistant/CitationQuotesSection";
 import { cn } from "@/app/lib/utils";
@@ -40,7 +40,7 @@ import {
     LIQUID_GLASS_PRESSED_CLASS,
     LIQUID_FLOAT_PANEL_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
-import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
+import { CloseButton } from "@/shared/ui/CloseButton";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 
@@ -328,7 +328,7 @@ export function TRSidePanel({
             {/* Resizable document panel — left */}
             {documentPaneOpen && doc && (
                 <div
-                    className="relative flex shrink-0 flex-col border-r border-white/30 px-3 pb-3"
+                    className="relative flex shrink-0 flex-col border-r border-white/30"
                     style={{ width: documentPaneWidth }}
                 >
                     <div
@@ -339,24 +339,14 @@ export function TRSidePanel({
                         className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-blue-400/60"
                         title="Resize document pane"
                     />
-                    {/* Doc header */}
-                    <div className="flex min-h-11 shrink-0 items-center gap-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                            <FileTypeIcon
-                                fileType={doc.file_type ?? doc.filename}
-                                className="h-4 w-4"
-                            />
-                            <div
-                                className="min-w-0 truncate text-sm font-medium text-gray-700"
-                                title={doc.filename}
-                            >
-                                {doc.filename}
-                            </div>
-                        </div>
-                    </div>
+                    <DocumentPaneTitle
+                        filename={doc.filename}
+                        fileType={doc.file_type}
+                        versionNumber={doc.active_version_number}
+                    />
                     {/* Quote row */}
                     {docCitation?.quote && (
-                        <div className="-mx-3 shrink-0 py-2">
+                        <div className="shrink-0">
                             <CitationQuotesSection
                                 quotes={[
                                     {
@@ -371,12 +361,18 @@ export function TRSidePanel({
                                     docCitation,
                                 )}
                                 citationRef={docCitation.citationRef}
+                                // Dismisses the quote and its highlight; the
+                                // document stays open.
+                                onClose={() => setDocCitation(undefined)}
                             />
                         </div>
                     )}
                     {documentViewType === "docx" ? (
                         <DocxView
+                            rounded="top-right"
                             documentId={doc.id}
+                            // A read-only preview: no EigenPal editing toolbar.
+                            toolbarVisible={false}
                             quotes={
                                 docCitation
                                     ? [
@@ -390,6 +386,7 @@ export function TRSidePanel({
                         />
                     ) : documentViewType === "spreadsheet" ? (
                         <SpreadsheetView
+                            rounded="top-right"
                             documentId={doc.id}
                             highlightCells={
                                 docCitation?.sheet || docCitation?.cell
@@ -404,6 +401,7 @@ export function TRSidePanel({
                         />
                     ) : (
                         <PdfView
+                            rounded="top-right"
                             doc={{ document_id: doc.id }}
                             quote={docCitation?.quote}
                             fallbackPage={docCitation?.page}
@@ -415,7 +413,7 @@ export function TRSidePanel({
             {/* Info column — right, 300px fixed */}
             <div className="flex w-[300px] shrink-0 flex-col overflow-hidden">
                 {/* Header */}
-                <div className="mb-2 flex min-h-11 shrink-0 items-center justify-end gap-1.5 px-3">
+                <div className="flex h-11 shrink-0 items-center justify-end gap-1.5 px-3">
                     {doc && (
                         <button
                             type="button"
@@ -461,9 +459,7 @@ export function TRSidePanel({
                             )}
                         </button>
                     )}
-                    <GlassIconButtonUI onClick={onClose} aria-label="Close">
-                        <X className="h-3.5 w-3.5" />
-                    </GlassIconButtonUI>
+                    <CloseButton onClick={onClose} label="Close panel" />
                 </div>
 
                 {/* Analysis panel */}

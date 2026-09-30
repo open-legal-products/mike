@@ -12,6 +12,7 @@ import {
     SpreadsheetWorkbook,
     type SpreadsheetSession,
 } from "./SpreadsheetWorkbook";
+import { viewRoundingClass, type ViewRounding } from "./viewRounding";
 
 type HighlightRange = { row: [number, number]; column: [number, number] };
 type WorkbookComponent = typeof import("@fortune-sheet/react").Workbook;
@@ -26,7 +27,7 @@ interface Props {
     refetchKey?: number | string;
     /** Cell(s) to select/scroll to (from a spreadsheet citation). */
     highlightCells?: HighlightCell[];
-    rounded?: boolean;
+    rounded?: ViewRounding;
     active?: boolean;
 }
 
@@ -502,7 +503,7 @@ export function SpreadsheetView({
         return () => window.clearTimeout(timer);
     }, [active, sheets, highlightCells, highlightKey]);
 
-    const frameClass = `fortune-sheet-viewer relative flex flex-col flex-1 min-h-0 overflow-hidden ${rounded ? "rounded-lg" : ""}`;
+    const frameClass = `fortune-sheet-viewer relative flex flex-col flex-1 min-h-0 overflow-hidden ${viewRoundingClass(rounded)}`;
 
     const message =
         error ?? (fetchError ? "Failed to load spreadsheet." : null);

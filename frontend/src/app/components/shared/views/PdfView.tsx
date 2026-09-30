@@ -15,6 +15,7 @@ import {
 } from "./highlightQuote";
 import { orderTextItemLines, type TextItemGeometry } from "./pdfTextOrder";
 import { LIQUID_GLASS_TRANSLUCENT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { viewRoundingClass, type ViewRounding } from "./viewRounding";
 
 interface Props {
     doc: { document_id: string; version_id?: string | null } | null;
@@ -27,7 +28,7 @@ interface Props {
     /** Back-compat single-quote API. Ignored if `quotes` is provided. */
     quote?: string;
     fallbackPage?: number;
-    rounded?: boolean;
+    rounded?: ViewRounding;
 }
 
 type QuoteEntry = { page?: number; quote: string };
@@ -773,7 +774,7 @@ export function PdfView({
 
     return (
         <div
-            className={`document-canvas relative flex flex-col flex-1 overflow-hidden ${rounded ? "rounded-lg" : ""}`}
+            className={`document-canvas relative flex flex-col flex-1 overflow-hidden ${viewRoundingClass(rounded)}`}
         >
             <div
                 ref={scrollContainerRef}

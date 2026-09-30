@@ -9,6 +9,7 @@ import { DocxSaveErrorPopup } from "./DocxSaveErrorPopup";
 import type { DocxMode, DocxSaveState, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
+import { viewRoundingClass, type ViewRounding } from "./viewRounding";
 
 const DocxRenderer = lazy(() => import("./EigenpalDocxRenderer"));
 const RENDER_ERROR = "This document could not be displayed. Please download it to view it.";
@@ -53,7 +54,7 @@ interface Props {
     onWarningDismiss?: () => void;
     initialScrollTop?: number | null;
     onScrollChange?: (scrollTop: number) => void;
-    rounded?: boolean;
+    rounded?: ViewRounding;
 }
 
 function focusHighlights(surface: DocxSurface, props: Props): boolean {
@@ -200,7 +201,7 @@ function DocxViewContent(props: Props) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <WarningPopup open={!!downloadError} title="Download failed" message={downloadError} onClose={() => setDownloadError(null)} />
             <div
-                className={`document-canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${rounded ? "rounded-lg" : ""}`}
+                className={`document-canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${viewRoundingClass(rounded)}`}
                 data-document-id={documentId}
                 data-version-id={versionId ?? ""}
                 onScrollCapture={(event) => {

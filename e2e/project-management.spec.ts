@@ -287,7 +287,7 @@ test("file upload type validation — .txt file is rejected", async ({ page }) =
 
     /* (a) UI-side filtering with a visible warning. */
     await uploadMenuBtn.click();
-    await page.getByRole("menuitem", { name: "Saved files" }).click();
+    await page.getByRole("menuitem", { name: "Saved Documents" }).click();
 
     const fileChooserPromise = page.waitForEvent("filechooser");
     /* The Upload button label is "Upload" (not "Uploading…") when idle */

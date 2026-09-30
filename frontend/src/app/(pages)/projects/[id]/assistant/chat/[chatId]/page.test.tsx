@@ -44,6 +44,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ replace: state.replace, push: state.push }),
+    usePathname: () => window.location.pathname,
 }));
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
@@ -489,6 +490,8 @@ describe("project chat workspace lifecycle", () => {
             ],
         });
 
+        window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
+
         await act(async () => {
             render(
                 <Suspense fallback="Loading">
@@ -540,6 +543,8 @@ describe("project chat workspace lifecycle", () => {
                     resolveProject = resolve;
                 }),
         );
+
+        window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
 
         await act(async () => {
             render(

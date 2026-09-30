@@ -7,12 +7,6 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { MikeIcon } from "@/app/components/chat/mike-icon";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
-import { QuickActionsModal } from "./QuickActionsModal";
-import {
-    createQuickAction,
-    listQuickActions,
-    updateQuickAction,
-} from "@/app/lib/mikeApi";
 import type { Document, Message, QuickAction } from "../shared/types";
 import {
     LIQUID_GLASS_HOVER_CLASS,
@@ -23,16 +17,22 @@ interface InitialViewProps {
     onSubmit: (message: Message) => void;
     inputRef?: RefObject<ChatInputHandle | null>;
     onDocumentClick?: (document: Document) => void;
+    quickActions: QuickAction[];
+    onEditQuickActions: () => void;
 }
 
 const ICON_SIZE = 30;
 const GAP = 12; // gap-4 = 1rem = 16px
-export function InitialView({ onSubmit, onDocumentClick, inputRef }: InitialViewProps) {
+export function InitialView({
+    onSubmit,
+    onDocumentClick,
+    inputRef,
+    quickActions,
+    onEditQuickActions,
+}: InitialViewProps) {
     const { user } = useAuth();
     const { profile } = useUserProfile();
     const [loaded, setLoaded] = useState(false);
-    const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false);
-    const [quickActions, setQuickActions] = useState<QuickAction[]>([]);
     const [iconOffset, setIconOffset] = useState(0);
     const [textOffset, setTextOffset] = useState(0);
     const textRef = useRef<HTMLHeadingElement>(null);
@@ -42,76 +42,6 @@ export function InitialView({ onSubmit, onDocumentClick, inputRef }: InitialView
     const username =
         profile?.displayName?.trim() || user?.email?.split("@")[0] || "there";
     const visibleQuickActions = quickActions.filter((action) => action.enabled);
-
-    useEffect(() => {
-        let cancelled = false;
-        listQuickActions()
-            .then(async (actions) => {
-                const legacyKey = "mike.quickActions.visible";
-                const migratedKey = "mike.quickActions.databaseMigrated";
-                let resolved = actions;
-                if (!window.localStorage.getItem(migratedKey)) {
-                    try {
-                        const legacy = JSON.parse(
-                            window.localStorage.getItem(legacyKey) ?? "null",
-                        ) as Record<string, unknown> | null;
-                        const keyByTitle: Record<string, string> = {
-                            proofread: "proofread",
-                            "compare documents": "compareDocuments",
-                            "extract key terms": "extractKeyTerms",
-                            "draft from template": "draftFromTemplate",
-                        };
-                        if (legacy) {
-                            const migrations = await Promise.allSettled(
-                                actions.map((action) => {
-                                    const legacyActionKey =
-                                        keyByTitle[
-                                            action.workflow.title.toLowerCase()
-                                        ];
-                                    const enabled = legacyActionKey
-                                        ? legacy[legacyActionKey]
-                                        : undefined;
-                                    return typeof enabled === "boolean" &&
-                                        enabled !== action.enabled
-                                        ? updateQuickAction(action.id, {
-                                              enabled,
-                                          })
-                                        : action;
-                                }),
-                            );
-                            resolved = migrations.map((result, index) =>
-                                result.status === "fulfilled"
-                                    ? result.value
-                                    : actions[index],
-                            );
-                            // Only mark the one-shot migration complete when
-                            // every update landed; otherwise a transient API
-                            // failure would permanently discard the user's
-                            // legacy preferences. A partial batch retries on
-                            // the next load — updates are idempotent.
-                            if (
-                                migrations.some(
-                                    (result) => result.status === "rejected",
-                                )
-                            ) {
-                                if (!cancelled) setQuickActions(resolved);
-                                return;
-                            }
-                        }
-                        window.localStorage.setItem(migratedKey, "1");
-                    } catch {
-                        // Invalid legacy state is ignored; database defaults win.
-                    }
-                }
-                if (!cancelled) setQuickActions(resolved);
-            })
-            .catch(() => {
-                if (!cancelled) setQuickActions([]);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, []);
 
     useLayoutEffect(() => {
         if (!profile || !textRef.current) return;
@@ -145,37 +75,6 @@ export function InitialView({ onSubmit, onDocumentClick, inputRef }: InitialView
         } else {
             chatInputRef.current?.startWorkflow(workflow, action.prompt);
         }
-    }
-
-    async function saveQuickAction(action: QuickAction) {
-        const updated = await updateQuickAction(action.id, {
-            workflow_id: action.workflow_id,
-            name: action.name,
-            prompt: action.prompt,
-            document_upload: action.document_upload,
-            enabled: action.enabled,
-        });
-        setQuickActions((current) =>
-            current.map((item) => (item.id === updated.id ? updated : item)),
-        );
-    }
-
-    async function addQuickAction(input: {
-        workflowId: string;
-        name: string;
-        prompt: string;
-        documentUpload: boolean;
-    }) {
-        const created = await createQuickAction({
-            workflow_id: input.workflowId,
-            name: input.name,
-            prompt: input.prompt,
-            document_upload: input.documentUpload,
-            surface: "app",
-            enabled: true,
-            sort_order: quickActions.length,
-        });
-        setQuickActions((current) => [...current, created]);
     }
 
     return (
@@ -249,7 +148,7 @@ export function InitialView({ onSubmit, onDocumentClick, inputRef }: InitialView
                             </span>
                             <button
                                 type="button"
-                                onClick={() => setQuickActionsModalOpen(true)}
+                                onClick={onEditQuickActions}
                                 aria-label="Configure quick actions"
                                 className="absolute left-full ml-1.5 flex h-5 w-5 items-center justify-center text-gray-400 opacity-0 transition-all hover:text-gray-700 group-hover:opacity-100 focus:opacity-100"
                             >
@@ -272,14 +171,6 @@ export function InitialView({ onSubmit, onDocumentClick, inputRef }: InitialView
                     </div>
                 )}
             </div>
-
-            <QuickActionsModal
-                open={quickActionsModalOpen}
-                onClose={() => setQuickActionsModalOpen(false)}
-                actions={quickActions}
-                onSave={saveQuickAction}
-                onCreate={addQuickAction}
-            />
         </div>
     );
 }

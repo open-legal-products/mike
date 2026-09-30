@@ -14,6 +14,7 @@
 @source "../../../frontend/src/shared/ui/GlassCardUI.tsx";
 @source "../../../frontend/src/shared/ui/GlassIconButtonUI.tsx";
 @source "../../../frontend/src/shared/ui/ModalUI.tsx";
+@source "../../../frontend/src/shared/ui/CloseButton.tsx";
 @source "../../../frontend/src/shared/ui/HeaderButtonsUI.tsx";
 @source "../../../frontend/src/shared/ui/PillButtonUI.tsx";
 @source "../../../frontend/src/shared/ui/PillButtonUI.styles.ts";

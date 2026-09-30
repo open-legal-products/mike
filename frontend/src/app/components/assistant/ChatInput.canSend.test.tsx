@@ -9,6 +9,7 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Document } from "@/app/components/shared/types";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -35,16 +36,13 @@ vi.mock("./ModelToggle", async (importOriginal) => ({
     ModelToggle: () => null,
 }));
 
-vi.mock("./AddDocButton", () => ({
-    AddDocButton: () => <button aria-label="Add documents" />,
-}));
 vi.mock("./UploadOverlay", () => ({ UploadOverlay: () => null }));
 vi.mock("../shared/FileTypeIcon", () => ({ FileTypeIcon: () => null }));
 vi.mock("../modals/AddDocumentsModal", () => ({
     AddDocumentsModal: vi.fn(() => null),
 }));
 vi.mock("./AssistantWorkflowModal", () => ({
-    AssistantWorkflowModal: () => null,
+    AssistantWorkflowModal: vi.fn(() => null),
 }));
 vi.mock("../popups/ApiKeyMissingPopup", () => ({
     ApiKeyMissingPopup: () => null,
@@ -53,6 +51,7 @@ vi.mock("../popups/ApiKeyMissingPopup", () => ({
 class ResizeObserverMock {
     observe() {}
     disconnect() {}
+    unobserve() {}
 }
 
 function mockProfile() {
@@ -87,6 +86,46 @@ describe("ChatInput canSend gating", () => {
         window.localStorage.clear();
         vi.stubGlobal("ResizeObserver", ResizeObserverMock);
         mockProfile();
+    });
+
+    it("opens documents from the dropdown and workflows from its own button", async () => {
+        const user = userEvent.setup();
+        renderInput(true);
+        await user.click(screen.getByRole("button", { name: "Add documents" }));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Upload Documents", "Saved Documents"]);
+        expect(vi.mocked(AddDocumentsModal).mock.calls.at(-1)?.[0].open).toBe(false);
+        await user.click(screen.getByRole("menuitem", { name: "Saved Documents" }));
+        expect(vi.mocked(AddDocumentsModal).mock.calls.at(-1)?.[0]).toMatchObject({ open: true, initialTab: "files" });
+        expect(screen.queryByRole("menu")).toBeNull();
+        await user.click(screen.getByRole("button", { name: "Open workflows" }));
+        expect(vi.mocked(AssistantWorkflowModal).mock.calls.at(-1)?.[0].open).toBe(true);
+    });
+
+    it.each([false, true])("uploads files using the existing project setting (%s)", async (dropUploadsToProject) => {
+        const user = userEvent.setup();
+        const upload = dropUploadsToProject ? uploadProjectDocuments : uploadStandaloneDocuments;
+        vi.mocked(upload).mockResolvedValue([]);
+        render(<ChatInput onSubmit={vi.fn()} onCancel={vi.fn()} isLoading={false} projectId="p1" dropUploadsToProject={dropUploadsToProject} />);
+        const input = screen.getByLabelText("Upload Documents");
+        const click = vi.spyOn(input, "click");
+        await user.click(screen.getByRole("button", { name: "Add documents" }));
+        await user.click(screen.getByRole("menuitem", { name: "Upload Documents" }));
+        expect(click).toHaveBeenCalledOnce();
+        expect(vi.mocked(AddDocumentsModal).mock.calls.at(-1)?.[0].open).toBe(false);
+        const file = new File(["example"], "example.pdf", { type: "application/pdf" });
+        await user.upload(input, file);
+        await waitFor(() => expect(upload).toHaveBeenCalledOnce());
+        const inputs = vi.mocked(upload).mock.calls[0][dropUploadsToProject ? 1 : 0];
+        expect(inputs).toEqual([expect.objectContaining({ file })]);
+        expect(input).toHaveValue("");
+    });
+
+    it("omits the workflow button when workflow selection is hidden", async () => {
+        const user = userEvent.setup();
+        render(<ChatInput onSubmit={vi.fn()} onCancel={vi.fn()} isLoading={false} hideWorkflowButton />);
+        expect(screen.queryByRole("button", { name: "Open workflows" })).toBeNull();
+        await user.click(screen.getByRole("button", { name: "Add documents" }));
+        expect(screen.queryByRole("menuitem", { name: "Workflows" })).toBeNull();
     });
 
     it.each(["", "  \n\t", "Replace this draft"])(

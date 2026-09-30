@@ -16,6 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/app/components/ui/popover";
+import { openReviewPane } from "./docxReviewPane";
 
 /** Mike-owned comment UI, using only the public open-source Editor contract. */
 export function DocxCommentComposer({
@@ -144,8 +145,7 @@ export function DocxCommentComposer({
       setError(null);
       setAnchorBox(null);
       setStatus("Comment added.");
-      if (!editor.snapshot().reviewPaneOpen)
-        editor.exec({ type: "toggleReviewPane" });
+      openReviewPane(editor);
     } catch {
       setError(
         "This comment could not be added. Your draft is still here; please try again.",
@@ -183,7 +183,13 @@ export function DocxCommentComposer({
                     start();
                   }}
                 >
-                  <MessageSquarePlus aria-hidden="true" className="h-4 w-4" />
+                  {/* Sized to EigenPal's filled Comments glyph (~13px): a
+                      16px stroked Lucide icon renders visibly larger. */}
+                  <MessageSquarePlus
+                    aria-hidden="true"
+                    strokeWidth={2.25}
+                    className="h-3.5 w-3.5"
+                  />
                 </TextButtonUI>
               </PopoverTrigger>
               {/* Always mounted: toggling a custom anchor remounts

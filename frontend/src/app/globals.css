@@ -547,6 +547,20 @@
     color: transparent;
 }
 
+/* PDF.js ends each text line with a <br>. The stock viewer stylesheet takes
+   those out of flow and hides their selection; without that they sat at the
+   layer's left edge and a drag selection painted a bar there on every line. */
+.pdf-text-layer br {
+    position: absolute;
+    color: transparent;
+    white-space: pre;
+    cursor: text;
+}
+
+.pdf-text-layer br::selection {
+    background: transparent;
+}
+
 .docx-view-container span.docx-text-highlight,
 .docx-view-container .docx-text-highlight {
     background-color: var(--docx-highlight-background) !important;

@@ -71,7 +71,11 @@ describe("TRSidePanel", () => {
 
         expect(screen.getByText("PDF doc-1")).toBeInTheDocument();
         expect(screen.getByText("Version")).toBeInTheDocument();
-        expect(screen.getByText("V3")).toBeInTheDocument();
+        // Once in the document's title row, once as the metadata value.
+        expect(screen.getAllByText("V3")).toHaveLength(2);
+        expect(
+            screen.getByRole("heading", { name: document.filename }),
+        ).toBeInTheDocument();
         expect(screen.queryByText("Column")).not.toBeInTheDocument();
         expect(screen.queryByText("Results")).not.toBeInTheDocument();
         expect(screen.queryByTitle("Regenerate")).not.toBeInTheDocument();
@@ -147,6 +151,15 @@ describe("TRSidePanel", () => {
 
         fireEvent.click(screen.getByTitle('Page 4: "Exact language"'));
 
+        expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
+        expect(screen.getByText(/Exact language/, { selector: "p" })).toBeInTheDocument();
+
+        // Closing the quote card dismisses the quote but keeps the document.
+        fireEvent.click(screen.getByTitle("Close citation"));
+
+        expect(
+            screen.queryByText(/Exact language/, { selector: "p" }),
+        ).not.toBeInTheDocument();
         expect(screen.getByText("PDF doc-2")).toBeInTheDocument();
     });
 });

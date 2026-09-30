@@ -66,6 +66,7 @@ import {
     type UploadProgress,
 } from "@/app/lib/mikeApi";
 import {
+    SUPPORTED_DOCUMENT_ACCEPT,
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
@@ -252,6 +253,7 @@ function ChatInputForChatImpl(
     const [activeSlashIndex, setActiveSlashIndex] = useState(0);
     const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
     const dragDepthRef = useRef(0);
+    const localFileInputRef = useRef<HTMLInputElement>(null);
     const settingsSaveRef = useRef<Promise<boolean>>(Promise.resolve(true));
     // `ChatInput` keys this component by chat. Mark this generation inactive
     // during the keyed unmount so upload callbacks from the previous thread
@@ -828,6 +830,8 @@ function ChatInputForChatImpl(
                         <div className="flex items-center gap-1">
                             {!hideAddDocButton && composerOpen && (
                                 <AddDocButton
+                                    onLocalFiles={() => localFileInputRef.current?.click()}
+                                    uploading={uploadingFiles.length > 0}
                                     onBrowseAll={() => {
                                         setDocSelectorInitialTab("files");
                                         setDocSelectorOpen(true);
@@ -921,6 +925,20 @@ function ChatInputForChatImpl(
                 </div>
             </div>
 
+            <input
+                ref={localFileInputRef}
+                type="file"
+                accept={SUPPORTED_DOCUMENT_ACCEPT}
+                multiple
+                hidden
+                aria-label="Upload Documents"
+                disabled={!composerOpen || uploadingFiles.length > 0}
+                onChange={(event) => {
+                    const files = Array.from(event.currentTarget.files ?? []);
+                    event.currentTarget.value = "";
+                    if (files.length) void handleDroppedFiles(files);
+                }}
+            />
             <AddDocumentsModal
                 open={docSelectorOpen}
                 keepMounted

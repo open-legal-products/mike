@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { createPortal } from "react-dom";
 import { expect, it, vi } from "vitest";
 import type { Document } from "@/app/components/shared/types";
+import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { DocumentSidePanel } from "./DocumentSidePanel";
 
 // Stand in for a viewer whose context menu portals to document.body.
@@ -24,12 +25,15 @@ const doc: Document = {
     created_at: "2026-09-27T00:00:00Z",
 };
 
-function renderPanel(onClose = vi.fn()) {
+function renderPanel(
+    onClose = vi.fn(),
+    options: { readOnly?: boolean; versions?: DocumentVersion[] } = {},
+) {
     render(
         <DocumentSidePanel
             doc={doc}
-            readOnly
-            versions={[]}
+            readOnly={options.readOnly ?? true}
+            versions={options.versions ?? []}
             versionsLoading={false}
             onClose={onClose}
             onLoadVersions={vi.fn()}
@@ -52,4 +56,36 @@ it("stays open for portaled menus opened from the viewer, but closes on a real o
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.pointerDown(document.body);
     expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("titles the document view and lists the latest version first", () => {
+    const version = (n: number, createdAt: string): DocumentVersion => ({
+        id: `v${n}`,
+        version_number: n,
+        source: "upload",
+        created_at: createdAt,
+        filename: `agreement-v${n}.docx`,
+    });
+    renderPanel(vi.fn(), {
+        readOnly: false,
+        // Out of order on purpose: the list must not rely on the API's order.
+        versions: [
+            version(1, "2026-09-01T00:00:00Z"),
+            version(3, "2026-09-02T00:00:00Z"),
+            version(2, "2026-09-03T00:00:00Z"),
+        ],
+    });
+
+    expect(
+        screen.getByRole("heading", { name: "agreement-v3.docx" }),
+    ).toBeInTheDocument();
+    expect(
+        screen
+            .getAllByRole("button", { name: /^Download Version/ })
+            .map((button) => button.getAttribute("aria-label")),
+    ).toEqual([
+        "Download Version 3",
+        "Download Version 2",
+        "Download Version 1",
+    ]);
 });

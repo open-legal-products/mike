@@ -24,6 +24,7 @@ import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { DocxCommentComposer } from "./DocxCommentComposer";
 import { DocxReviewActions } from "./DocxReviewActions";
 import { DocxCommentCard } from "./DocxCommentCard";
+import { openReviewPane, useRequestedReviewPane } from "./docxReviewPane";
 
 /** Host-owned comment column, docked beside the editor viewport like its navigation pane. */
 export function DocxReviewPanel({
@@ -53,7 +54,7 @@ export function DocxReviewPanel({
     );
     const registry = useContext(ReviewRailContext);
     const register = useRef(registry?.register);
-    const open = editor?.snapshot().reviewPaneOpen ?? false;
+    const open = useRequestedReviewPane(editor);
     // Registration tells the native viewport to reserve room beside the page.
     // Capture the registration function once: the registry value changes its
     // identity when its mounted count changes.
@@ -61,8 +62,7 @@ export function DocxReviewPanel({
     if (!editor) return null;
     // Replies and edits are written in the thread's bubble.
     const inBubble = (start: () => void) => {
-        if (!editor.snapshot().reviewPaneOpen)
-            editor.exec({ type: "toggleReviewPane" });
+        openReviewPane(editor);
         start();
     };
     const startReply = (key: string) => {

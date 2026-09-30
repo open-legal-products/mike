@@ -11,12 +11,13 @@ import {
     DocumentTabActions,
     type DocumentActions,
 } from "@/app/components/shared/DocumentTabActions";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import { VersionChip } from "@/app/components/shared/VersionChip";
 import type { TabDropPosition } from "@/app/lib/reorderTabs";
 import { cn } from "@/app/lib/utils";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { CloseButton } from "@/shared/ui/CloseButton";
+import { LIQUID_GLASS_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 
 export interface DocumentTabItem {
     id: string;
@@ -36,6 +37,9 @@ interface Props {
     onActivate: (id: string) => void;
     onClose: (id: string) => void;
     onClosePanel?: () => void;
+    /** Renders a + after the last tab; `addLabel` names it for assistive tech. */
+    onAdd?: () => void;
+    addLabel?: string;
     onReorder?: (
         draggedId: string,
         targetId: string,
@@ -54,6 +58,8 @@ export function DocumentTabBar({
     onActivate,
     onClose,
     onClosePanel,
+    onAdd,
+    addLabel = "Add",
     onReorder,
 }: Props) {
     const dragType = `application/mike-${idPrefix}-tab`;
@@ -330,6 +336,20 @@ export function DocumentTabBar({
                         );
                     })
                 )}
+                {tabs.length > 0 && onAdd && (
+                    <button
+                        type="button"
+                        onClick={onAdd}
+                        aria-label={addLabel}
+                        title={addLabel}
+                        className={cn(
+                            "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
+                            LIQUID_GLASS_HOVER_CLASS,
+                        )}
+                    >
+                        <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                    </button>
+                )}
                 {tabs.length > 0 && (
                     <div
                         aria-hidden="true"
@@ -344,16 +364,11 @@ export function DocumentTabBar({
                 )}
             </div>
             {onClosePanel && (
-                <PillButtonUI
-                    tone="white"
-                    size="icon-xs"
+                <CloseButton
                     onClick={onClosePanel}
-                    aria-label="Close panel"
-                    title="Close panel"
-                    className="mt-2 ml-2 mr-2 h-4 w-4 shrink-0 self-start"
-                >
-                    <X aria-hidden="true" className="h-2.5 w-2.5" />
-                </PillButtonUI>
+                    label="Close panel"
+                    className="mt-2 ml-2 mr-2 self-start"
+                />
             )}
         </div>
     );

@@ -144,7 +144,7 @@ function renderView(overrides: Partial<Chat> = {}) {
                 isResponseLoading={false}
                 handleChat={vi.fn().mockResolvedValue("chat-1")}
                 cancel={vi.fn()}
-                detach={vi.fn()}
+                onNewChat={vi.fn()}
                 canSend
             />
         </PageChromeContext.Provider>,

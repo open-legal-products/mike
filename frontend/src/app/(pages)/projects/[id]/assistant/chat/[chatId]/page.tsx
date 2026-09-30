@@ -44,6 +44,7 @@ import {
 } from "@/app/lib/chatActivity";
 import { useAssistantHistoryStatuses } from "@/app/hooks/useAssistantHistoryStatuses";
 import { useAssistantChat } from "@/app/hooks/useAssistantChat";
+import { useChatRoute } from "@/app/hooks/useChatRoute";
 import { useAssistantMessageLayout } from "@/app/hooks/useAssistantMessageLayout";
 import { useProjectPicker } from "@/app/hooks/useProjectPicker";
 import {
@@ -276,7 +277,7 @@ function Divider({ onDrag }: { onDrag: (dx: number) => void }) {
 }
 
 export default function ProjectAssistantChatPage({ params }: Props) {
-    const { id: projectId, chatId: routeChatId = "" } = use(params);
+    const { id: projectId } = use(params);
     const router = useRouter();
 
     const { setSidebarOpen } = useSidebar();
@@ -288,7 +289,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     const [project, setProject] = useState<Project | null>(null);
     const [projectLoaded, setProjectLoaded] = useState(false);
-    const [activeChatId, setActiveChatId] = useState(routeChatId);
+    const {
+        chatId: activeChatId,
+        openChat,
+        adoptChat,
+        claimCreated,
+    } = useChatRoute(`/projects/${projectId}/assistant/chat`);
     const activeChatIdRef = useRef(activeChatId);
     useLayoutEffect(() => {
         activeChatIdRef.current = activeChatId;
@@ -388,19 +394,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             ? (initialMessages[0]?.reasoning ?? null)
             : undefined,
     );
-    const createdChatIdRef = useRef<string | null>(null);
-    const adoptCreatedChat = useCallback(
-        (chatId: string) => {
-            createdChatIdRef.current = chatId;
-            setActiveChatId(chatId);
-            window.history.pushState(
-                null,
-                "",
-                `/projects/${projectId}/assistant/chat/${chatId}`,
-            );
-        },
-        [projectId],
-    );
     const {
         messages,
         rejectedApiKey,
@@ -413,7 +406,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         resetChat,
     } = useAssistantChat({
         initialMessages,
-        onChatCreated: adoptCreatedChat,
+        onChatCreated: adoptChat,
         chatId: activeChatId || undefined,
         projectId,
     });
@@ -628,16 +621,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [projectMutationSignature, refreshProject]);
 
     useEffect(() => {
-        setActiveChatId(routeChatId);
-    }, [routeChatId]);
-
-    useEffect(() => {
         setCurrentChatId(activeChatId || null);
     }, [activeChatId, setCurrentChatId]);
 
     useEffect(() => {
-        if (activeChatId && createdChatIdRef.current === activeChatId) {
-            createdChatIdRef.current = null;
+        if (claimCreated(activeChatId)) {
             const firstUserMessage = messages.find(
                 (message) => message.role === "user",
             );
@@ -1026,12 +1014,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         // and is persisted server-side, instead of being cut to
         // "Cancelled by user." in the chat the user just left.
         detach();
-        setActiveChatId(nextChatId);
-        window.history.pushState(
-            null,
-            "",
-            `/projects/${projectId}/assistant/chat/${nextChatId}`,
-        );
+        openChat(nextChatId);
     }
 
     function handleNewChat() {
@@ -1040,13 +1023,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             return;
         }
         resetChat();
-        setActiveChatId("");
+        openChat("");
         setComposerResetKey((current) => current + 1);
-        window.history.pushState(
-            null,
-            "",
-            `/projects/${projectId}/assistant/chat`,
-        );
     }
 
     async function handleDeleteChat() {

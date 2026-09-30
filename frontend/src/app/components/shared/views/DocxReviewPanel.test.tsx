@@ -14,6 +14,7 @@ import type {
 } from "@docx-editor.dev/core/contracts/editor";
 import { ReviewRailContext } from "@docx-editor.dev/react";
 import { DocxReviewPanel } from "./DocxReviewPanel";
+import { openReviewPane } from "./docxReviewPane";
 
 let host: HTMLDivElement;
 let toolbar: HTMLDivElement;
@@ -44,7 +45,15 @@ afterEach(() => {
 
 function fixture(open = true) {
     const listeners = new Set<() => void>();
+    let revision = 1;
     const editor = {
+        getDocumentHandle: () => ({ revision }),
+        /** A document edit; EigenPal opens the pane with a tracked one. */
+        edit: (tracked: boolean) => {
+            revision += 1;
+            if (tracked) open = true;
+            editor.emit();
+        },
         on: vi.fn((_event, listener: () => void) => {
             listeners.add(listener);
             return () => listeners.delete(listener);
@@ -438,4 +447,49 @@ it("opens the column and focuses the bubble when View comment is chosen on a hig
         ).toHaveFocus(),
     );
     expect(editor.exec).toHaveBeenCalledWith({ type: "toggleReviewPane" });
+});
+
+it("keeps the column closed when an edit opens the pane by itself", () => {
+    const editor = fixture(false);
+    render(view(editor));
+
+    act(() => editor.edit(true));
+
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(editor.exec).toHaveBeenCalledOnce();
+    expect(editor.exec).toHaveBeenLastCalledWith({ type: "toggleReviewPane" });
+    expect(editor.snapshot().reviewPaneOpen).toBe(false);
+});
+
+it("still opens for the toolbar toggle and stays open while typing", () => {
+    const editor = fixture(false);
+    render(view(editor));
+
+    act(() => {
+        editor.exec();
+    });
+    expect(
+        screen.getByRole("complementary", { name: "Document comments" }),
+    ).toBeVisible();
+
+    act(() => editor.edit(true));
+    expect(
+        screen.getByRole("complementary", { name: "Document comments" }),
+    ).toBeVisible();
+    expect(editor.exec).toHaveBeenCalledOnce();
+});
+
+it("opens for an announced request made in the same step as an edit", () => {
+    const editor = fixture(false);
+    render(view(editor));
+
+    act(() => {
+        editor.edit(false);
+        openReviewPane(editor as unknown as Editor);
+    });
+
+    expect(
+        screen.getByRole("complementary", { name: "Document comments" }),
+    ).toBeVisible();
+    expect(editor.snapshot().reviewPaneOpen).toBe(true);
 });

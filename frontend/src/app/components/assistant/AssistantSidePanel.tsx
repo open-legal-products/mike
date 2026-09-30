@@ -10,6 +10,7 @@ import {
 import { type DocumentActions } from "../shared/DocumentTabActions";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import Image from "next/image";
+import { BookOpenText } from "lucide-react";
 import { DocPanel, type DocPanelMode } from "./DocPanel";
 import { DocumentTabBar } from "../shared/DocumentTabBar";
 import type { Citation, EditAnnotation, PanelDocument } from "../shared/types";
@@ -169,6 +170,11 @@ interface Props {
      */
     onCloseAnnotation?: (tabId: string) => void;
     onScrollChange?: (tabId: string, scrollTop: number) => void;
+    /**
+     * Offered when the panel has no tabs. Without it an empty panel renders
+     * nothing; with it the panel stays open on an "Open Documents" placeholder.
+     */
+    onOpenDocuments?: () => void;
 }
 
 const MIN_WIDTH = 300;
@@ -199,6 +205,7 @@ export function AssistantSidePanel({
     onWarningDismiss,
     onCloseAnnotation,
     onScrollChange,
+    onOpenDocuments,
 }: Props) {
     const panelRef = useRef<HTMLDivElement>(null);
     const documentDownloads = useRef(new Map<string, () => Promise<void>>());
@@ -256,7 +263,7 @@ export function AssistantSidePanel({
     }, []);
 
     const active = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null;
-    if (!active) return null;
+    if (!active && !onOpenDocuments) return null;
 
     return (
         <div
@@ -286,10 +293,12 @@ export function AssistantSidePanel({
             <DocumentTabBar
                 label="Assistant documents"
                 idPrefix="assistant-document"
-                activeTabId={active.id}
+                activeTabId={active?.id ?? null}
                 onActivate={onActivateTab}
                 onClose={onCloseTab}
                 onClosePanel={onCloseAll}
+                onAdd={onOpenDocuments}
+                addLabel="Open Documents"
                 onReorder={onReorderTabs}
                 tabs={tabs.map((tab) => {
                     const isLegalSource =
@@ -336,8 +345,20 @@ export function AssistantSidePanel({
                 preserves its state (scroll, DOCX renderer, etc.)
                 when inactive. */}
             <div className="flex-1 min-h-0 relative">
+                {!active && onOpenDocuments ? (
+                    <div className="flex h-full items-center justify-center">
+                        <button
+                            type="button"
+                            onClick={onOpenDocuments}
+                            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
+                        >
+                            <BookOpenText aria-hidden="true" className="h-4 w-4" />
+                            Open Documents
+                        </button>
+                    </div>
+                ) : null}
                 {tabs.map((tab) => {
-                    const isActive = tab.id === active.id;
+                    const isActive = tab.id === active?.id;
                     const mode: DocPanelMode =
                         tab.kind === "citation"
                             ? {
