@@ -1125,6 +1125,12 @@ create index if not exists quick_actions_user_surface_order_idx
 create index if not exists quick_actions_workflow_idx
   on public.quick_actions(workflow_id);
 
+-- Workflow metadata is accessed through the backend service role only.
+alter table public.default_workflow_installations enable row level security;
+alter table public.quick_actions enable row level security;
+revoke all on public.default_workflow_installations from public, anon, authenticated;
+revoke all on public.quick_actions from public, anon, authenticated;
+
 create table if not exists public.mike_workflows (
   id uuid primary key default gen_random_uuid(),
   workflow_key text not null,
