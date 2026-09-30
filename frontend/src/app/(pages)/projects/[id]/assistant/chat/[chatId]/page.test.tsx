@@ -323,7 +323,8 @@ describe("document viewer drops", () => {
         );
         expect(screen.getByText("Draft viewer")).toBe(original);
         expect(screen.queryByText("Drop files here to open")).toBeNull();
-        expect(state.getDocument).not.toHaveBeenCalled();
+        // The mounted viewer resolves its document-specific editing rights.
+        expect(state.getDocument).toHaveBeenCalledWith("doc1");
         expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
     });
 

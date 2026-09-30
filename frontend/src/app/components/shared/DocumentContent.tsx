@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PdfView } from "./views/PdfView";
 import { DocxView } from "./views/DocxView";
-import type { DocxSaveState } from "./views/DocxRenderer.types";
+import type { DocxCloseGuard, DocxSaveState } from "./views/DocxRenderer.types";
 import { SpreadsheetView } from "./views/SpreadsheetView";
 import {
     CitationQuotesSection,
@@ -66,6 +66,12 @@ export interface DocumentContentProps {
     compactActions?: boolean;
     /** Assistant default: start with editing locked and the DOCX toolbar hidden. */
     showToolbarToggle?: boolean;
+    /**
+     * Whether the viewer may edit the document. Fails closed: without it a
+     * DOCX stays read-only and offers no Edit toggle, so a reader never types
+     * into a file whose every autosave the server would refuse.
+     */
+    canEdit?: boolean;
     active?: boolean;
     warning?: string | null;
     onWarningDismiss?: () => void;
@@ -82,6 +88,7 @@ export interface DocumentContentProps {
     refetchKey?: number | string;
     cacheBytes?: boolean;
     onVersionChange?: (version: DocumentVersion) => void;
+    onCloseGuardReady?: (guard: DocxCloseGuard | null) => void;
     onDownloadReady?: (download: (() => Promise<void>) | null) => void;
 }
 
@@ -92,6 +99,7 @@ export function DocumentContent({
     isReloading = false,
     compactActions,
     showToolbarToggle = false,
+    canEdit = false,
     active = true,
     warning,
     onWarningDismiss,
@@ -99,6 +107,7 @@ export function DocumentContent({
     initialScrollTop,
     onScrollChange,
     onDownloadReady,
+    onCloseGuardReady,
     refetchKey,
     cacheBytes = true,
     onVersionChange,
@@ -238,7 +247,7 @@ export function DocumentContent({
                         onDownload={() => localDownload.current?.()}
                         toolbarVisible={toolbarVisible}
                         onToggleToolbar={
-                            viewType === "docx"
+                            viewType === "docx" && canEdit
                                 ? () => setToolbarVisible((visible) => !visible)
                                 : undefined
                         }
@@ -308,8 +317,12 @@ export function DocumentContent({
                         onSaveStateChange={onSaveStateChange}
                         cacheBytes={cacheBytes}
                         refetchKey={refetchKey}
+                        onCloseGuardReady={onCloseGuardReady}
                         defaultMode="edit"
-                        toolbarVisible={toolbarVisible}
+                        canEdit={canEdit}
+                        // Read-only while hidden; a permission that resolves
+                        // after mount can still enable editing.
+                        toolbarVisible={canEdit && toolbarVisible}
                         filename={resolvedDocument.title}
                         documentId={documentId}
                         versionId={versionId ?? undefined}

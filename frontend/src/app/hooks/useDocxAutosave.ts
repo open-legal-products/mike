@@ -37,6 +37,9 @@ export function useDocxAutosave(options: Options) {
     const pending = useRef<Promise<void> | null>(null);
     const mounted = useRef(true);
     const failed = useRef(false);
+    const discarded = useRef(false);
+    // The server refused the save because the file changed; retrying cannot succeed.
+    const conflicted = useRef(false);
     const detachedSnapshot = useRef<{ bytes: Promise<ArrayBuffer>; sequence: number } | null>(null);
     const [dirty, setDirty] = useState(false);
     const [status, setStatus] = useState<"idle" | "pending" | "saving" | "saved" | "error">("idle");
@@ -45,7 +48,7 @@ export function useDocxAutosave(options: Options) {
     const save = useCallback((): Promise<void> => {
         clearTimeout(timer.current);
         if (pending.current) return pending.current;
-        if (!latest.current.enabled || sequence.current === savedSequence.current) return Promise.resolve();
+        if (discarded.current || !latest.current.enabled || sequence.current === savedSequence.current) return Promise.resolve();
         failed.current = false;
         const warnWhileSaving = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
         window.addEventListener("beforeunload", warnWhileSaving);
@@ -76,6 +79,7 @@ export function useDocxAutosave(options: Options) {
                     });
                     expectedHash.current = Promise.resolve(nextHash);
                     savedSequence.current = savingSequence;
+                    conflicted.current = false;
                     savedBytes.current = bytes;
                     snapshotRevision.current += 1;
                     invalidateDocxBytes(current.documentId);
@@ -86,9 +90,10 @@ export function useDocxAutosave(options: Options) {
                 } while ((mounted.current || detachedSnapshot.current) && sequence.current > savedSequence.current);
             } catch (reason) {
                 failed.current = true;
+                const conflict = reason instanceof UploadBatchError
+                    && reason.outcomes.some((outcome) => outcome.errorCode === "document_changed");
+                conflicted.current = conflict;
                 if (mounted.current) {
-                    const conflict = reason instanceof UploadBatchError
-                        && reason.outcomes.some((outcome) => outcome.errorCode === "document_changed");
                     setError(conflict
                         ? "This document changed elsewhere. Download your edits before reopening the latest version."
                         : userFacingApiError(reason, "Changes could not be saved. Your edits are still open. Press Cmd/Ctrl+S to retry, or download a copy."));
@@ -116,6 +121,7 @@ export function useDocxAutosave(options: Options) {
             if (previous.length === next.length && previous.every((byte, index) => byte === next[index])) return false;
         }
         expectedHash.current = null;
+        conflicted.current = false;
         savedBytes.current = bytes;
         snapshotRevision.current += 1;
         latest.current = { ...latest.current, bytes };
@@ -138,18 +144,19 @@ export function useDocxAutosave(options: Options) {
         return () => {
             mounted.current = false;
             clearTimeout(timer.current);
+            // Closing is the last chance to keep unsaved edits, so retry even
+            // after a failed save; only a conflict is left for the user.
+            if (conflicted.current || discarded.current) return;
             // Capture pending edits before the child editor's passive teardown.
-            if (!failed.current) {
-                if (pending.current && sequence.current > savedSequence.current) {
-                    const bytes = latest.current.exportDocx();
-                    if (bytes) {
-                        // Observe rejection immediately, even if the current upload fails first.
-                        void bytes.catch(() => {});
-                        detachedSnapshot.current = { bytes, sequence: sequence.current };
-                    }
+            if (pending.current && sequence.current > savedSequence.current) {
+                const bytes = latest.current.exportDocx();
+                if (bytes) {
+                    // Observe rejection immediately, even if the current upload fails first.
+                    void bytes.catch(() => {});
+                    detachedSnapshot.current = { bytes, sequence: sequence.current };
                 }
-                void save();
             }
+            void save();
         };
     }, [save]);
 
@@ -160,5 +167,11 @@ export function useDocxAutosave(options: Options) {
         return () => window.removeEventListener("beforeunload", warn);
     }, [dirty]);
 
-    return { dirty, status, error, markChanged, save, adoptSnapshot, captureSnapshotRevision };
+    const hasUnsavedChanges = useCallback(() => sequence.current !== savedSequence.current, []);
+    const prepareClose = useCallback(async () => {
+        if (!conflicted.current) await save();
+        return !hasUnsavedChanges();
+    }, [save, hasUnsavedChanges]);
+    const discard = useCallback(() => { discarded.current = true; clearTimeout(timer.current); }, []);
+    return { dirty, status, error, markChanged, save, adoptSnapshot, captureSnapshotRevision, hasUnsavedChanges, prepareClose, discard };
 }

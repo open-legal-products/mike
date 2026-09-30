@@ -11,6 +11,8 @@ import { ProjectDocumentTabs } from "../projects/ProjectDocumentTabs";
 import { AssistantSidePanel } from "../assistant/AssistantSidePanel";
 import type { Document } from "./types";
 
+vi.mock("@/app/hooks/useDocumentPermissions", () => ({ useDocumentPermissions: (_ids: string[], enabled: boolean) => () => ({ canEdit: enabled, canDelete: enabled }) }));
+
 const localDownload = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("../assistant/DocPanel", () => ({
     DocPanel: ({
@@ -68,6 +70,7 @@ function Harness({
         />
     ) : (
         <AssistantSidePanel
+            canEdit
             tabs={files.map((file) => ({
                 kind: "document",
                 id: file.id,

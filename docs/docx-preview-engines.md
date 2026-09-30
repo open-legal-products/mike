@@ -6,7 +6,10 @@ toolbar starts hidden in the assistant side panel and visible in the IDE.
 The title-row **Edit** button controls editing and toolbar visibility in both
 surfaces, with darker text while active. When off, EigenPal enforces read-only
 mode: typing, pasting, formatting, and native review mutations are locked.
-The assistant starts locked; the IDE starts with Edit active. Toggling keeps
+The assistant starts locked; the IDE starts with Edit active for users who may
+replace that document version. The document detail API supplies `can_edit` and
+`can_delete` using the same rules as the write endpoints. Viewers fail closed
+while permissions load, and shared-chat readers cannot enable editing. Toggling keeps
 the mounted editor, unsaved changes, and undo history. Each panel retains its
 choice when switching tabs or annotations. While Edit is active, EigenPal's
 native mode picker offers Viewing, Editing, and Suggesting modes.
@@ -50,6 +53,16 @@ The action shares EigenPal's overflow menu; a More menu remains available when
 all formatting controls fit. The navigation pane has a 12px left inset.
 
 Edits autosave to the open stored version after a short pause (1.5 seconds).
+Closing a tab/panel or switching its version waits for pending saves. If saving
+fails, the viewer stays mounted and asks whether to keep editing or discard
+unsaved changes. Conflicts require downloading a copy or explicitly discarding;
+closing does not retry a known conflict. Browser unload still warns about dirty
+or in-flight edits.
+
+Tracked-change accept/reject uploads to a new storage object, then conditionally
+swaps the version's path, hash, size and PDF rendition in one database update.
+A competing editor save or review action receives a conflict instead of losing
+either writer's content. The lifecycle cleanup retires the old objects.
 Tracked edits and review decisions use that same save path. Autosave does not
 generate a PDF; it invalidates the previous PDF rendition. Content hashes protect
 against overwriting another editor's newer file. **Download** exports the live

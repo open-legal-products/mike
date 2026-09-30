@@ -1,8 +1,9 @@
-import { StrictMode, useEffect, useRef } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import type { DocxRendererProps } from "./DocxRenderer.types";
+import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
 import { DocxView } from "./DocxView";
 import { createHash, webcrypto } from "node:crypto";
 
@@ -373,4 +374,46 @@ it("ignores a server read started before a local save even if it arrives after t
     await act(async () => finishRead(new Response(new Uint8Array([2]))));
     expect(screen.getByTestId("renderer-scroll")).toBe(originalEditor);
     expect(screen.getByText("Document revision 1")).toBeVisible();
+});
+
+function ClosableViewer() {
+    const viewers = useDocumentViewers();
+    const [open, setOpen] = useState(true);
+    return <>
+        <button onClick={() => viewers.requestClose(["draft"], () => setOpen(false))}>Close draft</button>
+        {open && <DocxView documentId="close-draft" versionId="v1" cacheBytes={false} defaultMode="edit"
+            onCloseGuardReady={(guard) => viewers.registerCloseGuard("draft", guard)} />}
+        {viewers.confirmation}
+    </>;
+}
+
+it("keeps the actual editor mounted after failed saves until discard is confirmed", async () => {
+    replaceVersion.mockRejectedValue(new Error("network"));
+    render(<ClosableViewer />);
+    const editor = await screen.findByTestId("renderer-scroll");
+    fireEvent.click(screen.getByRole("button", { name: "Change document" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await screen.findByText(/Changes could not be saved/);
+    fireEvent.click(screen.getByRole("button", { name: "Close draft" }));
+    await screen.findByRole("button", { name: "Keep editing" });
+    expect(replaceVersion).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("renderer-scroll")).toBe(editor);
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByTestId("renderer-scroll")).toBe(editor);
+    fireEvent.click(screen.getByRole("button", { name: "Close draft" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    expect(screen.queryByTestId("renderer-scroll")).toBeNull();
+    expect(replaceVersion).toHaveBeenCalledTimes(3);
+});
+
+it("blocks both editing controls and saves when document permission is denied", async () => {
+    render(<DocxView documentId="read-only" cacheBytes={false} defaultMode="edit" toolbarVisible canEdit={false} />);
+    await screen.findByTestId("renderer-scroll");
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    // Even an unexpected renderer event cannot mark the read-only document dirty.
+    fireEvent.click(screen.getByText("Change document"));
+    fireEvent.click(screen.getByRole("button", { name: "Save document" }));
+    await act(() => new Promise(resolve => setTimeout(resolve, 0)));
+    expect(exportDocx).not.toHaveBeenCalled();
+    expect(replaceVersion).not.toHaveBeenCalled();
 });

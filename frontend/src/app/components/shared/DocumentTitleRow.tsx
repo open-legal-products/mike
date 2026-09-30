@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
-import { getDocumentFile } from "@/app/lib/mikeApi";
+import { downloadDocumentFile } from "@/app/lib/downloadDocument";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
@@ -294,18 +294,7 @@ function DownloadButton({
                 await localDownload;
                 return;
             }
-            const { blob, filename: resolvedFilename } = await getDocumentFile(
-                documentId,
-                versionId,
-            );
-            const blobUrl = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = resolvedFilename || filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+            await downloadDocumentFile(documentId, versionId, filename);
         } catch (cause) {
             setError(
                 userFacingApiError(

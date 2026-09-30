@@ -1,0 +1,33 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { downloadBlob, downloadDocumentFile } from "./downloadDocument";
+import { getDocumentFile } from "./mikeApi";
+vi.mock("./mikeApi", () => ({ getDocumentFile: vi.fn() }));
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+it("uses the server filename, downloads bytes and releases the URL", async () => {
+    vi.useFakeTimers();
+    const blob = new Blob(["file"]);
+    vi.mocked(getDocumentFile).mockResolvedValue({ blob, filename: "server.docx" });
+    URL.createObjectURL = vi.fn(() => "blob:download");
+    URL.revokeObjectURL = vi.fn();
+    const names: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { names.push(this.download); });
+    await downloadDocumentFile("doc", "v", "fallback.docx");
+    vi.mocked(getDocumentFile).mockResolvedValue({ blob, filename: "" });
+    await downloadDocumentFile("doc", null, "fallback.docx");
+    await downloadDocumentFile("doc");
+    expect(names).toEqual(["server.docx", "fallback.docx", "document"]);
+    expect(getDocumentFile).toHaveBeenCalledWith("doc", "v");
+    expect(document.querySelector('a[download]')).toBeNull();
+    vi.runAllTimers();
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(3);
+});
+it("cleans up even if clicking fails", () => {
+    vi.useFakeTimers();
+    URL.createObjectURL = vi.fn(() => "blob:failed");
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => { throw new Error("click"); });
+    expect(() => downloadBlob(new Blob(), "test")).toThrow("click");
+    expect(document.querySelector('a[download]')).toBeNull();
+    vi.runAllTimers();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:failed");
+});

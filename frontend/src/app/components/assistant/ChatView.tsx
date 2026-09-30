@@ -38,6 +38,7 @@ import type {
     Citation,
     EditAnnotation,
     Document,
+    PanelDocument,
     Message,
 } from "../shared/types";
 import {
@@ -58,6 +59,7 @@ import {
     type HeaderActionsMenuItem,
 } from "@/app/components/shared/HeaderActionsMenu";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
+import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
 import {
@@ -67,7 +69,6 @@ import {
 import { can, roleFrom } from "@/app/lib/permissions";
 import {
     getDocument,
-    getDocumentFile,
     renameProjectDocument,
     renameLibraryDocument,
     deleteDocument,
@@ -173,6 +174,8 @@ export function ChatView({
                 : null,
         [rejectedApiKey],
     );
+    const [deleteTarget, setDeleteTarget] = useState<PanelDocument | null>(null);
+    const [deletingDocument, setDeletingDocument] = useState(false);
     const [tabs, setTabs] = useState<AssistantSidePanelTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [panelMounted, setPanelMounted] = useState(false);
@@ -999,6 +1002,9 @@ export function ChatView({
     );
 
     const messagesBottomPadding = DEFAULT_ASSISTANT_BOTTOM_PADDING;
+    // Readers of a shared chat may view its documents but not change them.
+    const canWrite =
+        accessResolved && (canSend === undefined || canSend === true);
 
     return (
         <div className="h-full w-full flex relative">
@@ -1299,40 +1305,53 @@ export function ChatView({
                 onClose={() => setActionError(null)}
             />
 
+            <ConfirmPopup
+                open={!!deleteTarget}
+                title="Delete file?"
+                message={`Delete “${deleteTarget?.title ?? "this file"}” and its versions? This cannot be undone.`}
+                confirmLabel="Delete file"
+                confirmVariant="danger"
+                confirmStatus={deletingDocument ? "loading" : "idle"}
+                onCancel={() => { if (!deletingDocument) setDeleteTarget(null); }}
+                onConfirm={() => {
+                    if (!deleteTarget || deletingDocument || !canWrite) return;
+                    const target = deleteTarget;
+                    setDeletingDocument(true);
+                    void (async () => {
+                        try {
+                            const file = await getDocument(target.document_id);
+                            if (file.can_delete !== true) {
+                                setActionError({ title: "Delete failed", message: "You do not have permission to delete this file." });
+                                return;
+                            }
+                            await deleteDocument(target.document_id);
+                            setTabs((current) => {
+                                const remaining = current.filter((tab) => tab.document.document_id !== target.document_id);
+                                setActiveTabId((id) => remaining.some((tab) => tab.id === id) ? id : remaining[0]?.id ?? null);
+                                return remaining;
+                            });
+                            setDeleteTarget(null);
+                        } catch (cause) {
+                            setActionError({ title: "Delete failed", message: userFacingApiError(cause, "This file could not be deleted. Please try again.") });
+                        } finally { setDeletingDocument(false); }
+                    })();
+                }}
+            />
+
             {panelMounted && (
                 <div
                     className={`fixed inset-0 z-40 flex justify-center p-3 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] md:relative md:inset-auto md:z-auto md:block md:h-full md:min-w-0 md:flex-shrink-0 md:p-0 ${panelVisible ? "translate-x-0" : "translate-x-full"}`}
                 >
                     <AssistantSidePanel
                         tabs={tabs}
+                        canEdit={canWrite}
                         documentActions={(document) => ({
-                            addToChatDisabled:
-                                !accessResolved ||
-                                (canSend !== undefined && canSend !== true) ||
-                                !!chatLoading,
+                            addToChatDisabled: !canWrite || !!chatLoading,
                             onAddToChat: async () => {
                                 const file = await getDocument(
                                     document.document_id,
                                 );
                                 chatInputRef.current?.addDoc(file);
-                            },
-                            onDownload: async () => {
-                                const file = await getDocumentFile(
-                                    document.document_id,
-                                    document.version_id,
-                                );
-                                const url = URL.createObjectURL(file.blob);
-                                const link = window.document.createElement("a");
-                                link.href = url;
-                                link.download =
-                                    document.title ||
-                                    file.filename ||
-                                    "document";
-                                link.click();
-                                setTimeout(
-                                    () => URL.revokeObjectURL(url),
-                                    1000,
-                                );
                             },
                             onRename: async (filename) => {
                                 const file = await getDocument(
@@ -1365,22 +1384,7 @@ export function ChatView({
                                     ),
                                 );
                             },
-                            onDelete: async () => {
-                                await deleteDocument(document.document_id);
-                                setTabs((current) => {
-                                    const remaining = current.filter(
-                                        (tab) =>
-                                            tab.document.document_id !==
-                                            document.document_id,
-                                    );
-                                    setActiveTabId((id) =>
-                                        remaining.some((tab) => tab.id === id)
-                                            ? id
-                                            : (remaining[0]?.id ?? null),
-                                    );
-                                    return remaining;
-                                });
-                            },
+                            onDelete: canWrite ? () => setDeleteTarget(document) : undefined,
                         })}
                         activeTabId={activeTabId}
                         onActivateTab={setActiveTabId}

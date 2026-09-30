@@ -100,3 +100,38 @@ it("flushes a pending edit when its viewer unmounts", async () => {
     unmount();
     await vi.waitFor(() => expect(replaceDocumentVersionFile).toHaveBeenCalledOnce());
 });
+
+it("retries a failed save when its viewer closes, so the edits are not dropped", async () => {
+    vi.mocked(replaceDocumentVersionFile).mockRejectedValueOnce(new Error("network"));
+    const { result, unmount } = renderHook(() => useDocxAutosave(options()));
+    act(() => result.current.markChanged());
+    await act(() => result.current.save());
+    expect(result.current.status).toBe("error");
+    unmount();
+    await vi.waitFor(() => expect(replaceDocumentVersionFile).toHaveBeenCalledTimes(2));
+});
+
+it("does not retry a conflicting save when its viewer closes", async () => {
+    vi.mocked(replaceDocumentVersionFile).mockRejectedValueOnce(new UploadBatchError("internal details", [{ clientId: "a", filename: "a.docx", status: "error", result: null, errorCode: "document_changed" }]));
+    const { result, unmount } = renderHook(() => useDocxAutosave(options()));
+    act(() => result.current.markChanged());
+    await act(() => result.current.save());
+    unmount();
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(replaceDocumentVersionFile).toHaveBeenCalledOnce();
+});
+
+it("keeps failed and conflicting drafts open until saved or explicitly discarded", async () => {
+    vi.mocked(replaceDocumentVersionFile).mockRejectedValueOnce(new Error("network"));
+    const { result, unmount } = renderHook(() => useDocxAutosave(options()));
+    act(() => result.current.markChanged());
+    await act(async () => { expect(await result.current.prepareClose()).toBe(false); });
+    expect(result.current.hasUnsavedChanges()).toBe(true);
+    await act(async () => { expect(await result.current.prepareClose()).toBe(true); });
+    expect(result.current.hasUnsavedChanges()).toBe(false);
+    act(() => result.current.markChanged());
+    act(() => result.current.discard());
+    unmount();
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(replaceDocumentVersionFile).toHaveBeenCalledTimes(2);
+});

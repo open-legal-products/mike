@@ -7,7 +7,11 @@ function chatIdFromPath(pathname: string, chatPath: string): string {
     const prefix = `${chatPath}/`;
     if (!pathname.startsWith(prefix)) return "";
     const segment = pathname.slice(prefix.length).split("/")[0] ?? "";
-    return decodeURIComponent(segment);
+    try {
+        return decodeURIComponent(segment);
+    } catch {
+        return "";
+    }
 }
 
 /**

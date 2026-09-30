@@ -46,6 +46,7 @@ vi.mock("./views/SpreadsheetView", () => ({
 }));
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
+    getDocument: vi.fn().mockResolvedValue({ can_edit: true, can_delete: true }),
     resolveDocumentEdit: resolveEdit,
     listDocumentVersions: loadVersions,
 }));
@@ -79,11 +80,13 @@ function content(
     surface: "assistant" | "project",
     mode: DocumentContentMode,
     active = true,
+    canEdit = true,
 ) {
     if (surface === "assistant")
         return (
             <DocPanel
                 showToolbarToggle
+                canEdit={canEdit}
                 document={panelDocumentFromCitation(
                     mode.kind === "citation" ? mode.citation : citation,
                 )}
@@ -107,6 +110,7 @@ function content(
                 },
             ]}
             documents={[]}
+            canEdit={canEdit}
             activeTabId={active ? "doc" : null}
             onWarningDismiss={vi.fn()}
             onCloseAnnotation={onClose}
@@ -127,9 +131,9 @@ afterEach(() => vi.unstubAllGlobals());
 describe.each(["assistant", "project"] as const)(
     "%s shared content",
     (surface) => {
-        it("offers Edit in both surfaces with their defaults and retains its state per panel", () => {
+        it("offers Edit in both surfaces with their defaults and retains its state per panel", async () => {
             const { rerender } = render(content(surface, { kind: "document" }));
-            const button = screen.getByRole("button", { name: "Edit" });
+            const button = await screen.findByRole("button", { name: "Edit" });
             if (surface === "project") {
                 expect(viewerProps().toolbarVisible).toBe(true);
                 expect(button).toHaveAttribute("aria-pressed", "true");
@@ -155,6 +159,12 @@ describe.each(["assistant", "project"] as const)(
             expect(button).toHaveAttribute("aria-pressed", "false");
             expect(button).toHaveClass("text-muted-foreground");
             expect(button).not.toHaveClass("text-foreground");
+        });
+
+        it("keeps a DOCX read-only, with no Edit toggle, for a reader", () => {
+            render(content(surface, { kind: "document" }, true, false));
+            expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+            expect(viewerProps().toolbarVisible).toBe(false);
         });
 
         it("shows citation quotes, selects and deselects highlights, and reopens after dismissal", () => {

@@ -1,5 +1,7 @@
 "use client";
 
+import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
+
 import {
     use,
     useCallback,
@@ -340,7 +342,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // Upload state
     const fileInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
-    const documentDownloads = useRef(new Map<string, () => Promise<void>>());
+    const documentViewers = useDocumentViewers();
     const projectExplorerRef = useRef<ProjectExplorerHandle>(null);
     const [addDocumentsOpen, setAddDocumentsOpen] = useState(false);
     const projectPicker = useProjectPicker();
@@ -1945,14 +1947,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         chatInputRef.current?.addDoc(document)
                     }
                     addToChatDisabled={!canSendChat}
-                    onDownloadDoc={(document) => {
-                        const download = documentDownloads.current.get(
-                            document.id,
-                        );
-                        return download
-                            ? download()
-                            : explorerDownload.downloadDocument(document, tabs.find((tab) => tab.documentId === document.id)?.versionId);
-                    }}
+                    onDownloadDoc={(document) => documentViewers.download(document.id, document.id, tabs.find((tab) => tab.documentId === document.id)?.versionId, document.filename)}
                     downloading={explorerDownload.downloading}
                     onRenameDoc={handleRenameDoc}
                     onDeleteDoc={handleDeleteDoc}
@@ -1960,7 +1955,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
                     onActivate={switchTab}
-                    onClose={closeTab}
+                    onClose={(id) => documentViewers.requestClose([id], () => closeTab(id))}
                     onReorder={(draggedId, targetId, position) =>
                         setTabs((current) =>
                             reorderTabs(
@@ -1974,15 +1969,13 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     }
                 />
                 <ProjectDocumentPanels
-                    onDownloadReady={(documentId, download) => {
-                        if (download)
-                            documentDownloads.current.set(documentId, download);
-                        else documentDownloads.current.delete(documentId);
-                    }}
+                    canEdit={canEditContent}
+                    onDownloadReady={documentViewers.registerDownload}
+                    onCloseGuardReady={documentViewers.registerCloseGuard}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
-                    onVersionChange={(documentId, version) => {
+                    onVersionChange={(documentId, version) => documentViewers.requestClose([documentId], () => {
                         openRequest.current += 1;
                         setTabs((current) =>
                             current.map((tab) => {
@@ -2008,7 +2001,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 };
                             }),
                         );
-                    }}
+                    })}
                     onCloseAnnotation={handleCloseAnnotation}
                     isDocumentReloading={(documentId) =>
                         Object.values(resolvingEdits).includes(documentId)
@@ -2021,6 +2014,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 />
             </div>
 
+            {documentViewers.confirmation}
             <Divider onDrag={onChatDividerDrag} />
 
             {/* RIGHT: Assistant Panel */}

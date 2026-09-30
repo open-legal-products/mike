@@ -26,6 +26,18 @@ describe("useChatRoute", () => {
         expect(renderChatRoute().result.current.chatId).toBe("c1");
     });
 
+    it("handles malformed escapes on initial load and navigation", () => {
+        navigation.pathname = "/assistant/chat/%E0%A4%A";
+        const { result, rerender } = renderChatRoute();
+        expect(result.current.chatId).toBe("");
+        navigation.pathname = "/assistant/chat/valid%20id";
+        rerender();
+        expect(result.current.chatId).toBe("valid id");
+        navigation.pathname = "/assistant/chat/%ZZ";
+        rerender();
+        expect(result.current.chatId).toBe("");
+    });
+
     it("opens a chat by rewriting the URL, without navigating", () => {
         const pushState = vi.spyOn(window.history, "pushState");
         const { result } = renderChatRoute();

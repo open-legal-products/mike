@@ -1,0 +1,20 @@
+import { describe, expect, it, vi } from "vitest";
+import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
+import { ensureDocAccess } from "../../../lib/access";
+import { getDocument } from "../documents.access";
+vi.mock("../../../lib/access", async (load) => ({ ...(await load<object>()), ensureDocAccess: vi.fn() }));
+vi.mock("../../../lib/documentVersions", () => ({ attachActiveVersionPaths: vi.fn(), attachLatestVersionNumbers: vi.fn() }));
+describe("document detail permissions", () => {
+  it.each([
+    ["viewer", false, "owner-id", null, false, false],
+    ["editor", false, "owner-id", null, false, false],
+    ["owner", true, "user", null, true, true],
+    ["owner", false, null, null, true, true],
+    ["editor", false, "owner-id", "workflow", true, true],
+  ] as const)("matches upload replacement and deletion rights (%s, creator %s)", async (projectRole, isCreator, creatorId, workflowId, canEdit, canDelete) => {
+    vi.mocked(ensureDocAccess).mockResolvedValue({ ok: true, projectRole, isCreator, orgRole: null });
+    const fake = scriptedDb([{ table: "documents", data: { id: "doc", user_id: creatorId, project_id: "project", workflow_id: workflowId } }]);
+    expect(await getDocument("doc", "user", undefined, fake.db)).toMatchObject({ ok: true, doc: { can_edit: canEdit, can_delete: canDelete } });
+    fake.done();
+  });
+});

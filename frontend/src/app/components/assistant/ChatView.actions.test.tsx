@@ -68,6 +68,8 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
 }));
 const spreadsheet = {
     id: "excel-1",
+    can_edit: true,
+    can_delete: true,
     filename: "Budget.xlsx",
     file_type: "xlsx",
     current_version_id: "excel-v4",
@@ -198,6 +200,7 @@ function openActions() {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getDocument).mockResolvedValue(spreadsheet);
     spreadsheet.id = "excel-1";
     spreadsheet.filename = "Budget.xlsx";
     vi.mocked(listDocumentVersions).mockResolvedValue({
@@ -696,7 +699,7 @@ describe("assistant document tab actions", () => {
             );
             const tab = await screen.findByRole("tab", { name: "Budget.xlsx" });
             fireEvent.contextMenu(tab);
-            fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+            fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
             const input = screen.getByRole("textbox", { name: "File name" });
             fireEvent.change(input, { target: { value: "Renamed.xlsx" } });
             fireEvent.keyDown(input, { key: "Enter" });
@@ -744,6 +747,29 @@ describe("assistant document tab actions", () => {
         expect(screen.queryByText("internal storage error")).toBeNull();
     });
 
+    it("asks before deletion and cancellation preserves the file", async () => {
+        renderView();
+        fireEvent.click(screen.getByRole("button", { name: "Open Budget.xlsx" }));
+        fireEvent.contextMenu(await screen.findByRole("tab", { name: "Budget.xlsx" }));
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        expect(screen.getByRole("dialog", { name: "Delete file?" })).toBeVisible();
+        expect(deleteDocument).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        expect(screen.getByRole("tab", { name: "Budget.xlsx" })).toBeVisible();
+        expect(deleteDocument).not.toHaveBeenCalled();
+    });
+
+    it("hides destructive actions when the document is read-only", async () => {
+        vi.mocked(getDocument).mockResolvedValue({ ...spreadsheet, can_edit: false, can_delete: false });
+        renderView();
+        fireEvent.click(screen.getByRole("button", { name: "Open Budget.xlsx" }));
+        await waitFor(() => expect(getDocument).toHaveBeenCalled());
+        fireEvent.contextMenu(await screen.findByRole("tab", { name: "Budget.xlsx" }));
+        expect(screen.queryByRole("menuitem", { name: "Delete file" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+        expect(deleteDocument).not.toHaveBeenCalled();
+    });
+
     it("keeps the tab on a failed deletion and closes it after success", async () => {
         vi.mocked(deleteDocument)
             .mockRejectedValueOnce(new Error("private database details"))
@@ -755,10 +781,11 @@ describe("assistant document tab actions", () => {
         fireEvent.contextMenu(
             await screen.findByRole("tab", { name: "Budget.xlsx" }),
         );
-        fireEvent.click(screen.getByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
         expect(
             await screen.findByText(
-                "This file action could not be completed. Please try again.",
+                "This file could not be deleted. Please try again.",
             ),
         ).toBeVisible();
         expect(screen.getByRole("tab", { name: "Budget.xlsx" })).toBeVisible();
@@ -766,7 +793,8 @@ describe("assistant document tab actions", () => {
             screen.getByRole("button", { name: "Dismiss warning" }),
         );
         fireEvent.contextMenu(screen.getByRole("tab", { name: "Budget.xlsx" }));
-        fireEvent.click(screen.getByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
         await waitFor(() =>
             expect(
                 screen.queryByRole("tab", { name: "Budget.xlsx" }),

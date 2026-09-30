@@ -1,5 +1,8 @@
 "use client";
 
+import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
+
+import type { DocxCloseGuard } from "../shared/views/DocxRenderer.types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { memo, useMemo } from "react";
 import {
@@ -43,8 +46,11 @@ interface Props {
     onEditResolved?: EditMode["onResolved"];
     onEditError?: EditMode["onError"];
     onVersionChange?: (documentId: string, version: DocumentVersion) => void;
+    /** Whether the viewer may edit the project's documents. */
+    canEdit?: boolean;
     onCloseAnnotation?: (documentId: string) => void;
     onWarningDismiss: (documentId: string) => void;
+    onCloseGuardReady?: (documentId: string, guard: DocxCloseGuard | null) => void;
     onDownloadReady?: (
         documentId: string,
         download: (() => Promise<void>) | null,
@@ -63,8 +69,10 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
     onEditError,
     onCloseAnnotation,
     onVersionChange,
+    canEdit = false,
     onWarningDismiss,
     onDownloadReady,
+    onCloseGuardReady,
 }: Props) {
     const panels = useMemo(() => {
         const documentsById = new Map(documents.map((doc) => [doc.id, doc]));
@@ -125,6 +133,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
             return { tab, panelDocument, refetchKey };
         });
     }, [tabs, documents]);
+    const permissions = useDocumentPermissions(tabs.map((tab) => tab.documentId), canEdit);
     return (
         <div className="relative flex-1 min-h-0 overflow-hidden">
             {panels.map(({ tab, panelDocument, refetchKey }) => {
@@ -160,6 +169,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                         <DocumentContent
                             document={panelDocument}
                             mode={mode}
+                            canEdit={permissions(tab.documentId).canEdit}
                             onVersionChange={
                                 onVersionChange
                                     ? (version) =>
@@ -188,6 +198,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                                     ? () => onCloseAnnotation(tab.documentId)
                                     : undefined
                             }
+                            onCloseGuardReady={(guard) => onCloseGuardReady?.(tab.documentId, guard)}
                             onDownloadReady={(download) =>
                                 onDownloadReady?.(tab.documentId, download)
                             }

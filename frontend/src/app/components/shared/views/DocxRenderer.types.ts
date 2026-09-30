@@ -39,3 +39,9 @@ export interface DocxRendererProps {
     onReady: (surface: DocxSurface) => void;
     onError: () => void;
 }
+
+export interface DocxCloseGuard {
+    hasUnsavedChanges: () => boolean;
+    prepareClose: () => Promise<boolean>;
+    discard: () => void;
+}

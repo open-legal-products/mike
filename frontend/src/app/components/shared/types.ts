@@ -83,6 +83,9 @@ export interface Project {
 }
 
 export interface Document {
+  /** Server-computed permissions on GET /documents/:id; absent fails closed. */
+  can_edit?: boolean;
+  can_delete?: boolean;
   id: string;
   user_id?: string;
   project_id: string | null;
@@ -624,16 +627,6 @@ function getDocumentCitationQuotes(a: Citation): DocumentCitationQuote[] {
     return a.quotes.filter((entry) => entry.quote.trim().length > 0);
   }
   return [{ page: a.page, quote: a.quote, sheet: a.sheet, cell: a.cell }];
-}
-
-/**
- * Expand a citation into one or more (page, quote) entries suitable for
- * highlighting in the PDF viewer. A single-page citation yields one entry; a
- * cross-page citation with page "N-M" and a `[[PAGE_BREAK]]` split yields two.
- */
-export function expandCitationToEntries(a: Citation): CitationQuote[] {
-  if (a.kind === "case") return [];
-  return getDocumentCitationQuotes(a).flatMap(expandDocumentQuoteEntry);
 }
 
 /**

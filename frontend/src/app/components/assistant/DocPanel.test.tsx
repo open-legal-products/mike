@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { DocPanel, DocumentTitleRow } from "./DocPanel";
+import { DocPanel } from "./DocPanel";
+import { DocumentTitleRow } from "../shared/DocumentTitleRow";
 
 vi.mock("../shared/views/DocxView", () => ({
     DocxView: ({ defaultMode, filename }: { defaultMode: string; filename: string }) =>

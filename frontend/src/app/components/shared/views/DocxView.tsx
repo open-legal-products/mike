@@ -6,7 +6,8 @@ import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import { useDocxAutosave } from "@/app/hooks/useDocxAutosave";
 import { DocxRenderBoundary } from "./DocxRenderBoundary";
 import { DocxSaveErrorPopup } from "./DocxSaveErrorPopup";
-import type { DocxMode, DocxSaveState, DocxSurface } from "./DocxRenderer.types";
+import { downloadBlob } from "@/app/lib/downloadDocument";
+import type { DocxCloseGuard, DocxMode, DocxSaveState, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { viewRoundingClass, type ViewRounding } from "./viewRounding";
@@ -30,6 +31,7 @@ interface Props {
     documentId: string;
     /** Initial mode for each document; the reader can change it in the viewer. */
     defaultMode?: DocxMode;
+    canEdit?: boolean;
     toolbarVisible?: boolean;
     filename?: string;
     /** Explicit author for standalone previews; app viewers use the signed-in profile. */
@@ -37,6 +39,7 @@ interface Props {
     versionId?: string | null;
     displayUrl?: string | null;
     onReady?: () => void;
+    onCloseGuardReady?: (guard: DocxCloseGuard | null) => void;
     onDownloadReady?: (download: (() => Promise<void>) | null) => void;
     onSaveStateChange?: (documentId: string, state: DocxSaveState | null) => void;
     highlightEdit?: {
@@ -103,7 +106,7 @@ function DocxViewContent(props: Props) {
     const surfaceRef = useRef<DocxSurface | null>(null);
     const autosave = useDocxAutosave({
         documentId, versionId, filename: props.filename, bytes,
-        enabled: !displayUrl,
+        enabled: props.canEdit !== false && !displayUrl,
         exportDocx: () => surfaceRef.current?.exportDocx?.(),
     });
     const { markChanged, adoptSnapshot, captureSnapshotRevision } = autosave;
@@ -122,7 +125,11 @@ function DocxViewContent(props: Props) {
             setEditedBytes(fetched.bytes);
         }
     }, [fetched.bytes, editedBytes, adoptSnapshot]);
-    const { dirty, status, error: saveError } = autosave;
+    const { dirty, status, error: saveError, hasUnsavedChanges, prepareClose, discard } = autosave;
+    useEffect(() => {
+        props.onCloseGuardReady?.({ hasUnsavedChanges, prepareClose, discard });
+        return () => props.onCloseGuardReady?.(null);
+    }, [props.onCloseGuardReady, hasUnsavedChanges, prepareClose, discard]);
     const saveReady = !!bytes && !error && !displayUrl && readyKey === renderKey && failedKey !== renderKey;
     useEffect(() => {
         onSaveStateChange?.(documentId, { ready: saveReady, dirty, status, error: saveError });
@@ -156,10 +163,10 @@ function DocxViewContent(props: Props) {
     }, [renderKey, focusSurface]);
     const onError = useCallback(() => setFailedKey(renderKey), [renderKey]);
     const onChange = useCallback(() => {
-        if (!surfaceRef.current?.content.isConnected) return;
+        if (props.canEdit === false || !surfaceRef.current?.content.isConnected) return;
         setEditedBytes(bytes);
         markChanged();
-    }, [bytes, markChanged]);
+    }, [bytes, markChanged, props.canEdit]);
     const download = useCallback(async (providedBytes?: ArrayBuffer) => {
         const surface = surfaceRef.current;
         if (!surface?.exportDocx || downloading) return;
@@ -167,15 +174,10 @@ function DocxViewContent(props: Props) {
         setDownloadError(null);
         try {
             const buffer = providedBytes ?? await surface.exportDocx();
-            const url = URL.createObjectURL(new Blob([buffer], {
-                type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            }));
-            const link = document.createElement("a");
-            link.href = url;
             const name = propsRef.current.filename || "document.docx";
-            link.download = /\.docx$/i.test(name) ? name : `${name}.docx`;
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            downloadBlob(new Blob([buffer], {
+                type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }), /\.docx$/i.test(name) ? name : `${name}.docx`);
         } catch {
             setDownloadError("This document could not be downloaded. Your edits are still open; please try again.");
         } finally {
@@ -232,7 +234,7 @@ function DocxViewContent(props: Props) {
                     {bytes && (
                         <DocxRenderBoundary key={renderKey} onError={onError}>
                             <Suspense fallback={null}>
-                                <DocxRenderer bytes={bytes} mode={initialMode} toolbarVisible={props.toolbarVisible} filename={props.filename} author={props.author} onChange={onChange} onSave={displayUrl ? download : autosave.save} onReady={onReady} onError={onError} />
+                                <DocxRenderer bytes={bytes} mode={initialMode} toolbarVisible={props.canEdit === false ? false : props.toolbarVisible} filename={props.filename} author={props.author} onChange={onChange} onSave={displayUrl ? download : autosave.save} onReady={onReady} onError={onError} />
                             </Suspense>
                         </DocxRenderBoundary>
                     )}

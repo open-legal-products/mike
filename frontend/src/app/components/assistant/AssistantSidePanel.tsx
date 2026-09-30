@@ -7,6 +7,8 @@ import {
     useState,
     type CSSProperties,
 } from "react";
+import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
+import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
 import { type DocumentActions } from "../shared/DocumentTabActions";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import Image from "next/image";
@@ -122,6 +124,8 @@ export function reorderAssistantSidePanelTabs(
 
 interface Props {
     tabs: AssistantSidePanelTab[];
+    /** Whether the viewer may edit the documents; read-only otherwise. */
+    canEdit?: boolean;
     activeTabId: string | null;
     onActivateTab: (id: string) => void;
     onCloseTab: (id: string) => void;
@@ -190,6 +194,7 @@ function maxPanelWidth() {
 
 export function AssistantSidePanel({
     tabs,
+    canEdit = false,
     activeTabId,
     onActivateTab,
     onCloseTab,
@@ -208,7 +213,8 @@ export function AssistantSidePanel({
     onOpenDocuments,
 }: Props) {
     const panelRef = useRef<HTMLDivElement>(null);
-    const documentDownloads = useRef(new Map<string, () => Promise<void>>());
+    const permissions = useDocumentPermissions(tabs.filter((tab) => !["case", "legislation"].includes(tab.document.type)).map((tab) => tab.document.document_id), canEdit);
+    const viewers = useDocumentViewers();
     const [panelWidth, setPanelWidth] = useState(() =>
         typeof window !== "undefined"
             ? Math.min(
@@ -295,8 +301,8 @@ export function AssistantSidePanel({
                 idPrefix="assistant-document"
                 activeTabId={active?.id ?? null}
                 onActivate={onActivateTab}
-                onClose={onCloseTab}
-                onClosePanel={onCloseAll}
+                onClose={(id) => viewers.requestClose([id], () => onCloseTab(id))}
+                onClosePanel={() => viewers.requestClose(tabs.map((tab) => tab.id), onCloseAll)}
                 onAdd={onOpenDocuments}
                 addLabel="Open Documents"
                 onReorder={onReorderTabs}
@@ -327,15 +333,9 @@ export function AssistantSidePanel({
                         ) : undefined,
                         actions: {
                             ...actions,
-                            onDownload: actions?.onDownload
-                                ? () => {
-                                      const download =
-                                          documentDownloads.current.get(tab.id);
-                                      return download
-                                          ? download()
-                                          : actions.onDownload?.();
-                                  }
-                                : undefined,
+                            onRename: permissions(tab.document.document_id).canEdit ? actions?.onRename : undefined,
+                            onDownload: isLegalSource ? undefined : () => viewers.download(tab.id, tab.document.document_id, tab.document.version_id, tab.document.title),
+                            onDelete: permissions(tab.document.document_id).canDelete ? actions?.onDelete : undefined,
                         },
                     };
                 })}
@@ -390,22 +390,14 @@ export function AssistantSidePanel({
                         >
                             <DocPanel
                                 showToolbarToggle
-                                onDownloadReady={(download) => {
-                                    if (download)
-                                        documentDownloads.current.set(
-                                            tab.id,
-                                            download,
-                                        );
-                                    else
-                                        documentDownloads.current.delete(
-                                            tab.id,
-                                        );
-                                }}
+                                canEdit={permissions(tab.document.document_id).canEdit}
+                                onDownloadReady={(download) => viewers.registerDownload(tab.id, download)}
+                                onCloseGuardReady={(guard) => viewers.registerCloseGuard(tab.id, guard)}
                                 active={isActive}
                                 onVersionChange={
                                     onVersionChange
                                         ? (version) =>
-                                              onVersionChange(tab.id, version)
+                                              viewers.requestClose([tab.id], () => onVersionChange(tab.id, version))
                                         : undefined
                                 }
                                 document={tab.document}
@@ -433,6 +425,7 @@ export function AssistantSidePanel({
                     );
                 })}
             </div>
+            {viewers.confirmation}
         </div>
     );
 }

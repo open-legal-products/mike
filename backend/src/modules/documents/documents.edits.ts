@@ -1,7 +1,8 @@
 // Tracked-change (assistant edit) operations: listing change ids embedded in
 // the active DOCX and accepting / rejecting an individual edit.
 
-import { downloadFile, uploadFile } from "../../lib/storage";
+import { randomUUID } from "node:crypto";
+import { downloadFile, uploadFile, deleteFileBestEffort, versionStorageKey } from "../../lib/storage";
 import {
     extractTrackedChangeIds,
     resolveTrackedChange,
@@ -138,7 +139,7 @@ export async function resolveEdit(
         latestPath,
         current_version_id: doc.current_version_id,
     });
-    if (!latestPath) return { ok: false, detail: "No file to edit" };
+    if (!active || !latestPath) return { ok: false, detail: "No file to edit" };
 
     const raw = await downloadFile(latestPath);
     devLog(`[edit-resolution] downloaded bytes`, {
@@ -189,74 +190,34 @@ export async function resolveEdit(
         return { ok: true, body: payload };
     }
 
-    // Overwrite bytes in place at the current version's storage path —
-    // accept/reject mutates the existing version rather than spawning a
-    // new row. This keeps document_versions lean (one row per assistant
-    // edit, not one per accept/reject click) and avoids the N-versions-
-    // per-doc churn as users resolve pending changes.
+    // Write immutable bytes first, then atomically swap the path/hash. An
+    // editor save or another review action can win the same comparison, but
+    // cannot overwrite an object already referenced by the winning update.
     const ab = resolvedBytes.buffer.slice(
         resolvedBytes.byteOffset,
         resolvedBytes.byteOffset + resolvedBytes.byteLength,
     ) as ArrayBuffer;
-
-    // Clear the hash before the bytes change, and set it again after. The
-    // stored object and the hash live in different systems, so they cannot be
-    // written atomically; ordering it this way means a crash between the two
-    // leaves the version UNHASHED, which the manifest reports as unverifiable
-    // (true). The other order can leave the old hash attesting to content the
-    // version no longer holds, which is the one thing the manifest must never
-    // do — and a process kill returns no error object to compensate on.
-    //
-    // The same pre-write retires the PDF rendition: the bytes are about to
-    // change, so any rendition this version carried would no longer match
-    // them (served by /display, copied onto replicas by replicate_document).
-    // Both retirements ride on this one write, so the cleanup trigger fires
-    // once for them, and it goes through the lifecycle helper so the inline
-    // capture/complete pair still removes the rendition when DB_JOBS_ENABLED
-    // is false and no runner will ever drain the trigger's row.
-    const { error: clearErr } = await updateDocumentVersion(
+    const nextPath = versionStorageKey(userId, documentId, randomUUID(), active?.filename || "document.docx");
+    await uploadFile(nextPath, ab, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    const { data: updated, error: versionErr } = await updateDocumentVersion(
         db,
         documentId,
-        doc.current_version_id as string,
-        { content_sha256: null, pdf_storage_path: null },
+        active.id,
+        {
+            storage_path: nextPath,
+            content_sha256: contentSha256(ab),
+            pdf_storage_path: null,
+            size_bytes: ab.byteLength,
+        },
+        { expectedStoragePath: latestPath },
     );
-    if (clearErr) {
-        // Nothing has been written to storage yet, so the version is intact;
-        // refuse rather than rewrite bytes the row could not be made to match.
-        devLog(`[edit-resolution] pre-write clear failed; leaving bytes alone`, {
-            clearErr,
-        });
-        // Not a missing edit: the database refused the write. Carry the
-        // cause so the route answers 500 (a retrying client should retry)
-        // instead of the 404 every other failure here maps to.
-        return { ok: false, detail: "Failed to resolve edit", error: clearErr };
-    }
-
-    devLog(`[edit-resolution] overwriting bytes in place`, {
-        latestPath,
-        byteLength: ab.byteLength,
-    });
-    await uploadFile(
-        latestPath,
-        ab,
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    );
-
-    // Record the hash of the bytes that are now in storage. This second write
-    // changes only content_sha256, so the trigger re-queues the extracted-text
-    // cache key it already queued above — an idempotent object delete, and
-    // still one row fewer than the three this click used to produce. If it
-    // fails, the version simply stays unhashed: unverifiable, and true.
-    const { error: versionErr } = await updateDocumentVersion(
-        db,
-        documentId,
-        doc.current_version_id as string,
-        { content_sha256: contentSha256(ab) },
-    );
-    if (versionErr) {
-        devLog(`[edit-resolution] hash write failed; version stays unhashed`, {
-            versionErr,
-        });
+    if (versionErr || !updated) {
+        // A definite comparison miss left the new object unreferenced. On a
+        // database error the commit outcome may be unknown, so retain it.
+        if (!versionErr) await deleteFileBestEffort(nextPath, "edit-resolution-conflict");
+        return versionErr
+            ? { ok: false, detail: "Failed to resolve edit", error: versionErr }
+            : { ok: false, status: 409, detail: "This document changed. Reopen the latest version and try again." };
     }
 
     const { error: statusErr } = await db
@@ -282,7 +243,7 @@ export async function resolveEdit(
         ok: true,
         version_id: doc.current_version_id,
         download_url: buildDownloadUrl(
-            latestPath,
+            nextPath,
             downloadFilenameForVersion(
                 active?.filename,
                 active?.version_number ?? null,
