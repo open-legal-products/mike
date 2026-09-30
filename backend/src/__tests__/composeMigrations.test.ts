@@ -27,7 +27,7 @@ describe("docker-compose db-init migration replay", () => {
         .filter((f) => f >= REPLAY_FROM)
         .sort();
 
-    it.each(["google-drive", "google-workspace"])(
+    it.each(["google-drive", "google-workspace", "workflow-metadata-access"])(
         "fails closed when the %s migration fails",
         (name) => {
             expect(compose).toContain(`-f /${name}-migration.sql || exit 1;`);
