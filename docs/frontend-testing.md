@@ -41,10 +41,12 @@ collapses and resizes a live disclosure. Both cases run in the general assistant
 project assistant and tabular-review chat (six browser scenarios).
 It uses the real Next.js/React renderer, fails on browser console errors and
 uncaught exceptions, and requires no model-provider key. It runs in the regular
-production Playwright suite and the separate **Assistant streaming (development)**
-job, including keyless CI runs. The development job matters because React's
-passive-update-depth warning is development-only. Make both checks required in
-branch protection; a workflow failure alone does not block a merge.
+production Playwright suite on every PR. The separate **Assistant streaming
+(development)** job reruns it on `next dev`, because React's
+passive-update-depth warning is development-only; that job runs nightly, on
+manual dispatch, and on PRs labelled `stress` (see
+[e2e-ci.md](e2e-ci.md#development-stress-jobs)). Add the label to PRs that touch
+streaming or render loops.
 
 Run it against the documented local stack with:
 

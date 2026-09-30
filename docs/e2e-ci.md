@@ -41,14 +41,35 @@ baked into that file are the single source of truth.
 The separate **Assistant streaming (development)** job runs
 `e2e/assistant-streaming.spec.ts` and `e2e/tabular-chat-lifecycle.spec.ts` against `next dev`, with synthetic API/SSE
 fixtures and no backend, authentication setup or model-provider key. It catches
-React's development-only passive-update warning on a long conversation. Keep
-this check required alongside the production `playwright` check in branch
-protection. See [frontend-testing.md](frontend-testing.md#assistant-streaming-regressions)
-for a standalone local command.
+React's development-only passive-update warning on a long conversation. See
+[frontend-testing.md](frontend-testing.md#assistant-streaming-regressions) for
+a standalone local command.
 
 Four live-provider cases remain key-gated; the synthetic streaming and history
 stress cases always run. Use the current Playwright summary as the source of
 truth for totals, failures and skips.
+
+### Development stress jobs
+
+Three jobs run against React's development renderer, which is 3-4x slower than
+the production build: **`e2e / Playwright (development stress)`** (~25-35 min),
+**`e2e / Assistant streaming (development)`** (~20-27 min) and **`Word add-in /
+Development stress (chromium + webkit)`** (~18-24 min). They were the last checks
+to finish on every slow PR, so they are off the default PR path. They run:
+
+- nightly (e2e at 03:47 UTC, the Word add-in at 04:17 UTC) and on manual
+  dispatch;
+- on every push to `main` (Word add-in only);
+- on any PR carrying the **`stress`** label.
+
+Add `stress` to PRs that touch streaming, render loops or effect dependencies.
+The label is read when a run starts, so push a commit (or close and reopen the
+PR) after adding it. There is deliberately no `labeled` trigger: a run started
+by an unrelated label would report every check as skipped, and GitHub treats a
+skipped required check as passing, which would hide an earlier red run.
+
+Because these checks are absent on unlabelled PRs, do **not** mark them as
+required status checks: a required check that never reports blocks the merge.
 
 ## Accessibility scans
 
@@ -160,12 +181,11 @@ suite go green a few times (it is environment-sensitive by nature):
    `main`).
 2. Enable **Require status checks to pass before merging**.
 3. Enable **Require branches to be up to date before merging**.
-4. In the checks search box add **`e2e / playwright`**,
-   **`e2e / Playwright (development stress)`** and
-   **`e2e / Assistant streaming (development)`**. Jobs appear in the list after
-   they have run at least once on a PR. Require both Word jobs too:
-   **`Word add-in / Typecheck and Playwright (chromium + webkit)`** and
-   **`Word add-in / Development stress (chromium + webkit)`**.
+4. In the checks search box add **`e2e / playwright`** and
+   **`Word add-in / Typecheck and Playwright (chromium + webkit)`**. Jobs appear
+   in the list after they have run at least once on a PR. Do not require the
+   development-stress checks; they only run on PRs labelled `stress` (see
+   [Development stress jobs](#development-stress-jobs)).
 5. Keep the existing unit/build, security and `license/cla` requirements.
 6. Save. From now on a red e2e run blocks the **Merge** button.
 
