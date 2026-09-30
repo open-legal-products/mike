@@ -5,6 +5,17 @@ servers from **Settings > Connectors**. Installed connectors appear under
 **Installed**. Hosted providers appear under **Discover**, and an arbitrary
 remote server can be added with **+ Custom**.
 
+Google Drive, Gmail, and Google Calendar use native Google connections. All
+Discover cards use **Add** to start provider consent directly, with no setup
+dialog. While authorization is pending, the card shows **Cancel** and a waiting
+message. Cancelling returns to **Add** without an error; a successful connection
+shows **Manage**. Add failures appear on the affected card so users can retry.
+If the browser blocks the popup, consent opens in the current tab instead.
+
+Google cards show missing server configuration inline and disable **Add** until
+it is resolved. Native Google accounts remain managed from their cards; MCP
+connectors also appear in **Installed** after authorization succeeds.
+
 ## Authentication pathways
 
 ### Dynamic client registration

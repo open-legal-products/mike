@@ -85,6 +85,34 @@ describe("opt-in Google connections and action review", () => {
       screen.getByRole("button", { name: "Add Gmail" }),
     ).toBeEnabled();
   });
+  it.each([
+    [{ ...base, configured: false }, /administrator must configure a Google OAuth client/i],
+    [{ ...base, schemaReady: false }, /needs the Gmail and Calendar database migration/i],
+  ])("shows unavailable setup inline with disabled Add buttons", async (status, message) => {
+    vi.mocked(api.getGoogleWorkspaceStatus).mockResolvedValue(status);
+    render(<GoogleWorkspacePanel />);
+    for (const name of ["Gmail", "Google Calendar"]) {
+      const card = within(screen.getByRole("region", { name: `${name} connector` }));
+      expect(await card.findByText(message)).toBeVisible();
+      expect(card.getByRole("button", { name: `Add ${name}` })).toBeDisabled();
+      if (status.schemaReady) {
+        expect(card.getByText(`Authorized redirect URI: ${base.redirectUri}`)).toBeVisible();
+      }
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Set up/ })).toBeNull();
+    expect(api.startGoogleWorkspaceOAuth).not.toHaveBeenCalled();
+  });
+  it("keeps status failures inline without opening setup", async () => {
+    vi.mocked(api.getGoogleWorkspaceStatus).mockRejectedValue(new Error("internal-sentinel"));
+    render(<GoogleWorkspacePanel />);
+    for (const name of ["Gmail", "Google Calendar"]) {
+      expect(await screen.findByText(`Could not load ${name}. Reload this page.`)).toBeVisible();
+      expect(screen.getByRole("button", { name: `Add ${name}` })).toBeDisabled();
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(/internal-sentinel/)).toBeNull();
+  });
   it("shows the selected account, independently of the Mike login", async () => {
     vi.mocked(api.getGoogleWorkspaceStatus).mockResolvedValue({
       ...base,
@@ -247,20 +275,29 @@ describe("opt-in Google connections and action review", () => {
       expect(popups[1].location.href).toContain("accounts.google.com"),
     );
   });
-  it("opens Google directly on Add and cancels consent from the card", async () => {
+  it.each([
+    ["gmail", "Gmail"],
+    ["google-calendar", "Google Calendar"],
+  ] as const)("opens %s directly on Add and cancels consent from the card", async (provider, name) => {
     vi.spyOn(window, "open").mockReturnValue({ location: { href: "" }, close: vi.fn() } as unknown as Window);
     vi.mocked(api.startGoogleWorkspaceOAuth).mockResolvedValue({ authorizationUrl: "https://accounts.google.com/auth?state=closing" });
     render(<GoogleWorkspacePanel />);
-    const setup = await screen.findByRole("button", { name: "Add Gmail" });
+    const setup = await screen.findByRole("button", { name: `Add ${name}` });
     await waitFor(() => expect(setup).toBeEnabled());
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("button", { name: "Connect read-only" })).toBeNull();
     fireEvent.click(setup);
     expect(screen.queryByRole("dialog")).toBeNull();
-    await waitFor(() => expect(api.startGoogleWorkspaceOAuth).toHaveBeenCalledWith("gmail", false));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel Gmail authorization" }));
-    await waitFor(() => expect(api.cancelGoogleWorkspaceOAuth).toHaveBeenCalledWith("gmail", "closing"));
+    await waitFor(() => expect(api.startGoogleWorkspaceOAuth).toHaveBeenCalledWith(provider, false));
+    expect(window.open).toHaveBeenCalledOnce();
+    expect(vi.mocked(window.open).mock.results[0].value.location.href).toBe(
+      "https://accounts.google.com/auth?state=closing",
+    );
+    fireEvent.click(screen.getByRole("button", { name: `Cancel ${name} authorization` }));
+    await waitFor(() => expect(api.cancelGoogleWorkspaceOAuth).toHaveBeenCalledWith(provider, "closing"));
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: `Add ${name}` })).toBeEnabled());
   });
   it("cancels server state when cancellation occurs while start is in flight", async () => {
     let resolve!: (v: { authorizationUrl: string }) => void;

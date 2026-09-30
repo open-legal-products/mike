@@ -68,10 +68,6 @@ function ConnectionCard({
     );
     let pending: string | null = null;
     try {
-      if (!popup)
-        throw new FlowError(
-          "Allow popups for Mike, then try connecting again.",
-        );
       await sensitive(
         async () => {
           const { authorizationUrl } = await startGoogleWorkspaceOAuth(
@@ -81,6 +77,11 @@ function ConnectionCard({
           pending = new URL(authorizationUrl).searchParams.get("state");
           if (controller.signal.aborted)
             throw new FlowError("Authorization cancelled.");
+          if (!popup) {
+            pending = null;
+            window.location.assign(authorizationUrl);
+            return;
+          }
           popup.location.href = authorizationUrl;
           const started = Date.now();
           while (Date.now() - started < 300_000) {
@@ -113,11 +114,13 @@ function ConnectionCard({
         () => connect(write),
       );
     } catch (e) {
-      setError(
-        e instanceof FlowError
-          ? e.message
-          : userFacingApiError(e, `Could not connect ${name}.`),
-      );
+      if (!controller.signal.aborted) {
+        setError(
+          e instanceof FlowError
+            ? e.message
+            : userFacingApiError(e, `Could not connect ${name}.`),
+        );
+      }
     } finally {
       if (pending) {
         try {
@@ -163,6 +166,22 @@ function ConnectionCard({
       loading={!status && !error}
       accountEmail={status?.connected ? status.accountEmail : null}
       onConnect={status?.configured && status.schemaReady ? () => void connect(false) : undefined}
+      connectionNotice={
+        status && (!status.schemaReady || !status.configured) ? (
+          <>
+            <p>
+              {!status.schemaReady
+                ? "This server needs the Gmail and Calendar database migration."
+                : "An administrator must configure a Google OAuth client."}
+            </p>
+            {status.schemaReady && status.redirectUri && (
+              <p className="mt-2">
+                Authorized redirect URI: {status.redirectUri}
+              </p>
+            )}
+          </>
+        ) : null
+      }
       connecting={authorizing}
       error={error}
       summary={
@@ -194,28 +213,6 @@ function ConnectionCard({
                 ? `Connected as ${status.accountEmail ?? "your selected Google account"} · ${status.writeEnabled ? "Writes require approval" : "Read-only"}`
                 : "Not connected"}
             </p>
-            {!status.schemaReady ? (
-              <p className="text-xs text-muted-foreground">
-                This server needs the Gmail and Calendar database migration.
-              </p>
-            ) : !status.configured ? (
-              <p className="text-xs text-muted-foreground">
-                An administrator must configure a Google OAuth client.
-              </p>
-            ) : null}
-            {status.redirectUri && !status.connected && (
-              <details className="text-xs text-muted-foreground">
-                <summary
-                  tabIndex={0}
-                  className="w-fit cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  Connection setup
-                </summary>
-                <p className="mt-2 break-all">
-                  Authorized redirect URI: {status.redirectUri}
-                </p>
-              </details>
-            )}
             <div className="flex flex-wrap gap-2">
               <PillButtonUI
                 tone="blue"

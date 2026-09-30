@@ -451,13 +451,13 @@ describe("ConnectorsPage operator setup guidance", () => {
         });
         await act(async () => {
             fireEvent.click(
-                screen.getByRole("button", { name: "Add Slack connector" }),
+                screen.getByRole("button", { name: "Add Slack" }),
             );
             await flushMicrotasks();
         });
 
         const notice = screen.getByRole("alert");
-        expect(notice.textContent).toContain("Could not add connector");
+        expect(screen.queryByRole("dialog")).toBeNull();
         expect(notice.textContent).toContain("administrator setup");
         expect(notice.textContent).not.toContain("localhost");
         expect(
@@ -503,6 +503,53 @@ describe("ConnectorsPage suggested connectors", () => {
         cleanup();
     });
 
+    it("keeps Cancel available until Slack consent completes and quietly resets on cancel", async () => {
+        const slack = makeSummary({ name: "Slack", serverUrl: "https://mcp.slack.com/mcp" });
+        vi.mocked(createMcpConnector).mockResolvedValue({ connector: slack, oauthRequired: true });
+        vi.mocked(startMcpConnectorOAuth).mockResolvedValue({ authorizationUrl: "https://slack.com/oauth?state=test", alreadyAuthorized: false, callbackOrigin: "https://api.example" });
+        vi.mocked(deleteMcpConnector).mockResolvedValue(undefined);
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Add Slack" }));
+            await flushMicrotasks();
+        });
+        expect(screen.getByRole("button", { name: "Cancel Slack authorization" })).toBeEnabled();
+        expect(screen.getByText("Waiting for Slack…")).toBeTruthy();
+        expect(screen.getByText("No connectors yet.")).toBeTruthy();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Cancel Slack authorization" }));
+            await flushMicrotasks();
+        });
+        expect(deleteMcpConnector).toHaveBeenCalledWith(slack.id);
+        expect(screen.getByRole("button", { name: "Add Slack" })).toBeEnabled();
+        expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("honors Slack cancellation while the OAuth start request is in flight", async () => {
+        const slack = makeSummary({ name: "Slack", serverUrl: "https://mcp.slack.com/mcp" });
+        vi.mocked(createMcpConnector).mockResolvedValue({ connector: slack, oauthRequired: true });
+        let resolveStart!: (value: Awaited<ReturnType<typeof startMcpConnectorOAuth>>) => void;
+        vi.mocked(startMcpConnectorOAuth).mockReturnValue(new Promise(resolve => { resolveStart = resolve; }));
+        vi.mocked(deleteMcpConnector).mockResolvedValue(undefined);
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Add Slack" }));
+            await flushMicrotasks();
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Cancel Slack authorization" }));
+        await act(async () => {
+            resolveStart({ authorizationUrl: "https://slack.com/oauth?state=test", alreadyAuthorized: false, callbackOrigin: "https://api.example" });
+            await flushMicrotasks();
+        });
+        expect(deleteMcpConnector).toHaveBeenCalledWith(slack.id);
+        expect(screen.getByRole("button", { name: "Add Slack" })).toBeEnabled();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(vi.mocked(window.open).mock.results.at(-1)?.value.location.href).toBe("");
+    });
+
     it("adds the Notion preset with one click", async () => {
         const notion = makeSummary({
             id: "notion-1",
@@ -535,7 +582,7 @@ describe("ConnectorsPage suggested connectors", () => {
         await act(async () => {
             fireEvent.click(
                 screen.getByRole("button", {
-                    name: "Add Notion connector",
+                    name: "Add Notion",
                 }),
             );
             await flushMicrotasks();
@@ -550,8 +597,8 @@ describe("ConnectorsPage suggested connectors", () => {
         expect(refreshMcpConnectorTools).toHaveBeenCalledTimes(1);
         expect(screen.queryByText("Connector added")).toBeNull();
         expect(
-            screen.getByRole("button", { name: "Notion connector added" }),
-        ).toBeDisabled();
+            screen.getByRole("button", { name: "Manage Notion" }),
+        ).toBeEnabled();
     });
 
     it("adds the Airtable DCR preset with one click", async () => {
@@ -575,7 +622,7 @@ describe("ConnectorsPage suggested connectors", () => {
         await act(async () => {
             fireEvent.click(
                 screen.getByRole("button", {
-                    name: "Add Airtable connector",
+                    name: "Add Airtable",
                 }),
             );
             await flushMicrotasks();
@@ -589,8 +636,8 @@ describe("ConnectorsPage suggested connectors", () => {
         expect(startMcpConnectorOAuth).toHaveBeenCalledWith("airtable-1");
         expect(refreshMcpConnectorTools).toHaveBeenCalledTimes(1);
         expect(
-            screen.getByRole("button", { name: "Airtable connector added" }),
-        ).toBeDisabled();
+            screen.getByRole("button", { name: "Manage Airtable" }),
+        ).toBeEnabled();
     });
 
     it("adds the Linear DCR preset with one click", async () => {
@@ -628,7 +675,7 @@ describe("ConnectorsPage suggested connectors", () => {
         await act(async () => {
             fireEvent.click(
                 screen.getByRole("button", {
-                    name: "Add Linear connector",
+                    name: "Add Linear",
                 }),
             );
             await flushMicrotasks();
@@ -643,8 +690,8 @@ describe("ConnectorsPage suggested connectors", () => {
         expect(popupClose).toHaveBeenCalled();
         expect(screen.queryByText("New Custom Connector")).toBeNull();
         expect(
-            screen.getByRole("button", { name: "Linear connector added" }),
-        ).toBeDisabled();
+            screen.getByRole("button", { name: "Manage Linear" }),
+        ).toBeEnabled();
     });
 
     it("does not offer to add a preset that is already configured", async () => {
@@ -661,8 +708,8 @@ describe("ConnectorsPage suggested connectors", () => {
         });
 
         expect(
-            screen.getByRole("button", { name: "Notion connector added" }),
-        ).toBeDisabled();
+            screen.getByRole("button", { name: "Manage Notion" }),
+        ).toBeEnabled();
         expect(createMcpConnector).not.toHaveBeenCalled();
         expect(
             screen.getByRole("switch", { name: "My Notion connector" }),
@@ -841,7 +888,8 @@ describe("Google Drive connection lifecycle", () => {
 
         render(<ConnectorsPage />);
         await act(flushMicrotasks);
-        fireEvent.click(screen.getByRole("button", { name: "Set up Google Drive" }));
+        expect(screen.getByRole("button", { name: "Add Google Drive" })).toBeDisabled();
+        expect(screen.queryByRole("dialog")).toBeNull();
 
         expect(
             screen.getByText(
@@ -850,11 +898,11 @@ describe("Google Drive connection lifecycle", () => {
         ).toBeTruthy();
         expect(
             screen.getByText(
-                "http://localhost:3000/api/user/integrations/google-drive/oauth/callback",
+                /Authorized redirect URI to register: http:\/\/localhost:3000\/api\/user\/integrations\/google-drive\/oauth\/callback/,
             ),
         ).toBeTruthy();
         expect(
-            (screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement)
+            (screen.getByRole("button", { name: "Add Google Drive" }) as HTMLButtonElement)
                 .disabled,
         ).toBe(true);
     });
@@ -867,7 +915,8 @@ describe("Google Drive connection lifecycle", () => {
 
         render(<ConnectorsPage />);
         await act(flushMicrotasks);
-        fireEvent.click(screen.getByRole("button", { name: "Set up Google Drive" }));
+        expect(screen.getByRole("button", { name: "Add Google Drive" })).toBeDisabled();
+        expect(screen.queryByRole("dialog")).toBeNull();
 
         expect(
             screen.getByText(/missing the Google Drive migration/i),
@@ -878,7 +927,7 @@ describe("Google Drive connection lifecycle", () => {
             ),
         ).toBeNull();
         expect(
-            (screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement)
+            (screen.getByRole("button", { name: "Add Google Drive" }) as HTMLButtonElement)
                 .disabled,
         ).toBe(true);
     });
@@ -910,7 +959,7 @@ describe("Google Drive connection lifecycle", () => {
             await flushMicrotasks();
         });
         expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(state);
-        expect(screen.getByText("Authorization cancelled.")).toBeTruthy();
+        expect(screen.queryByText("Authorization cancelled.")).toBeNull();
         const count = vi.mocked(getGoogleDriveStatus).mock.calls.length;
         await act(async () => {
             await vi.advanceTimersByTimeAsync(10000);
@@ -920,6 +969,11 @@ describe("Google Drive connection lifecycle", () => {
 
     it("starts OAuth directly and cancels pending consent from the card", async () => {
         await openCard();
+        expect(startGoogleDriveOAuth).toHaveBeenCalledOnce();
+        expect(vi.mocked(window.open).mock.results[0].value.location.href).toBe(
+            `https://accounts.google.com/authorize?state=${state}`,
+        );
+        expect(screen.queryByRole("dialog")).toBeNull();
         fireEvent.click(screen.getByRole("button", { name: "Cancel Google Drive authorization" }));
         await act(flushMicrotasks);
         expect(cancelGoogleDriveOAuth).toHaveBeenCalledWith(state);
@@ -975,7 +1029,8 @@ describe("Google Drive connection lifecycle", () => {
         );
         render(<ConnectorsPage />);
         await act(flushMicrotasks);
-        fireEvent.click(screen.getByRole("button", { name: "Set up Google Drive" }));
+        expect(screen.getByRole("button", { name: "Add Google Drive" })).toBeDisabled();
+        expect(screen.queryByRole("dialog")).toBeNull();
         expect(
             screen.getByText(/Could not load Google Drive status/),
         ).toBeTruthy();

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
+import { ConnectorCard } from "@/app/components/settings/ConnectorCard";
 import { GoogleConnectionCard } from "@/app/components/settings/GoogleConnectionCard";
 import { GoogleWorkspacePanel } from "@/app/components/settings/GoogleWorkspacePanel";
 import { NewCustomMcpModal } from "@/app/components/settings/NewCustomMcpModal";
@@ -225,7 +226,7 @@ function ConnectorBrandIcon({ name }: { name: string }) {
   }
 
   return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5 fill-black" aria-hidden="true">
+    <svg viewBox="0 0 24 24" className="h-5 w-5 fill-foreground" aria-hidden="true">
       <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z" />
     </svg>
   );
@@ -349,11 +350,13 @@ function GoogleDriveCard({
           });
         } catch (cause) {
           if (isMfaRequiredError(cause)) throw cause;
-          setError(
-            cause instanceof GoogleDriveFlowError
-              ? cause.message
-              : userFacingApiError(cause, "Failed to connect Google Drive."),
-          );
+          if (!abortController.signal.aborted) {
+            setError(
+              cause instanceof GoogleDriveFlowError
+                ? cause.message
+                : userFacingApiError(cause, "Failed to connect Google Drive."),
+            );
+          }
         }
       });
     } finally {
@@ -412,6 +415,27 @@ function GoogleDriveCard({
       connected={!!status?.connected}
       loading={!status && !error}
       onConnect={status?.configured && status.schemaReady !== false ? () => void connect() : undefined}
+      connectionNotice={
+        status?.schemaReady === false ? (
+          <p>
+            Not available on this server yet: the database is missing the Google
+            Drive migration. The administrator needs to apply it and restart.
+          </p>
+        ) : status && !status.configured ? (
+          <>
+            <p>
+              Not available on this server: the administrator needs to configure
+              a Google OAuth client (see &ldquo;Google Drive Integration&rdquo;
+              in the README).
+            </p>
+            {status.redirectUri && (
+              <p className="mt-1">
+                Authorized redirect URI to register: {status.redirectUri}
+              </p>
+            )}
+          </>
+        ) : null
+      }
       connecting={busy && !status?.connected}
       error={error}
       summary={
@@ -457,36 +481,6 @@ function GoogleDriveCard({
             </PillButtonUI>
           )}
         </div>
-        {status !== null &&
-          !status.connected &&
-          status.schemaReady === false && (
-            <p className="pb-4 text-xs text-muted-foreground">
-              Not available on this server yet: the database is missing the
-              Google Drive migration
-              (backend/migrations/20260921_02_google_drive_integration.sql). The
-              administrator needs to apply it and restart.
-            </p>
-          )}
-        {status !== null &&
-          !status.connected &&
-          status.schemaReady !== false &&
-          !status.configured && (
-            <div className="pb-4 text-xs text-muted-foreground">
-              <p>
-                Not available on this server: the administrator needs to
-                configure a Google OAuth client (see &ldquo;Google Drive
-                Integration&rdquo; in the README).
-              </p>
-              {status.redirectUri && (
-                <p className="mt-1">
-                  Authorized redirect URI to register:{" "}
-                  <code className="break-all text-foreground">
-                    {status.redirectUri}
-                  </code>
-                </p>
-              )}
-            </div>
-          )}
         {busy && !status?.connected && (
           <PillButtonUI
             tone="white"
@@ -519,6 +513,11 @@ export default function ConnectorsPage() {
   const [addStep, setAddStep] = useState<AddStep>("form");
   const [addResult, setAddResult] = useState<McpConnectorSummary | null>(null);
   const [addError, setAddError] = useState<string | null>(null);
+  const [presetError, setPresetError] = useState<{
+    url: string;
+    message: string;
+    guideUrl: string | null;
+  } | null>(null);
   const [addErrorGuideUrl, setAddErrorGuideUrl] = useState<string | null>(null);
   const [addAuthMessage, setAddAuthMessage] = useState<string | null>(null);
   const [installingPresetUrl, setInstallingPresetUrl] = useState<string | null>(
@@ -674,6 +673,20 @@ export default function ConnectorsPage() {
     }
   };
 
+  const reportAddError = (
+    draft: AddDraft,
+    surface: CreateSurface,
+    message: string,
+    guideUrl: string | null = null,
+  ) => {
+    if (surface === "page") {
+      setPresetError({ url: draft.serverUrl, message, guideUrl });
+    } else {
+      setAddError(message);
+      setAddErrorGuideUrl(guideUrl);
+    }
+  };
+
   const runSensitiveAction = async (
     action: PendingMfaAction,
     fn: () => Promise<void>,
@@ -705,12 +718,14 @@ export default function ConnectorsPage() {
       }
       const message = userFacingApiError(err, "Action failed.");
       if (action.type === "create") {
-        setAddErrorGuideUrl(
+        reportAddError(
+          action.draft,
+          action.surface,
+          message,
           isConnectorSetupError(err)
             ? connectorSetupGuideUrl(action.draft.serverUrl)
             : null,
         );
-        setAddError(message);
       } else if (action.type === "save") setDetailError(message);
       else setError(message);
     }
@@ -741,42 +756,6 @@ export default function ConnectorsPage() {
   const connectConnectorOAuth = async (
     connectorId: string,
   ): Promise<McpConnectorSummary | null> => {
-    const popup = window.open(
-      "about:blank",
-      "mike_mcp_oauth",
-      "popup,width=560,height=720,menubar=no,toolbar=no,location=no,status=no",
-    );
-    let started: Awaited<ReturnType<typeof startMcpConnectorOAuth>>;
-    try {
-      started = await startMcpConnectorOAuth(connectorId);
-    } catch (err) {
-      // The popup is opened *before* the start call so browsers treat it
-      // as user-initiated. When the start call fails — typically the 400
-      // "connector_setup_required" answer for a Slack/Google client the
-      // deployment has not configured yet — nothing will ever navigate
-      // that window, so close it instead of stranding an about:blank
-      // popup next to the setup notice (seen live on 2026-09-06).
-      popup?.close();
-      throw err;
-    }
-    const { authorizationUrl, alreadyAuthorized, callbackOrigin } = started;
-    if (alreadyAuthorized) {
-      popup?.close();
-      const refreshed = await refreshMcpConnectorTools(connectorId);
-      replaceConnector(refreshed);
-      return refreshed;
-    }
-    if (!authorizationUrl) {
-      popup?.close();
-      throw new Error("OAuth authorization URL was not returned.");
-    }
-    const expectedCallbackOrigin = new URL(callbackOrigin).origin;
-    if (!popup) {
-      window.location.assign(authorizationUrl);
-      return null;
-    }
-    popup.location.href = authorizationUrl;
-
     // A single OAuth wait runs at a time. Register its AbortController so the
     // Cancel affordance and the unmount cleanup can tear it down; abort any
     // stray previous flow first.
@@ -785,15 +764,40 @@ export default function ConnectorsPage() {
     oauthAbortRef.current = abortController;
     const { signal } = abortController;
 
-    // Wait for authorization to complete. Strict identity providers (Google
-    // among them) serve their consent page with
-    // `Cross-Origin-Opener-Policy: same-origin`, which severs `window.opener`
-    // and makes `popup.closed` unreadable from here. That breaks both the
-    // callback's `postMessage` and any `popup.closed` polling, and a blocked
-    // `popup.closed` read can even report a false "closed". So we treat the
-    // backend's `oauthConnected` flag as the source of truth and poll for it,
-    // while still honouring a `postMessage` on the chance it gets through.
+    const popup = window.open(
+      "about:blank",
+      "mike_mcp_oauth",
+      "popup,width=560,height=720,menubar=no,toolbar=no,location=no,status=no",
+    );
     try {
+      const started = await startMcpConnectorOAuth(connectorId);
+      if (signal.aborted) throw new McpOAuthCancelledError();
+      const { authorizationUrl, alreadyAuthorized, callbackOrigin } = started;
+      if (alreadyAuthorized) {
+        popup?.close();
+        const refreshed = await refreshMcpConnectorTools(connectorId);
+        replaceConnector(refreshed);
+        return refreshed;
+      }
+      if (!authorizationUrl) {
+        popup?.close();
+        throw new Error("OAuth authorization URL was not returned.");
+      }
+      const expectedCallbackOrigin = new URL(callbackOrigin).origin;
+      if (!popup) {
+        window.location.assign(authorizationUrl);
+        return null;
+      }
+      popup.location.href = authorizationUrl;
+
+      // Wait for authorization to complete. Strict identity providers (Google
+      // among them) serve their consent page with
+      // `Cross-Origin-Opener-Policy: same-origin`, which severs `window.opener`
+      // and makes `popup.closed` unreadable from here. That breaks both the
+      // callback's `postMessage` and any `popup.closed` polling, and a blocked
+      // `popup.closed` read can even report a false "closed". So we treat the
+      // backend's `oauthConnected` flag as the source of truth and poll for it,
+      // while still honouring a `postMessage` on the chance it gets through.
       await new Promise<void>((resolve, reject) => {
         let settled = false;
         const finish = (action: () => void) => {
@@ -876,20 +880,19 @@ export default function ConnectorsPage() {
         scheduleNextPoll();
         if (signal.aborted) onAbort();
       });
+      const refreshed = await refreshMcpConnectorTools(connectorId);
+      replaceConnector(refreshed);
+      return refreshed;
     } finally {
       if (oauthAbortRef.current === abortController) {
         oauthAbortRef.current = null;
       }
       try {
-        popup.close();
+        popup?.close();
       } catch {
         // COOP may block closing a severed popup; it self-closes anyway.
       }
     }
-
-    const refreshed = await refreshMcpConnectorTools(connectorId);
-    replaceConnector(refreshed);
-    return refreshed;
   };
 
   const handleCreate = async (
@@ -928,6 +931,7 @@ export default function ConnectorsPage() {
           createdConnector = null;
           return true;
         } catch {
+          if (createdConnector) replaceConnector(createdConnector);
           return false;
         }
       };
@@ -941,13 +945,13 @@ export default function ConnectorsPage() {
         });
         const connector = created.connector;
         createdConnector = connector;
-        replaceConnector(connector);
         const needsAuthorization =
           created.oauthRequired ||
           (!connector.oauthConnected &&
             (surface === "page" || isGoogleMcpConnector(connector)));
         if (needsAuthorization) {
           if (surface === "modal") {
+            replaceConnector(connector);
             setAddAuthMessage(
               "Complete authorization in the popup to finish connecting this MCP server.",
             );
@@ -961,6 +965,7 @@ export default function ConnectorsPage() {
           }
           return;
         }
+        replaceConnector(connector);
         if (surface === "modal") {
           setAddResult(connector);
           setAddStep("success");
@@ -972,7 +977,9 @@ export default function ConnectorsPage() {
         if (err instanceof McpOAuthCancelledError) {
           const discarded = await discardCreatedConnector();
           if (!discarded) {
-            setAddError(
+            reportAddError(
+              draft,
+              surface,
               "Authorization was cancelled, but the incomplete connector could not be removed. Remove it from Installed before trying again.",
             );
           }
@@ -993,15 +1000,13 @@ export default function ConnectorsPage() {
         }
         const message = userFacingApiError(err, "Failed to add connector.");
         const discarded = await discardCreatedConnector();
-        setAddErrorGuideUrl(
-          isConnectorSetupError(err)
-            ? connectorSetupGuideUrl(draft.serverUrl)
-            : null,
-        );
-        setAddError(
+        reportAddError(
+          draft,
+          surface,
           discarded
             ? message
             : `${message} The incomplete connector could not be removed; remove it from Installed before trying again.`,
+          isConnectorSetupError(err) ? connectorSetupGuideUrl(draft.serverUrl) : null,
         );
       } finally {
         setBusyKey(null);
@@ -1241,6 +1246,7 @@ export default function ConnectorsPage() {
       name: preset.name,
       serverUrl: preset.serverUrl,
     };
+    setPresetError(null);
     setInstallingPresetUrl(draft.serverUrl);
     try {
       await handleCreate(draft, "page");
@@ -1335,7 +1341,7 @@ export default function ConnectorsPage() {
         </div>
         <GoogleWorkspacePanel
           additionalConnectors={CONNECTOR_PRESETS.map((preset) => {
-            const isAdded = connectors.some(
+            const installedConnector = connectors.find(
               (connector) =>
                 normalizedServerUrl(connector.serverUrl) ===
                 normalizedServerUrl(preset.serverUrl),
@@ -1351,47 +1357,33 @@ export default function ConnectorsPage() {
               normalizedServerUrl(authorizingPresetUrl) ===
                 normalizedServerUrl(preset.serverUrl);
 
+            const failure =
+              presetError?.url === preset.serverUrl ? presetError : null;
             return (
-              <SettingsCard key={preset.serverUrl}>
-                <div className="flex min-h-24 flex-wrap items-center gap-3 p-4">
-                  <div className="flex min-w-0 flex-[1_0_8rem] items-center gap-3">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-                      <ConnectorBrandIcon name={preset.name} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <SettingsLabel>{preset.name}</SettingsLabel>
-                    </div>
-                  </div>
-                  <PillButtonUI
-                    className="ml-auto"
-                    tone="blue"
-                    size="sm"
-                    onClick={() => {
-                      if (isAuthorizing) cancelReconnectOAuth();
-                      else void handleAddPreset(preset);
-                    }}
-                    disabled={
-                      loading || isAdded || (busyKey !== null && !isAuthorizing)
-                    }
-                    loading={isAdding && !isAuthorizing}
-                    aria-label={
-                      isAdded
-                        ? `${preset.name} connector added`
-                        : isAuthorizing
-                          ? `Cancel ${preset.name} authorization`
-                          : `Add ${preset.name} connector`
-                    }
-                  >
-                    {isAdded
-                      ? "Added"
-                      : isAuthorizing
-                        ? "Cancel"
-                        : isAdding
-                          ? "Adding..."
-                          : "Add"}
-                  </PillButtonUI>
-                </div>
-              </SettingsCard>
+              <ConnectorCard
+                key={preset.serverUrl}
+                name={preset.name}
+                icon={<ConnectorBrandIcon name={preset.name} />}
+                connected={!!installedConnector}
+                loading={loading}
+                adding={isAdding}
+                connecting={isAuthorizing}
+                disabled={busyKey !== null}
+                summary={
+                  loading ? "Loading…" : installedConnector ? "Connected" : "Not connected"
+                }
+                error={failure?.message}
+                notice={
+                  failure?.guideUrl ? <ConnectorSetupGuideLink href={failure.guideUrl} /> : null
+                }
+                onAdd={() => void handleAddPreset(preset)}
+                onCancel={cancelReconnectOAuth}
+                onManage={
+                  installedConnector
+                    ? () => void openConnectorDetails(installedConnector.id)
+                    : undefined
+                }
+              />
             );
           })}
         >
