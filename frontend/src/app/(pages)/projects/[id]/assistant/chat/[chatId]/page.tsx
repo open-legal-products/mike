@@ -25,8 +25,10 @@ import {
     Trash2,
 } from "lucide-react";
 import {
+    UploadBatchError,
     deleteChat,
     deleteDocument,
+    failedUploadMessage,
     getDocument,
     getProject,
     listProjectChats,
@@ -125,7 +127,12 @@ import {
     documentUploadFolderSegments,
     type DocumentUploadEntry,
 } from "@/app/lib/documentDirectoryUpload";
-import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
+import {
+    SUPPORTED_DOCUMENT_ACCEPT,
+    combineUploadWarnings,
+    formatUnsupportedDocumentWarning,
+    partitionSupportedDocumentFiles,
+} from "@/app/lib/documentUploadValidation";
 
 interface Props {
     params: Promise<{ id: string; chatId?: string }>;
@@ -358,6 +365,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const [documentDropError, setDocumentDropError] = useState<string | null>(
         null,
     );
+    const [uploadWarning, setUploadWarning] = useState<string | null>(null);
 
     // Tabs
     const [tabs, setTabs] = useState<ProjectDocumentTab[]>([]);
@@ -1165,10 +1173,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     async function uploadEntries(
-        entries: DocumentUploadEntry[],
+        selectedEntries: DocumentUploadEntry[],
         openInViewer = false,
     ) {
-        if (!entries.length) return;
+        if (!selectedEntries.length) return;
         if (!canEditContent) {
             // Only accuse somebody of lacking a role once we know they do.
             if (projectRole) {
@@ -1176,6 +1184,21 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             }
             return;
         }
+
+        // A drop or a folder selection carries whatever was on disk, and
+        // `accept` cannot constrain either. Filter to the types the converter
+        // can read before spending an upload session (or creating folders) on
+        // files the server is guaranteed to refuse.
+        const { supported, unsupported } = partitionSupportedDocumentFiles(
+            selectedEntries.map((entry) => entry.file),
+        );
+        const supportedFiles = new Set(supported);
+        const entries = selectedEntries.filter((entry) =>
+            supportedFiles.has(entry.file),
+        );
+        const unsupportedWarning = formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
+        if (!entries.length) return;
 
         const pendingUploads = entries.map((entry) => ({
             clientId: crypto.randomUUID(),
@@ -1282,24 +1305,32 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     : [],
             );
             addUploadedDocuments(uploaded);
-            if (openInViewer) {
-                uploaded.forEach(handleDocClick);
-                if (outcomes.some((outcome) => outcome.status === "error")) {
-                    setDocumentDropError(
-                        "Some files could not be uploaded. Please try again.",
-                    );
-                }
-            }
-        } catch (err) {
-            console.error("Upload failed:", err);
-            if (openInViewer) {
-                setDocumentDropError(
-                    userFacingApiError(
-                        err,
-                        "Files could not be uploaded. Please try again.",
+            if (openInViewer) uploaded.forEach(handleDocClick);
+            // Per-file outcomes, not an all-or-nothing batch: the files that
+            // landed stay in the tree and the ones that did not are named.
+            // Dropping the failures silently is what made a partly-failed bulk
+            // upload look like it simply did nothing (#8).
+            if (uploaded.length < outcomes.length) {
+                setUploadWarning(
+                    combineUploadWarnings(
+                        unsupportedWarning,
+                        failedUploadMessage(outcomes),
                     ),
                 );
             }
+        } catch (err) {
+            console.error("Upload failed:", err);
+            setUploadWarning(
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    err instanceof UploadBatchError
+                        ? failedUploadMessage(err.outcomes)
+                        : userFacingApiError(
+                              err,
+                              "Files could not be uploaded. Please try again.",
+                          ),
+                ),
+            );
         } finally {
             setUploadingDocuments((current) =>
                 current.filter((upload) => !pendingIds.has(upload.clientId)),
@@ -2365,6 +2396,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 onClose={projectPicker.clearError}
                 title="Projects could not be loaded"
                 message={projectPicker.error ?? ""}
+            />
+            <WarningPopup
+                open={!!uploadWarning}
+                onClose={() => setUploadWarning(null)}
+                title="Some files were not uploaded"
+                message={uploadWarning ?? ""}
             />
             <WarningPopup
                 open={!!documentDropError}

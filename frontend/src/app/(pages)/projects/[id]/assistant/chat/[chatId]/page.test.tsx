@@ -535,6 +535,133 @@ describe("document viewer drops", () => {
     });
 });
 
+describe("explorer uploads", () => {
+    const completed = (id: string, filename: string) => ({
+        clientId: id,
+        filename,
+        status: "completed" as const,
+        result: { id, filename, file_type: "pdf", status: "ready" },
+        error: null,
+        errorCode: null,
+    });
+    const failed = (filename: string, errorCode: string | null = null) => ({
+        clientId: filename,
+        filename,
+        status: "error" as const,
+        result: null,
+        error: "refused",
+        errorCode,
+    });
+
+    // External files dropped on the tree bubble up to the Explorer pane's
+    // own drop handler; the mocked tree is the drop target.
+    function dropOnExplorer(files: File[]) {
+        fireEvent.drop(screen.getByRole("button", { name: "Open draft" }), {
+            dataTransfer: { types: ["Files"], files, items: [], getData: () => "" },
+        });
+    }
+
+    async function findUploadWarning() {
+        const title = await screen.findByText("Some files were not uploaded");
+        return title.closest<HTMLElement>('[role="alert"]')!;
+    }
+
+    it("names the files that did not upload instead of dropping them silently", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            completed("a", "Alpha.pdf"),
+            failed("Broken.pdf"),
+        ]);
+        await renderWorkspace();
+        dropOnExplorer([
+            new File(["a"], "Alpha.pdf"),
+            new File(["b"], "Broken.pdf"),
+        ]);
+        const dialog = await findUploadWarning();
+        expect(dialog).toHaveTextContent(
+            "Broken.pdf could not be uploaded. Please try again.",
+        );
+        expect(dialog).not.toHaveTextContent("Alpha.pdf");
+    });
+
+    it("reports the limit a batch broke from the file picker", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            completed("a", "Alpha.pdf"),
+            failed("Huge.pdf", "upload_file_too_large"),
+        ]);
+        const { container } = await act(async () =>
+            render(
+                <Suspense fallback="Loading">
+                    <ProjectAssistantChatPage
+                        params={Promise.resolve({ id: "p1" })}
+                    />
+                </Suspense>,
+            ),
+        );
+        await screen.findByRole("button", { name: "Send question" });
+        const picker = container.querySelector(
+            'input[type="file"]:not([webkitdirectory])',
+        )!;
+        fireEvent.change(picker, {
+            target: {
+                files: [
+                    new File(["a"], "Alpha.pdf"),
+                    new File(["b"], "Huge.pdf"),
+                ],
+            },
+        });
+        expect(
+            await screen.findByText(
+                "Each uploaded file must be 100 MB or smaller.",
+            ),
+        ).toBeVisible();
+    });
+
+    it("filters unsupported types out of a drop and reports both failures together", async () => {
+        state.uploadProjectDocuments.mockResolvedValueOnce([
+            failed("Broken.pdf"),
+        ]);
+        await renderWorkspace();
+        const pdf = new File(["b"], "Broken.pdf");
+        dropOnExplorer([pdf, new File(["png"], "Photo.png")]);
+        const dialog = await findUploadWarning();
+        expect(dialog).toHaveTextContent("Unsupported file type.");
+        expect(dialog).toHaveTextContent("Broken.pdf could not be uploaded.");
+        expect(state.uploadProjectDocuments).toHaveBeenCalledWith(
+            "p1",
+            [expect.objectContaining({ file: pdf })],
+            expect.any(Object),
+        );
+    });
+
+    it("never opens an upload session for a drop of only unsupported files", async () => {
+        await renderWorkspace();
+        dropOnExplorer([new File(["png"], "Photo.png")]);
+        expect(
+            await screen.findByText(/Unsupported file type\./),
+        ).toBeVisible();
+        expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
+    });
+
+    it("does not leak a transport error and can be dismissed", async () => {
+        state.uploadProjectDocuments.mockRejectedValueOnce(
+            new Error("connect ECONNREFUSED 10.0.0.3:5432"),
+        );
+        await renderWorkspace();
+        dropOnExplorer([new File(["a"], "Alpha.pdf")]);
+        const dialog = await findUploadWarning();
+        expect(dialog).toHaveTextContent(
+            "Files could not be uploaded. Please try again.",
+        );
+        expect(dialog).not.toHaveTextContent("ECONNREFUSED");
+        fireEvent.click(
+            within(dialog).getByRole("button", { name: "Dismiss warning" }),
+        );
+        await waitFor(() =>
+            expect(screen.queryByText("Some files were not uploaded")).toBeNull(),
+        );
+    });
+});
+
 describe("project chat workspace lifecycle", () => {
     it("marks the selected citation pill active until a regular document view opens", async () => {
         const citation: Citation = {
