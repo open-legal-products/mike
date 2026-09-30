@@ -1771,20 +1771,13 @@ export function TRView({ reviewId, projectId }: Props) {
                     const expandedRow = rows.find(
                         (row) => row.id === expandedCell.row_id,
                     );
-                    const citedDocumentId =
-                        expandedCellCitation?.documentId &&
-                        expandedRow?.source_document_ids.includes(
-                            expandedCellCitation.documentId,
-                        )
-                            ? expandedCellCitation.documentId
-                            : undefined;
+                    // Pass navigation intent as an ID. The panel resolves it
+                    // against current row membership and available documents;
+                    // a background removal must not masquerade as navigation.
                     const requestedDocumentId =
-                        citedDocumentId ??
+                        expandedCellCitation?.documentId ??
                         expandedDocumentId ??
-                        expandedRow?.document_id;
-                    const expandedDoc = documents.find(
-                        (document) => document.id === requestedDocumentId,
-                    );
+                        expandedRow?.document_id ?? undefined;
                     const expandedCol = columns.find(
                         (c) => c.index === expandedCell.column_index,
                     );
@@ -1794,7 +1787,7 @@ export function TRView({ reviewId, projectId }: Props) {
                             cell={expandedCell}
                             row={expandedRow}
                             rows={filteredRows}
-                            document={expandedDoc}
+                            documentId={requestedDocumentId}
                             documents={documents}
                             column={expandedCol}
                             columns={columns}
@@ -1825,7 +1818,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                           )
                             }
                             displayDocument={
-                                !!expandedDoc &&
+                                !!requestedDocumentId &&
                                 (expandedCellCitation !== undefined ||
                                     expandedDocumentId !== undefined)
                             }

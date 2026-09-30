@@ -30,6 +30,115 @@ mock `global fetch` and the Supabase client module — no network, no real
 backend — one `describe` block per function or concern, and tests that assert
 current behavior.
 
+## Assistant streaming regressions
+
+Changes to chat rendering, effect dependencies, scrolling or reveal animations
+must exercise a long conversation and paced streaming, not just a completed
+response. `e2e/assistant-streaming.spec.ts` loads eight synthetic exchanges and
+sends four content replies or eight reasoning replies through a browser
+`ReadableStream`, with CPU throttling. The reasoning case also expands,
+collapses and resizes a live disclosure. Both cases run in the general assistant,
+project assistant and tabular-review chat (six browser scenarios).
+It uses the real Next.js/React renderer, fails on browser console errors and
+uncaught exceptions, and requires no model-provider key. It runs in the regular
+production Playwright suite and the separate **Assistant streaming (development)**
+job, including keyless CI runs. The development job matters because React's
+passive-update-depth warning is development-only. Make both checks required in
+branch protection; a workflow failure alone does not block a merge.
+
+Run it against the documented local stack with:
+
+```bash
+npm run test:e2e -- e2e/assistant-streaming.spec.ts
+```
+
+For a standalone frontend already running on localhost, its API fixtures and
+empty storage state also allow a run without backend/auth setup:
+
+```bash
+CI=1 PLAYWRIGHT_BASE_URL=http://localhost:3000 npm run test:e2e -- \
+  e2e/assistant-streaming.spec.ts --project=chromium --no-deps
+```
+
+For scroll state, observe the viewport and content size and respond to scroll
+events. A changing `messages` array is not a layout signal: an effect that sets
+scroll state on every chunk can exhaust React's passive-update limit, even when
+the boolean is unchanged. Avoid dispatching equal values before calling the
+setter; pending concurrent work can prevent React's eager bailout. The
+`ChatView.actions.test.tsx` regressions check content reveal without a new message,
+resize/scroll behavior, 120 consecutive chunks and observer/frame cleanup.
+
+When investigating maximum-depth warnings, trace the repeated passive updates
+as well as the final stack. The reveal animation can be the next setter that
+crosses the limit, while a different component's effect caused the buildup.
+
+## Review effects for update loops and starvation
+
+Treat streamed text, message arrays, freshly allocated objects and callbacks as
+high-frequency inputs. Before adding a state-setting effect, identify its actual
+trigger and how it terminates:
+
+- Derive display defaults from props during render. Keep state for user choices,
+  rather than mirroring `isStreaming` on every chunk.
+- Observe natural content size for overflow measurements. Coalesce observer
+  callbacks into one animation frame and compare against the last published
+  value **before** dispatching state. Observing a clipped wrapper can hide growth.
+- Position/reveal a transcript when its chat, loading state or user-message count
+  changes. Do not restart a timer or a two-frame layout operation on every text
+  chunk: the callback can be starved indefinitely even without a console warning.
+- Trace parent callbacks and external-store snapshots when objects change every
+  render. Fix the source of instability; do not suppress exhaustive-deps or add
+  arbitrary debounce delays to hide it.
+- Keep an animation's elapsed time across new chunks and stop requesting frames
+  when caught up. Test deltas arriving just before each frame, not only an idle
+  clock after a single append.
+- Reset user selections on navigation identity, not refreshed object identity.
+  A row/document refetch should not close a pane or replace a chosen source.
+- Retire asynchronous history requests on selection, new chat, deletion and
+  unmount. Test reversed response order, including A → B → A: checking only the
+  chat ID misses stale requests for the same chat.
+- Test cleanup on close, unmount and Strict Mode remount. Test that work settles
+  while geometry is unchanged, and that resize without a new message still works.
+
+A functional setter returning its existing value is not sufficient evidence that
+an effect is bounded under concurrent rendering. `useReasoningDisclosure.test.tsx`
+checks 300 text updates, repeated resize notifications and cleanup. The assistant
+and tabular chat suites interleave chunks with frame/timer advancement and assert
+that history becomes visible **before** the stream ends. A buffered SSE fixture
+or assertions only after `[DONE]` would miss those failures.
+
+The Word add-in uses the same disclosure hook. Its
+`word-addin/e2e/assistant-streaming.spec.ts` sends sixteen exchanges through paced
+SSE in Chromium and WebKit, including a live resize to 320px and disclosure
+interactions. Keep both production and development jobs required in branch
+protection. Run the development check with no existing server on port 3100:
+
+```bash
+WORD_E2E_DEVELOPMENT=1 REACT_STRESS=1 npm run test:e2e --prefix word-addin -- \
+  --retries=0
+```
+
+An existing local server is reused by Playwright, so make sure it serves the
+intended build mode. Development bundles are static-served with the same Office
+mock; the test does not need Word, HTTPS certificates or a real backend.
+
+The complete web suite also runs on both production and development builds in
+CI. `REACT_STRESS=1` applies 4x Chromium CPU throttling and fails UI fixtures on
+maximum-depth, excessive-render, uncached-snapshot and ResizeObserver-loop
+diagnostics. Word runs its complete hermetic suite in both build modes and both
+engines; WebKit has no equivalent CDP CPU-throttling control. Existing error-path
+tests may intentionally log other errors; the focused streaming/history tests
+additionally fail on every console error and uncaught exception.
+Stress mode disables retries and retains failed traces, so an intermittent loop
+cannot become a passing check merely because a retry uses different timing.
+
+`e2e/tabular-chat-lifecycle.spec.ts` switches sixteen times while history requests
+are held, then releases long transcripts in reverse order. The latest selection
+must remain visible before and after a narrow viewport resize.
+
+See [the class audit](incidents/2026-09-29-streaming-effects-audit.md) for the
+confirmed failures, unaffected paths examined and limits of the investigation.
+
 ## What the coverage gate covers
 
 The ratchet gates `src/app/lib/**` only — the client library — mirroring the

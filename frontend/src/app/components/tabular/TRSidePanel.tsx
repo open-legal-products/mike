@@ -48,8 +48,8 @@ interface Props {
     cell: TabularCell;
     row: TabularReviewRow;
     rows: TabularReviewRow[];
-    document?: Document;
-    documents?: Document[];
+    documentId?: string;
+    documents: Document[];
     column: ColumnConfig;
     columns: ColumnConfig[];
     onClose: () => void;
@@ -102,8 +102,8 @@ export function TRSidePanel({
     cell,
     row,
     rows,
-    document: initialDocument,
-    documents = [],
+    documentId,
+    documents,
     column,
     columns,
     onClose,
@@ -140,17 +140,21 @@ export function TRSidePanel({
         );
         return sourceDocument ? [sourceDocument] : [];
     });
+    // Keep navigation intent separate from current availability. A refresh can
+    // remove the requested source without requesting a different selection.
+    const requestedDocumentId = citationDocumentId ?? documentId;
+    const requestedDocument = sourceDocuments.find(
+        (document) => document.id === requestedDocumentId,
+    );
+    const availableRequestedDocumentId = requestedDocument?.id;
     const [regenerating, setRegenerating] = useState(false);
     const [folderExpanded, setFolderExpanded] = useState(false);
     const [activeDocumentId, setActiveDocumentId] = useState(
-        citationDocumentId ?? initialDocument?.id,
+        requestedDocumentId,
     );
     const doc =
-        documents.find(
-            (document) =>
-                document.id === activeDocumentId &&
-                row.source_document_ids.includes(document.id),
-        ) ?? initialDocument;
+        sourceDocuments.find((document) => document.id === activeDocumentId) ??
+        requestedDocument;
     const activeVersionNumber =
         doc?.active_version_number ?? doc?.latest_version_number ?? 1;
     const documentViewType = resolveDocumentViewType({
@@ -183,7 +187,19 @@ export function TRSidePanel({
             : undefined,
     );
 
-    // Re-sync when the panel opens for a different cell or citation
+    const resolvedDocumentId = doc?.id;
+    useEffect(() => {
+        if (!activeDocumentId || activeDocumentId === resolvedDocumentId) return;
+        // A removed secondary source must not stay selected and reappear on a
+        // later refresh. Primitive IDs keep equivalent refreshes inert. Run
+        // before the navigation reset below so a new citation takes precedence.
+        setActiveDocumentId(availableRequestedDocumentId);
+        setDocCitation(undefined);
+        setDocumentPaneOpen((open) => open && !!availableRequestedDocumentId);
+    }, [activeDocumentId, resolvedDocumentId, availableRequestedDocumentId]);
+
+    // Reset on navigation intent, not on refreshed row/document object identity.
+    // Background review updates must preserve a source picked inside the panel.
     useEffect(() => {
         setDocCitation(
             displayDocument && citationQuote
@@ -197,17 +213,11 @@ export function TRSidePanel({
                   }
                 : undefined,
         );
-        const nextDocument = citationDocumentId
-            ? documents.find(
-                  (document) =>
-                      document.id === citationDocumentId &&
-                      row.source_document_ids.includes(document.id),
-              )
-            : initialDocument;
-        setActiveDocumentId(nextDocument?.id);
-        setDocumentPaneOpen(displayDocument && !!nextDocument);
+        setActiveDocumentId(requestedDocumentId);
+        setDocumentPaneOpen(displayDocument && !!requestedDocumentId);
     }, [
         cell.id,
+        row.id,
         displayDocument,
         citationCell,
         citationDocumentId,
@@ -215,9 +225,7 @@ export function TRSidePanel({
         citationQuote,
         citationRef,
         citationSheet,
-        documents,
-        initialDocument,
-        row,
+        requestedDocumentId,
     ]);
 
     useEffect(
@@ -291,7 +299,6 @@ export function TRSidePanel({
     }
 
     function handleCitationOpen(citation: TRPanelCitation) {
-        setDocCitation(citation);
         const citedDocument = citation.documentId
             ? documents.find(
                   (document) =>
@@ -300,6 +307,7 @@ export function TRSidePanel({
               )
             : doc;
         if (citedDocument) {
+            setDocCitation(citation);
             setActiveDocumentId(citedDocument.id);
             setDocumentPaneOpen(true);
         }

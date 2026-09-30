@@ -686,6 +686,7 @@ export function ChatView({
     );
 
     const messagesContainerRef = useRef<HTMLDivElement>(null);
+    const messagesContentRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<ChatInputHandle | null>(null);
@@ -703,6 +704,7 @@ export function ChatView({
         () => messages.length > 0 && !chatLoading,
     );
     const [showScrollButton, setShowScrollButton] = useState(false);
+    const scrollButtonVisibleRef = useRef(false);
     const [inputHeight, setInputHeight] = useState(0);
     const [minHeight, setMinHeight] = useState("0px");
 
@@ -749,21 +751,43 @@ export function ChatView({
         return () => observer.disconnect();
     }, [messages.length]);
 
-    const updateScrollButton = useCallback(() => {
-        const c = messagesContainerRef.current;
-        if (!c) return;
-        const isScrolledUp = c.scrollHeight - c.scrollTop - c.clientHeight > 10;
-        setShowScrollButton(isScrolledUp && c.scrollHeight > c.clientHeight);
-    }, []);
-
+    const isInitialView = Boolean(onInitialSubmit);
     useEffect(() => {
         const c = messagesContainerRef.current;
-        if (!c) return;
-        c.addEventListener("scroll", updateScrollButton);
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- initial scroll-button state must be measured from the live DOM
-        updateScrollButton();
-        return () => c.removeEventListener("scroll", updateScrollButton);
-    }, [messages, updateScrollButton]);
+        const content = messagesContentRef.current;
+        if (!c || !content) return;
+        let frame: number | null = null;
+        const measure = () => {
+            frame = null;
+            const height = c.scrollHeight;
+            const visible =
+                height > c.clientHeight &&
+                height - c.scrollTop - c.clientHeight > 10;
+            // Avoid dispatching even an unchanged value during a busy stream:
+            // React cannot always bail out eagerly while other work is queued.
+            if (visible !== scrollButtonVisibleRef.current) {
+                scrollButtonVisibleRef.current = visible;
+                setShowScrollButton(visible);
+            }
+        };
+        const scheduleMeasure = () => {
+            if (frame === null) frame = requestAnimationFrame(measure);
+        };
+        // Measure actual layout changes, including smoothed text reveal.
+        // Depending on `messages` dispatches state from an effect on every
+        // streamed chunk and can exceed React's nested passive-update limit.
+        const observer = new ResizeObserver(scheduleMeasure);
+        observer.observe(c);
+        observer.observe(content);
+        c.addEventListener("scroll", scheduleMeasure, { passive: true });
+        scheduleMeasure();
+        return () => {
+            observer.disconnect();
+            c.removeEventListener("scroll", scheduleMeasure);
+            if (frame !== null) cancelAnimationFrame(frame);
+        };
+        // The container mounts when the initial screen becomes a conversation.
+    }, [isInitialView]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -817,6 +841,10 @@ export function ChatView({
             return scrollLatestUserToTop();
     }, [chatLoading, isResponseLoading, scrollLatestUserToTop]);
 
+    const hasMessages = messages.length > 0;
+    const userMessageCount = messages.filter(
+        (message) => message.role === "user",
+    ).length;
     /* eslint-disable react-hooks/set-state-in-effect -- visibility is synchronized with completion of the selected chat's DOM positioning */
     useEffect(() => {
         const viewingUnpositionedChat = positionedChatRef.current !== chatId;
@@ -828,16 +856,13 @@ export function ChatView({
             setMessagesVisible(false);
             return;
         }
-        if (messages.length === 0) {
+        if (!hasMessages) {
             hasScrolledRef.current = false;
             positionedChatRef.current = undefined;
             setMessagesVisible(false);
         } else if (!hasScrolledRef.current || viewingUnpositionedChat) {
-            const userMsgCount = messages.filter(
-                (m) => m.role === "user",
-            ).length;
             if (
-                userMsgCount >= 2 &&
+                userMessageCount >= 2 &&
                 latestUserMessageRef.current &&
                 messagesContainerRef.current
             ) {
@@ -852,7 +877,15 @@ export function ChatView({
                 setMessagesVisible(true);
             }
         }
-    }, [chatId, chatLoading, messages, scrollLatestUserToTop]);
+        // Keep the two-frame positioning operation alive while text streams.
+        // Depending on messages would cancel it before its reveal callback.
+    }, [
+        chatId,
+        chatLoading,
+        hasMessages,
+        userMessageCount,
+        scrollLatestUserToTop,
+    ]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
     useEffect(() => {
@@ -1031,6 +1064,7 @@ export function ChatView({
                             style={{ scrollbarGutter: "stable both-edges" }}
                         >
                             <div
+                                ref={messagesContentRef}
                                 data-slot="chat-messages-content"
                                 className="w-full max-w-4xl mx-auto px-6 md:px-8 min-h-full flex flex-col relative"
                                 style={{
@@ -1201,6 +1235,8 @@ export function ChatView({
                                 }}
                             >
                                 <button
+                                    type="button"
+                                    aria-label="Scroll to bottom"
                                     onClick={scrollToBottom}
                                     className={`cursor-pointer rounded-full p-2 transition-all ${LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS}`}
                                 >

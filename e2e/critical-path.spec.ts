@@ -6,7 +6,7 @@
  *
  * Prerequisite: auth.setup.ts has already saved the session to e2e/.auth/user.json
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { hasLlmKey, LLM_SKIP_REASON } from "./llm";
 import { createProject, PDF_FIXTURE, selectClaudeModel } from "./helpers";
 

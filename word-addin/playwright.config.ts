@@ -24,16 +24,22 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  // A timing-dependent stress failure must not become green on retry.
+  retries: process.env.REACT_STRESS === "1" ? 0 : process.env.CI ? 2 : 0,
+  timeout: process.env.REACT_STRESS === "1" ? 90_000 : 30_000,
+  expect: { timeout: process.env.REACT_STRESS === "1" ? 10_000 : 5_000 },
+  // Keep per-test progress visible during the longer development stress run.
+  reporter: process.env.CI ? [["github"], ["list"]] : "list",
 
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? BASE_URL,
     screenshot: "only-on-failure",
-    trace: "on-first-retry",
+    trace: process.env.REACT_STRESS === "1" ? "retain-on-failure" : "on-first-retry",
     // PW_VIDEO=1 records a webm per test (for demo/review reels); off by
     // default because videos slow the suite and bloat CI artifacts.
-    video: process.env.PW_VIDEO === "1" ? "on" : "off",
+    video: process.env.PW_VIDEO === "1"
+      ? { mode: "on", size: { width: 1280, height: 720 } }
+      : "off",
   },
 
   projects: [
@@ -52,11 +58,13 @@ export default defineConfig({
     },
   ],
 
-  // Build the production bundle, then static-serve dist/ over HTTP. Build runs
+  // WORD_E2E_DEVELOPMENT=1 exercises React development-only warnings with
+  // the same static server and Office mocks (no HTTPS/keychain dependency).
+  // Build the production bundle by default, then static-serve dist/ over HTTP. Build runs
   // here so `npx playwright test` works standalone; reuse a running server
   // locally to avoid rebuilding on every invocation.
   webServer: {
-    command: "npm run build:e2e && npm run serve:e2e",
+    command: `npm run ${process.env.WORD_E2E_DEVELOPMENT === "1" ? "build:e2e:development" : "build:e2e"} && npm run serve:e2e`,
     url: `${BASE_URL}/taskpane.html`,
     reuseExistingServer: !process.env.CI,
     // Generous because the command includes a cold typecheck + production

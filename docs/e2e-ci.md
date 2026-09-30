@@ -12,7 +12,7 @@ On every `pull_request` targeting `main` (or `upstream-main`, the fork mirror),
 on manual `workflow_dispatch`, and **nightly at 03:47 UTC** (a `schedule` cron,
 so drift that lands between PRs — dependency bumps, Supabase CLI changes,
 selector-breaking UI tweaks — is caught within a day), the `e2e / playwright`
-job:
+matrix:
 
 1. installs the root (Playwright), `backend/`, and `frontend/` dependencies;
 2. boots **MinIO** (S3-compatible object storage — several specs upload documents);
@@ -25,22 +25,30 @@ job:
 4. writes `backend/.env` and `frontend/.env.local` from the live Supabase values;
 5. builds the backend and runs the pinned `sync:workflows` release job, matching
    production ordering so the default and add-on catalog exists before startup;
-6. **builds** the web app (`next build`) and serves it with `next start` — a
-   production build, not `next dev`, so there is no on-demand compilation (which
-   makes first-hit page loads slow enough to time out specs) and no dev
-   hydration-error overlay (whose injected DOM pollutes text locators). Starts the
-   backend API (`:3001`) and the web server (`:3000`) and waits for both healthy;
+6. serves the production build (`next build` / `next start`) in one job and
+   the development renderer (`next dev`) in another. The development job warms
+   static routes, sets `REACT_STRESS=1` for 4x Chromium CPU pressure, and fails
+   on React/observer loop diagnostics. Development overlays remain observable;
+   they are not suppressed to make selectors pass. Both jobs use the backend
+   API (`:3001`) and web server (`:3000`) with isolated disposable services;
 7. runs `npx playwright test` and uploads the HTML report + traces as an artifact
-   (`playwright-report`) on pass, fail, or timeout.
+   (`playwright-report-production` / `playwright-report-development`) on pass, fail, or timeout.
 
 `e2e/auth.setup.ts` bootstraps the shared test user (`e2e@mike.local`) against
 the local Supabase admin API, so no login secret is needed — the credentials
 baked into that file are the single source of truth.
 
-A keyless run is expected to end **27 passed / 4 skipped / 0 failed** — the
-suite currently has 31 tests, 4 of them LLM-gated (see "Confirm the specs ran"
-below). Use the Playwright summary as the source of truth if tests are added or
-removed.
+The separate **Assistant streaming (development)** job runs
+`e2e/assistant-streaming.spec.ts` and `e2e/tabular-chat-lifecycle.spec.ts` against `next dev`, with synthetic API/SSE
+fixtures and no backend, authentication setup or model-provider key. It catches
+React's development-only passive-update warning on a long conversation. Keep
+this check required alongside the production `playwright` check in branch
+protection. See [frontend-testing.md](frontend-testing.md#assistant-streaming-regressions)
+for a standalone local command.
+
+Four live-provider cases remain key-gated; the synthetic streaming and history
+stress cases always run. Use the current Playwright summary as the source of
+truth for totals, failures and skips.
 
 ## Accessibility scans
 
@@ -54,11 +62,14 @@ that backlog is cleared. The scans need no LLM key and run on every trigger.
 
 ## Failure artifacts
 
-Playwright retries failed specs up to twice on CI and records a **trace** on the
-first retry (`retries` / `trace: "on-first-retry"` in `playwright.config.ts`).
-On pass, fail, or timeout, the job uploads `playwright-report/` and
-`test-results/` as the **`playwright-report`** artifact (14-day retention): from
-the failed run's page in the Actions tab, download it, then
+The production suite retries failed specs up to twice on CI and records a
+**trace** on the first retry. Development stress uses **zero retries** and
+retains traces on failure, so an intermittent loop cannot pass on a retry.
+On pass, fail, or timeout, each full-stack job uploads `playwright-report/`,
+`test-results/` and the web-server log as **`playwright-report-production`** or
+**`playwright-report-development`** (14-day retention). The focused development
+job uploads **`assistant-streaming-development`** with the same failure evidence.
+From the failed run's page in the Actions tab, download its artifact, then
 `npx playwright show-report playwright-report` locally to see per-spec results,
 screenshots, and step-by-step traces of what the browser did.
 
@@ -66,7 +77,7 @@ screenshots, and step-by-step traces of what the browser did.
 
 | Secret | What it unlocks | Without it |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | The 4 LLM-dependent specs (chat rename/delete/submit, critical-path "ask a question") send a message and assert a **streamed** answer. With the key set they run and are enforced. | Those 4 specs **skip** (see `e2e/llm.ts`) instead of hanging, so the run is still green on the other 27 specs. |
+| `ANTHROPIC_API_KEY` | The 4 LLM-dependent specs (chat rename/delete/submit, critical-path "ask a question") send a message and assert a **streamed** answer. With the key set they run and are enforced. | Those 4 specs **skip** (see `e2e/llm.ts`) instead of hanging, the remaining keyless cases still run. |
 
 The suite is green **without** any secret — the LLM specs skip themselves via
 `test.skip(!process.env.ANTHROPIC_API_KEY, …)`, which keeps keyless runs (local,
@@ -122,13 +133,14 @@ few cents per run — negligible next to the CI minutes.
 
 Open the **Run Playwright** step in the Actions log:
 
-- **Keyless run:** the summary ends with `4 skipped` / `27 passed`, and each
+- **Keyless run:** the summary includes `4 skipped`, and each
   skipped spec carries the reason
   `requires a model key — set the ANTHROPIC_API_KEY secret to run LLM-dependent specs`.
-- **With the secret:** the summary shows `31 passed` and **no `skipped` line**;
+- **With the secret:** all cases pass with **no `skipped` line**;
   searching the log for `requires a model key` finds nothing.
 
-The uploaded `playwright-report` artifact shows the same per-spec statuses.
+The uploaded `playwright-report-production` and `playwright-report-development`
+artifacts show the same per-spec statuses.
 
 ### Model selection
 
@@ -148,23 +160,18 @@ suite go green a few times (it is environment-sensitive by nature):
    `main`).
 2. Enable **Require status checks to pass before merging**.
 3. Enable **Require branches to be up to date before merging**.
-4. In the checks search box add **`e2e / playwright`** (the job appears in the
-   list after it has run at least once on a PR).
-5. Recommended alongside it: the unit/build check `backend` and the `license/cla`
-   check.
+4. In the checks search box add **`e2e / playwright`**,
+   **`e2e / Playwright (development stress)`** and
+   **`e2e / Assistant streaming (development)`**. Jobs appear in the list after
+   they have run at least once on a PR. Require both Word jobs too:
+   **`Word add-in / Typecheck and Playwright (chromium + webkit)`** and
+   **`Word add-in / Development stress (chromium + webkit)`**.
+5. Keep the existing unit/build, security and `license/cla` requirements.
 6. Save. From now on a red e2e run blocks the **Merge** button.
 
-Equivalent via the GitHub CLI (repo admin token required):
-
-```bash
-gh api -X PUT repos/OWNER/REPO/branches/main/protection \
-  -H "Accept: application/vnd.github+json" \
-  -f 'required_status_checks[strict]=true' \
-  -f 'required_status_checks[contexts][]=e2e / playwright' \
-  -f 'enforce_admins=true' \
-  -f 'required_pull_request_reviews[required_approving_review_count]=1' \
-  -f 'restrictions='
-```
+This PR adds workflow checks; it does not edit repository protection settings.
+When configuring them through an API, first read and preserve the existing
+requirements and use the exact check contexts reported by the repository.
 
 ## Running the suite locally
 

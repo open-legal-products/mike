@@ -1,13 +1,14 @@
 import { useImperativeHandle, type Ref } from "react";
 import type { ChatInputHandle } from "./ChatInput";
 import {
+    act,
     fireEvent,
     render,
     screen,
     waitFor,
     within,
 } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Chat, Document, Message } from "@/app/components/shared/types";
 import { ChatView } from "./ChatView";
 import {
@@ -197,6 +198,182 @@ function openActions() {
     );
     fireEvent.click(trigger);
 }
+
+describe("ChatView streaming scroll controls", () => {
+    let frames: Map<number, FrameRequestCallback>;
+    let observers: Map<Element, () => void>;
+    let nextFrame: number;
+
+    beforeEach(() => {
+        frames = new Map();
+        observers = new Map();
+        nextFrame = 0;
+        vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+            frames.set(++nextFrame, callback);
+            return nextFrame;
+        });
+        vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+        vi.stubGlobal("ResizeObserver", class {
+            private targets = new Set<Element>();
+            constructor(private callback: () => void) {}
+            observe(target: Element) {
+                this.targets.add(target);
+                observers.set(target, this.callback);
+            }
+            disconnect() {
+                for (const target of this.targets) observers.delete(target);
+            }
+        });
+    });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    function flushFrame() {
+        act(() => {
+            const pending = [...frames.values()];
+            frames.clear();
+            for (const callback of pending) callback(performance.now());
+        });
+    }
+
+    function view(chunk = "Answer", initial = false) {
+        return (
+            <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+                <ChatView
+                    chatId="chat-1"
+                    chat={activeChat}
+                    messages={[
+                        { id: "user", role: "user", content: "Question" },
+                        { id: "answer", role: "assistant", content: chunk },
+                    ]}
+                    isResponseLoading
+                    handleChat={vi.fn()}
+                    cancel={vi.fn()}
+                    detach={vi.fn()}
+                    onInitialSubmit={initial ? vi.fn() : undefined}
+                />
+            </PageChromeContext.Provider>
+        );
+    }
+
+    function geometry() {
+        const content = document.querySelector('[data-slot="chat-messages-content"]')!;
+        const viewport = content.parentElement!;
+        const size = { content: 600, viewport: 600 };
+        const readHeight = vi.fn(() => size.content);
+        Object.defineProperties(viewport, {
+            scrollHeight: { configurable: true, get: readHeight },
+            clientHeight: { configurable: true, get: () => size.viewport },
+        });
+        return { content, viewport, size, readHeight };
+    }
+
+    it("reveals a resumed transcript even when every animation frame receives another chunk", () => {
+        const transcript = (chunk: string, chatLoading = false) => (
+            <PageChromeContext.Provider value={{ mobileActionsContainer: null }}>
+                <ChatView
+                    chatId="chat-1"
+                    chatLoading={chatLoading}
+                    chat={activeChat}
+                    messages={[
+                        { id: "old-user", role: "user", content: "Earlier question" },
+                        { id: "old-answer", role: "assistant", content: "Earlier answer" },
+                        { id: "latest-user", role: "user", content: "Current question" },
+                        { id: "live-answer", role: "assistant", content: chunk },
+                    ]}
+                    isResponseLoading
+                    handleChat={vi.fn()}
+                    cancel={vi.fn()}
+                    detach={vi.fn()}
+                />
+            </PageChromeContext.Provider>
+        );
+        const { rerender } = render(transcript("First chunk", true));
+        rerender(transcript("First chunk"));
+        for (let chunk = 0; chunk < 120; chunk++) {
+            flushFrame();
+            rerender(transcript(`Chunk ${chunk}`));
+        }
+        expect(document.querySelector('[data-slot="chat-messages-content"] .transition-opacity')).toHaveStyle({ opacity: "1" });
+    });
+
+    it("updates for revealed content, viewport resizing and scrolling without a new message", () => {
+        render(view());
+        const { content, viewport, size } = geometry();
+        flushFrame();
+        expect(screen.queryByRole("button", { name: "Scroll to bottom" })).toBeNull();
+
+        size.content = 1000;
+        act(() => observers.get(content)?.());
+        flushFrame();
+        expect(screen.getByRole("button", { name: "Scroll to bottom" })).toBeVisible();
+
+        viewport.scrollTop = 390; // Within the existing 10px bottom threshold.
+        fireEvent.scroll(viewport);
+        flushFrame();
+        expect(screen.queryByRole("button", { name: "Scroll to bottom" })).toBeNull();
+
+        viewport.scrollTop = 0;
+        fireEvent.scroll(viewport);
+        flushFrame();
+        expect(screen.getByRole("button", { name: "Scroll to bottom" })).toBeVisible();
+
+        size.viewport = 1000;
+        act(() => observers.get(viewport)?.());
+        flushFrame();
+        expect(screen.queryByRole("button", { name: "Scroll to bottom" })).toBeNull();
+    });
+
+    it("does not measure or enqueue scroll state on every streaming chunk", () => {
+        const { rerender } = render(view());
+        const { readHeight } = geometry();
+        flushFrame();
+        readHeight.mockClear();
+
+        for (let chunk = 0; chunk < 120; chunk++) {
+            rerender(view(`Streamed chunk ${chunk}`));
+            flushFrame();
+        }
+
+        // Incoming data is not a layout signal. ResizeObserver will notify
+        // when the revealed content actually changes the scroll geometry.
+        expect(readHeight).not.toHaveBeenCalled();
+    });
+
+    it("coalesces layout notifications and cleans up pending measurements", () => {
+        const { unmount } = render(view());
+        const { content, viewport, readHeight } = geometry();
+        flushFrame();
+        readHeight.mockClear();
+        act(() => {
+            observers.get(content)?.();
+            observers.get(viewport)?.();
+            fireEvent.scroll(viewport);
+        });
+        flushFrame();
+        expect(readHeight).toHaveBeenCalledTimes(1);
+
+        act(() => observers.get(content)?.());
+        unmount();
+        readHeight.mockClear();
+        fireEvent.scroll(viewport);
+        flushFrame();
+        expect(readHeight).not.toHaveBeenCalled();
+        expect(observers.has(content)).toBe(false);
+        expect(observers.has(viewport)).toBe(false);
+    });
+
+    it("starts observing when the initial screen becomes a conversation", () => {
+        const { rerender } = render(view("Answer", true));
+        rerender(view());
+        const { content, size } = geometry();
+        flushFrame();
+        size.content = 1000;
+        act(() => observers.get(content)?.());
+        flushFrame();
+        expect(screen.getByRole("button", { name: "Scroll to bottom" })).toBeVisible();
+    });
+});
 
 beforeEach(() => {
     vi.clearAllMocks();

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // Exercise the actual settings page/popup/polling in Chromium while replacing
 // the auth/profile and integration endpoints. No Google credentials or consent UI.

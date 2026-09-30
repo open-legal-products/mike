@@ -8,7 +8,7 @@
  * Auth: inherits storageState from playwright.config.ts ("e2e/.auth/user.json")
  * Test user: e2e@mike.local / E2eTestPass1!
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 import { hasLlmKey, LLM_SKIP_REASON } from "./llm";
 import { createProject, selectClaudeModel } from "./helpers";
 

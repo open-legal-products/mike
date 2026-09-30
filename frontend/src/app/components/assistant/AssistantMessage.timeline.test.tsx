@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantMessage } from "./AssistantMessage";
 import type { AssistantEvent } from "../shared/types";
 
@@ -15,6 +15,13 @@ const reasoning = (text: string): AssistantEvent => ({
 });
 
 describe("AssistantMessage timeline", () => {
+    beforeEach(() => {
+        vi.stubGlobal("ResizeObserver", class {
+            observe() {}
+            disconnect() {}
+        });
+    });
+    afterEach(() => vi.unstubAllGlobals());
     it("folds a run of reasoning events into one thinking block", () => {
         render(
             <AssistantMessage

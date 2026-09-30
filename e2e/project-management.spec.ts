@@ -11,7 +11,7 @@
  *
  * Each test creates its own uniquely-named project so tests are fully isolated.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { createProject } from "./helpers";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────

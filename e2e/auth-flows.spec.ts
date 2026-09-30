@@ -9,7 +9,7 @@
  * Test 3 inherits the authenticated storageState from the Playwright project
  * config (e2e/.auth/user.json), so auth.setup.ts must run first.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import { completeOnboardingIfRequired } from "./onboarding";
 
 /* ─── Unauthenticated tests ───────────────────────────────────────────────── */
