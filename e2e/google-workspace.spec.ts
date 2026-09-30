@@ -131,7 +131,7 @@ test("Google SSO does not auto-connect Gmail; account choice, write upgrade and 
   const popup = await popupPromise;
   await expect(popup).toHaveURL(/^https:\/\/accounts\.google\.com\//);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(discover.getByText("Waiting for Google…")).toBeVisible();
+  await expect(discover.getByText("Waiting for Gmail…")).toBeVisible();
   connected = true;
   grant++;
   await page.getByRole("button", { name: "Manage Gmail", exact: true }).click();
