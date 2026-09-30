@@ -13,7 +13,8 @@ import {
     useState,
 } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Plus } from "lucide-react";
+import { BookOpen, ChevronLeft, Plus } from "lucide-react";
+import { PresetTemplatesModal } from "./PresetTemplatesModal";
 import { DocTable } from "@/app/components/documents/DocTable";
 import { NO_ROLE_MODEL } from "@/app/lib/permissions";
 import type {
@@ -522,6 +523,7 @@ export function LibraryCollectionPage({
     const collectionRootPath = kind === "files" ? "/library" : "/library/templates";
   const debouncedSearch = useDebouncedValue(search, 250);
     const title = kind === "files" ? "Files" : "Templates";
+    const [presetsOpen, setPresetsOpen] = useState(false);
   const [documentTypeOptions, setDocumentTypeOptions] = useState<string[]>([]);
   const [tableQuery, setTableQuery] = useState<DocTableQuery>({
     search: "",
@@ -955,13 +957,24 @@ export function LibraryCollectionPage({
                         ) : undefined
                     }
                     actions={
-                        <TabPillButtonUI
-                            onClick={createFolderAction ?? undefined}
-                            disabled={!createFolderAction || loading}
-                        >
-                            <Plus className="h-3.5 w-3.5" />
-                            <span className="hidden sm:inline">Folder</span>
-                        </TabPillButtonUI>
+                        <>
+                            {kind === "templates" && (
+                                <TabPillButtonUI
+                                    onClick={() => setPresetsOpen(true)}
+                                    disabled={loading}
+                                >
+                                    <BookOpen aria-hidden="true" className="h-3.5 w-3.5" />
+                                    Browse presets
+                                </TabPillButtonUI>
+                            )}
+                            <TabPillButtonUI
+                                onClick={createFolderAction ?? undefined}
+                                disabled={!createFolderAction || loading}
+                            >
+                                <Plus className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">Folder</span>
+                            </TabPillButtonUI>
+                        </>
                     }
                 />
                 <DocTable
@@ -1008,6 +1021,21 @@ export function LibraryCollectionPage({
                     canDo={NO_ROLE_MODEL}
                 />
             </div>
+            {kind === "templates" && (
+                <PresetTemplatesModal
+                    key={folderId ?? "root"}
+                    open={presetsOpen}
+                    onClose={() => setPresetsOpen(false)}
+                    folderId={folderId}
+                    onImported={(document) => {
+                        setDocuments((current) => [
+                            document,
+                            ...current.filter((item) => item.id !== document.id),
+                        ]);
+                        setServerQueryRefreshVersion((version) => version + 1);
+                    }}
+                />
+            )}
         </div>
     );
 }
