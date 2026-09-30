@@ -4,6 +4,7 @@ import Image from "next/image";
 import { DocumentTabBar } from "@/app/components/shared/DocumentTabBar";
 import type { Document, PanelDocument } from "@/app/components/shared/types";
 import type { TabDropPosition } from "@/app/lib/reorderTabs";
+import type { DocumentPermissions } from "@/app/hooks/useDocumentPermissions";
 
 interface Props {
     tabs: ReadonlyArray<{
@@ -18,6 +19,7 @@ interface Props {
     onDownloadDoc?: (document: Document) => Promise<void>;
     onRenameDoc?: (documentId: string, filename: string) => Promise<void>;
     onDeleteDoc?: (documentId: string) => Promise<void>;
+    documentPermissions?: (documentId: string) => DocumentPermissions;
     addToChatDisabled?: boolean;
     downloading?: boolean;
     onClose: (documentId: string) => void;
@@ -37,6 +39,7 @@ export function ProjectDocumentTabs({
     onDownloadDoc,
     onRenameDoc,
     onDeleteDoc,
+    documentPermissions,
     addToChatDisabled,
     downloading,
     onClose,
@@ -85,12 +88,12 @@ export function ProjectDocumentTabs({
                                 ? () => onDownloadDoc(document)
                                 : undefined,
                         onRename:
-                            !legalSource && onRenameDoc
+                            !legalSource && documentPermissions?.(tab.documentId).canEdit && onRenameDoc
                                 ? (name: string) =>
                                       onRenameDoc(tab.documentId, name)
                                 : undefined,
                         onDelete:
-                            !legalSource && onDeleteDoc
+                            !legalSource && documentPermissions?.(tab.documentId).canDelete && onDeleteDoc
                                 ? () => onDeleteDoc(tab.documentId)
                                 : undefined,
                         addToChatDisabled,

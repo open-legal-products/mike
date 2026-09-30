@@ -23,6 +23,11 @@ export function useDocumentViewers() {
         const live = downloads.current.get(id);
         return live ? live() : downloadDocumentFile(documentId, versionId, filename);
     }, []);
+    // Call only after confirmed deletion succeeds. A cancelled/failed deletion
+    // must retain its draft; a deleted document must not save again on unmount.
+    const discardDeleted = useCallback((ids: string[]) => {
+        ids.forEach((id) => guards.current.get(id)?.discard());
+    }, []);
     const requestClose = useCallback((ids: string[], close: () => void) => {
         if (busy.current) return;
         const selected = ids.flatMap((id) => {
@@ -51,5 +56,5 @@ export function useDocumentViewers() {
             busy.current = false;
         }}
     />;
-    return { registerDownload, registerCloseGuard, download, requestClose, confirmation };
+    return { registerDownload, registerCloseGuard, download, requestClose, discardDeleted, confirmation };
 }

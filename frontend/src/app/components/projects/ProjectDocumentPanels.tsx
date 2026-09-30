@@ -1,6 +1,6 @@
 "use client";
 
-import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
+import type { DocumentPermissions } from "@/app/hooks/useDocumentPermissions";
 
 import type { DocxCloseGuard } from "../shared/views/DocxRenderer.types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
@@ -48,6 +48,7 @@ interface Props {
     onVersionChange?: (documentId: string, version: DocumentVersion) => void;
     /** Whether the viewer may edit the project's documents. */
     canEdit?: boolean;
+    documentPermissions?: (documentId: string) => DocumentPermissions;
     onCloseAnnotation?: (documentId: string) => void;
     onWarningDismiss: (documentId: string) => void;
     onCloseGuardReady?: (documentId: string, guard: DocxCloseGuard | null) => void;
@@ -70,6 +71,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
     onCloseAnnotation,
     onVersionChange,
     canEdit = false,
+    documentPermissions,
     onWarningDismiss,
     onDownloadReady,
     onCloseGuardReady,
@@ -133,7 +135,6 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
             return { tab, panelDocument, refetchKey };
         });
     }, [tabs, documents]);
-    const permissions = useDocumentPermissions(tabs.map((tab) => tab.documentId), canEdit);
     return (
         <div className="relative flex-1 min-h-0 overflow-hidden">
             {panels.map(({ tab, panelDocument, refetchKey }) => {
@@ -169,7 +170,7 @@ export const ProjectDocumentPanels = memo(function ProjectDocumentPanels({
                         <DocumentContent
                             document={panelDocument}
                             mode={mode}
-                            canEdit={permissions(tab.documentId).canEdit}
+                            canEdit={canEdit && documentPermissions?.(tab.documentId).canEdit === true}
                             onVersionChange={
                                 onVersionChange
                                     ? (version) =>

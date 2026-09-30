@@ -9,7 +9,9 @@ mode: typing, pasting, formatting, and native review mutations are locked.
 The assistant starts locked; the IDE starts with Edit active for users who may
 replace that document version. The document detail API supplies `can_edit` and
 `can_delete` using the same rules as the write endpoints. Viewers fail closed
-while permissions load, and shared-chat readers cannot enable editing. Toggling keeps
+while permissions load, and shared-chat readers cannot enable editing. Resolved
+rights stay cached per document while tabs change; disabling access clears them.
+Project tabs and viewers share the same permission lookup. Toggling keeps
 the mounted editor, unsaved changes, and undo history. Each panel retains its
 choice when switching tabs or annotations. While Edit is active, EigenPal's
 native mode picker offers Viewing, Editing, and Suggesting modes.
@@ -58,6 +60,11 @@ fails, the viewer stays mounted and asks whether to keep editing or discard
 unsaved changes. Conflicts require downloading a copy or explicitly discarding;
 closing does not retry a known conflict. Browser unload still warns about dirty
 or in-flight edits.
+
+Project file deletion asks for confirmation, including discarding unsaved edits,
+and checks the document's current delete permission again before the request.
+Cancellation or failure preserves the viewer and draft. Successful deletion
+disables that viewer's pending/unmount autosave before removing its tab.
 
 Tracked-change accept/reject uploads to a new storage object, then conditionally
 swaps the version's path, hash, size and PDF rendition in one database update.

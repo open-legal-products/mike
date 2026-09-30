@@ -111,6 +111,7 @@ function content(
             ]}
             documents={[]}
             canEdit={canEdit}
+            documentPermissions={() => ({ canEdit, canDelete: canEdit })}
             activeTabId={active ? "doc" : null}
             onWarningDismiss={vi.fn()}
             onCloseAnnotation={onClose}

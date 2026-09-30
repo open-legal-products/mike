@@ -52,6 +52,7 @@ function Harness({
     };
     return surface === "project" ? (
         <ProjectDocumentTabs
+            documentPermissions={() => ({ canEdit: true, canDelete: true })}
             tabs={files.map((file) => ({
                 documentId: file.id,
                 filename: file.filename,

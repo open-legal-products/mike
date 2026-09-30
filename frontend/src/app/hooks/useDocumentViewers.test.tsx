@@ -40,3 +40,12 @@ it("shares the live download lookup and falls back to the requested server versi
     await viewers().download("tab", "doc", "v", "file.docx");
     expect(downloadDocumentFile).toHaveBeenCalledWith("doc", "v", "file.docx");
 });
+
+it("suppresses saves only for viewers whose deletion succeeded", () => {
+    const viewers = setup(); const discard = vi.fn(); const otherDiscard = vi.fn();
+    viewers().registerCloseGuard("deleted", { hasUnsavedChanges: () => true, prepareClose: vi.fn(), discard });
+    viewers().registerCloseGuard("retained", { hasUnsavedChanges: () => true, prepareClose: vi.fn(), discard: otherDiscard });
+    viewers().discardDeleted(["deleted", "unmounted"]);
+    expect(discard).toHaveBeenCalledOnce();
+    expect(otherDiscard).not.toHaveBeenCalled();
+});

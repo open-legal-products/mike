@@ -1,6 +1,7 @@
 "use client";
 
 import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
+import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
 
 import {
     use,
@@ -343,6 +344,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
     const documentViewers = useDocumentViewers();
+    const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
+    const [deletingDocument, setDeletingDocument] = useState(false);
     const projectExplorerRef = useRef<ProjectExplorerHandle>(null);
     const [addDocumentsOpen, setAddDocumentsOpen] = useState(false);
     const projectPicker = useProjectPicker();
@@ -462,6 +465,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // surface, and what appears afterwards is already correct.
     const projectRole = roleFromLoaded(project);
     const canEditContent = can(projectRole, "content.edit");
+    const documentPermissions = useDocumentPermissions(
+        tabs.filter((tab) => !["case", "legislation"].includes(tab.sourceDocument?.type ?? ""))
+            .map((tab) => tab.documentId),
+        canEditContent,
+    );
     const canManageProject = can(projectRole, "access.manage");
     // There is no creator exception on a PROJECT chat. The server derives the
     // caller's whole standing here from the project role
@@ -1562,13 +1570,28 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         await moveSubfolderToFolder(projectId, folderId, targetFolderId);
     };
 
+    const requestDeleteDoc = async (docId: string) => {
+        if (!canEditContent) return;
+        setDeleteTarget({
+            id: docId,
+            filename: tabs.find((tab) => tab.documentId === docId)?.filename
+                ?? project?.documents?.find((document) => document.id === docId)?.filename
+                ?? "this file",
+        });
+    };
+
     const handleDeleteDoc = async (docId: string) => {
+        if (!canEditContent || deletingDocument) return;
+        setDeletingDocument(true);
         try {
+            const document = await getDocument(docId);
+            if (document.can_delete !== true) {
+                setDocumentDropError("You do not have permission to delete this file.");
+                return;
+            }
             await deleteDocument(docId);
         } catch (err) {
-            // The explorer fires this as `void onDeleteDoc(...)`, so a
-            // rejection here would be an unhandled promise and a silent
-            // no-op for the user. Say what happened, keep the row.
+            // Keep the file and its live draft intact if deletion fails.
             console.error("Delete failed:", err);
             setDocumentDropError(
                 userFacingApiError(
@@ -1577,7 +1600,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 ),
             );
             return;
+        } finally {
+            setDeletingDocument(false);
         }
+        documentViewers.discardDeleted([docId]);
+        setDeleteTarget(null);
         setProject((prev) =>
             prev
                 ? {
@@ -1874,7 +1901,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 onRenameFolder={handleRenameFolder}
                                 onRenameDoc={handleRenameDoc}
                                 onDeleteFolder={requestDeleteFolder}
-                                onDeleteDoc={handleDeleteDoc}
+                                onDeleteDoc={canEditContent ? requestDeleteDoc : undefined}
                                 onMoveDoc={handleMoveDoc}
                                 onMoveFolder={handleMoveFolder}
                                 uploadingDocuments={uploadingDocuments}
@@ -1950,7 +1977,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     onDownloadDoc={(document) => documentViewers.download(document.id, document.id, tabs.find((tab) => tab.documentId === document.id)?.versionId, document.filename)}
                     downloading={explorerDownload.downloading}
                     onRenameDoc={handleRenameDoc}
-                    onDeleteDoc={handleDeleteDoc}
+                    onDeleteDoc={requestDeleteDoc}
+                    documentPermissions={documentPermissions}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
@@ -1970,6 +1998,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 />
                 <ProjectDocumentPanels
                     canEdit={canEditContent}
+                    documentPermissions={documentPermissions}
                     onDownloadReady={documentViewers.registerDownload}
                     onCloseGuardReady={documentViewers.registerCloseGuard}
                     tabs={tabs}
@@ -2015,6 +2044,17 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             </div>
 
             {documentViewers.confirmation}
+            <ConfirmPopup
+                open={!!deleteTarget}
+                title="Delete file?"
+                message={`Delete “${deleteTarget?.filename ?? "this file"}” and its versions, including any unsaved edits? This cannot be undone.`}
+                confirmLabel="Delete file"
+                confirmVariant="danger"
+                confirmStatus={deletingDocument ? "loading" : "idle"}
+                confirmDisabled={!canEditContent}
+                onCancel={() => { if (!deletingDocument) setDeleteTarget(null); }}
+                onConfirm={() => { if (deleteTarget) void handleDeleteDoc(deleteTarget.id); }}
+            />
             <Divider onDrag={onChatDividerDrag} />
 
             {/* RIGHT: Assistant Panel */}
