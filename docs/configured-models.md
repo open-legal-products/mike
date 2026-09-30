@@ -47,6 +47,7 @@ array:
 | `apiKeyProvider` | no | Use the requesting user's saved key for that provider. |
 | `tolerateTextToolCalls` | no | Override the tolerance default. |
 | `maxTokensField` | no | Output-token request field: `max_tokens` (default) or `max_completion_tokens`. |
+| `replayReasoning` | no | Send each earlier assistant turn's stored reasoning back as `reasoning_content`. Default `false`. See [Reasoning replay](#reasoning-replay). |
 
 An entry that declares no key at all is treated as needing none, regardless of
 whether its location is `local` or `cloud`. When a key source is declared but
@@ -109,3 +110,45 @@ that needs it, or off for a local one that behaves properly.
 
 Set `DEBUG_LLM_TOOL_CALLS=1` to log the raw text of a tool call that could not
 be recovered.
+
+## Reasoning replay
+
+Mike sends earlier turns to the model as text only by default. Some
+reasoning models are served with a chat template that expects their own
+earlier thinking back — for example Qwen3.6 on `llama-server` with
+`--chat-template-kwargs '{"preserve_thinking":true}'`. Without it, the model
+cannot see why it answered as it did in earlier turns, and it may contradict
+or forget decisions it made while thinking.
+
+Set `replayReasoning: true` on such a model:
+
+```json
+{
+  "id": "local-qwen",
+  "provider": "openai-compatible",
+  "location": "local",
+  "apiModel": "qwen3.6",
+  "baseUrl": "http://localhost:8000/v1",
+  "replayReasoning": true
+}
+```
+
+For each earlier assistant message, Mike looks up the stored turn with the same
+visible text and sends that turn's reasoning as `reasoning_content`. Messages
+that match no stored turn, such as an edited history, are sent as text only. So
+is a reply whose text is stored more times than it appears in the history
+sent, because Mike cannot tell which of those turns it is.
+Reasoning is never taken from the request body. Models without the flag,
+including every hosted provider, never receive stored reasoning.
+
+Mike records which model produced each piece of stored reasoning, and replays
+only reasoning produced by the model now answering. Switching a chat to another
+model never sends it the previous model's thinking. Turns stored before this
+recording existed are sent as text only.
+
+Replay is bounded. Only the last 12,000 characters of each turn's reasoning are
+sent, and at most 36,000 characters across the whole history, newest turns
+first. Once a turn does not fit, it and every older turn are sent as text only.
+
+Within a single turn, the reasoning of each tool-calling step is always passed
+to the next step, whatever this setting is.

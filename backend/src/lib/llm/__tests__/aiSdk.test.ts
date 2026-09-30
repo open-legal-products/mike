@@ -39,4 +39,39 @@ describe("withPrefixCacheHints", () => {
       providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
     });
   });
+
+  const withReasoning = [
+    { role: "user" as const, content: "q1" },
+    { role: "assistant" as const, content: "a1", reasoning: "why a1" },
+    { role: "user" as const, content: "q2" },
+  ];
+
+  it("replays stored reasoning as a reasoning part when the model opts in", () => {
+    const hints = withPrefixCacheHints(
+      { model: "local-qwen", systemPrompt: "s", messages: withReasoning },
+      { replayReasoning: true },
+    );
+    expect(hints.messages).toEqual([
+      { role: "user", content: "q1" },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "why a1" },
+          { type: "text", text: "a1" },
+        ],
+      },
+      { role: "user", content: "q2" },
+    ]);
+  });
+
+  it("drops stored reasoning for every other model", () => {
+    const hints = withPrefixCacheHints({
+      model: "gpt-5",
+      systemPrompt: "s",
+      messages: withReasoning,
+      conversationId: "chat-1",
+    });
+    expect(hints.messages[1]).toEqual({ role: "assistant", content: "a1" });
+    expect(JSON.stringify(hints.messages)).not.toContain("why a1");
+  });
 });

@@ -165,6 +165,15 @@ export function tolerateTextToolCalls(model: ConfiguredModel): boolean {
   return model.tolerateTextToolCalls ?? model.location === "local";
 }
 
+/**
+ * Whether history sent to this model should carry each earlier assistant
+ * turn's stored reasoning. Only configured models can opt in; see
+ * `ConfiguredModel.replayReasoning`.
+ */
+export function replaysReasoning(id: string): boolean {
+  return getConfiguredModel(id)?.replayReasoning === true;
+}
+
 // Only OpenAI-compatible endpoints are declarable. The hosted providers are
 // covered by the static catalog in models.ts and by the router prefixes
 // (openrouter/, vercel/, opencode-go/), so a configured entry for one of them
@@ -234,6 +243,8 @@ function parseConfiguredModel(value: unknown): ConfiguredModel | null {
         !USER_API_KEY_PROVIDERS.has(apiKeyProvider as keyof UserApiKeys))) ||
     (record.tolerateTextToolCalls !== undefined &&
       typeof record.tolerateTextToolCalls !== "boolean") ||
+    (record.replayReasoning !== undefined &&
+      typeof record.replayReasoning !== "boolean") ||
     (maxTokensField !== undefined &&
       maxTokensField !== "max_tokens" &&
       maxTokensField !== "max_completion_tokens")
@@ -257,6 +268,7 @@ function parseConfiguredModel(value: unknown): ConfiguredModel | null {
       ? { tolerateTextToolCalls: record.tolerateTextToolCalls }
       : {}),
     ...(maxTokensField ? { maxTokensField } : {}),
+    ...(record.replayReasoning === true ? { replayReasoning: true } : {}),
   };
 }
 

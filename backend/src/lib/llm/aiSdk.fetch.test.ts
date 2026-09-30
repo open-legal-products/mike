@@ -165,3 +165,67 @@ describe("aiSdkFetch", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("reasoning replay on the wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function sentAssistantTurn(replayReasoning: boolean) {
+    const { createOpenAICompatible } =
+      await import("@ai-sdk/openai-compatible");
+    const fetchMock = vi.fn().mockResolvedValue(
+      streamResponse([
+        { choices: [{ delta: { content: "ok" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const compatible = createOpenAICompatible({
+      name: "local-qwen",
+      apiKey: "test-key",
+      baseURL: "https://example.test/v1",
+      fetch: aiSdkFetch,
+    });
+
+    await streamAiSdk(
+      {
+        model: "local-qwen",
+        systemPrompt: "Help",
+        messages: [
+          { role: "user", content: "q1" },
+          { role: "assistant", content: "a1", reasoning: "why a1" },
+          { role: "user", content: "q2" },
+        ],
+        conversationId: "chat-1",
+      },
+      {
+        provider: "openai-compatible",
+        label: "Local Qwen",
+        model: compatible("qwen"),
+        modelId: "local-qwen",
+        supportsReasoning: false,
+        replayReasoning,
+      },
+    );
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      messages: Record<string, unknown>[];
+    };
+    return body.messages.find((m) => m.role === "assistant");
+  }
+
+  it("sends an earlier turn's reasoning as reasoning_content when the model opts in", async () => {
+    await expect(sentAssistantTurn(true)).resolves.toMatchObject({
+      role: "assistant",
+      content: "a1",
+      reasoning_content: "why a1",
+    });
+  });
+
+  it("sends no reasoning without the opt-in", async () => {
+    const turn = await sentAssistantTurn(false);
+    expect(turn).toMatchObject({ role: "assistant", content: "a1" });
+    expect(turn).not.toHaveProperty("reasoning_content");
+  });
+});

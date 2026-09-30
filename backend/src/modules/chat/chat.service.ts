@@ -44,6 +44,7 @@ export {
   buildMessages,
   buildUserPersonalisationPrompt,
   buildWorkflowStore,
+  attachPriorReasoning,
   enrichWithPriorEvents,
   appendAskInputsResponseToAssistantMessage,
   generateSpotlightNonce,

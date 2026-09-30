@@ -35,6 +35,11 @@ export type OpenAIToolSchema = {
 export type LlmMessage = {
     role: "user" | "assistant";
     content: string;
+    /**
+     * The reasoning this assistant turn produced, as persisted. Only sent
+     * upstream to a configured model declared with `replayReasoning`.
+     */
+    reasoning?: string;
 };
 
 export type NormalizedToolCall = {
@@ -127,6 +132,13 @@ export type ConfiguredModel = {
     tolerateTextToolCalls?: boolean;
     /** Request field used for the output-token limit by the compatible endpoint. */
     maxTokensField?: "max_tokens" | "max_completion_tokens";
+    /**
+     * Send each earlier assistant turn's stored reasoning back as
+     * `reasoning_content`. Reasoning models served with a thinking-preserving
+     * chat template (Qwen3.6 with `preserve_thinking`) lose coherence across
+     * turns without it. Off by default.
+     */
+    replayReasoning?: boolean;
 };
 
 /**
