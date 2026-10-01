@@ -30,7 +30,12 @@ async function consumeGoogleResponse(
     init: RequestInit,
     maxBytes: number,
     onChunk: (chunk: Uint8Array) => Promise<void>,
-    options: { idleMs: number; totalMs: number; download?: boolean },
+    options: {
+        idleMs: number;
+        totalMs: number;
+        download?: boolean;
+        onResponse?: (response: Response) => void;
+    },
 ): Promise<number> {
     const controller = new AbortController();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -62,6 +67,7 @@ async function consumeGoogleResponse(
                     redirect: "error",
                     signal: controller.signal,
                 });
+                options.onResponse?.(response);
                 reader = response.body?.getReader();
                 const tooLarge = () =>
                     new GoogleDriveUserError(
@@ -119,6 +125,7 @@ export async function googleDriveRequest(
     maxBytes = 1024 * 1024,
 ): Promise<Response> {
     const chunks: Uint8Array[] = [];
+    const headers = new Headers();
     const status = await consumeGoogleResponse(
         url,
         init,
@@ -129,10 +136,15 @@ export async function googleDriveRequest(
         {
             idleMs: GOOGLE_DRIVE_REQUEST_TIMEOUT_MS,
             totalMs: GOOGLE_DRIVE_REQUEST_TIMEOUT_MS,
+            onResponse: (response) => {
+                const etag = response.headers.get("etag");
+                if (etag) headers.set("etag", etag);
+            },
         },
     );
     return new Response(status === 204 ? null : Buffer.concat(chunks), {
         status,
+        headers,
     });
 }
 

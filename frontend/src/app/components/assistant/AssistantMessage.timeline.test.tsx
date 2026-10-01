@@ -3,11 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantMessage } from "./AssistantMessage";
 import type { AssistantEvent } from "../shared/types";
 
-vi.mock("@/app/components/shared/GoogleWorkspaceActionCard", () => ({
-    InlineGoogleWorkspaceAction: ({ actionId }: { actionId: string }) => (
-        <div>Inline Google approval {actionId}</div>
-    ),
-}));
+const approvalRequest: AssistantEvent = {
+    type: "ask_inputs",
+    event_id: "ask-1",
+    items: [
+        {
+            id: "approve-1",
+            kind: "approval",
+            connector_name: "Gmail",
+            tool_name: "gmail_send",
+            title: "Send email",
+            arguments: { to: ["a@example.com"], subject: "Hi", body: "Body" },
+            binding: { type: "google", provider: "gmail", grant_id: "g1" },
+        },
+    ],
+};
 
 const reasoning = (text: string): AssistantEvent => ({
     type: "reasoning",
@@ -98,31 +108,50 @@ describe("AssistantMessage timeline", () => {
         expect(screen.getByText("Connector unavailable")).toBeInTheDocument();
     });
 
-    it("keeps a Google approval visible in the assistant flow", () => {
+    it("keeps a pending connector approval open in the assistant flow", () => {
+        render(<AssistantMessage events={[approvalRequest]} />);
+
+        expect(screen.getByText("Asking for approval")).toBeVisible();
+        expect(screen.getByText("Gmail: Send email")).toBeVisible();
+    });
+
+    it("records the decision and the approved action's result", () => {
         render(
             <AssistantMessage
                 events={[
+                    approvalRequest,
+                    {
+                        type: "ask_inputs_response",
+                        assistant_message_id: "m1",
+                        ask_event_id: "ask-1",
+                        responses: [
+                            {
+                                id: "approve-1",
+                                kind: "approval",
+                                decision: "approve",
+                            },
+                        ],
+                    },
                     {
                         type: "mcp_tool_call",
                         connector_id: "gmail-native",
                         connector_name: "Gmail",
-                        tool_name: "gmail_propose_send",
-                        openai_tool_name: "gmail_propose_send",
+                        tool_name: "gmail_send",
+                        openai_tool_name: "gmail_send",
                         status: "ok",
-                        google_action_id: "action-1",
+                        approval_id: "approve-1",
                     },
-                    {
-                        type: "content",
-                        text: "Review the exact email before it is sent.",
-                    },
+                    { type: "content", text: "Sent." },
                 ]}
             />,
         );
 
-        expect(screen.getByText("Inline Google approval action-1")).toBeVisible();
-        expect(
-            screen.getByRole("button", { name: "Completed in 1 step" }),
-        ).toHaveAttribute("aria-expanded", "true");
+        fireEvent.click(
+            screen.getByRole("button", { name: "Completed in 2 steps" }),
+        );
+        fireEvent.click(screen.getByText("Asked for approval"));
+        expect(screen.getByText("Approved")).toBeVisible();
+        expect(screen.getByText("Gmail: gmail_send")).toBeVisible();
     });
 
     it("marks the response failed for a top-level error event", () => {

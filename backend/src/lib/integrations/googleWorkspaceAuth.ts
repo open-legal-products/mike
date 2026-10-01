@@ -11,6 +11,7 @@ import {
   stateHash,
 } from "../mcp/client";
 import { googleDriveOAuthEnv } from "./googleDrive";
+import { ConnectorSetupError } from "../mcp/errors";
 import { googleDriveRequest } from "./googleDriveHttp";
 
 export type GoogleProvider = GoogleWorkspaceProvider;
@@ -30,6 +31,21 @@ export const GOOGLE_PROVIDERS = {
   },
 } as const;
 export class GoogleWorkspaceError extends Error {}
+export function googleWorkspaceSetupInstructions(
+  provider: GoogleProvider,
+  redirectUri: string,
+): string {
+  const api = provider === "gmail" ? "Gmail API" : "Google Calendar API";
+  return (
+    `${GOOGLE_PROVIDERS[provider].name} needs an OAuth client. Create one in Google Cloud Console ` +
+    "(APIs & Services → Credentials → Create credentials → OAuth client ID → " +
+    `Web application) with authorized redirect URI ${redirectUri}, enable the ` +
+    `${api}, then set GOOGLE_WORKSPACE_OAUTH_CLIENT_ID and ` +
+    "GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET (or the Google Drive client variables) " +
+    "in backend/.env and restart. The redirect URI is derived from " +
+    "API_PUBLIC_URL, so fix that first if it is not the address browsers use to reach Mike."
+  );
+}
 export function googleWorkspaceEnv() {
   if (
     process.env.GOOGLE_WORKSPACE_OAUTH_CLIENT_ID?.trim() ||
@@ -41,12 +57,21 @@ export function googleWorkspaceEnv() {
     };
   return googleDriveOAuthEnv();
 }
-export function requiredScopes(
-  provider: GoogleProvider,
-  write: boolean,
-): string[] {
+/**
+ * Mike asks for write access on every connect. Google lets the user untick
+ * individual permissions and lets Workspace admins block them, so write access
+ * is whatever Google actually granted — see `grantedWriteAccess`.
+ */
+export function requestedScopes(provider: GoogleProvider): string[] {
   const config = GOOGLE_PROVIDERS[provider];
-  return ["openid", "email", ...config.read, ...(write ? config.write : [])];
+  return ["openid", "email", ...config.read, ...config.write];
+}
+function grantedScopes(scope: unknown): string[] {
+  return typeof scope === "string" ? scope.split(/\s+/) : [];
+}
+function grantedWriteAccess(provider: GoogleProvider, scope: unknown): boolean {
+  const scopes = grantedScopes(scope);
+  return GOOGLE_PROVIDERS[provider].write.every((s) => scopes.includes(s));
 }
 export function encryptFields(prefix: string, value: string) {
   const enc = encryptString(value);
@@ -98,7 +123,7 @@ export async function workspaceStatus(
   db: Db,
   userId: string,
   provider: GoogleProvider,
-): Promise<Omit<GoogleWorkspaceStatus, "redirectUri">> {
+): Promise<Omit<GoogleWorkspaceStatus, "redirectUri" | "tools">> {
   const env = googleWorkspaceEnv();
   const configured = !!(env.clientId && env.clientSecret);
   try {
@@ -115,6 +140,9 @@ export async function workspaceStatus(
       schemaReady: true,
       connected: !!row,
       writeEnabled: row?.write_enabled === true,
+      enabled: row?.enabled !== false,
+      requireWriteApproval: row?.require_write_approval === true,
+      readOnly: row?.read_only === true,
       grantId: row?.grant_id as string | undefined,
       accountEmail: row?.account_email as string | undefined,
     };
@@ -126,21 +154,75 @@ export async function workspaceStatus(
         schemaReady: false,
         connected: false,
         writeEnabled: false,
+        enabled: true,
+        requireWriteApproval: false,
+        readOnly: false,
       };
     throw error;
   }
+}
+/** Settings live on the grant row, so they exist only while connected. */
+export async function updateWorkspaceSettings(
+  db: Db,
+  userId: string,
+  provider: GoogleProvider,
+  settings: { enabled?: boolean; requireWriteApproval?: boolean; readOnly?: boolean },
+) {
+  const patch: Record<string, unknown> = {};
+  if (typeof settings.enabled === "boolean") patch.enabled = settings.enabled;
+  if (typeof settings.readOnly === "boolean") patch.read_only = settings.readOnly;
+  if (typeof settings.requireWriteApproval === "boolean")
+    patch.require_write_approval = settings.requireWriteApproval;
+  if (!Object.keys(patch).length) return;
+  const { data, error } = await db
+    .from("user_google_workspace_tokens")
+    .update(patch)
+    .eq("user_id", userId)
+    .eq("provider", provider)
+    .select("user_id")
+    .maybeSingle();
+  if (error) throw error;
+  if (!data)
+    throw new GoogleWorkspaceError(
+      `Connect ${GOOGLE_PROVIDERS[provider].name} first.`,
+    );
+}
+export async function setWorkspaceToolEnabled(
+  db: Db,
+  userId: string,
+  provider: GoogleProvider,
+  toolName: string,
+  enabled: boolean,
+) {
+  const row = await loadWorkspaceGrant(db, userId, provider);
+  if (!row)
+    throw new GoogleWorkspaceError(
+      `Connect ${GOOGLE_PROVIDERS[provider].name} first.`,
+    );
+  const current = Array.isArray(row.disabled_tools)
+    ? (row.disabled_tools as string[])
+    : [];
+  const next = enabled
+    ? current.filter((name) => name !== toolName)
+    : [...new Set([...current, toolName])];
+  const { error } = await db
+    .from("user_google_workspace_tokens")
+    .update({ disabled_tools: next })
+    .eq("user_id", userId)
+    .eq("provider", provider)
+    .eq("grant_id", row.grant_id);
+  if (error) throw error;
 }
 export async function startWorkspaceOAuth(
   db: Db,
   userId: string,
   provider: GoogleProvider,
   redirectUri: string,
-  write = false,
 ) {
   const env = googleWorkspaceEnv();
   if (!env.clientId || !env.clientSecret)
-    throw new GoogleWorkspaceError(
-      "Configure a Google OAuth client on this server first.",
+    throw new ConnectorSetupError(
+      googleWorkspaceSetupInstructions(provider, redirectUri),
     );
   const { error: cleanupError } = await db
     .from("google_workspace_oauth_states")
@@ -155,7 +237,6 @@ export async function startWorkspaceOAuth(
     provider,
     state_hash: stateHash(state),
     ...encryptFields("state_config", JSON.stringify({ verifier, redirectUri })),
-    write_enabled: write,
     expires_at: new Date(Date.now() + 600_000).toISOString(),
   });
   if (error) throw error;
@@ -164,7 +245,7 @@ export async function startWorkspaceOAuth(
     client_id: env.clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: requiredScopes(provider, write).join(" "),
+    scope: requestedScopes(provider).join(" "),
     state,
     code_challenge: base64Url(
       crypto.createHash("sha256").update(verifier).digest(),
@@ -178,7 +259,6 @@ export async function startWorkspaceOAuth(
 function tokenPatch(
   token: Record<string, unknown>,
   provider: GoogleProvider,
-  write: boolean,
   existing?: Record<string, unknown>,
 ) {
   const scope = token.scope ?? existing?.scope;
@@ -190,18 +270,17 @@ function tokenPatch(
     token.expires_in <= 0
   )
     throw new Error("Invalid Google token response");
-  const scopes = typeof scope === "string" ? scope.split(/\s+/) : [];
+  const scopes = grantedScopes(scope);
+  // Read access is required; write access is optional and recorded as granted.
   if (
-    !requiredScopes(provider, write)
-      .filter((s) => s !== "openid" && s !== "email")
-      .every(
-        (s) =>
-          scopes.includes(s) ||
-          (s.endsWith("/gmail.readonly") &&
-            scopes.includes("https://www.googleapis.com/auth/gmail.modify")) ||
-          (s.endsWith("/calendar.events.readonly") &&
-            scopes.includes("https://www.googleapis.com/auth/calendar.events")),
-      )
+    !GOOGLE_PROVIDERS[provider].read.every(
+      (s) =>
+        scopes.includes(s) ||
+        (s.endsWith("/gmail.readonly") &&
+          scopes.includes("https://www.googleapis.com/auth/gmail.modify")) ||
+        (s.endsWith("/calendar.events.readonly") &&
+          scopes.includes("https://www.googleapis.com/auth/calendar.events")),
+    )
   )
     throw new GoogleWorkspaceError(
       "Required Google permissions were not granted. Reconnect and grant the requested access.",
@@ -213,6 +292,7 @@ function tokenPatch(
       : {}),
     scope,
     expires_at: new Date(Date.now() + token.expires_in * 1000).toISOString(),
+    write_enabled: grantedWriteAccess(provider, scope),
   };
 }
 export async function completeWorkspaceOAuth(
@@ -265,7 +345,7 @@ export async function completeWorkspaceOAuth(
     throw new GoogleWorkspaceError(
       "Google authorization did not provide offline access. Reconnect.",
     );
-  const patch = tokenPatch(token, provider, data.write_enabled === true);
+  const patch = tokenPatch(token, provider);
   const identityResponse = await workspaceRequest(
     "https://openidconnect.googleapis.com/v1/userinfo",
     { headers: { Authorization: `Bearer ${token.access_token}` } },
@@ -329,16 +409,11 @@ export async function workspaceAccessToken(
   db: Db,
   userId: string,
   provider: GoogleProvider,
-  requiredGrant?: string,
 ): Promise<string> {
   const row = await loadWorkspaceGrant(db, userId, provider);
-  if (
-    !row ||
-    (requiredGrant &&
-      (row.grant_id !== requiredGrant || row.write_enabled !== true))
-  )
+  if (!row)
     throw new GoogleWorkspaceError(
-      "Google connection changed or is disconnected. Reconnect and request a new action.",
+      "Google connection changed or is disconnected. Reconnect it in Settings → Connectors.",
     );
   if (Date.parse(String(row.expires_at)) - Date.now() > 60_000)
     return decryptFields(row, "access_token");
@@ -374,7 +449,7 @@ export async function workspaceAccessToken(
   }
   const { data: saved, error } = await db
     .from("user_google_workspace_tokens")
-    .update(tokenPatch(token, provider, row.write_enabled === true, row))
+    .update(tokenPatch(token, provider, row))
     .eq("user_id", userId)
     .eq("provider", provider)
     .eq("grant_id", row.grant_id)

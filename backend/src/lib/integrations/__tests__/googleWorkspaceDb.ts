@@ -6,7 +6,6 @@ export function workspaceDb() {
   const tables: Record<string, Row[]> = {
     user_google_workspace_tokens: [],
     google_workspace_oauth_states: [],
-    google_workspace_actions: [],
   };
   const failures = new Map<string, unknown>();
   const db = {
@@ -82,7 +81,6 @@ export function workspaceDb() {
             const row = {
               id: randomUUID(),
               created_at: new Date().toISOString(),
-              status: "pending",
               ...patch,
             };
             rows.push(row);
@@ -103,8 +101,7 @@ export function workspaceDb() {
     async rpc(name: string, args: Row) {
       if (failures.has(name)) return { data: null, error: failures.get(name) };
       const grants = tables.user_google_workspace_tokens,
-        states = tables.google_workspace_oauth_states,
-        actions = tables.google_workspace_actions;
+        states = tables.google_workspace_oauth_states;
       if (name === "complete_google_workspace_oauth") {
         const state = states.find(
           (s) =>
@@ -118,21 +115,19 @@ export function workspaceDb() {
           (g) => g.user_id === state.user_id && g.provider === state.provider,
         );
         if (prior) grants.splice(grants.indexOf(prior), 1);
+        const tokens = args.p_tokens as Row;
+        // Reconnecting keeps the user's connector settings.
         grants.push({
-          ...(args.p_tokens as Row),
+          enabled: prior?.enabled ?? true,
+          require_write_approval: prior?.require_write_approval ?? false,
+          read_only: prior?.read_only ?? false,
+          disabled_tools: prior?.disabled_tools ?? [],
+          ...tokens,
           user_id: state.user_id,
           provider: state.provider,
-          write_enabled: state.write_enabled,
+          write_enabled: tokens.write_enabled === true,
           grant_id: randomUUID(),
         });
-        actions
-          .filter(
-            (a) =>
-              a.user_id === state.user_id &&
-              a.provider === state.provider &&
-              a.status === "pending",
-          )
-          .forEach((a) => (a.status = "rejected"));
         return { data: true, error: null };
       }
       if (name === "disconnect_google_workspace") {
@@ -140,34 +135,7 @@ export function workspaceDb() {
           for (const r of [...rows])
             if (r.user_id === args.p_user_id && r.provider === args.p_provider)
               rows.splice(rows.indexOf(r), 1);
-        actions
-          .filter(
-            (a) =>
-              a.user_id === args.p_user_id &&
-              a.provider === args.p_provider &&
-              a.status === "pending",
-          )
-          .forEach((a) => (a.status = "rejected"));
         return { data: null, error: null };
-      }
-      if (name === "claim_google_workspace_action") {
-        const a = actions.find(
-          (a) =>
-            a.id === args.p_action_id &&
-            a.user_id === args.p_user_id &&
-            a.status === "pending" &&
-            String(a.expires_at) > new Date().toISOString() &&
-            grants.some(
-              (g) =>
-                g.user_id === a.user_id &&
-                g.provider === a.provider &&
-                g.grant_id === a.grant_id &&
-                g.write_enabled === true,
-            ),
-        );
-        if (!a) return { data: null, error: null };
-        a.status = "executing";
-        return { data: { ...a }, error: null };
       }
       throw new Error(`Unexpected RPC ${name}`);
     },

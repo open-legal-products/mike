@@ -2,7 +2,7 @@ import { test, expect } from "./fixtures";
 
 // Exercise the actual settings page/popup/polling in Chromium while replacing
 // the auth/profile and integration endpoints. No Google credentials or consent UI.
-test("Google Drive connect, cancel and disconnect", async ({
+test("Google Drive add, cancel and delete work like Slack", async ({
     page,
     context,
 }) => {
@@ -21,8 +21,8 @@ test("Google Drive connect, cancel and disconnect", async ({
             body: "<p>Mock Google consent</p>",
         }),
     );
-    // Other connected providers also render Disconnect buttons. Keep this
-    // regression deterministic without depending on local Google grants.
+    // Other connected providers also render Delete. Keep this regression
+    // deterministic without depending on local Google grants.
     for (const provider of ["gmail", "google-calendar"]) {
         await page.route(`**/api/user/integrations/${provider}`, (route) =>
             route.fulfill({
@@ -31,14 +31,14 @@ test("Google Drive connect, cancel and disconnect", async ({
                     schemaReady: true,
                     connected: true,
                     writeEnabled: false,
+                    enabled: true,
+                    requireWriteApproval: false,
                     accountEmail: "fixture@example.com",
+                    tools: [],
                 },
             }),
         );
     }
-    await page.route("**/api/user/google-actions", (route) =>
-        route.fulfill({ json: { actions: [] } }),
-    );
     await page.route(
         "**/api/user/integrations/google-drive**",
         async (route) => {
@@ -63,42 +63,52 @@ test("Google Drive connect, cancel and disconnect", async ({
                 json: {
                     connected,
                     scope: connected
-                        ? "https://www.googleapis.com/auth/drive.readonly"
+                        ? "https://www.googleapis.com/auth/drive"
                         : null,
                     configured: true,
                     schemaReady: true,
+                    enabled: true,
+                    tools: [
+                        {
+                            name: "google_drive_search",
+                            title: "Search files",
+                            description: "Search Drive.",
+                            write: false,
+                            enabled: true,
+                        },
+                    ],
                 },
             });
         },
     );
     await page.goto("/settings/connectors");
-    const drive = page.getByRole("region", { name: "Google Drive connector" });
-    const connect = drive.getByRole("button", { name: "Add Google Drive", exact: true });
-    await expect(connect).toBeEnabled();
+    const discover = page.getByRole("region", { name: "Discover", exact: true });
+    const installed = page.getByRole("region", { name: "Installed", exact: true });
+    const drive = discover.getByRole("region", { name: "Google Drive connector" });
+    const add = drive.getByRole("button", { name: "Add Google Drive connector", exact: true });
+    await expect(add).toBeEnabled();
     const firstPopup = context.waitForEvent("page");
-    await connect.click();
+    await add.click();
     const popup = await firstPopup;
     await expect(popup).toHaveURL(/^https:\/\/accounts\.google\.com\//);
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(drive.getByText("Waiting for Google…")).toBeVisible();
     await drive.getByRole("button", { name: "Cancel Google Drive authorization", exact: true }).click();
-    await expect(drive.getByText("Authorization cancelled.")).toBeVisible();
+    await expect(add).toBeEnabled();
     expect(cancelled).toBe(true);
-    await expect(connect).toBeEnabled();
+    // A cancel is not a failure.
+    await expect(page.getByText("Could not add connector")).toHaveCount(0);
     if (!popup.isClosed()) await popup.close();
 
-    await connect.click();
+    await add.click();
     connected = true; // Represents the successful server-side code exchange.
-    await page.getByRole("button", { name: "Manage Google Drive" }).click();
-    const details = page.getByRole("region", { name: "Google Drive connection" });
-    const disconnect = details.getByRole("button", {
-        name: "Disconnect",
-        exact: true,
-    });
-    await expect(disconnect).toBeVisible();
-    await disconnect.click();
-    await expect(details.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();
-    await page.getByRole("dialog", { name: "Google Drive", exact: true }).getByRole("button", { name: "Close", exact: true }).click();
-    await expect(connect).toBeEnabled();
+    await expect(drive.getByRole("button", { name: "Google Drive connector added" })).toBeDisabled();
+    await installed.getByRole("button", { name: "Manage Google Drive" }).click();
+    const dialog = page.getByRole("dialog", { name: "Google Drive", exact: true });
+    await expect(dialog.getByText("Search files")).toBeVisible();
+    // Drive is read-only, so it has no write-approval setting.
+    await expect(dialog.getByText("Ask for permission for write actions")).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(add).toBeEnabled();
     expect(connected).toBe(false);
 });

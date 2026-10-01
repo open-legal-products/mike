@@ -460,6 +460,9 @@ describe("ChatPanelHeader", () => {
         });
         expect(
             completedRow.querySelector("img[aria-hidden='true']"),
-        ).toHaveClass("hue-rotate-[285deg]");
+        ).toHaveAttribute(
+            "src",
+            expect.stringContaining("features/chat-complete"),
+        );
     });
 });

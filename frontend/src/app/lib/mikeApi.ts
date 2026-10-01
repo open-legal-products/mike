@@ -966,7 +966,8 @@ interface McpToolSummary {
     enabled: boolean;
     readOnly: boolean;
     destructive: boolean;
-    requiresConfirmation: boolean;
+    /** Changes data; held for approval when the connector asks for permission. */
+    write: boolean;
     lastSeenAt: string;
 }
 
@@ -977,6 +978,9 @@ export interface McpConnectorSummary {
     serverUrl: string;
     authType: "none" | "bearer" | "oauth";
     enabled: boolean;
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
     hasAuthConfig: boolean;
     customHeaderKeys: string[];
     oauthConnected: boolean;
@@ -1023,6 +1027,8 @@ export async function updateMcpConnector(
         name?: string;
         serverUrl?: string;
         enabled?: boolean;
+        requireWriteApproval?: boolean;
+        readOnly?: boolean;
         bearerToken?: string | null;
         headers?: Record<string, string>;
     },
@@ -1083,23 +1089,7 @@ export async function setMcpToolEnabled(
 // Native Google Drive integration (first-party — not an MCP connector)
 // ---------------------------------------------------------------------------
 
-export type GoogleDriveStatus = {
-    connected: boolean;
-    scope: string | null;
-    /** Whether the backend has a Google OAuth client configured at all. */
-    configured: boolean;
-    /**
-     * Whether the Drive token tables exist. False means the deployment has
-     * not applied the Drive migration yet — a different fix from `configured`.
-     * Optional so older backends (which omit it) read as ready.
-     */
-    schemaReady?: boolean;
-    /**
-     * The redirect URI this deployment will send to Google, for the operator
-     * to register on the OAuth client. Null when the backend cannot derive it.
-     */
-    redirectUri?: string | null;
-};
+export type GoogleDriveStatus = import("@mike/contracts").GoogleDriveStatus;
 
 /**
  * Error code the backend attaches when a connector cannot start because the
@@ -1142,6 +1132,32 @@ export async function disconnectGoogleDrive(): Promise<void> {
     return apiRequest<void>("/user/integrations/google-drive", {
         method: "DELETE",
     });
+}
+
+export async function updateGoogleDriveSettings(settings: {
+    enabled?: boolean;
+    requireWriteApproval?: boolean;
+    readOnly?: boolean;
+}): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>("/user/integrations/google-drive", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+    });
+}
+
+export async function setGoogleDriveToolEnabled(
+    toolName: string,
+    enabled: boolean,
+): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>(
+        `/user/integrations/google-drive/tools/${encodeURIComponent(toolName)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
+    );
 }
 
 export async function getProject(projectId: string): Promise<Project> {
@@ -2355,6 +2371,18 @@ export async function getPanelDocument(
     return request;
 }
 
+/**
+ * The browser's IANA time zone (e.g. "Europe/London"), sent with chat requests
+ * so the assistant knows the user's local date and time.
+ */
+function browserTimeZone(): string | undefined {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 export async function streamChat(payload: {
     messages: {
         role: string;
@@ -2376,7 +2404,7 @@ export async function streamChat(payload: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
         signal,
     });
 }
@@ -2406,7 +2434,7 @@ export async function streamProjectChat(payload: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
         signal,
     });
 }
@@ -2654,6 +2682,7 @@ export async function streamTabularChat(
             project_name: context?.projectName ?? undefined,
             model,
             reasoning,
+            time_zone: browserTimeZone(),
         }),
         signal: signal ?? undefined,
     });
@@ -3224,15 +3253,10 @@ export async function getGoogleWorkspaceStatus(
 }
 export async function startGoogleWorkspaceOAuth(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
-    write = false,
 ) {
     return apiRequest<{ authorizationUrl: string }>(
         `/user/integrations/${provider}/oauth/start`,
-        {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ write }),
-        },
+        { method: "POST" },
     );
 }
 export async function cancelGoogleWorkspaceOAuth(
@@ -3252,17 +3276,30 @@ export async function disconnectGoogleWorkspace(
         method: "DELETE",
     });
 }
-export async function listGoogleWorkspaceActions() {
-    return apiRequest<{
-        actions: import("@mike/contracts").GoogleWorkspaceActionReview[];
-    }>("/user/google-actions");
-}
-export async function decideGoogleWorkspaceAction(
-    id: string,
-    decision: "approve" | "reject",
+export async function updateGoogleWorkspaceSettings(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    settings: { enabled?: boolean; requireWriteApproval?: boolean; readOnly?: boolean },
 ) {
-    return apiRequest<{ status: string; message: string } | undefined>(
-        `/user/google-actions/${encodeURIComponent(id)}/${decision}`,
-        { method: "POST" },
+    return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
+        `/user/integrations/${provider}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(settings),
+        },
+    );
+}
+export async function setGoogleWorkspaceToolEnabled(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    toolName: string,
+    enabled: boolean,
+) {
+    return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
+        `/user/integrations/${provider}/tools/${encodeURIComponent(toolName)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
     );
 }

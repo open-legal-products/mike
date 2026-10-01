@@ -440,6 +440,7 @@ export function useAssistantChat({
         reportError(error, {
           tags: { component: "assistant-chat", project: Boolean(projectId) },
         });
+        sink.endStreamingAfterFailure();
         turn.update((assistantMessage) => ({
           ...assistantMessage,
           error: "Sorry, something went wrong.",

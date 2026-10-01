@@ -6,6 +6,7 @@ export type {
     McpToolSummary,
     McpTransport,
 } from "./mcp/types";
+export type { McpToolPlan } from "./mcp/servers";
 export { McpOAuthRequiredError } from "./mcp/oauth";
 export { mcpConnectorSetupInstructions } from "./mcp/oauth";
 export { ConnectorSetupError } from "./mcp/errors";
@@ -14,9 +15,11 @@ export {
     completeUserMcpConnectorOAuth,
     createUserMcpConnector,
     deleteUserMcpConnector,
+    executeApprovedMcpToolCall,
     executeMcpToolCall,
     getUserMcpConnector,
     listUserMcpConnectors,
+    planMcpToolCall,
     refreshUserMcpConnectorTools,
     setUserMcpToolEnabled,
     startUserMcpConnectorOAuth,

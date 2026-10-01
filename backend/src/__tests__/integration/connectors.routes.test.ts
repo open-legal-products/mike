@@ -13,6 +13,7 @@ const authState = vi.hoisted(() => ({ allowed: true, mfa: true }));
 const startUserMcpConnectorOAuth = vi.fn();
 const refreshUserMcpConnectorTools = vi.fn();
 const createUserMcpConnector = vi.fn();
+const updateUserMcpConnector = vi.fn();
 const deleteUserMcpConnector = vi.fn();
 const mcpConnectorSetupInstructions = vi.fn();
 const startGoogleDriveOAuth = vi.fn();
@@ -55,6 +56,7 @@ vi.mock("../../lib/mcpConnectors", async (importOriginal) => {
             startUserMcpConnectorOAuth(...args),
         refreshUserMcpConnectorTools: (...args: unknown[]) =>
             refreshUserMcpConnectorTools(...args),
+        updateUserMcpConnector: (...args: unknown[]) => updateUserMcpConnector(...args),
         createUserMcpConnector: (...args: unknown[]) =>
             createUserMcpConnector(...args),
         deleteUserMcpConnector: (...args: unknown[]) =>
@@ -287,7 +289,7 @@ describe("POST /user/integrations/google-drive/oauth/start", () => {
     it("does not echo arbitrary error messages to the client", async () => {
         startGoogleDriveOAuth.mockRejectedValue(
             new Error(
-                'insert into "google_drive_oauth_states" failed: relation does not exist',
+                'insert into "google_workspace_oauth_states" failed: relation does not exist',
             ),
         );
 
@@ -459,4 +461,26 @@ it("requires authentication and MFA to disconnect Drive", async () => {
         (await request(app).delete("/user/integrations/google-drive")).status,
     ).toBe(403);
     expect(disconnectGoogleDrive).not.toHaveBeenCalled();
+});
+
+
+describe("MCP read-only settings route", () => {
+    it("validates and saves the mode for the authenticated owner", async () => {
+        expect((await request(app).patch("/user/mcp-connectors/c1").send({ readOnly: "yes" })).status).toBe(400);
+        expect(updateUserMcpConnector).not.toHaveBeenCalled();
+        updateUserMcpConnector.mockResolvedValue({ id: "c1", readOnly: true });
+        const result = await request(app).patch("/user/mcp-connectors/c1").send({ readOnly: true, userId: "other-user" });
+        expect(result.status).toBe(200);
+        expect(result.body.readOnly).toBe(true);
+        expect(updateUserMcpConnector).toHaveBeenCalledWith("u1", "c1", { readOnly: true }, {});
+    });
+
+    it("requires authentication and MFA before changing the mode", async () => {
+        authState.allowed = false;
+        expect((await request(app).patch("/user/mcp-connectors/c1").send({ readOnly: false })).status).toBe(401);
+        authState.allowed = true;
+        authState.mfa = false;
+        expect((await request(app).patch("/user/mcp-connectors/c1").send({ readOnly: false })).status).toBe(403);
+        expect(updateUserMcpConnector).not.toHaveBeenCalled();
+    });
 });

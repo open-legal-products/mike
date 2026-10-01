@@ -29,6 +29,7 @@ import {
     isMeaningfulTextlessAssistantOutput,
     runLLMStream,
     stripTransientAssistantEvents,
+    writeApprovedConnectorFrames,
     parseChatMessages,
     parseOptionalAskInputsResponse,
     parseOptionalChatId,
@@ -570,6 +571,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         askInputsResponse,
         requestedModel: model,
         requestedReasoning: parsedReasoning.value,
+        requestedTimeZone: req.body?.time_zone,
     });
     if (!prep.ok) {
         if ("internal" in prep) return void sendInternalError(res, prep.error);
@@ -598,6 +600,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         selectedModel,
         selectedReasoningLevel,
         nonce,
+        approvalEvents,
     } = prep.prepared;
     let chatTitle = prep.prepared.chatTitle;
     let completedTurnPersisted = prep.prepared.completedTurnPersisted;
@@ -677,6 +680,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     ...(assistantMessageId ? { assistantMessageId } : {}),
                 })}\n\n`,
             );
+            writeApprovedConnectorFrames(write, approvalEvents);
 
             const shouldGenerateTitle =
                 !chatTitle && !!lastUser?.content && !askInputsResponse;
@@ -736,6 +740,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 projectId: resolvedProjectId,
                 conversationId: chatId,
                 includeMemory: true,
+                connectorApprovals: true,
                 memoryProjectId: canReadProjectMemory
                     ? resolvedProjectId
                     : null,
@@ -756,9 +761,9 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             // (observed via OpenRouter). Silence reads as a hung composer, so
             // surface it — unless tools produced visible artifacts, which carry
             // their own completion signal.
-            const hasToolOutput = events?.some(
-                isMeaningfulTextlessAssistantOutput,
-            );
+            const hasToolOutput =
+                approvalEvents.length > 0 ||
+                events?.some(isMeaningfulTextlessAssistantOutput);
             if (!fullText?.trim() && !hasToolOutput) {
                 write(
                     `data: ${JSON.stringify({

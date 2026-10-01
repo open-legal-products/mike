@@ -1,3 +1,4 @@
+import { resolveRequestTimeZone } from "../../lib/userTime";
 // chat prepare — implementation behind the module facade.
 // Business logic + data-access for the chat module.
 //
@@ -13,7 +14,8 @@
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
 import { type Db } from "../../lib/supabase";
-import { buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage } from "./engine/index";
+import { buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage } from "./engine/index";
+import type { McpToolEvent } from "@mike/contracts";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
 import { checkProjectAccess, projectHasSharedAudience, resolveContentOrgId } from "../../lib/access";
 import { hasDirectContentGrants } from "../../lib/contentAccess";
@@ -41,6 +43,9 @@ export type PreparedChatStream = {
     // An ask_inputs continuation that could not be appended is not durable,
     // and must not trigger memory consolidation.
     completedTurnPersisted: boolean;
+    // Connector actions the user approved in this continuation, already run
+    // and appended; the route streams them before the model continues.
+    approvalEvents: McpToolEvent[];
     // Whether the document-writing tools are offered this turn. A standalone
     // chat writes into the caller's own library, so it keeps them; a project
     // chat writes into the PROJECT, and that is a question about the caller's
@@ -89,6 +94,8 @@ export async function prepareChatStream(
         requestedReasoning:
             | ReturnType<typeof resolveEffectiveReasoningLevel>
             | undefined;
+        /** The browser's IANA time zone; unvalidated request input. */
+        requestedTimeZone?: unknown;
     },
 ): Promise<
     | { ok: true; prepared: PreparedChatStream }
@@ -281,6 +288,7 @@ export async function prepareChatStream(
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     let completedTurnPersisted = true;
     let memoryTurn: MemoryConversationTurn | null = null;
+    let approvalEvents: McpToolEvent[] = [];
     if (args.askInputsResponse) {
         const appendResult = await appendAskInputsResponseToAssistantMessage(
             db,
@@ -316,6 +324,15 @@ export async function prepareChatStream(
         if (!completedTurnPersisted) {
             return { ok: false, status: 500, detail: "Failed to save message" };
         }
+        // The append above is the single-use claim; only now may an approved
+        // connector action run.
+        approvalEvents = await runApprovedConnectorActions({
+            db,
+            chatId,
+            messageId: args.askInputsResponse.assistant_message_id,
+            askEventId: args.askInputsResponse.ask_event_id,
+            userId,
+        });
     } else if (lastUser) {
         const { error: userMessageError } = await db
             .from("chat_messages")
@@ -365,12 +382,15 @@ export async function prepareChatStream(
         // Generate the nonce before enriching prior events so document filenames
         // and workflow titles replayed from earlier turns are fenced as well.
         const nonce = generateSpotlightNonce(chatId);
+        const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
         const enrichedMessages = await enrichWithPriorEvents(
             messages,
             chatId,
             db,
             docIndex,
             nonce,
+            "chat_messages",
+            timeZone,
         );
         const {
             api_keys: apiKeys,
@@ -382,6 +402,12 @@ export async function prepareChatStream(
             personalisation,
             nonce,
         );
+        const userSentAt = await loadUserMessageSentTimes(
+            db,
+            "chat_messages",
+            chatId,
+            enrichedMessages,
+        );
         const apiMessages = buildMessages(
             enrichedMessages,
             docAvailability,
@@ -389,6 +415,8 @@ export async function prepareChatStream(
             undefined,
             legalResearchUs,
             nonce,
+            "append",
+            { timeZone, now: new Date(), userSentAt },
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db);
@@ -401,6 +429,7 @@ export async function prepareChatStream(
                 lastUser,
                 resolvedProjectId,
                 completedTurnPersisted,
+                approvalEvents,
                 allowDocumentMutation,
                 canReadProjectMemory,
                 canCurateProjectMemory,

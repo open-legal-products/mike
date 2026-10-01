@@ -14,6 +14,10 @@ export type McpConnectorSummary = {
     serverUrl: string;
     authType: McpAuthType;
     enabled: boolean;
+    /** Write tools wait for the user's approval in the conversation. */
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
     hasAuthConfig: boolean;
     customHeaderKeys: string[];
     oauthConnected: boolean;
@@ -33,7 +37,8 @@ export type McpToolSummary = {
     enabled: boolean;
     readOnly: boolean;
     destructive: boolean;
-    requiresConfirmation: boolean;
+    /** The server marks this tool as changing data (see isMcpWriteTool). */
+    write: boolean;
     lastSeenAt: string;
 };
 
@@ -48,6 +53,8 @@ export type ConnectorRow = {
     server_url: string;
     auth_type: McpAuthType;
     enabled: boolean;
+    require_write_approval?: boolean | null;
+    read_only?: boolean;
     tool_policy: Record<string, unknown> | null;
     encrypted_auth_config: string | null;
     auth_config_iv: string | null;
@@ -109,6 +116,7 @@ export type ToolCacheRow = {
     output_schema: Record<string, unknown> | null;
     annotations: Record<string, unknown> | null;
     enabled: boolean;
+    /** Write tool: stored under its historical column name. */
     requires_confirmation: boolean;
     last_seen_at: string;
 };

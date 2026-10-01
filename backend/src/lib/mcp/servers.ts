@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { ConnectorApprovalItem } from "@mike/contracts";
 import type { OpenAIToolSchema } from "../llm";
 import { createServerSupabase } from "../supabase";
 import {
@@ -12,7 +13,7 @@ import {
     normalizeJsonSchema,
     openaiToolName,
     toConnectorSummary,
-    toolRequiresConfirmation,
+    isMcpWriteTool,
     validateCustomHeaders,
     validateRemoteMcpUrl,
 } from "./client";
@@ -251,6 +252,8 @@ export async function updateUserMcpConnector(
         name?: string;
         serverUrl?: string;
         enabled?: boolean;
+        requireWriteApproval?: boolean;
+        readOnly?: boolean;
         bearerToken?: string | null;
         headers?: Record<string, unknown>;
     },
@@ -269,6 +272,10 @@ export async function updateUserMcpConnector(
     }
     if (typeof input.enabled === "boolean") {
         update.enabled = input.enabled;
+    }
+    if (typeof input.readOnly === "boolean") update.read_only = input.readOnly;
+    if (typeof input.requireWriteApproval === "boolean") {
+        update.require_write_approval = input.requireWriteApproval;
     }
     if ("bearerToken" in input || "headers" in input) {
         const current = await loadConnector(userId, connectorId, db).catch(
@@ -368,7 +375,7 @@ export async function refreshUserMcpConnectorTools(
             input_schema: normalizeJsonSchema(tool.inputSchema),
             output_schema: tool.outputSchema ?? null,
             annotations,
-            requires_confirmation: toolRequiresConfirmation(annotations),
+            requires_confirmation: isMcpWriteTool(annotations),
             last_seen_at: now,
         };
     });
@@ -380,12 +387,6 @@ export async function refreshUserMcpConnectorTools(
                 onConflict: "connector_id,tool_name",
             });
         if (error) throw error;
-        const { error: disableError } = await db
-            .from("user_mcp_connector_tools")
-            .update({ enabled: false, updated_at: now })
-            .eq("connector_id", connector.id)
-            .eq("requires_confirmation", true);
-        if (disableError) throw disableError;
     }
 
     const staleNames = new Set(rows.map((row) => row.tool_name));
@@ -419,22 +420,6 @@ export async function setUserMcpToolEnabled(
     db: Db = createServerSupabase(),
 ): Promise<McpConnectorSummary> {
     await loadConnector(userId, connectorId, db);
-    if (enabled) {
-        const { data, error } = await db
-            .from("user_mcp_connector_tools")
-            .select("requires_confirmation")
-            .eq("connector_id", connectorId)
-            .eq("id", toolId)
-            .single();
-        if (error) throw error;
-        if (
-            (data as { requires_confirmation?: boolean }).requires_confirmation
-        ) {
-            throw new Error(
-                "This MCP tool needs human confirmation before Mike can expose it to chat.",
-            );
-        }
-    }
     const { error } = await db
         .from("user_mcp_connector_tools")
         .update({ enabled, updated_at: new Date().toISOString() })
@@ -455,10 +440,9 @@ export async function buildUserMcpTools(
     const { data, error } = await db
         .from("user_mcp_connector_tools")
         .select(
-            "openai_tool_name, tool_name, title, description, input_schema, requires_confirmation, enabled, user_mcp_connectors!inner(id, user_id, name, enabled)",
+            "openai_tool_name, tool_name, title, description, input_schema, requires_confirmation, enabled, user_mcp_connectors!inner(id, user_id, name, enabled, read_only)",
         )
         .eq("enabled", true)
-        .eq("requires_confirmation", false)
         .eq("user_mcp_connectors.user_id", userId)
         .eq("user_mcp_connectors.enabled", true);
     if (error) {
@@ -469,7 +453,11 @@ export async function buildUserMcpTools(
         return [];
     }
 
-    return (data ?? []).map((row) => {
+    return (data ?? []).filter((row) => {
+        const joined = row.user_mcp_connectors as { read_only?: boolean } | { read_only?: boolean }[];
+        const connector = Array.isArray(joined) ? joined[0] : joined;
+        return !(connector?.read_only && row.requires_confirmation);
+    }).map((row) => {
         const raw = row as Record<string, unknown>;
         const connector = raw.user_mcp_connectors as
             | { name?: string }
@@ -505,7 +493,6 @@ async function resolveCallableTool(
         .select("*, user_mcp_connectors!inner(*)")
         .eq("openai_tool_name", openaiToolName)
         .eq("enabled", true)
-        .eq("requires_confirmation", false)
         .eq("user_mcp_connectors.user_id", userId)
         .eq("user_mcp_connectors.enabled", true)
         .single();
@@ -516,6 +503,7 @@ async function resolveCallableTool(
     const connector = Array.isArray(row.user_mcp_connectors)
         ? row.user_mcp_connectors[0]
         : row.user_mcp_connectors;
+    if (connector.read_only && row.requires_confirmation) return null;
     return { connector, tool: row };
 }
 
@@ -532,6 +520,73 @@ function stringifyMcpResult(result: unknown): string {
     return `${text.slice(0, MAX_MCP_RESULT_CHARS)}\n\n[Truncated MCP result to ${MAX_MCP_RESULT_CHARS} characters]`;
 }
 
+function unavailableTool(
+    openaiToolName: string,
+    error = "MCP tool is not available or is disabled.",
+): { content: string; event: McpToolEvent } {
+    return {
+        content: JSON.stringify({ ok: false, error }),
+        event: {
+            type: "mcp_tool_call",
+            connector_id: "",
+            connector_name: "",
+            tool_name: openaiToolName,
+            openai_tool_name: openaiToolName,
+            status: "error",
+            error,
+        },
+    };
+}
+
+const MAX_APPROVAL_ARGUMENT_CHARS = 200_000;
+
+export type McpToolPlan =
+    | { type: "run" }
+    | { type: "approval"; item: Omit<ConnectorApprovalItem, "id"> }
+    | { type: "result"; content: string; event: McpToolEvent };
+
+/**
+ * Decides whether a call runs now or waits for the user's approval: a write
+ * tool on a connector whose "Ask for permission for write actions" setting is
+ * on waits; everything else runs.
+ */
+export async function planMcpToolCall(
+    userId: string,
+    openaiToolName: string,
+    args: Record<string, unknown>,
+    db: Db = createServerSupabase(),
+): Promise<McpToolPlan> {
+    const resolved = await resolveCallableTool(userId, openaiToolName, db);
+    if (!resolved) return { type: "result", ...unavailableTool(openaiToolName) };
+    const { connector, tool } = resolved;
+    if (!tool.requires_confirmation || connector.require_write_approval !== true)
+        return { type: "run" };
+    if (JSON.stringify(args).length > MAX_APPROVAL_ARGUMENT_CHARS) {
+        return {
+            type: "result",
+            ...unavailableTool(
+                openaiToolName,
+                "This action is too large to review in Mike.",
+            ),
+        };
+    }
+    return {
+        type: "approval",
+        item: {
+            kind: "approval",
+            connector_name: connector.name,
+            tool_name: tool.openai_tool_name,
+            title: tool.title || tool.tool_name,
+            arguments: args,
+            binding: {
+                type: "mcp",
+                connector_id: connector.id,
+                tool_id: tool.id,
+            },
+        },
+    };
+}
+
 export async function executeMcpToolCall(
     userId: string,
     openaiToolName: string,
@@ -542,31 +597,67 @@ export async function executeMcpToolCall(
     event: McpToolEvent;
 }> {
     const resolved = await resolveCallableTool(userId, openaiToolName, db);
-    if (!resolved) {
-        return {
-            content: JSON.stringify({
-                ok: false,
-                error: "MCP tool is not available or is disabled.",
-            }),
-            event: {
-                type: "mcp_tool_call",
-                connector_id: "",
-                connector_name: "",
-                tool_name: openaiToolName,
-                openai_tool_name: openaiToolName,
-                status: "error",
-                error: "MCP tool is not available or is disabled.",
-            },
-        };
-    }
+    if (!resolved) return unavailableTool(openaiToolName);
+    return callResolvedTool(
+        userId,
+        resolved.connector,
+        resolved.tool,
+        args,
+        db,
+    );
+}
 
-    const { connector, tool } = resolved;
+/**
+ * Runs an approved call with the arguments the user reviewed. The item comes
+ * from the persisted assistant message, never from the client, and runs only
+ * while the reviewed tool is still the same enabled tool on the same connector.
+ */
+export async function executeApprovedMcpToolCall(
+    userId: string,
+    item: ConnectorApprovalItem,
+    db: Db = createServerSupabase(),
+): Promise<{ content: string; event: McpToolEvent }> {
+    const resolved =
+        item.binding.type === "mcp"
+            ? await resolveCallableTool(userId, item.tool_name, db)
+            : null;
+    const result =
+        resolved &&
+        item.binding.type === "mcp" &&
+        resolved.connector.id === item.binding.connector_id &&
+        resolved.tool.id === item.binding.tool_id
+            ? await callResolvedTool(
+                  userId,
+                  resolved.connector,
+                  resolved.tool,
+                  item.arguments,
+                  db,
+              )
+            : unavailableTool(
+                  item.tool_name,
+                  "This connector tool was changed, turned off, or removed after it was reviewed.",
+              );
+    return { ...result, event: { ...result.event, approval_id: item.id } };
+}
+
+async function callResolvedTool(
+    userId: string,
+    connector: ConnectorRow,
+    tool: ToolCacheRow,
+    args: Record<string, unknown>,
+    db: Db,
+): Promise<{ content: string; event: McpToolEvent }> {
     const started = Date.now();
     try {
         const result = await withMcpClient(
             connector,
-            (client) =>
-                client.callTool(
+            async (client) => {
+                if (tool.requires_confirmation) {
+                    const current = await resolveCallableTool(userId, tool.openai_tool_name, db);
+                    if (!current || current.connector.id !== connector.id || current.tool.id !== tool.id)
+                        throw new Error("This connector tool was changed, turned off, or set to read-only.");
+                }
+                return client.callTool(
                     {
                         name: tool.tool_name,
                         arguments: args,
@@ -576,7 +667,8 @@ export async function executeMcpToolCall(
                         timeout: MCP_REQUEST_TIMEOUT_MS,
                         maxTotalTimeout: MCP_REQUEST_TIMEOUT_MS,
                     },
-                ),
+                );
+            },
             db,
         );
         const toolError = mcpToolResultErrorMessage(result);

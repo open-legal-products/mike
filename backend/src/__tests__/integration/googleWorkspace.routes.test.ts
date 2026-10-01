@@ -9,9 +9,15 @@ const mocks = vi.hoisted(() => ({
   status: vi.fn(),
   cancel: vi.fn(),
   disconnect: vi.fn(),
-  list: vi.fn(),
-  approve: vi.fn(),
-  reject: vi.fn(),
+  settings: vi.fn(),
+  tool: vi.fn(),
+  driveSettings: vi.fn(),
+  driveStatus: vi.fn(),
+}));
+vi.mock("../../lib/integrations/googleDrive", async (original) => ({
+  ...(await original<typeof import("../../lib/integrations/googleDrive")>()),
+  updateGoogleDriveSettings: mocks.driveSettings,
+  getGoogleDriveStatus: mocks.driveStatus,
 }));
 vi.mock("../../lib/supabase", () => ({ createServerSupabase: () => ({}) }));
 vi.mock("../../middleware/auth", () => ({
@@ -32,19 +38,21 @@ vi.mock("../../lib/integrations/googleWorkspaceAuth", async (original) => ({
   >()),
   startWorkspaceOAuth: mocks.start,
   completeWorkspaceOAuth: mocks.complete,
-  workspaceStatus: mocks.status,
   cancelWorkspaceOAuth: mocks.cancel,
   disconnectWorkspace: mocks.disconnect,
+  updateWorkspaceSettings: mocks.settings,
+  setWorkspaceToolEnabled: mocks.tool,
 }));
-vi.mock("../../lib/integrations/googleWorkspace", () => ({
-  listWorkspaceActions: mocks.list,
-  approveWorkspaceAction: mocks.approve,
-  rejectWorkspaceAction: mocks.reject,
+vi.mock("../../lib/integrations/googleWorkspace", async (original) => ({
+  ...(await original<
+    typeof import("../../lib/integrations/googleWorkspace")
+  >()),
+  workspaceConnectorStatus: mocks.status,
   buildGoogleWorkspaceTools: vi.fn().mockResolvedValue([]),
   isGoogleWorkspaceTool: () => false,
 }));
 import { app } from "../../app";
-const action = "12345678-1234-1234-1234-123456789abc";
+import { ConnectorSetupError } from "../../lib/mcp/errors";
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.auth = true;
@@ -57,8 +65,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("Google Workspace routes", () => {
+  it("validates and saves Drive's approval setting for the authenticated owner", async () => {
+    mocks.driveStatus.mockResolvedValue({ writeEnabled: true, requireWriteApproval: true });
+    expect((await request(app).patch("/user/integrations/google-drive").send({ requireWriteApproval: "yes" })).status).toBe(400);
+    expect(mocks.driveSettings).not.toHaveBeenCalled();
+    const response = await request(app).patch("/user/integrations/google-drive").send({ requireWriteApproval: true, readOnly: true, userId: "other-user" });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ requireWriteApproval: true });
+    expect(mocks.driveSettings).toHaveBeenCalledWith("owner", { enabled: undefined, requireWriteApproval: true, readOnly: true }, {});
+  });
   it.each(["gmail", "google-calendar"])(
-    "defaults %s to read-only and uses authenticated Mike user",
+    "starts %s for the authenticated Mike user; the body cannot change the requested permissions",
     async (provider) => {
       mocks.start.mockResolvedValue({
         authorizationUrl: "https://accounts.google.com/auth",
@@ -67,7 +84,7 @@ describe("Google Workspace routes", () => {
         (
           await request(app)
             .post(`/user/integrations/${provider}/oauth/start`)
-            .send({})
+            .send({ write: false, scope: "anything" })
         ).status,
       ).toBe(200);
       expect(mocks.start).toHaveBeenCalledWith(
@@ -75,7 +92,6 @@ describe("Google Workspace routes", () => {
         "owner",
         provider,
         `http://localhost:3000/api/user/integrations/${provider}/oauth/callback`,
-        false,
       );
     },
   );
@@ -119,61 +135,88 @@ describe("Google Workspace routes", () => {
       );
     },
   );
-  it("only enables writes through an explicit boolean", async () => {
-    expect(
-      (
-        await request(app)
-          .post("/user/integrations/gmail/oauth/start")
-          .send({ write: "true" })
-      ).status,
-    ).toBe(400);
-    expect(mocks.start).not.toHaveBeenCalled();
-    mocks.start.mockResolvedValue({ authorizationUrl: "url" });
-    await request(app)
-      .post("/user/integrations/gmail/oauth/start")
-      .send({ write: true });
-    expect(mocks.start.mock.calls[0].at(-1)).toBe(true);
-  });
   it.each([
-    "/user/integrations/gmail/oauth/start",
-    "/user/integrations/google-calendar/oauth/start",
-    `/user/google-actions/${action}/approve`,
-    `/user/google-actions/${action}/reject`,
-  ])("requires authentication and MFA for %s", async (path) => {
+    ["post", "/user/integrations/gmail/oauth/start"],
+    ["post", "/user/integrations/google-calendar/oauth/start"],
+    ["patch", "/user/integrations/gmail"],
+    ["patch", "/user/integrations/google-calendar/tools/google_calendar_create_event"],
+  ] as const)("requires authentication and MFA for %s %s", async (method, path) => {
     mocks.auth = false;
-    expect((await request(app).post(path)).status).toBe(401);
+    expect((await request(app)[method](path).send({ enabled: true })).status).toBe(401);
     mocks.auth = true;
     mocks.mfa = false;
-    expect((await request(app).post(path)).status).toBe(403);
-    expect(mocks.approve).not.toHaveBeenCalled();
+    expect((await request(app)[method](path).send({ enabled: true })).status).toBe(403);
     expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.settings).not.toHaveBeenCalled();
+    expect(mocks.tool).not.toHaveBeenCalled();
   });
-  it("does not let approval replace the reviewed payload or user ID", async () => {
+  it("saves connector settings for the authenticated owner and returns the fresh status", async () => {
+    mocks.status.mockResolvedValue({ connected: true, requireWriteApproval: true });
     expect(
       (
         await request(app)
-          .post(`/user/google-actions/${action}/approve`)
-          .send({ userId: "other", payload: { to: "attacker" } })
+          .patch("/user/integrations/gmail")
+          .send({ requireWriteApproval: "yes" })
       ).status,
     ).toBe(400);
-    expect(mocks.approve).not.toHaveBeenCalled();
-    mocks.approve.mockResolvedValue({ status: "succeeded" });
-    expect(
-      (await request(app).post(`/user/google-actions/${action}/approve`))
-        .status,
-    ).toBe(200);
-    expect(mocks.approve).toHaveBeenCalledWith({}, "owner", action);
-  });
-  it("lists only through the authenticated owner service and rejects malformed IDs", async () => {
-    mocks.list.mockResolvedValue([]);
-    expect((await request(app).get("/user/google-actions")).body).toEqual({
-      actions: [],
+    expect(mocks.settings).not.toHaveBeenCalled();
+    const res = await request(app)
+      .patch("/user/integrations/gmail")
+      .send({ enabled: false, requireWriteApproval: true, readOnly: true, userId: "other" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ requireWriteApproval: true });
+    expect(mocks.settings).toHaveBeenCalledWith({}, "owner", "gmail", {
+      enabled: false,
+      requireWriteApproval: true,
+      readOnly: true,
     });
-    expect(mocks.list).toHaveBeenCalledWith({}, "owner");
+  });
+  it("switches only known tools of the addressed provider", async () => {
+    mocks.status.mockResolvedValue({ connected: true });
     expect(
-      (await request(app).post("/user/google-actions/not-an-id/approve"))
-        .status,
+      (
+        await request(app)
+          .patch("/user/integrations/gmail/tools/google_calendar_create_event")
+          .send({ enabled: false })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await request(app)
+          .patch("/user/integrations/gmail/tools/gmail_send")
+          .send({ enabled: "no" })
+      ).status,
     ).toBe(400);
+    expect(mocks.tool).not.toHaveBeenCalled();
+    expect(
+      (
+        await request(app)
+          .patch("/user/integrations/gmail/tools/gmail_send")
+          .send({ enabled: false })
+      ).status,
+    ).toBe(200);
+    expect(mocks.tool).toHaveBeenCalledWith({}, "owner", "gmail", "gmail_send", false);
+  });
+  it("no longer serves out-of-turn Google action approvals", async () => {
+    expect((await request(app).get("/user/google-actions")).status).toBe(404);
+    expect(
+      (
+        await request(app).post(
+          "/user/google-actions/12345678-1234-1234-1234-123456789abc/approve",
+        )
+      ).status,
+    ).toBe(404);
+  });
+  it("passes setup steps through with the connector_setup_required code", async () => {
+    mocks.start.mockRejectedValue(
+      new ConnectorSetupError("Gmail needs an OAuth client."),
+    );
+    const res = await request(app).post("/user/integrations/gmail/oauth/start");
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      code: "connector_setup_required",
+      detail: "Gmail needs an OAuth client.",
+    });
   });
   it("sanitizes provider and database errors", async () => {
     mocks.start.mockRejectedValue(new Error("secret token and stack"));
@@ -188,5 +231,14 @@ describe("Google Workspace routes", () => {
     expect(callback.status).toBe(400);
     expect(callback.text).not.toContain("secret");
     expect(callback.headers["content-security-policy"]).toContain("nonce-");
+  });
+});
+
+
+describe("Google read-only settings validation", () => {
+  it.each(["google-drive", "gmail", "google-calendar"])("rejects a non-boolean mode for %s", async provider => {
+    expect((await request(app).patch(`/user/integrations/${provider}`).send({ readOnly: "false" })).status).toBe(400);
+    expect(mocks.settings).not.toHaveBeenCalled();
+    expect(mocks.driveSettings).not.toHaveBeenCalled();
   });
 });

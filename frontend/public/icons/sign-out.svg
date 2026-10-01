@@ -6,33 +6,15 @@
       <stop offset="0.82" stop-color="#CBD1D9" stop-opacity="0.96"/>
       <stop offset="1" stop-color="#DDE2E8" stop-opacity="0.96"/>
     </linearGradient>
-    <linearGradient id="arrow" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#7AB8FF" stop-opacity="0.96"/>
-      <stop offset="0.45" stop-color="#4F92F7" stop-opacity="0.95"/>
-      <stop offset="1" stop-color="#2563EB" stop-opacity="0.97"/>
-    </linearGradient>
-    <linearGradient id="doorRim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
-      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="#374151" stop-opacity="0.4"/>
-    </linearGradient>
-    <linearGradient id="arrowRim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.75"/>
-      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.12"/>
-      <stop offset="1" stop-color="#172554" stop-opacity="0.45"/>
-    </linearGradient>
     <radialGradient id="sheen">
       <stop offset="0" stop-color="#FFFFFF"/>
       <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </radialGradient>
     <clipPath id="clipDoor"><rect x="6" y="5" width="39" height="54" rx="8"/></clipPath>
-    <clipPath id="clipArrow">
-      <path d="M24 26.5H43.5V20.5L58 32L43.5 43.5V37.5H24Z"/>
-    </clipPath>
   </defs>
 
-  <rect x="6" y="5" width="39" height="54" rx="8" fill="url(#door)" stroke="url(#doorRim)" stroke-width="1.5"/>
+  <rect x="6" y="5" width="39" height="54" rx="8" fill="url(#door)"/>
 
   <g clip-path="url(#clipDoor)">
     <ellipse cx="25.5" cy="10" rx="17" ry="5" fill="url(#sheen)" opacity="0.3"/>
@@ -40,10 +22,5 @@
   </g>
 
   <path d="M24 26.5H43.5V20.5L58 32L43.5 43.5V37.5H24Z"
-        fill="url(#arrow)" stroke="url(#arrowRim)" stroke-width="1.25" stroke-linejoin="round"/>
-
-  <g clip-path="url(#clipArrow)">
-    <ellipse cx="36" cy="26.8" rx="15" ry="2.8" fill="url(#sheen)" opacity="0.15"/>
-    <ellipse cx="27" cy="32" rx="3" ry="5" fill="url(#sheen)" opacity="0.09"/>
-  </g>
+        fill="#4F92F7" stroke="#4F92F7" stroke-width="3" stroke-linejoin="round"/>
 </svg>

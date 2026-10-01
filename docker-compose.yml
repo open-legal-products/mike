@@ -157,6 +157,8 @@ services:
       - ./backend/migrations/20260921_01_chat_activity.sql:/chat-activity-migration.sql:ro
       - ./backend/migrations/20260921_02_google_drive_integration.sql:/google-drive-migration.sql:ro
       - ./backend/migrations/20260922_01_google_workspace.sql:/google-workspace-migration.sql:ro
+      - ./backend/migrations/20261001_01_connector_write_access.sql:/connector-write-access-migration.sql:ro
+      - ./backend/migrations/20261002_04_remove_user_time_zone.sql:/remove-user-time-zone-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -198,6 +200,8 @@ services:
         psql "$$DB" -v ON_ERROR_STOP=1 -f /chat-activity-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /google-drive-migration.sql || exit 1;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /google-workspace-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /connector-write-access-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /remove-user-time-zone-migration.sql || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;

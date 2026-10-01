@@ -185,12 +185,13 @@ function truthyAnnotation(
     return annotations?.[key] === true;
 }
 
-export function toolRequiresConfirmation(
+export function isMcpWriteTool(
     annotations: Record<string, unknown> | null | undefined,
 ) {
-    // Gate only genuinely destructive tools behind human confirmation. We do
-    // NOT gate on openWorldHint (almost every useful connector — Gmail, Slack,
-    // GitHub — is "open world", so gating on it disables everything), and we
+    // A write tool is one a connector's "Ask for permission for write actions"
+    // setting holds for approval. Only genuinely changing tools count. We do
+    // NOT use openWorldHint (almost every useful connector — Gmail, Slack,
+    // GitHub — is "open world", so it would catch everything), and we
     // require readOnlyHint to be *explicitly* false rather than merely absent
     // (a missing hint must not be treated the same as readOnlyHint:false).
     return (
@@ -209,7 +210,7 @@ function toToolSummary(row: ToolCacheRow): McpToolSummary {
         enabled: row.enabled,
         readOnly: truthyAnnotation(row.annotations, "readOnlyHint"),
         destructive: truthyAnnotation(row.annotations, "destructiveHint"),
-        requiresConfirmation: row.requires_confirmation,
+        write: row.requires_confirmation,
         lastSeenAt: row.last_seen_at,
     };
 }
@@ -228,11 +229,16 @@ export function toConnectorSummary(
         serverUrl: connector.server_url,
         authType: connector.auth_type ?? "none",
         enabled: connector.enabled,
+        requireWriteApproval: connector.require_write_approval === true,
+        readOnly: connector.read_only === true,
         hasAuthConfig: !!connector.encrypted_auth_config,
         customHeaderKeys: Object.keys(authConfig.headers ?? {}),
         oauthConnected: !!oauthToken?.encrypted_access_token,
         toolPolicy: connector.tool_policy ?? {},
-        tools: tools.map(toToolSummary),
+        tools: tools.map((tool) => ({
+            ...toToolSummary(tool),
+            enabled: tool.enabled && !(connector.read_only && tool.requires_confirmation),
+        })),
         toolCount,
         createdAt: connector.created_at,
         updatedAt: connector.updated_at,

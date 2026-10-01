@@ -1,14 +1,20 @@
 # Google Drive: implementation and verification
 
-Mike provides three first-party, read-only assistant tools over Drive REST v3:
-`google_drive_search`, `google_drive_list_recent`, and `google_drive_read_file`.
-Each Mike user connects their own Google account in Settings → Connectors → Discover. Choose **Add** on the Google Drive card to open Google OAuth directly and select the account there; a connected card offers **Manage**.
+Mike provides first-party read and write assistant tools over Drive REST v3.
+Reads are `google_drive_search`, `google_drive_list_recent`, and `google_drive_read_file`.
+Writes create text files or Google Docs, create folders, rename or describe items,
+replace plain-text/Google Doc contents, move and copy files, and trash or restore items.
+Each Mike user connects their own Google account in Settings → Connectors → Discover. Google Drive works like every other connector there: **Add** opens Google OAuth directly (showing **Adding...**, then **Cancel** while Google's window is open), the Discover card then shows **Added**, and the connector appears under **Installed** with an on/off switch. Its Manage dialog switches individual tools on or off, offers a **Read-only** override that disables every write tool while preserving individual choices, configures whether writes need approval, and deletes the connection. If the server has no Google OAuth app configured, **Add** shows the same **Could not add connector** warning as Slack, with setup steps and a guide link.
 The integration does not require a Google MCP server or a service account.
 
 ## Technical approach
 
 - **Authorization:** Web application OAuth, PKCE S256, a random state token,
-  `drive.readonly`, offline access, and explicit consent. State is hashed in the
+  full `drive` access, offline access, and explicit consent. OpenID/email
+  identifies the selected account for the Manage dialog; connections made
+  before it was recorded show no account until connected again. Connections made
+  before Mike asked for full access hold `drive.readonly` and keep working for
+  reads; write tools appear after the user deletes the connector and connects it again with full access. State is hashed in the
   database; its verifier and redirect URI are encrypted. State expires after
   ten minutes. The backend owns the client secret; no token reaches the browser.
   The callback relays to the fixed frontend API gateway and completes only
@@ -39,7 +45,7 @@ The integration does not require a Google MCP server or a service account.
 - **Data access:** every token query uses the authenticated Mike user ID. Google
   enforces that account's file permissions. Drive content is returned as
   untrusted tool context, using the existing connector activity events. There
-  are no Drive write tools. Retrieved content can be included in the chosen
+  are no permanent-deletion or sharing-permission tools. Retrieved content can be included in the chosen
   model's input and persisted chat history, so test with synthetic documents.
 - **Errors:** callback HTML, chat events, and tool output contain fixed messages
   for unexpected failures. Intentional reconnect, permission, size, and timeout
@@ -57,6 +63,46 @@ Code entry points:
 | Routes and MFA gates | `backend/src/modules/user/user.routes.ts` |
 | Database lifecycle | `backend/migrations/20260921_02_google_drive_integration.sql` and `backend/schema.sql` |
 | Card and API calls | `frontend/src/app/(pages)/settings/connectors/page.tsx`, `frontend/src/app/lib/mikeApi.ts` |
+
+## Write actions and approval
+
+Apply `backend/migrations/20261002_01_google_drive_writes.sql` to existing
+installations. Fresh installs include it in `backend/schema.sql`. It adds a
+connection identity and the same `require_write_approval` setting used by the
+other connectors. The default is off; users can turn on **Ask for permission for
+write actions** in the connector's Manage dialog. Reconnecting rotates the
+connection identity and keeps all tool/approval settings.
+
+| Tool | Behavior |
+| --- | --- |
+| `google_drive_create_file` | Creates a plain-text file or imports plain text into a Google Doc; optional parent folder. |
+| `google_drive_create_folder` | Creates a folder, optionally nested. |
+| `google_drive_update_file` | Changes a file/folder name or description. |
+| `google_drive_replace_file_content` | Replaces all contents of a plain-text file or Google Doc, including existing Doc formatting. |
+| `google_drive_move_file` | Moves to a destination folder; inherited access may change. |
+| `google_drive_copy_file` | Copies a file under a new name; folders are not supported. |
+| `google_drive_trash_file` | Moves an item to Trash; folders affect their contents. |
+| `google_drive_restore_file` | Restores an item from Trash. |
+
+Content writes accept up to 60,000 characters. Binary file upload and editing
+PDF, DOCX, Sheets, or Slides contents are not implemented. The model is told to
+read the complete source before proposing a full content replacement. The
+approval card shows the submitted contents and explains the replacement.
+Google Docs imports follow Google's [upload and conversion API](https://developers.google.com/workspace/drive/api/guides/manage-uploads).
+
+Approval-required writes pause inside the assistant turn. Only a persisted
+explicit approval can run them; rejection does not make a write request. The
+server rechecks the actor's full Drive grant, current connection identity,
+connector switch, and tool switch. Reconnected or disabled grants invalidate
+pending approvals. Source and destination metadata are shown for review, and
+their versions are checked again before execution. When Google supplies an
+ETag, PATCH requests also send `If-Match`; without an ETag the version check is
+best effort and cannot exclude a concurrent edit between the read and write.
+
+A mutation is attempted once. A timeout, transport failure, or Google server
+error after submission reports an uncertain outcome and asks the user to check
+Drive before trying again. It is never automatically retried. Permanent deletion
+and permission/sharing changes are not exposed.
 
 ## File support and resource budgets
 
@@ -114,8 +160,8 @@ and [first-sheet-only CSV export](https://developers.google.com/workspace/drive/
    This is separate from the Supabase Google **sign-in** callback. Keep existing
    callbacks if using the same client for both. Mike email/password login works
    independently of the Google Drive connection.
-3. Configure `https://www.googleapis.com/auth/drive.readonly` in Google Auth
-   Platform → Data Access. For External/Testing, add your Google account as a
+3. Configure `https://www.googleapis.com/auth/drive`, `openid`, and
+   `.../auth/userinfo.email` in Google Auth Platform → Data Access. For External/Testing, add your Google account as a
    test user. Internal is for users within the Workspace organization that owns
    the Cloud project; Workspace administrators may need to allow the client.
 4. Set the dedicated credentials in `backend/.env`:
@@ -164,7 +210,7 @@ No remote database migration is implicit in these instructions.
 
 Google permits HTTP localhost redirects but requires exact matching:
 [web-server OAuth guide](https://developers.google.com/identity/protocols/oauth2/web-server).
-`drive.readonly` is a restricted scope. External distribution may require
+`drive` is a restricted scope. External distribution may require
 verification and a security assessment, subject to applicable exceptions:
 [Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth),
 [verification requirements](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification).
@@ -183,10 +229,10 @@ actual Cloud client, consent configuration and Workspace policy work together.
    `configured:true`, `schemaReady:true`, `connected:false`, and the exact
    registered redirect URI. These flags alone do not validate Google credentials
    or prove the lifecycle RPCs were deployed.
-2. **Consent:** choose Add on the Google Drive card, then Connect in the details
-   dialog. Complete Mike MFA if enrolled, choose your test
-   Google account, and approve Drive read access. Expect Connected, including
-   after page reload and backend restart. No access/refresh tokens should appear
+2. **Consent:** choose Add on the Google Drive card. Complete Mike MFA if
+   enrolled, choose your test
+   Google account, and approve Drive read access. Expect Google Drive under
+   Installed, including after page reload and backend restart. No access/refresh tokens should appear
    in browser API responses. If Google denies consent, close the popup and use
    Cancel in Mike to end its polling attempt; a retry should work.
 3. **Search/read:** create `MIKE434 Consulting Agreement` in Google Docs with
@@ -224,11 +270,12 @@ actual Cloud client, consent configuration and Workspace policy work together.
    that user to a different Google account and try the first account's private
    fixture ID; Google must deny access unless that account has file permission.
 9. **Cancel/disconnect:** cancel a pending attempt; it must not complete later.
-   If consent already completed before cancellation, the card must honestly
-   show Connected. Disconnect, reload, and start a new chat: the token row is
-   gone and Drive tools are not offered. Google-side revocation is best-effort.
+   If consent already completed before cancellation, Google Drive must honestly
+   appear under Installed. Switch it off: Drive tools are not offered. Delete
+   it, reload, and start a new chat: the token row is gone and Drive tools are
+   not offered. Google-side revocation is best-effort.
    COOP may prevent Mike from closing Google's popup; close that window manually.
-10. **Read-only:** ask the assistant to rename/delete a Drive fixture. No Drive
+10. **Read-only grant:** with an older `drive.readonly` connection, ask the assistant to rename/delete a Drive fixture. No Drive
     write tool exists, and the original must remain unchanged.
 
 Record the tested commit, browser, audience mode, fixture names and pass/fail
@@ -256,7 +303,7 @@ concurrent completion/disconnect, rollback, and anon/owner grant denial. It runs
 in the Supabase stack CI job; local setup is documented in
 [safe local testing](safe-local-testing.md) and [the stack harness](../backend/scripts/test-stack.sh).
 `e2e/google-drive.spec.ts` exercises the real page, popup, cancellation, polling,
-and disconnect in Chromium with mocked Google integration endpoints. It runs
+the Manage dialog and Delete in Chromium with mocked Google integration endpoints. It runs
 in the standard Playwright CI job without Google credentials.
 
 Approve and merge only the exact tested head after all required checks pass,

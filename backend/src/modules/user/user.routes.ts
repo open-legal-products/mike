@@ -1,5 +1,5 @@
-import { GoogleWorkspaceError, workspaceStatus, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace } from "../../lib/integrations/googleWorkspaceAuth";
-import { listWorkspaceActions, approveWorkspaceAction, rejectWorkspaceAction } from "../../lib/integrations/googleWorkspace";
+import { GoogleWorkspaceError, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
+import { workspaceConnectorStatus, workspaceToolList } from "../../lib/integrations/googleWorkspace";
 // HTTP layer for the user module. Handlers parse params/query/body, call the
 // service functions behind user.service.ts, and map their typed results onto
 // status codes, headers, and JSON bodies. The MFA step-up guard
@@ -12,7 +12,9 @@ import {
     completeGoogleDriveOAuth,
     disconnectGoogleDrive,
     getGoogleDriveStatus,
+    setGoogleDriveToolEnabled,
     startGoogleDriveOAuth,
+    updateGoogleDriveSettings,
 } from "../../lib/integrations/googleDrive";
 import { ConnectorSetupError } from "../../lib/mcp/errors";
 
@@ -428,6 +430,8 @@ userRouter.patch(
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const body = req.body ?? {};
+        if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
+            return void res.status(400).json({ detail: "readOnly must be a boolean." });
         const result = await updateMcpConnector(
             db,
             userId,
@@ -439,6 +443,10 @@ userRouter.patch(
                     : {}),
                 ...(typeof body.enabled === "boolean"
                     ? { enabled: body.enabled }
+                    : {}),
+                ...(typeof body.readOnly === "boolean" ? { readOnly: body.readOnly } : {}),
+                ...(typeof body.requireWriteApproval === "boolean"
+                    ? { requireWriteApproval: body.requireWriteApproval }
                     : {}),
                 ...("bearerToken" in body
                     ? {
@@ -735,6 +743,69 @@ userRouter.delete(
     },
 );
 
+// PATCH /user/integrations/google-drive — { enabled?, requireWriteApproval? }
+userRouter.patch(
+    "/integrations/google-drive",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const userId = res.locals.userId as string;
+        for (const key of ["enabled", "requireWriteApproval", "readOnly"]) {
+            if (req.body?.[key] !== undefined && typeof req.body[key] !== "boolean")
+                return void res.status(400).json({ detail: `${key} must be a boolean.` });
+        }
+        const db = createServerSupabase();
+        try {
+            await updateGoogleDriveSettings(
+                userId,
+                { enabled: req.body?.enabled, requireWriteApproval: req.body?.requireWriteApproval, readOnly: req.body?.readOnly },
+                db,
+            );
+            res.json(await getGoogleDriveStatus(userId, db));
+        } catch (err) {
+            console.error("[google-drive] settings update failed", {
+                userId,
+                error: safeError(err),
+            });
+            res.status(409).json({
+                detail: "Google Drive settings could not be saved. Reload and try again.",
+            });
+        }
+    }),
+);
+
+// PATCH /user/integrations/google-drive/tools/:toolName — { enabled }
+userRouter.patch(
+    "/integrations/google-drive/tools/:toolName",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const userId = res.locals.userId as string;
+        if (typeof req.body?.enabled !== "boolean")
+            return void res
+                .status(400)
+                .json({ detail: "enabled must be a boolean." });
+        const db = createServerSupabase();
+        try {
+            await setGoogleDriveToolEnabled(
+                userId,
+                String(req.params.toolName),
+                req.body.enabled,
+                db,
+            );
+            res.json(await getGoogleDriveStatus(userId, db));
+        } catch (err) {
+            console.error("[google-drive] tool update failed", {
+                userId,
+                error: safeError(err),
+            });
+            res.status(409).json({
+                detail: "Google Drive tool settings could not be saved. Reload and try again.",
+            });
+        }
+    }),
+);
+
 // Cancel only this user's pending attempt; never disconnect an existing grant.
 userRouter.post(
     "/integrations/google-drive/oauth/cancel",
@@ -792,7 +863,7 @@ for (const provider of ["gmail", "google-calendar"] as const) {
             }
             try {
                 res.json({
-                    ...(await workspaceStatus(
+                    ...(await workspaceConnectorStatus(
                         createServerSupabase(),
                         res.locals.userId,
                         provider,
@@ -809,13 +880,6 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         requireAuth,
         requireMfaIfEnrolled,
         asyncRoute(async (req, res) => {
-            if (
-                req.body?.write !== undefined &&
-                typeof req.body.write !== "boolean"
-            )
-                return void res
-                    .status(400)
-                    .json({ detail: "write must be a boolean." });
             try {
                 res.json(
                     await startWorkspaceOAuth(
@@ -823,10 +887,19 @@ for (const provider of ["gmail", "google-calendar"] as const) {
                         res.locals.userId,
                         provider,
                         callback(req),
-                        req.body?.write === true,
                     ),
                 );
             } catch (error) {
+                // As for Slack and Drive: only repo-authored setup steps reach
+                // the browser verbatim, under their machine-readable code.
+                if (error instanceof ConnectorSetupError) {
+                    console.error("[google-workspace] setup required", {
+                        provider,
+                    });
+                    return void res
+                        .status(400)
+                        .json({ code: error.code, detail: error.message });
+                }
                 res.status(400).json({ detail: report(error) });
             }
         }),
@@ -901,6 +974,72 @@ for (const provider of ["gmail", "google-calendar"] as const) {
             }
         }),
     );
+    // PATCH /user/integrations/:provider — { enabled?, requireWriteApproval? }
+    userRouter.patch(
+        path,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            const body = req.body ?? {};
+            for (const key of ["enabled", "requireWriteApproval", "readOnly"]) {
+                if (body[key] !== undefined && typeof body[key] !== "boolean")
+                    return void res
+                        .status(400)
+                        .json({ detail: `${key} must be a boolean.` });
+            }
+            const db = createServerSupabase();
+            try {
+                await updateWorkspaceSettings(db, res.locals.userId, provider, {
+                    enabled: body.enabled,
+                    requireWriteApproval: body.requireWriteApproval,
+                    readOnly: body.readOnly,
+                });
+                res.json(
+                    await workspaceConnectorStatus(
+                        db,
+                        res.locals.userId,
+                        provider,
+                    ),
+                );
+            } catch (error) {
+                res.status(409).json({ detail: report(error) });
+            }
+        }),
+    );
+    // PATCH /user/integrations/:provider/tools/:toolName — { enabled }
+    userRouter.patch(
+        `${path}/tools/:toolName`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            const toolName = String(req.params.toolName);
+            if (typeof req.body?.enabled !== "boolean")
+                return void res
+                    .status(400)
+                    .json({ detail: "enabled must be a boolean." });
+            if (!workspaceToolList(provider, null).some((t) => t.name === toolName))
+                return void res.status(404).json({ detail: "Unknown tool." });
+            const db = createServerSupabase();
+            try {
+                await setWorkspaceToolEnabled(
+                    db,
+                    res.locals.userId,
+                    provider,
+                    toolName,
+                    req.body.enabled,
+                );
+                res.json(
+                    await workspaceConnectorStatus(
+                        db,
+                        res.locals.userId,
+                        provider,
+                    ),
+                );
+            } catch (error) {
+                res.status(409).json({ detail: report(error) });
+            }
+        }),
+    );
     userRouter.delete(
         path,
         requireAuth,
@@ -919,83 +1058,6 @@ for (const provider of ["gmail", "google-calendar"] as const) {
         }),
     );
 }
-userRouter.get(
-    "/google-actions",
-    requireAuth,
-    asyncRoute(async (_req, res) => {
-        try {
-            res.json({
-                actions: await listWorkspaceActions(
-                    createServerSupabase(),
-                    res.locals.userId,
-                ),
-            });
-        } catch (error) {
-            console.error("[google-actions] list failed", safeError(error));
-            res.status(500).json({
-                detail: "Could not load Google action proposals.",
-            });
-        }
-    }),
-);
-for (const decision of ["approve", "reject"] as const) {
-    userRouter.post(
-        `/google-actions/:actionId/${decision}`,
-        requireAuth,
-        requireMfaIfEnrolled,
-        asyncRoute(async (req, res) => {
-            const id = String(req.params.actionId);
-            if (
-                !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-                    id,
-                )
-            )
-                return void res
-                    .status(400)
-                    .json({ detail: "Invalid action ID." });
-            // The client supplies only the decision. Exact content comes from the
-            // immutable server-side proposal; no replacement payload is accepted.
-            if (req.body && Object.keys(req.body).length)
-                return void res
-                    .status(400)
-                    .json({
-                        detail: "Action content cannot be changed during approval.",
-                    });
-            try {
-                if (decision === "approve")
-                    res.json(
-                        await approveWorkspaceAction(
-                            createServerSupabase(),
-                            res.locals.userId,
-                            id,
-                        ),
-                    );
-                else {
-                    await rejectWorkspaceAction(
-                        createServerSupabase(),
-                        res.locals.userId,
-                        id,
-                    );
-                    res.status(204).end();
-                }
-            } catch (error) {
-                console.error(
-                    "[google-actions] decision failed",
-                    safeError(error),
-                );
-                res.status(
-                    error instanceof GoogleWorkspaceError ? 409 : 500,
-                ).json({
-                    detail:
-                        error instanceof GoogleWorkspaceError
-                            ? error.message
-                            : "Could not save the decision. Refresh and inspect the action status before trying again.",
-                });
-            }
-        }),
-    );
-}
-
 // POST /user/mcp-connectors/:connectorId/refresh-tools
 userRouter.post(
     "/mcp-connectors/:connectorId/refresh-tools",

@@ -5,11 +5,15 @@
 // over. The streaming loop itself stays in tabular.routes.ts.
 
 import {
+    loadUserMessageSentTimes,
     parseOptionalModel,
     parseOptionalReasoning,
+    stampUserMessageContent,
     type ChatMessage,
+    type MessageTimeContext,
     type TabularCellStore,
 } from "../chat/chat.service";
+import { MESSAGE_TIME_PROMPT, resolveRequestTimeZone } from "../../lib/userTime";
 import { type ReasoningLevel, type UserApiKeys } from "../../lib/llm";
 import { randomUUID } from "node:crypto";
 import {
@@ -99,6 +103,7 @@ export function buildTabularMessages(
     messages: ChatMessage[],
     tabularStore: TabularCellStore,
     reviewTitle: string,
+    time?: MessageTimeContext,
 ): unknown[] {
     const docList = tabularStore.documents
         .map((d, i) => `- ROW:${i} "${d.filename}"`)
@@ -136,11 +141,25 @@ Rules:
 - quote should be verbatim text from the cell's summary
 - Omit <CITATIONS> if you make no citations
 - Do not fabricate cell content
-- Answer in clear, concise prose. You may use markdown formatting.`;
+- Answer in clear, concise prose. You may use markdown formatting.${
+        time ? `\n\n${MESSAGE_TIME_PROMPT}` : ""
+    }`;
 
     const formatted: unknown[] = [{ role: "system", content: systemContent }];
-    for (const msg of messages) {
-        formatted.push({ role: msg.role, content: msg.content ?? "" });
+    const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
+    let userIndex = 0;
+    for (const [index, msg] of messages.entries()) {
+        let content = msg.content ?? "";
+        if (msg.role === "user" && time) {
+            content = stampUserMessageContent(
+                content,
+                time,
+                userIndex,
+                index === lastUserIndex,
+            );
+        }
+        if (msg.role === "user") userIndex += 1;
+        formatted.push({ role: msg.role, content });
     }
     return formatted;
 }
@@ -513,6 +532,8 @@ export async function prepareTabularChat(
         chatId: string | undefined;
         requestedModel: string | undefined;
         requestedReasoning: string | undefined;
+        /** The browser's IANA time zone; unvalidated request input. */
+        requestedTimeZone?: unknown;
     },
 ): Promise<TabularResult<PreparedTabularChat>> {
     const {
@@ -712,10 +733,18 @@ export async function prepareTabularChat(
         });
     }
 
+    const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+    const userSentAt = await loadUserMessageSentTimes(
+        db,
+        "tabular_review_chat_messages",
+        chatId,
+        messages,
+    );
     const apiMessages = buildTabularMessages(
         messages,
         tabularStore,
         review.title || "Untitled Review",
+        { timeZone, now: new Date(), userSentAt },
     );
 
     return {
