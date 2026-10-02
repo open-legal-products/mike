@@ -44,11 +44,21 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
+# Development stress (the `next dev` renderer) is 3-4x slower than the
+# production suite — ~25-35 min against ~7 — and was the last check to finish
+# on every slow PR. It runs nightly, on manual dispatch, and on any PR carrying
+# the `stress` label; ordinary PR pushes run only the production suite. Add the
+# label to PRs that touch streaming, render loops or effect dependencies; it
+# takes effect on the next push (or close + reopen the PR). There is deliberately
+# no `labeled` trigger: a run started by an unrelated label would report every
+# check as skipped, and a skipped check counts as passing — masking a red run.
+
 jobs:
   assistant-streaming:
     # React's passive-update warning is development-only. Keep the focused,
     # keyless streaming regression on next dev as well as the production suite.
     name: Assistant streaming (development)
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'stress')
     timeout-minutes: 45
     runs-on: ubuntu-latest
     env:
@@ -104,7 +114,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        renderer: [production, development]
+        # The development leg only exists when stress is opted in (see above).
+        renderer: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'stress')) && '["production","development"]' || '["production"]') }}
     runs-on: ubuntu-latest
     env:
       # Defaults match e2e/auth.setup.ts; overriding the password here would break

@@ -17,6 +17,14 @@ on:
   pull_request:
     branches: [main]
 
+# Don't pile up runs on rapid pushes to the same PR: a new push cancels the
+# superseded run so it stops holding job slots (the org's concurrent-job cap is
+# shared by every workflow). Pushes to main each get their own group (keyed by
+# sha) and are never cancelled.
+concurrency:
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
 jobs:
   backend:
     name: Backend build and tests

@@ -40,6 +40,10 @@ on:
       - "frontend/public/icons/**"
       - "packages/**"
       - ".github/workflows/word-addin.yml"
+  # Nightly development-stress run (see the job below). Offset from e2e.yml's
+  # 03:47 so the two stress suites don't compete for runners.
+  schedule:
+    - cron: "17 4 * * *"
 
 # Don't pile up runs on rapid pushes to the same PR; pushes to main each get
 # their own group (keyed by sha) and are never cancelled.
@@ -50,6 +54,11 @@ concurrency:
 jobs:
   streaming-development:
     name: Development stress (chromium + webkit)
+    # ~18-24 min against ~8 for the production job, so it stays off the PR
+    # path: it runs on push to main, nightly, on manual dispatch, and on PRs
+    # labelled `stress` (takes effect on the next push; see e2e.yml for why
+    # there is no `labeled` trigger).
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'stress')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:

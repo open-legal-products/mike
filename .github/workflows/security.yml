@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Don't pile up runs on rapid pushes to the same PR: a new push cancels the
+# superseded run so it stops holding job slots (the org's concurrent-job cap is
+# shared by every workflow). Pushes to main each get their own group (keyed by
+# sha) and are never cancelled.
+concurrency:
+  group: security-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
 # Least privilege for the job token: this workflow only reads the repo and
 # queries the npm registry — it never writes to the repo, issues, or checks.
 # Without this block the job token inherits the repository default, which
