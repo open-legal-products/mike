@@ -32,6 +32,7 @@ import {
     type PendingDirectGrant,
 } from "../modals/CreateAccessStep";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
+import { useUploadDuplicateCheck } from "@/app/components/documents/useUploadDuplicateCheck";
 
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
@@ -109,6 +110,9 @@ export function NewTRModal({
         [],
     );
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
+    // Exact-duplicate check for uploads into a project (see the hook).
+    const { checkProjectUpload, checkLibraryUpload, duplicateDialog } =
+        useUploadDuplicateCheck();
     const [groupBySubfolder, setGroupBySubfolder] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [creating, setCreating] = useState(false);
@@ -337,23 +341,52 @@ export function NewTRModal({
                 : underProject
                   ? selectedProjectId
                   : undefined;
-            const outcomes = uploadProjectId
-                ? await uploadProjectDocuments(
-                      uploadProjectId,
-                      files.map((file) => ({ file })),
-                  )
-                : await uploadStandaloneDocuments(
-                      files.map((file) => ({ file })),
-                  );
-            const uploaded = outcomes.flatMap((outcome) =>
-                outcome.status === "completed" && outcome.result
-                    ? [outcome.result]
-                    : [],
-            );
+            // Files already in the project (or, without one, in the user's
+            // library, where standalone uploads land) are not uploaded
+            // again: with "Use existing" their documents join the review.
+            const entries = files.map((file) => ({ file }));
+            const decision = uploadProjectId
+                ? await checkProjectUpload(uploadProjectId, entries, {
+                      reuse: true,
+                  })
+                : await checkLibraryUpload("files", entries, { reuse: true });
+            if (!decision) return;
+            const filesToUpload = decision.upload.map((entry) => entry.file);
+            const reused = decision.reuse;
+            const outcomes =
+                filesToUpload.length === 0
+                    ? []
+                    : uploadProjectId
+                      ? await uploadProjectDocuments(
+                            uploadProjectId,
+                            filesToUpload.map((file) => ({ file })),
+                        )
+                      : await uploadStandaloneDocuments(
+                            filesToUpload.map((file) => ({ file })),
+                        );
+            const uploaded = [
+                ...reused,
+                ...outcomes.flatMap((outcome) =>
+                    outcome.status === "completed" && outcome.result
+                        ? [outcome.result]
+                        : [],
+                ),
+            ];
             if (uploadProjectId) {
-                setProjectDocs((prev) => [...uploaded, ...prev]);
+                // Reused documents are already listed; add only new ones.
+                setProjectDocs((prev) => [
+                    ...uploaded.filter(
+                        (document) => !prev.some((doc) => doc.id === document.id),
+                    ),
+                    ...prev,
+                ]);
             } else {
-                setExtraStandaloneDocs((prev) => [...uploaded, ...prev]);
+                setExtraStandaloneDocs((prev) => [
+                    ...uploaded.filter(
+                        (document) => !prev.some((doc) => doc.id === document.id),
+                    ),
+                    ...prev,
+                ]);
             }
             setSelectedDocuments((prev) => [
                 ...prev,
@@ -365,7 +398,7 @@ export function NewTRModal({
             // Files that never became documents cannot be attached to the
             // review, so say which ones instead of leaving the picker looking
             // as though the upload simply produced nothing.
-            if (uploaded.length < outcomes.length) {
+            if (uploaded.length - reused.length < outcomes.length) {
                 setUploadError(failedUploadMessage(outcomes));
             }
         } catch (err) {
@@ -432,6 +465,8 @@ export function NewTRModal({
             : ["Tabular Reviews", "New Tabular Review"];
 
     return (
+        <>
+        {duplicateDialog}
         <Modal
             open={open}
             onClose={handleDismiss}
@@ -685,5 +720,6 @@ export function NewTRModal({
                 onClose={() => setNoModelsWarning(null)}
             />
         </Modal>
+        </>
     );
 }

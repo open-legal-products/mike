@@ -4,6 +4,35 @@ import { ConfirmPopup } from "./ConfirmPopup";
 import { ModalUI } from "@/shared/ui/ModalUI";
 
 describe("ConfirmPopup", () => {
+  it("offers an optional third choice between cancel and confirm", () => {
+    const onSecondary = vi.fn();
+    render(
+      <ConfirmPopup
+        open
+        title="Duplicates"
+        confirmLabel="Skip duplicates"
+        secondaryLabel="Upload anyway"
+        onSecondary={onSecondary}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const labels = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(labels).toEqual(["Cancel", "Upload anyway", "Skip duplicates"]);
+    fireEvent.click(screen.getByRole("button", { name: "Upload anyway" }));
+    expect(onSecondary).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no third button without one", () => {
+    render(
+      <ConfirmPopup open title="Continue?" onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+  });
+
   it("uses the configured danger variant for non-Delete labels", () => {
     render(
       <ConfirmPopup

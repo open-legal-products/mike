@@ -50,6 +50,7 @@ export {
 
 export {
   listProjectDocuments,
+  findProjectDocumentDuplicates,
   getProjectDirectoryLevel,
   assignOrCopyDocument,
   renameProjectDocument,

@@ -2,7 +2,20 @@ import { createDocumentVersion, copyDocumentVersionFiles } from "../documents/do
 // Project document service functions: list, assign/copy an existing document
 // into a project, and rename.
 
-import { renameDocument } from "../documents/documents.service";
+import {
+  MAX_DUPLICATE_CHECK_HASHES,
+  matchDocumentsByContentHash,
+  parseContentHashes,
+  renameDocument,
+  type DuplicateCandidate,
+  type DuplicateDocumentMatch,
+} from "../documents/documents.service";
+import {
+  failure,
+  internalFailure,
+  ok,
+  type ServiceResult,
+} from "../../lib/serviceResult";
 import {
   attachActiveVersionPaths,
   attachLatestVersionNumbers,
@@ -16,6 +29,7 @@ import {
   storageKey,
 } from "../../lib/storage";
 import { convertedPdfKey } from "../../lib/convert";
+import { fetchAllPages } from "../../lib/pagination";
 import { checkProjectAccess, resolveContentOrgId } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import { contentTypeForDocumentType } from "../../lib/documentTypes";
@@ -343,4 +357,49 @@ export async function renameProjectDocument(
     result.data as { id: string; current_version_id?: string | null },
   ]);
   return { ok: true, doc: { ...result.data, filename: renamedFilename } };
+}
+
+/**
+ * Which of the given file hashes (SHA-256 of the raw bytes, lower-case hex)
+ * already exist as the current version of a document in this project. Lets
+ * the upload dialogs warn about exact duplicates before anything is
+ * uploaded. Only documents of this project are reported, and only to
+ * someone who can see it.
+ */
+export async function findProjectDocumentDuplicates(
+  db: Db,
+  args: {
+    projectId: string;
+    userId: string;
+    userEmail?: string;
+    hashes: unknown;
+  },
+): Promise<ServiceResult<Record<string, DuplicateDocumentMatch[]>>> {
+  const { projectId, userId, userEmail } = args;
+  const hashes = parseContentHashes(args.hashes);
+  if (!hashes) {
+    return failure(
+      "validation",
+      `hashes must be an array of at most ${MAX_DUPLICATE_CHECK_HASHES} lower-case SHA-256 hex strings`,
+    );
+  }
+
+  const access = await checkProjectAccess(projectId, userId, userEmail, db);
+  if (!access.ok) return failure("not_found", "Project not found");
+  if (hashes.length === 0) return ok({});
+
+  // Every document of the project, past the PostgREST row cap.
+  const documents = await fetchAllPages<DuplicateCandidate>((from, to) =>
+    db
+      .from("documents")
+      .select("id, current_version_id, folder_id")
+      .eq("project_id", projectId)
+      .order("id")
+      .range(from, to),
+  );
+  if (!documents.ok) return internalFailure(documents.error);
+
+  const result = await matchDocumentsByContentHash(db, documents.rows, hashes);
+  if (!result.ok) return internalFailure(result.error);
+  return ok(result.matches);
 }

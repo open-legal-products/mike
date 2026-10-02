@@ -45,6 +45,11 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
     useUserProfile,
 }));
 vi.mock("../shared/FileDirectory", () => ({ FileDirectory: () => null }));
+// Content-addressed stand-in for SHA-256 (jsdom's File has no arrayBuffer):
+// the "hash" is the file's text, so equal contents count as duplicates.
+vi.mock("@/app/lib/fileHash", () => ({
+    sha256Hex: async (file: File) => `hash:${await file.text()}`,
+}));
 vi.mock("./ProjectPracticeField", () => ({
     ProjectPracticeField: ({
         id,
@@ -843,6 +848,68 @@ describe("NewProjectModal sharing", () => {
         // File that produced it rather than to a name they share.
         expect(sentFiles[0].clientId).toBeTruthy();
         expect(sentFiles[0].clientId).not.toBe(sentFiles[1].clientId);
+    });
+
+    it("asks before keeping the same file picked twice", async () => {
+        // The project is still empty, so only the selection can repeat: a
+        // second pick with the same content is asked about, and "Skip
+        // duplicates" drops it again.
+        const user = userEvent.setup({ delay: null });
+        renderModal();
+
+        await user.type(screen.getByPlaceholderText("Add project name"), "P");
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+
+        const input = document.querySelector(
+            'input[type="file"]',
+        ) as HTMLInputElement;
+        fireEvent.change(input, {
+            target: { files: [new File(["same"], "Lease.pdf")] },
+        });
+        fireEvent.change(input, {
+            target: { files: [new File(["same"], "Lease copy.pdf")] },
+        });
+
+        expect(
+            await screen.findByText(
+                "Lease copy.pdf: same file as Lease.pdf in this upload",
+            ),
+        ).toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Skip duplicates" }));
+
+        expect(
+            await screen.findByRole("button", { name: /Upload \(1\)/ }),
+        ).toBeInTheDocument();
+    });
+
+    it("keeps an earlier pick when a newer pick replaces its dialog", async () => {
+        // Two picks with duplicates in quick succession: the newer dialog
+        // cancels the older one, which must not remove the files it staged.
+        const user = userEvent.setup({ delay: null });
+        renderModal();
+
+        await user.type(screen.getByPlaceholderText("Add project name"), "P");
+        await user.click(screen.getByRole("button", { name: "Next" }));
+        await user.click(screen.getByRole("button", { name: "Next" }));
+
+        const input = document.querySelector(
+            'input[type="file"]',
+        ) as HTMLInputElement;
+        fireEvent.change(input, {
+            target: { files: [new File(["x"], "A.pdf"), new File(["x"], "A copy.pdf")] },
+        });
+        await screen.findByText("A copy.pdf: same file as A.pdf in this upload");
+        fireEvent.change(input, {
+            target: { files: [new File(["y"], "B.pdf"), new File(["y"], "B copy.pdf")] },
+        });
+        await screen.findByText("B copy.pdf: same file as B.pdf in this upload");
+        await user.click(screen.getByRole("button", { name: "Upload anyway" }));
+
+        // All four stay: the first pick's cancelled check changed nothing.
+        expect(
+            await screen.findByRole("button", { name: /Upload \(4\)/ }),
+        ).toBeInTheDocument();
     });
 
     it("says the attached files are still pending when a grant is refused", async () => {

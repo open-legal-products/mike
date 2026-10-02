@@ -33,6 +33,12 @@ import {
     type UploadProgressStatus,
     MikeApiError,
 } from "@/app/lib/mikeApi";
+import type { DuplicateDocumentMatch } from "@/app/lib/mikeApi";
+import {
+    describeUploadDuplicate,
+    findUploadDuplicates,
+    type UploadDuplicate,
+} from "./uploadDuplicates";
 import { runUserExport } from "@/app/lib/asyncExport";
 import type {
     Document,
@@ -126,6 +132,8 @@ import {
 // and should download instantly, while a large one risks an out-of-memory or a
 // gateway timeout and is worth the polling round trips.
 const ASYNC_ZIP_THRESHOLD = 10;
+/** Duplicate lines listed in the upload dialog before "and N more". */
+const UPLOAD_DUPLICATES_SHOWN = 6;
 const DOC_TABLE_STICKY_CELL_CLASS = "table-sticky-cell";
 
 export type DocTableFolder = ProjectFolder | LibraryFolder;
@@ -196,6 +204,14 @@ interface DocTableOperations {
     moveDocument: (documentId: string, folderId: string | null) => Promise<Document>;
     renameDocument: (documentId: string, filename: string) => Promise<Document>;
     bulkDeleteDocuments?: (documentIds: string[]) => Promise<{ deletedIds: string[] }>;
+    /**
+     * Exact-duplicate check before an upload: which of these SHA-256 file
+     * hashes already exist in the destination. Collections without it
+     * upload without asking.
+     */
+    findDuplicates?: (
+        hashes: string[],
+    ) => Promise<Record<string, DuplicateDocumentMatch[]>>;
 }
 
 interface DocTableProps {
@@ -765,6 +781,14 @@ export function DocTable({
     const folderUploadConflictResolverRef = useRef<
         ((choice: "rename" | "cancel") => void) | null
     >(null);
+    const [uploadDuplicates, setUploadDuplicates] = useState<{
+        lines: string[];
+        total: number;
+        allDuplicates: boolean;
+    } | null>(null);
+    const uploadDuplicatesResolverRef = useRef<
+        ((choice: "skip" | "all" | "cancel") => void) | null
+    >(null);
     const [deletingDocIds, setDeletingDocIds] = useState<Set<string>>(() => new Set());
     const [documentUploadWarning, setDocumentUploadWarning] = useState<string | null>(null);
     const [documentRenameWarning, setDocumentRenameWarning] = useState<string | null>(null);
@@ -787,6 +811,8 @@ export function DocTable({
         () => () => {
             folderUploadConflictResolverRef.current?.("cancel");
             folderUploadConflictResolverRef.current = null;
+            uploadDuplicatesResolverRef.current?.("cancel");
+            uploadDuplicatesResolverRef.current = null;
         },
         [],
     );
@@ -1526,6 +1552,28 @@ export function DocTable({
         resolve?.(choice);
     }
 
+    function requestUploadDuplicatesChoice(
+        duplicates: UploadDuplicate<DocumentUploadEntry>[],
+        totalFiles: number,
+    ): Promise<"skip" | "all" | "cancel"> {
+        uploadDuplicatesResolverRef.current?.("cancel");
+        setUploadDuplicates({
+            lines: duplicates.map(describeUploadDuplicate),
+            total: duplicates.length,
+            allDuplicates: duplicates.length === totalFiles,
+        });
+        return new Promise((resolve) => {
+            uploadDuplicatesResolverRef.current = resolve;
+        });
+    }
+
+    function finishUploadDuplicates(choice: "skip" | "all" | "cancel") {
+        const resolve = uploadDuplicatesResolverRef.current;
+        uploadDuplicatesResolverRef.current = null;
+        setUploadDuplicates(null);
+        resolve?.(choice);
+    }
+
     async function handleCollectionUploadEntries(
         entries: DocumentUploadEntry[],
         baseFolderId: string | null = viewedFolderIdRef.current,
@@ -1543,7 +1591,7 @@ export function DocTable({
         setDocumentUploadWarning(formatUnsupportedDocumentWarning(unsupported));
         if (supported.length === 0) return;
         const supportedFiles = new Set(supported);
-        const supportedEntries = entries.filter((entry) =>
+        let supportedEntries = entries.filter((entry) =>
             supportedFiles.has(entry.file),
         );
         if (
@@ -1553,6 +1601,31 @@ export function DocTable({
                 `You can upload up to ${MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD} supported documents at a time. Nothing was uploaded.`,
             );
             return;
+        }
+        // Exact duplicates (same bytes) already in the destination or
+        // repeated in this upload: ask before uploading them again. If the
+        // check cannot run, the upload goes ahead unchecked.
+        if (operations.findDuplicates) {
+            const duplicates = await findUploadDuplicates(
+                supportedEntries,
+                operations.findDuplicates,
+            );
+            if (duplicates && duplicates.length > 0) {
+                const choice = await requestUploadDuplicatesChoice(
+                    duplicates,
+                    supportedEntries.length,
+                );
+                if (choice === "cancel") return;
+                if (choice === "skip") {
+                    const skipped = new Set(
+                        duplicates.map((duplicate) => duplicate.entry),
+                    );
+                    supportedEntries = supportedEntries.filter(
+                        (entry) => !skipped.has(entry),
+                    );
+                    if (supportedEntries.length === 0) return;
+                }
+            }
         }
         const progressFiles = supportedEntries.map((entry) => ({
             clientId: crypto.randomUUID(),
@@ -3903,6 +3976,50 @@ export function DocTable({
                 open={!!collectionActionWarning}
                 onClose={() => setCollectionActionWarning(null)}
                 message={collectionActionWarning}
+            />
+            <ConfirmPopup
+                open={!!uploadDuplicates}
+                title={
+                    uploadDuplicates?.total === 1
+                        ? "This file is already here"
+                        : `${uploadDuplicates?.total ?? 0} files are already here`
+                }
+                message={
+                    uploadDuplicates ? (
+                        <div className="space-y-2">
+                            <p>
+                                These files have exactly the same content as
+                                documents in this collection or in this
+                                upload.
+                            </p>
+                            <ul className="list-disc space-y-0.5 pl-4 break-words">
+                                {uploadDuplicates.lines
+                                    .slice(0, UPLOAD_DUPLICATES_SHOWN)
+                                    .map((line, index) => (
+                                        <li key={index}>{line}</li>
+                                    ))}
+                            </ul>
+                            {uploadDuplicates.total > UPLOAD_DUPLICATES_SHOWN && (
+                                <p>
+                                    and{" "}
+                                    {uploadDuplicates.total -
+                                        UPLOAD_DUPLICATES_SHOWN}{" "}
+                                    more
+                                </p>
+                            )}
+                        </div>
+                    ) : undefined
+                }
+                confirmLabel={
+                    uploadDuplicates?.allDuplicates
+                        ? "Don't upload"
+                        : "Skip duplicates"
+                }
+                secondaryLabel="Upload anyway"
+                onSecondary={() => finishUploadDuplicates("all")}
+                cancelLabel="Cancel"
+                onCancel={() => finishUploadDuplicates("cancel")}
+                onConfirm={() => finishUploadDuplicates("skip")}
             />
             <ConfirmPopup
                 open={!!folderUploadConflict}
