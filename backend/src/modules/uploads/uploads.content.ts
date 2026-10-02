@@ -5,8 +5,12 @@
 
 import JSZip from "jszip";
 
-/** A PDF header must appear within the first 1024 bytes (ISO 32000). */
-export const PDF_HEAD_BYTES = 1024;
+/**
+ * Bytes read from the start of an object for the checks that need no more: a
+ * PDF header must appear within the first 1024 bytes (ISO 32000), and the OLE
+ * signature is 8.
+ */
+export const HEAD_BYTES = 1024;
 
 const OLE_SIGNATURE = Buffer.from([
   0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,
@@ -30,7 +34,7 @@ export function needsFullObjectForValidation(fileType: string): boolean {
 }
 
 export function hasPdfHeader(head: Uint8Array): boolean {
-  return Buffer.from(head.subarray(0, PDF_HEAD_BYTES))
+  return Buffer.from(head.subarray(0, HEAD_BYTES))
     .toString("latin1")
     .includes("%PDF-");
 }
@@ -39,11 +43,12 @@ async function isOoxmlPackage(
   bytes: Uint8Array,
   mainPart: string,
 ): Promise<boolean> {
-  const buf = Buffer.from(bytes);
-  if (!buf.subarray(0, 4).equals(ZIP_SIGNATURE)) return false;
+  // Copy only the 4 signature bytes; hand JSZip the original array so a
+  // 100 MB upload is not held in memory twice.
+  if (!Buffer.from(bytes.subarray(0, 4)).equals(ZIP_SIGNATURE)) return false;
   try {
     // Reads only the central directory; no entry is decompressed.
-    const zip = await JSZip.loadAsync(buf);
+    const zip = await JSZip.loadAsync(bytes);
     return zip.file("[Content_Types].xml") !== null &&
       zip.file(mainPart) !== null;
   } catch {

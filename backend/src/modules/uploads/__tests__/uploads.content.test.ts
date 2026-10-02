@@ -38,6 +38,7 @@ describe("validateDocumentContent", () => {
     expect(await validateDocumentContent("docx", bytes("%PDF-1.7"))).toBe(false);
     const docx = await zipOf(["[Content_Types].xml", "word/document.xml"]);
     expect(await validateDocumentContent("docx", docx.slice(0, 40))).toBe(false);
+    expect(await validateDocumentContent("docx", new Uint8Array())).toBe(false);
   });
 
   it("checks the OLE signature for legacy Office types", async () => {

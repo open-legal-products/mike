@@ -31,7 +31,7 @@ import {
 import type { Db } from "../../lib/supabase";
 import {
   needsFullObjectForValidation,
-  PDF_HEAD_BYTES,
+  HEAD_BYTES,
   validateDocumentContent,
 } from "./uploads.content";
 import {
@@ -189,7 +189,7 @@ async function verifyAndSealSessionFiles(
     // The declared type is a claim; check the staged bytes before sealing.
     const head = needsFullObjectForValidation(file.file_type)
       ? await downloadFile(file.staging_storage_path)
-      : await downloadFileHead(file.staging_storage_path, PDF_HEAD_BYTES);
+      : await downloadFileHead(file.staging_storage_path, HEAD_BYTES);
     if (!head) throw new Error("Failed to read staged upload for validation");
     if (!(await validateDocumentContent(file.file_type, new Uint8Array(head)))) {
       await deleteFileBestEffort(file.staging_storage_path, "seal-mismatch");
