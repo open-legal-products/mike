@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import dns from "dns/promises";
 import net from "net";
+import { promisify } from "node:util";
 import { Agent, fetch as undiciFetch } from "undici";
 import { isBlockedIp } from "../privateIp";
 import { configuredApiPublicUrl } from "../runtimeConfig";
@@ -203,16 +204,21 @@ export function mcpToolRequiresWriteAccess(
     return tool.requires_confirmation || isMcpWriteTool(tool.annotations);
 }
 
+const deriveCredentialFingerprint = promisify(crypto.scrypt);
+
 /** An opaque binding to the destination and credentials, stable across token refresh. */
-export function mcpConnectionFingerprint(
+export async function mcpConnectionFingerprint(
     connector: ConnectorRow,
     oauthGrantId: string | null,
 ) {
     const config = decryptAuthConfig(connector);
-    const credentials = connector.encrypted_auth_config || oauthGrantId
-        ? crypto
-                .createHmac("sha256", encryptionKey())
-                .update(
+    // Use a slow, asynchronous derivation for potentially low-entropy custom
+    // credentials. The application key also prevents offline guessing from
+    // a fingerprint alone without blocking the request event loop.
+    const credentials =
+        connector.encrypted_auth_config || oauthGrantId
+            ? (
+                (await deriveCredentialFingerprint(
                     JSON.stringify({
                         oauthGrantId,
                         bearerToken: config.bearerToken ?? null,
@@ -220,9 +226,11 @@ export function mcpConnectionFingerprint(
                             a.localeCompare(b),
                         ),
                     }),
-                )
-                .digest("hex")
-        : null;
+                    encryptionKey(),
+                    32,
+                )) as Buffer
+            ).toString("hex")
+            : null;
     return crypto
         .createHash("sha256")
         .update(

@@ -201,7 +201,7 @@ describe("MCP write approvals", () => {
                     type: "mcp",
                     connector_id: "connector-1",
                     tool_id: "tool-1",
-                    connection_fingerprint: mcpConnectionFingerprint(makeConnector(), null),
+                    connection_fingerprint: await mcpConnectionFingerprint(makeConnector(), null),
                 },
             },
         });
@@ -252,7 +252,7 @@ describe("MCP write approvals", () => {
                     type: "mcp",
                     connector_id: "connector-1",
                     tool_id: "tool-1",
-                    connection_fingerprint: mcpConnectionFingerprint(makeConnector(), null),
+                    connection_fingerprint: await mcpConnectionFingerprint(makeConnector(), null),
                 },
             },
             db,
