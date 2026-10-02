@@ -1,0 +1,271 @@
+@reference "../../../globals.css";
+
+/* EigenPal 2.21.1 has no title-row or frame-border option. Scope these
+   overrides to its packaged chrome; Mike owns the filename and file actions. */
+.host {
+    --mike-docx-comment-width: 240px;
+    /* Capture Mike's semantic tokens before EigenPal shadows them with HSL. */
+    --mike-docx-focus-color: var(--ring);
+    --mike-docx-foreground: var(--foreground);
+    --mike-docx-muted-foreground: var(--muted-foreground);
+    --mike-docx-button-color: var(--muted-foreground);
+    --mike-docx-border: var(--border);
+}
+
+:global(.dark) .host {
+    --mike-docx-button-color: var(--foreground);
+}
+
+.host :global(.docx-editor) {
+    background: transparent !important;
+}
+
+/* Inset the navigation pane while keeping its right edge and page reservation. */
+.host :global(.docx-editor) :global(.docx-nav__panel-shell) {
+    background: transparent;
+    inset-inline-start: 0.75rem;
+    width: calc(var(--docx-nav-width, 280px) + var(--docx-nav-inset, 32px) - 0.75rem);
+}
+
+/* EigenPal shifts the page by the pane plus a 16px gap, and the page keeps its
+   own 24px gutter. Tighten the pane-to-page gap to about 16px. The pane is the
+   viewport's previous sibling, and the inline shift needs !important. */
+.host :global(.docx-nav[data-open="true"]) + :global(.docx-editor__scroll-container) {
+    --docx-nav-shift: 304px !important;
+}
+
+.host :global(.docx-toolbar) {
+    /* Reuse Mike's text utilities and the same material/state tokens as
+       TextButtonUI, LiquidDropdown and the flat dropdown inputs. */
+    --foreground: var(--mike-docx-foreground);
+    --muted-foreground: var(--mike-docx-muted-foreground);
+    --ring: var(--mike-docx-focus-color);
+    --doc-text: var(--foreground);
+    --doc-text-muted: var(--muted-foreground);
+    --doc-surface: var(--liquid-glass-background-float);
+    --doc-border: var(--mike-docx-border);
+    --doc-border-dark: var(--mike-docx-border);
+    --doc-bg-hover: var(--liquid-glass-hover-background);
+    --doc-surface-hover: var(--liquid-glass-hover-background);
+    --doc-toggle-active-bg: var(--liquid-glass-selected-background);
+    --doc-toggle-active-fg: var(--foreground);
+    --doc-primary-light: var(--liquid-glass-selected-background);
+    --doc-primary: var(--foreground);
+    --doc-accent: var(--mike-docx-focus-color);
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+
+.host :global(.docx-toolbar) button {
+    color: var(--mike-docx-button-color);
+}
+
+/* The portaled New comment action follows Comments, before the mode picker. */
+.host :global(.docx-toolbar__group) > [data-slot="review.comments"] {
+    order: -2;
+}
+
+/* A compact toolbar: 24px controls with 16px icons (EigenPal: 28px / 18px). */
+.host :global(.docx-toolbar) :global(.docx-toolbar__button) {
+    width: 24px;
+    height: 24px;
+}
+
+.host :global(.docx-toolbar) :global(.docx-toolbar__colorsplit-caret) {
+    width: 16px;
+    height: 24px;
+}
+
+.host :global(.docx-toolbar) :global(.docx-toolbar__picker) {
+    height: 28px;
+}
+
+.host :global(.docx-toolbar) :is(:global(.docx-toolbar__button), :global(.docx-toolbar__picker)) svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Color swatches represent document colors, not interactive surface fills. */
+.host :global(.docx-toolbar) button:not(:global(.docx-toolbar__swatch)):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) {
+    background: var(--liquid-glass-hover-background);
+    color: var(--mike-docx-button-color);
+}
+
+.host :global(.docx-toolbar) button:not(:global(.docx-toolbar__swatch)):not(:disabled):not([aria-disabled="true"]):is([data-active]:not([data-active="false"]), [aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]) {
+    background: var(--liquid-glass-selected-background);
+    color: var(--mike-docx-button-color);
+}
+
+.host :global(.docx-toolbar) :global(.docx-toolbar__font-size-input) {
+    @apply rounded-md;
+}
+
+.host :global(.docx-toolbar) :is(input:not([type]), input[type="text"], input[type="search"], input[type="number"], textarea) {
+    @apply text-foreground;
+    background: var(--dropdown-input-background);
+    border-color: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+}
+
+.host :global(.docx-toolbar) :is(button, input, textarea):focus-visible {
+    outline: 2px solid var(--mike-docx-focus-color);
+    outline-offset: -2px;
+}
+
+/* The packaged toolbar doesn't expose a shared dropdown component slot.
+   Use LiquidDropdownSurface's material tokens for its menus, palettes, nested
+   table pickers and overflow panel without replacing native menu behavior. */
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu),
+    :global(.docx-toolbar__more-panel),
+    :global(.docx-toolbar__mode-menu),
+    :global(.docx-toolbar__reviewers-menu),
+    :global(.docx-toolbar__image-wrap-menu),
+    :global(.docx-toolbar__alt-text-panel),
+    :global(.docx-toolbar__swatch-popup),
+    :global(.docx-table-chrome__panel)
+) {
+    background: var(--liquid-glass-background-float);
+    border: 1px solid var(--liquid-glass-border-float);
+    border-radius: 1rem;
+    box-shadow: var(--liquid-glass-shadow-float);
+    backdrop-filter: blur(40px);
+}
+
+/* Match Mike's dropdown rows, preserving font/style previews and swatch colors. */
+.host :global(.docx-toolbar) :global(.docx-toolbar__font-search) {
+    border-radius: 0.75rem;
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu-item),
+    :global(.docx-toolbar__mode-item),
+    :global(.docx-toolbar__reviewer-item),
+    :global(.docx-toolbar__font-family-item),
+    :global(.docx-toolbar__style-item),
+    :global(.docx-table-chrome__width-row),
+    :global(.docx-toolbar__swatch-clear)
+) {
+    border-radius: 0.5rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu-item),
+    :global(.docx-toolbar__mode-item),
+    :global(.docx-toolbar__reviewer-item),
+    :global(.docx-toolbar__font-family-item),
+    :global(.docx-toolbar__style-item),
+    :global(.docx-table-chrome__width-row),
+    :global(.docx-toolbar__swatch-clear)
+):not(:disabled):not([aria-disabled="true"]):is(:hover, :focus-visible) {
+    background: var(--liquid-glass-hover-background);
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu-item),
+    :global(.docx-toolbar__mode-item),
+    :global(.docx-toolbar__reviewer-item),
+    :global(.docx-toolbar__font-family-item),
+    :global(.docx-toolbar__style-item),
+    :global(.docx-table-chrome__width-row),
+    :global(.docx-toolbar__alignment-option),
+    :global(.docx-table-chrome__option),
+    :global(.docx-table-chrome__target-btn)
+):is([aria-selected="true"], [aria-checked="true"], [data-active="true"], [data-active=""]) {
+    background: var(--liquid-glass-selected-background);
+}
+
+.host :global(.docx-toolbar) :is(
+    :global(.docx-toolbar__menu),
+    :global(.docx-toolbar__more-panel),
+    :global(.docx-toolbar__mode-menu),
+    :global(.docx-toolbar__reviewers-menu),
+    :global(.docx-toolbar__image-wrap-menu),
+    :global(.docx-toolbar__alt-text-panel),
+    :global(.docx-toolbar__swatch-popup),
+    :global(.docx-table-chrome__panel)
+) :focus-visible {
+    outline: 2px solid var(--mike-docx-focus-color);
+    outline-offset: -2px;
+}
+
+.host :global(.docx-editor) > div:has(:global(.docx-toolbar)) {
+    z-index: auto !important;
+    background: var(--liquid-glass-background-float) !important;
+    border-bottom: 0 !important;
+    box-shadow: none !important;
+}
+
+/* Keep the native toolbar mounted so toggling preserves its controls and editor state. */
+.host[data-toolbar-visible="false"] :global(.docx-editor) > div:has(:global(.docx-toolbar)) {
+    display: none !important;
+}
+
+.host :global(.docx-editor) > div:has(:global(.docx-toolbar)) > div:first-child {
+    display: none !important;
+}
+
+.host :global(.docx-editor) > div > div:has(> :global(.docx-toolbar)) {
+    padding: 0 !important;
+}
+
+.host :global(.docx-font-notice),
+.host :global(.docx-notification-warning) {
+    background: var(--liquid-glass-background-flat) !important;
+    border-color: var(--liquid-glass-border-flat) !important;
+}
+
+.host :global(.docx-font-notice) {
+    color: var(--color-gray-700);
+}
+
+/* These packaged dismiss buttons have no styling slot. Match PillButtonUI's
+   white/xs material and shape while preserving EigenPal's dismissal handlers.
+   Toast controls use inline styles, hence the scoped important overrides. */
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    height: 1.5rem;
+    padding: 0 0.625rem !important;
+    border-radius: 9999px !important;
+    border: 1px solid var(--liquid-glass-border-flat) !important;
+    background: var(--liquid-glass-background-flat) !important;
+    box-shadow: var(--liquid-glass-shadow-flat);
+    color: var(--color-gray-700) !important;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 150ms, box-shadow 150ms, transform 150ms;
+}
+
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child):hover {
+    background: var(--liquid-glass-hover-background) !important;
+}
+
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child):active {
+    transform: scale(0.98);
+}
+
+.host :is(:global(.docx-font-notice__dismiss), :global(.docx-notification-toast) > div > button:last-child):focus-visible {
+    outline: 2px solid var(--mike-docx-focus-color);
+    outline-offset: 2px;
+}
+
+.host :global(.docx-notification-toast) > div > button:last-child {
+    width: 1.5rem;
+    padding: 0 !important;
+}
+
+/* Comments sit in a docked column beside the viewport, so the page needs no
+   in-viewport comment gutter while that column is open. */
+.host :global(.docx-editor__scroll-container)[data-review-pane="open"] {
+    --docx-review-gutter: 24px !important;
+    --docx-review-gutter-start: 24px !important;
+}

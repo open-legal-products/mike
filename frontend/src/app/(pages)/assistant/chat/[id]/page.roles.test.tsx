@@ -6,10 +6,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // the caller's standing; this file pins that the page actually consumes it
 // — dropping it handed a viewer a live composer whose sends 403.
 
-const { getChat } = vi.hoisted(() => ({ getChat: vi.fn() }));
+const { getChat, loadChats, chatOptions } = vi.hoisted(() => ({
+    getChat: vi.fn(),
+    loadChats: vi.fn(),
+    chatOptions: {
+        current: null as null | { onChatCreated?: (chatId: string) => void },
+    },
+}));
 
 vi.mock("next/navigation", () => ({
-    useParams: () => ({ id: "chat-1" }),
+    usePathname: () => window.location.pathname,
     useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -20,17 +26,23 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
         setCurrentChatId: vi.fn(),
         newChatMessages: null,
         setNewChatMessages: vi.fn(),
+        loadChats,
     }),
 }));
 vi.mock("@/app/hooks/useAssistantChat", () => ({
-    useAssistantChat: () => ({
-        messages: [],
-        isResponseLoading: false,
-        handleChat: vi.fn(),
-        setMessages: vi.fn(),
-        cancel: vi.fn(),
-        detach: vi.fn(),
-    }),
+    useAssistantChat: (options: {
+        onChatCreated?: (chatId: string) => void;
+    }) => {
+        chatOptions.current = options;
+        return {
+            messages: [],
+            isResponseLoading: false,
+            handleChat: vi.fn(),
+            setMessages: vi.fn(),
+            cancel: vi.fn(),
+            resetChat: vi.fn(),
+        };
+    },
 }));
 vi.mock("@/app/components/assistant/ChatView", () => ({
     ChatView: ({
@@ -68,16 +80,45 @@ function chatDetail(access_role: "owner" | "editor" | "viewer") {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState(null, "", "/assistant/chat/chat-1");
+});
+
+describe("global new chat", () => {
+    beforeEach(() => {
+        window.history.replaceState(null, "", "/assistant");
+    });
+
+    it("opens writable without loading a chat", () => {
+        render(<AssistantChatPage />);
+
+        expect(screen.getByTestId("can-send")).toHaveTextContent("true");
+        expect(screen.getByTestId("access-resolved")).toHaveTextContent("true");
+        expect(getChat).not.toHaveBeenCalled();
+    });
+
+    it("adopts the created chat in place instead of reloading it", async () => {
+        render(<AssistantChatPage />);
+
+        await act(async () => {
+            chatOptions.current?.onChatCreated?.("chat-9");
+        });
+
+        expect(window.location.pathname).toBe("/assistant/chat/chat-9");
+        expect(loadChats).toHaveBeenCalled();
+        expect(getChat).not.toHaveBeenCalled();
+        expect(screen.getByTestId("can-send")).toHaveTextContent("true");
+    });
 });
 
 describe("global chat page composer gating", () => {
     it("hands a project viewer a read-only composer", async () => {
         getChat.mockResolvedValue(chatDetail("viewer"));
         render(<AssistantChatPage />);
+        // `canSend` also opens at false, so wait on the served role instead.
         await waitFor(() =>
-            expect(screen.getByTestId("can-send")).toHaveTextContent("false"),
+            expect(screen.getByTestId("chat-role")).toHaveTextContent("viewer"),
         );
-        expect(screen.getByTestId("chat-role")).toHaveTextContent("viewer");
+        expect(screen.getByTestId("can-send")).toHaveTextContent("false");
     });
 
     it("holds the composer back until the served standing lands", async () => {

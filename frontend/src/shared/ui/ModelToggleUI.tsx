@@ -118,6 +118,8 @@ export interface ModelToggleUIProps {
   selectedAvailable?: boolean;
   loading?: boolean;
   compact?: boolean;
+  /** `default` matches the toolbar's other buttons; `muted` is the lighter chat-composer look. */
+  tone?: "muted" | "default";
   modalInput?: boolean;
   emptyLabel?: string;
   onEmptyClick?: () => void;
@@ -141,6 +143,7 @@ export function ModelToggleUI({
   selectedAvailable = true,
   loading = false,
   compact = false,
+  tone = "muted",
   modalInput = false,
   emptyLabel = "No Models",
   onEmptyClick,
@@ -217,7 +220,7 @@ export function ModelToggleUI({
           className={
             modalInput
               ? `flex h-10 w-full items-center justify-between gap-2 rounded-xl px-3 text-sm text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} backdrop-blur-xl transition-colors enabled:cursor-pointer disabled:cursor-default disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${open ? LIQUID_GLASS_SELECTED_CLASS : ""}`
-              : `flex h-8 shrink-0 items-center rounded-lg text-sm text-gray-400 transition-colors enabled:cursor-pointer enabled:hover:text-gray-700 disabled:cursor-default disabled:hover:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${compact ? "w-8 justify-center px-0" : "gap-1.5 px-2"} ${open ? "text-gray-700" : ""}`
+              : `flex h-8 shrink-0 items-center rounded-lg text-sm ${tone === "default" ? "text-gray-700 enabled:hover:text-gray-900 disabled:hover:text-gray-700" : "text-gray-400 enabled:hover:text-gray-700 disabled:hover:text-gray-400"} transition-colors enabled:cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${compact ? "w-8 justify-center px-0" : "gap-1.5 px-2"} ${open ? "text-gray-700" : ""}`
           }
         >
           {compact ? (
@@ -231,7 +234,7 @@ export function ModelToggleUI({
           ) : (
             <>
               <span
-                className={`${modalInput ? "min-w-0 flex-1 text-left" : "max-w-[200px]"} truncate`}
+                className={`${modalInput ? "min-w-0 flex-1 text-left" : "min-w-0 max-w-[200px]"} truncate`}
               >
                 {label}
               </span>

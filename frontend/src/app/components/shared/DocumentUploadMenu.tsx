@@ -50,7 +50,7 @@ export function DocumentUploadMenu({
                         className="flex items-center px-3 py-2"
                     >
                         <Files className="mr-2 h-3.5 w-3.5" />
-                        Saved files
+                        Saved Documents
                     </LiquidDropdownItem>
                 )}
                 <LiquidDropdownItem
@@ -59,7 +59,7 @@ export function DocumentUploadMenu({
                     className="flex items-center px-3 py-2"
                 >
                     <Upload className="mr-2 h-3.5 w-3.5" />
-                    Upload files
+                    Upload Documents
                 </LiquidDropdownItem>
                 {onUploadFolder !== undefined && (
                     <LiquidDropdownItem

@@ -183,6 +183,10 @@ module.exports = async (_env, options) => {
         "@mike/edit-cards-section-ui": frontendSharedUi(
           "EditCardsSectionUI.tsx",
         ),
+        "@mike/reasoning-disclosure": frontendShared(
+          "hooks",
+          "useReasoningDisclosure.ts",
+        ),
         "@mike/pre-response-wrapper-ui": frontendSharedUi(
           "PreResponseWrapperUI.tsx",
         ),

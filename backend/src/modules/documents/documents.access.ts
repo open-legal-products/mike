@@ -115,7 +115,14 @@ export async function getDocument(
     }[];
     await attachLatestVersionNumbers(db, docs);
     await attachActiveVersionPaths(db, docs);
-    return { ok: true, doc: docs[0] as unknown as Record<string, unknown> };
+    const canReplace = creatorScopedAllowed(access, access.doc.user_id)
+        || (!!access.doc.workflow_id && can(access.projectRole, "content.edit"));
+    return { ok: true, doc: {
+        ...docs[0],
+        can_edit: can(access.projectRole, "content.edit") && canReplace,
+        can_delete: canReplace,
+    } };
+
 }
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 
 const LIQUID_DROPDOWN_CHROME_CLASS =
-    "rounded-2xl backdrop-blur-2xl";
+    "theme-dropdown-surface rounded-2xl backdrop-blur-2xl";
 const LIQUID_DROPDOWN_SURFACE_CLASS =
     `${LIQUID_DROPDOWN_CHROME_CLASS} ${LIQUID_GLASS_FLOAT_CLASS}`;
 

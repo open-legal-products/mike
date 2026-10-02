@@ -1,9 +1,11 @@
 // Async + reconnectable variants of the tabular generate stream.
 //
-// LAYERING EXCEPTION: unlike the other service files, this one takes `res`
-// and owns an SSE response — the stream over the Redis progress channel IS
-// the product here, and both routes (POST generate, GET generate/stream)
-// share it. Do not copy this pattern into other service files.
+// LAYERING EXCEPTION: unlike the other service files, the ASYNC half of this
+// one takes `res` and owns an SSE response — the stream over the Redis
+// progress channel IS the product here, and both routes (POST generate, GET
+// generate/stream) share it. Do not copy this pattern into other service
+// files. The synchronous half no longer does: its generation is a
+// server-owned run (lib/streamRuns.ts) and it writes through the run.
 //
 // Extraction is handed to durable BullMQ jobs (one per row) that retry and
 // survive a client disconnect or server restart. The HTTP request becomes a
@@ -555,18 +557,20 @@ const TABULAR_GENERATION_CONCURRENCY = 3;
  * Run extraction inline and stream each cell as it lands — the historical path,
  * taken when ASYNC_TABULAR_EXTRACTION is off (no Redis required).
  *
- * It lives beside its async sibling for the same reason that one is here: the
- * SSE frames ARE the product, so the loop needs `res`. The route keeps the
- * lease, the abort wiring and the terminal `[DONE]` frame; this owns only the
- * extraction fan-out and the `cell_update` frames, which the async path emits
- * in exactly the same shape.
+ * Unlike its async sibling this takes no `res`: the generation is a
+ * server-owned run (lib/streamRuns.ts), so the frames go to `write`, which
+ * buffers them and fans them out to every attached response — the original
+ * request, a reload, a second tab. The route keeps the lease, the run and the
+ * terminal `[DONE]` frame; this owns only the extraction fan-out and the
+ * `cell_update` frames, which the async path emits in exactly the same shape.
  *
  * Returns true when the run finished on its own, false when it was aborted —
  * the caller uses that to decide whether to record the audit event and close
  * the stream cleanly.
  */
 export async function streamTabularGenerateSync(args: {
-    res: Response;
+    /** The run's frame sink; never the raw response. */
+    write: (line: string) => boolean;
     db: Db;
     reviewId: string;
     columns: Column[];
@@ -579,7 +583,7 @@ export async function streamTabularGenerateSync(args: {
     onError?: (error: unknown) => void;
 }): Promise<boolean> {
     const {
-        res,
+        write,
         db,
         reviewId,
         columns,
@@ -591,17 +595,6 @@ export async function streamTabularGenerateSync(args: {
         abortSignal,
         onError,
     } = args;
-
-    const write = (line: string) => {
-        if (res.destroyed || res.writableEnded) return false;
-        return res.write(line);
-    };
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
 
     let nextRowIndex = 0;
     const cellFrame = (

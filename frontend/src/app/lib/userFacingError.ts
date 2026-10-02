@@ -1,9 +1,15 @@
-import { MikeApiError } from "./mikeApi";
+import { MikeApiError, reportedUpstreamMessage } from "./mikeApi";
 
 export function userFacingApiError(
     error: unknown,
     fallback: string,
 ): string {
+    // The 5xx codes with something to say (a migration to apply, a server
+    // to wait for) get their fixed frontend message (mikeApi.ts).
+    if (error instanceof MikeApiError && error.code) {
+        const upstream = reportedUpstreamMessage(error.code);
+        if (upstream) return upstream;
+    }
     if (
         error instanceof MikeApiError &&
         error.status >= 400 &&

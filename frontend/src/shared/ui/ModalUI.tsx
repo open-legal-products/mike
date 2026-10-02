@@ -8,8 +8,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { LIQUID_GLASS_MODAL_CLASS } from "./LiquidGlassUI";
-import { X } from "lucide-react";
-import { GlassIconButtonUI } from "./GlassIconButtonUI";
+import { CloseButton } from "./CloseButton";
 
 export type ModalUISize = "sm" | "md" | "lg" | "xl";
 
@@ -169,9 +168,7 @@ export function ModalUI({
                             </div>
                             {headerAction}
                         </div>
-                        <GlassIconButtonUI onClick={onClose} aria-label="Close">
-                            <X className="h-3.5 w-3.5" />
-                        </GlassIconButtonUI>
+                        <CloseButton onClick={onClose} size="md" />
                     </header>
                 )}
 

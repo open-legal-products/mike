@@ -24,6 +24,7 @@
     --citation-selected-text: #172554;
     --citation-selected-muted-text: #1e3a8a;
 
+    --dropdown-input-background: var(--color-gray-100, #f3f4f6);
     --liquid-glass-hover-background: #f5f6f8;
     --liquid-glass-selected-background: var(--app-surface-active, #eff0f3);
     --liquid-glass-modal-row-hover-background: #f3f4f6;
@@ -42,6 +43,7 @@
 }
 
 .dark {
+    --dropdown-input-background: var(--color-gray-800, #1f2937);
     --document-canvas-background: var(--app-surface-hover, #19212c);
     --document-tab-active-background: var(--app-surface, #131922);
     --document-tab-inactive-background: var(--app-surface-hover, #19212c);
@@ -86,9 +88,14 @@
     background-color: var(--document-tab-strip-background);
 }
 
-.project-document-tabs {
-    --document-tab-active-background: var(--document-canvas-background);
-    --document-tab-inactive-background: var(--app-surface);
+.document-tab-bar {
+    --document-tab-active-background: var(--app-surface-active);
+    --document-tab-inactive-background: transparent;
+}
+
+.document-tab-bar .document-tab::before,
+.document-tab-bar .document-tab::after {
+    display: none;
 }
 
 .document-canvas {
@@ -133,6 +140,31 @@
 
 .document-tab[data-active="true"]::after {
     box-shadow: -4px 4px 0 4px var(--document-tab-active-background);
+}
+
+/* Dropdown text fields are flat; the surrounding menu carries the glass depth.
+   Keep Tailwind focus rings while dropping the input's elevation shadow. */
+.theme-dropdown-surface :is(
+    input:not([type]),
+    input[type="text"],
+    input[type="search"],
+    input[type="email"],
+    input[type="password"],
+    input[type="url"],
+    input[type="tel"],
+    input[type="number"],
+    textarea,
+    [data-slot="search-bar"]
+) {
+    background: var(--dropdown-input-background);
+    border-color: transparent;
+    box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000);
+    backdrop-filter: none;
+}
+
+/* SearchBar's wrapper owns the fill and focus ring around its icon and input. */
+.theme-dropdown-surface [data-slot="search-bar"] input {
+    background: transparent;
 }
 
 .theme-dropdown-item:hover,

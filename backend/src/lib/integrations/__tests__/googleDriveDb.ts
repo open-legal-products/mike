@@ -1,4 +1,5 @@
 import type { Db } from "../../supabase";
+import { randomUUID } from "node:crypto";
 
 type Row = Record<string, unknown>;
 export function driveDb(
@@ -103,7 +104,13 @@ export function driveDb(
                 );
                 if (index < 0) return { data: false, error: null };
                 const state = states.splice(index, 1)[0];
+                const previous = tokens.find((r) => r.user_id === state.user_id);
                 const row = {
+                    enabled: previous?.enabled ?? true,
+                    disabled_tools: previous?.disabled_tools ?? [],
+                    require_write_approval: previous?.require_write_approval ?? false,
+                    read_only: previous?.read_only ?? false,
+                    grant_id: randomUUID(),
                     ...(args.p_tokens as Row),
                     user_id: state.user_id,
                 };

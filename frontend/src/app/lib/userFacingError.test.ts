@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MikeApiError } from "./mikeApi";
+import { MikeApiError, SCHEMA_OUT_OF_DATE_MESSAGE, UPSTREAM_UNAVAILABLE_MESSAGE } from "./mikeApi";
 import {
     errorCode,
     knownErrorCodeMessage,
@@ -16,6 +16,28 @@ describe("userFacingApiError", () => {
         expect(userFacingApiError(error, "Fallback")).toBe(
             "The filename is required.",
         );
+    });
+
+    it("shows the intentional schema_out_of_date and upstream_unavailable messages despite the 5xx status", () => {
+        const error = new MikeApiError({
+            status: 503,
+            code: "schema_out_of_date",
+            message: SCHEMA_OUT_OF_DATE_MESSAGE,
+        });
+        expect(userFacingApiError(error, "Fallback")).toBe(SCHEMA_OUT_OF_DATE_MESSAGE);
+        expect(
+            userFacingApiError(
+                new MikeApiError({ status: 503, code: "upstream_unavailable", message: "raw" }),
+                "Fallback",
+            ),
+        ).toBe(UPSTREAM_UNAVAILABLE_MESSAGE);
+        // Any other 5xx code keeps the generic fallback.
+        expect(
+            userFacingApiError(
+                new MikeApiError({ status: 503, code: "internal_error", message: "x" }),
+                "Fallback",
+            ),
+        ).toBe("Fallback");
     });
 
     it("does not expose server or plain exception messages", () => {

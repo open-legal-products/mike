@@ -5,23 +5,13 @@
       <stop offset="1" stop-color="#D69B1B"/>
     </linearGradient>
     <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFE68A" stop-opacity="0.98"/>
-      <stop offset="0.5" stop-color="#F5BE3F" stop-opacity="0.98"/>
-      <stop offset="1" stop-color="#D89414" stop-opacity="0.98"/>
+      <stop offset="0" stop-color="#FCDB78"/>
+      <stop offset="0.5" stop-color="#F5BE3F"/>
+      <stop offset="1" stop-color="#D89414"/>
     </linearGradient>
     <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#FFFFFF"/>
       <stop offset="1" stop-color="#E5E7EB"/>
-    </linearGradient>
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.75"/>
-      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="#8A5A0A" stop-opacity="0.42"/>
-    </linearGradient>
-    <linearGradient id="rimBack" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.65"/>
-      <stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0.1"/>
-      <stop offset="1" stop-color="#8A5A0A" stop-opacity="0.46"/>
     </linearGradient>
     <radialGradient id="sheen">
       <stop offset="0" stop-color="#FFFFFF"/>
@@ -31,24 +21,37 @@
     <clipPath id="clipFront">
       <path d="M5.5 26 H58.5 C60.2 26 61.4 27.6 61 29.2 L55.9 50.3 C55.3 52.5 53.3 54 51 54 H13 C10.7 54 8.7 52.5 8.1 50.3 L3 29.2 C2.6 27.6 3.8 26 5.5 26 Z"/>
     </clipPath>
+    <clipPath id="clipTop">
+      <rect x="0" y="0" width="64" height="29.2"/>
+    </clipPath>
   </defs>
 
-  <!-- folder back -->
-  <path d="M8 46 V15 C8 12.2 10.2 10 13 10 H23 C24.4 10 25.7 10.6 26.7 11.6 L31 16 H51 C53.8 16 56 18.2 56 21 V46 Z"
-        fill="url(#back)" stroke="url(#rimBack)" stroke-width="1.5"/>
+  <!-- 5% wider, centred on the 64-unit canvas -->
+  <g transform="translate(32 0) scale(1.05 1) translate(-32 0)">
 
-  <!-- paper peeking out -->
-  <rect x="14" y="17" width="36" height="14" rx="2.5" fill="url(#paper)"/>
-  <g stroke="#D1D5DB" stroke-width="1.4" stroke-linecap="round" opacity="0.8">
-    <line x1="19" y1="21.5" x2="45" y2="21.5"/>
-  </g>
+    <!-- folder back -->
+    <path d="M8 46 V15 C8 12.2 10.2 10 13 10 H23 C24.4 10 25.7 10.6 26.7 11.6 L31 16 H51 C53.8 16 56 18.2 56 21 V46 Z"
+          fill="url(#back)"/>
 
-  <!-- open front, tilted out, tighter corners -->
-  <path d="M5.5 26 H58.5 C60.2 26 61.4 27.6 61 29.2 L55.9 50.3 C55.3 52.5 53.3 54 51 54 H13 C10.7 54 8.7 52.5 8.1 50.3 L3 29.2 C2.6 27.6 3.8 26 5.5 26 Z"
-        fill="url(#front)" stroke="url(#rim)" stroke-width="1.5"/>
+    <!-- paper peeking out -->
+    <rect x="14" y="17" width="36" height="14" rx="2.5" fill="url(#paper)"/>
+    <g stroke="#D1D5DB" stroke-width="1.4" stroke-linecap="round" opacity="0.8">
+      <line x1="19" y1="21.5" x2="45" y2="21.5"/>
+    </g>
 
-  <g clip-path="url(#clipFront)">
-    <ellipse cx="32" cy="30" rx="26" ry="6" fill="url(#sheen)" opacity="0.12"/>
-    <ellipse cx="11.5" cy="40" rx="4" ry="10" fill="url(#sheen)" opacity="0.08"/>
+    <!-- open front, tilted out, tighter corners -->
+    <path d="M5.5 26 H58.5 C60.2 26 61.4 27.6 61 29.2 L55.9 50.3 C55.3 52.5 53.3 54 51 54 H13 C10.7 54 8.7 52.5 8.1 50.3 L3 29.2 C2.6 27.6 3.8 26 5.5 26 Z"
+          fill="url(#front)"/>
+
+    <g clip-path="url(#clipFront)">
+      <ellipse cx="32" cy="30" rx="26" ry="6" fill="url(#sheen)" opacity="0.12"/>
+      <ellipse cx="11.5" cy="40" rx="4" ry="10" fill="url(#sheen)" opacity="0.08"/>
+    </g>
+
+    <!-- inner outline along the top edge only: clipped inside the front panel, above its straight sides -->
+    <g clip-path="url(#clipTop)">
+    <path d="M5.5 26 H58.5 C60.2 26 61.4 27.6 61 29.2 L55.9 50.3 C55.3 52.5 53.3 54 51 54 H13 C10.7 54 8.7 52.5 8.1 50.3 L3 29.2 C2.6 27.6 3.8 26 5.5 26 Z"
+          fill="none" stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="3" clip-path="url(#clipFront)"/>
+    </g>
   </g>
 </svg>

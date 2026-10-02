@@ -82,3 +82,27 @@ it("distinguishes an unavailable converter from a rejected document without stde
     failure_code: "conversion_unavailable",
   });
 });
+
+// MIKE-BACKEND-M: soffice can exit 0 without writing a PDF (it prints
+// "Error: source file could not be loaded" to stderr and still succeeds).
+// The follow-up access() then threw a bare ENOENT whose top frame was the
+// access call, so the issue read as a missing file rather than a rejected
+// conversion and the operator log lost LibreOffice's own explanation.
+it("reports a clean soffice exit that wrote no PDF as a failed conversion", async () => {
+  timing.timeoutMs = 5000;
+  await writeFile(
+    join(directory, "soffice"),
+    '#!/bin/sh\necho "Error: source file could not be loaded" >&2\nexit 0\n',
+  );
+  const failure = await officeFileToPdf(
+    join(directory, "PRIVATE_DOCUMENT.docx"),
+    join(directory, "work"),
+  ).catch((error) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(diagnosticErrorTags(failure)).toEqual({
+    failure_code: "conversion_failed",
+  });
+  // Operator log keeps LibreOffice's reason; the missing-file error is the cause.
+  expect(failure.message).toContain("source file could not be loaded");
+  expect(failure.cause).toMatchObject({ code: "ENOENT" });
+});

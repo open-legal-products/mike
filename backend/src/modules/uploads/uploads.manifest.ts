@@ -94,6 +94,8 @@ const requestSchema = z.discriminatedUnion("purpose", [
         .object({
           document_id: z.string().uuid(),
           version_id: z.string().uuid(),
+          expected_content_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+          generate_pdf: z.boolean().optional(),
         })
         .strict(),
       files: z.tuple([clientFileSchema]),

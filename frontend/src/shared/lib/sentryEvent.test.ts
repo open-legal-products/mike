@@ -500,3 +500,88 @@ describe("community install minimisation", () => {
         expect(out.breadcrumbs).toHaveLength(1);
     });
 });
+
+// MIKE-FRONTEND-K / MIKE-FRONTEND-M: `next dev` toolchain events from a
+// contributor's local checkout (a Turbopack compile error of their own edits,
+// forwarded to the dev overlay and logged there) reached the shared project.
+describe("next dev toolchain noise", () => {
+    const devTags = { build_mode: "development", runtime: "browser" };
+    const origin = "http://localhost:3000";
+
+    it("drops an unhandled dev-server compile error whose stack is all Next internals (M)", () => {
+        const { scrubEvent } = createEventScrubber();
+        const next = "/Users/dev/mike/frontend/node_modules/next/dist/server";
+        const event: ScrubbableEvent = {
+            tags: { ...devTags },
+            exception: { values: [{
+                type: "Error",
+                value: "./src/app/page.tsx: Parsing ecmascript source code failed",
+                mechanism: { type: "onunhandledrejection", handled: false },
+                stacktrace: { frames: [
+                    { filename: `${next}/dev/hot-reloader-turbopack.js` },
+                    { filename: `${next}/lib/dev-bundler-service.js` },
+                    { filename: `${next}/dev/next-dev-server.js` },
+                    { filename: `${next}/dev/next-dev-server.js` },
+                    { filename: `${next}/base-server.js` },
+                ] },
+            }] },
+        };
+        expect(scrubEvent(event)).toBeNull();
+    });
+
+    it("drops a dev-overlay console.error whose call site is Next's Turbopack chunk (K)", () => {
+        const { scrubEvent } = createEventScrubber();
+        const event: ScrubbableEvent = {
+            logger: "console",
+            message: "Build Error",
+            tags: { ...devTags },
+            stacktrace: { frames: [
+                { filename: `${origin}/_next/static/chunks/%5Bturbopack%5D_browser_dev_hmr-client_hmr-client_ts_0a1b2c._.js` },
+                { filename: `${origin}/_next/static/chunks/node_modules_react-dom_cjs_react-dom-client_development_0f1e2d._.js` },
+                { filename: "<anonymous>" },
+                { filename: `${origin}/_next/static/chunks/node_modules_next_dist_07iqgt0._.js` },
+            ] },
+        };
+        expect(scrubEvent(event, { captureContext: { extra: { arguments: ["Build Error"] } } })).toBeNull();
+    });
+
+    it("keeps a genuine app error in development", () => {
+        const { scrubEvent } = createEventScrubber();
+        const appFrame = { filename: `${origin}/_next/static/chunks/src_app_components_chat_ChatView_tsx_1a2b3c._.js` };
+        const nextFrame = { filename: `${origin}/_next/static/chunks/node_modules_next_dist_07iqgt0._.js` };
+        const thrown: ScrubbableEvent = {
+            tags: { ...devTags },
+            exception: { values: [{ type: "TypeError", mechanism: { type: "onerror", handled: false }, stacktrace: { frames: [nextFrame, appFrame] } }] },
+        };
+        expect(scrubEvent(thrown)).not.toBeNull();
+
+        // Logged through Next's console interceptor, but the nested Error
+        // was thrown in Mike's code: its stack keeps the event.
+        const nested = new Error("render failed");
+        nested.stack = `Error: render failed\n    at ChatView (${origin}/_next/static/chunks/src_app_chat_page_tsx_9f8e7d._.js:12:5)`;
+        const logged: ScrubbableEvent = {
+            logger: "console",
+            tags: { ...devTags },
+            stacktrace: { frames: [nextFrame] },
+        };
+        expect(
+            scrubEvent(logged, { captureContext: { extra: { arguments: ["[chat] failed", { error: nested }] } } }),
+        ).not.toBeNull();
+    });
+
+    it("keeps the same toolchain-only event in production, from explicit reports, and without frames", () => {
+        const { scrubEvent } = createEventScrubber();
+        const frames = [{ filename: "/app/node_modules/next/dist/server/base-server.js" }];
+        const unhandled = (tags: Record<string, unknown>): ScrubbableEvent => ({
+            tags,
+            exception: { values: [{ type: "Error", mechanism: { handled: false }, stacktrace: { frames } }] },
+        });
+        expect(scrubEvent(unhandled({ build_mode: "production" }))).not.toBeNull();
+        expect(
+            scrubEvent({ tags: { ...devTags }, exception: { values: [{ type: "Error", mechanism: { handled: true }, stacktrace: { frames } }] } }),
+        ).not.toBeNull();
+        expect(
+            scrubEvent({ tags: { ...devTags }, exception: { values: [{ type: "Error", mechanism: { handled: false } }] } }),
+        ).not.toBeNull();
+    });
+});

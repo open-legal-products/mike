@@ -51,6 +51,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push, replace: vi.fn() }),
+    usePathname: () => window.location.pathname,
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
@@ -178,6 +179,7 @@ function chatDetail(userId = "creator") {
 // The page reads its route params with React's `use()`, which suspends until
 // the promise settles — so it needs a boundary and a first await.
 async function renderPage() {
+    window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
     await act(async () => {
         render(
             <Suspense fallback={null}>

@@ -16,13 +16,16 @@ describe("DocDownloadBlock", () => {
             />,
         );
 
-        expect(screen.getByText("agreement")).toHaveClass("text-lg");
+        const name = screen.getByText("agreement");
+        // Compact by default; the full size applies only in a wide container.
+        expect(name).toHaveClass("truncate", "text-sm", "@md:text-lg");
+        expect(name).toHaveAttribute("title", "agreement");
         expect(screen.queryByText("DOCX")).not.toBeInTheDocument();
         expect(
             container.querySelector(
                 'img[src*="/icons/file-types/word.svg"]',
             ),
-        ).toHaveClass("h-4", "w-4");
+        ).toHaveClass("h-3.5", "w-3.5", "@md:h-4", "@md:w-4");
     });
 });
 

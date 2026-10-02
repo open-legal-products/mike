@@ -14,6 +14,11 @@ import {
   devLog,
 } from "./types";
 import { buildSystemPrompt } from "./prompts";
+import {
+  MESSAGE_TIME_PROMPT,
+  answerTimeStamp,
+  userMessageTimeStamp,
+} from "../../../lib/userTime";
 import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
 import { parseCitations, createCitation } from "./citations";
 import type { AssistantEvent } from "./streaming";
@@ -163,6 +168,8 @@ export async function enrichWithPriorEvents(
   docIndex: DocIndex,
   nonce?: string,
   messageTable = "chat_messages",
+  /** When set, the user's answers are stamped with when they responded. */
+  timeZone?: string,
 ): Promise<ChatMessage[]> {
   if (!chatId) return messages;
   // Skip streaming reservations: routeStreaming inserts the assistant row
@@ -201,6 +208,11 @@ export async function enrichWithPriorEvents(
 
   const lines: string[] = [];
   let skippedInputSeen = false;
+  // Connector approvals: what was asked, what the user decided, what ran.
+  const approvalLabels = new Map<string, string>();
+  const approvedIds: string[] = [];
+  const approvalOutcomes = new Set<string>();
+  let rejectedApprovalSeen = false;
   for (const ev of content as Record<string, unknown>[]) {
     if (ev?.type === "doc_created") {
       lines.push(
@@ -239,13 +251,59 @@ export async function enrichWithPriorEvents(
     } else if (ev?.type === "workflow_applied") {
       lines.push(`- applied workflow: ${untrustedRef(ev.title)}`);
     } else if (ev?.type === "ask_inputs") {
-      const count = Array.isArray(ev.items) ? ev.items.length : 0;
-      lines.push(`- asked user for ${count} input${count === 1 ? "" : "s"}`);
+      const items = (Array.isArray(ev.items) ? ev.items : []) as Record<
+        string,
+        unknown
+      >[];
+      const count = items.filter((item) => item?.kind !== "approval").length;
+      if (count > 0)
+        lines.push(`- asked user for ${count} input${count === 1 ? "" : "s"}`);
+      for (const item of items) {
+        if (item?.kind !== "approval") continue;
+        const label = `${untrustedRef(item.tool_name)} on ${untrustedRef(item.connector_name)}`;
+        approvalLabels.set(String(item.id), label);
+        lines.push(`- asked user to approve ${label}`);
+      }
+    } else if (
+      ev?.type === "mcp_tool_call" &&
+      typeof ev.approval_id === "string"
+    ) {
+      approvalOutcomes.add(ev.approval_id);
+      const label =
+        approvalLabels.get(ev.approval_id) ?? untrustedRef(ev.tool_name);
+      lines.push(
+        ev.status === "error"
+          ? `- approved ${label} failed: ${untrustedRef(ev.error)}`
+          : `- approved ${label} completed${
+              typeof ev.result === "string" && ev.result
+                ? `; result: ${untrustedRef(ev.result)}`
+                : ""
+            }`,
+      );
     } else if (ev?.type === "ask_inputs_response") {
+      // recorded_at is stored with the answers, so this line never changes
+      // between requests and does not disturb prompt caching.
+      const answeredAt =
+        timeZone && typeof ev.recorded_at === "string"
+          ? new Date(ev.recorded_at)
+          : null;
+      if (answeredAt && !Number.isNaN(answeredAt.getTime()))
+        lines.push(`- user responded ${answerTimeStamp(answeredAt, timeZone!)}`);
       const responses = Array.isArray(ev.responses) ? ev.responses : [];
       for (const response of responses) {
         if (!response || typeof response !== "object") continue;
         const row = response as Record<string, unknown>;
+        if (row.kind === "approval") {
+          const label = approvalLabels.get(String(row.id)) ?? "an action";
+          if (row.decision === "approve") {
+            approvedIds.push(String(row.id));
+            lines.push(`- user approved ${label}`);
+          } else {
+            rejectedApprovalSeen = true;
+            lines.push(`- user rejected ${label}; it did not run`);
+          }
+          continue;
+        }
         if (row.skipped) {
           skippedInputSeen = true;
           const skippedLabel =
@@ -275,6 +333,17 @@ export async function enrichWithPriorEvents(
         }
       }
     }
+  }
+  for (const id of approvedIds) {
+    if (approvalOutcomes.has(id)) continue;
+    lines.push(
+      `- approved ${approvalLabels.get(id) ?? "action"} has no recorded outcome. Tell the user to check the connected service before trying again; do not retry it yourself.`,
+    );
+  }
+  if (rejectedApprovalSeen) {
+    lines.push(
+      "- Instruction: do not retry a rejected action unless the user asks for it again.",
+    );
   }
   if (skippedInputSeen) {
     lines.push(
@@ -350,6 +419,7 @@ export function buildMessages(
   includeResearchTools = true,
   nonce?: string,
   systemPromptMode: "append" | "replace" = "append",
+  time?: MessageTimeContext,
 ) {
   const formatted: unknown[] = [];
   let systemContent =
@@ -359,6 +429,9 @@ export function buildMessages(
 
   if (systemPromptMode === "append" && systemPromptExtra) {
     systemContent += `\n\n${systemPromptExtra.trim()}`;
+  }
+  if (time) {
+    systemContent += `\n\n${MESSAGE_TIME_PROMPT}`;
   }
 
   if (docAvailability.length) {
@@ -387,7 +460,8 @@ export function buildMessages(
     }
   }
 
-  for (const msg of messages) {
+  const stamp = userMessageStamper(messages, time);
+  for (const [index, msg] of messages.entries()) {
     let content = msg.content ?? "";
     if (msg.role === "user" && msg.workflow) {
       // Workflow titles are user-controlled; spotlight them.
@@ -407,9 +481,95 @@ export function buildMessages(
       });
       content = `[The user attached the following document(s) to this message:\n${lines.join("\n")}]\n\n${content}`;
     }
-    formatted.push({ role: msg.role, content });
+    formatted.push({ role: msg.role, content: stamp(msg, index, content) });
   }
   return formatted;
+}
+
+/**
+ * Stamps a history's user messages in order. Call the returned function once
+ * per message, in order; it leaves other roles (and everything, when `time`
+ * is absent) unchanged.
+ */
+export function userMessageStamper(
+  messages: readonly { role: string }[],
+  time: MessageTimeContext | undefined,
+) {
+  const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
+  let userIndex = 0;
+  return (msg: { role: string }, index: number, content: string): string => {
+    if (msg.role !== "user") return content;
+    const position = userIndex++;
+    return time
+      ? stampUserMessageContent(content, time, position, index === lastUserIndex)
+      : content;
+  };
+}
+
+/**
+ * Prefix a user message with the local time it was sent. Stored send times
+ * never change, so earlier turns stay byte-identical for prompt caching; only
+ * the newest message may fall back to the current time.
+ */
+function stampUserMessageContent(
+  content: string,
+  time: MessageTimeContext,
+  userIndex: number,
+  isLatestUserMessage: boolean,
+): string {
+  const stored = time.userSentAt[userIndex];
+  const sentAt = stored
+    ? new Date(stored)
+    : isLatestUserMessage
+      ? time.now
+      : null;
+  if (!sentAt || Number.isNaN(sentAt.getTime())) return content;
+  return `${userMessageTimeStamp(sentAt, time.timeZone)}\n${content}`;
+}
+
+/** The user's time zone, the current time, and when each user message was sent. */
+export type MessageTimeContext = {
+  timeZone: string;
+  now: Date;
+  /** One entry per user message in the history, in order; null if unknown. */
+  userSentAt: readonly (string | null)[];
+};
+
+/**
+ * Stored send times for the history's user messages. The client sends the
+ * history, the database holds when each user message was saved (the current
+ * one is saved before the prompt is built). Both are in order, so they are
+ * aligned from the newest message back; unmatched older messages get null.
+ *
+ * A continuation (an ask-inputs answer or a connector approval) ends the
+ * history with a user message that is never stored. `latestUnsaved` leaves it
+ * null and aligns the stored times to the messages before it.
+ */
+export async function loadUserMessageSentTimes(
+  db: Db,
+  messageTable: string,
+  chatId: string | null | undefined,
+  messages: readonly ChatMessage[],
+  latestUnsaved = false,
+): Promise<(string | null)[]> {
+  const userCount = messages.filter((m) => m.role === "user").length;
+  const times: (string | null)[] = new Array(userCount).fill(null);
+  if (!chatId || userCount === 0) return times;
+  const { data, error } = await db
+    .from(messageTable)
+    .select("created_at")
+    .eq("chat_id", chatId)
+    .eq("role", "user")
+    .order("created_at", { ascending: true });
+  if (error || !Array.isArray(data)) return times;
+  const stored = (data as { created_at?: unknown }[]).map((row) =>
+    typeof row.created_at === "string" ? row.created_at : null,
+  );
+  const savedCount = latestUnsaved ? userCount - 1 : userCount;
+  for (let k = 1; k <= Math.min(savedCount, stored.length); k++) {
+    times[savedCount - k] = stored[stored.length - k];
+  }
+  return times;
 }
 
 export function extractCitations(
@@ -461,7 +621,7 @@ export function isMeaningfulTextlessAssistantOutput(
   // visible output even though its successful form is only intermediate work.
   return (
     "error" in event ||
-    (event.type === "mcp_tool_call" && !!event.google_action_id) ||
+    (event.type === "mcp_tool_call" && !!event.approval_id) ||
     COMPLETES_TEXTLESS_TURN[event.type]
   );
 }
@@ -492,9 +652,17 @@ export function parseAskInputsResponsePayload(
         (kind !== "choice" &&
           kind !== "multi_choice" &&
           kind !== "text" &&
-          kind !== "documents")
+          kind !== "documents" &&
+          kind !== "approval")
       )
         return null;
+      if (kind === "approval") {
+        // Only the decision travels from the client; what runs is the
+        // server-persisted approval item.
+        const decision = current.decision;
+        if (decision !== "approve" && decision !== "reject") return null;
+        return { id, kind, decision };
+      }
       if (kind === "multi_choice") {
         const question =
           typeof current.question === "string"
@@ -567,7 +735,7 @@ type StoredAssistantEventRow = {
   author_user_id?: string | null;
 };
 
-async function loadAssistantMessage(
+export async function loadAssistantMessage(
   db: Db,
   chatId: string,
   messageId: string,
@@ -641,6 +809,15 @@ function canonicalAskInputsResponses(
   for (const item of items) {
     const answer = responses.get(item.id);
     if (!answer || answer.kind !== item.kind) return null;
+    if (item.kind === "approval" && answer.kind === "approval") {
+      canonical.push({
+        id: item.id,
+        kind: "approval",
+        decision: answer.decision,
+      });
+      continue;
+    }
+    if (answer.kind === "approval" || item.kind === "approval") return null;
     if (answer.skipped) {
       canonical.push(
         item.kind === "documents"

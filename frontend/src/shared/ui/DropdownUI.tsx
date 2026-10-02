@@ -23,7 +23,7 @@ export const DropdownContent = React.forwardRef<
             <DropdownPrimitive.Content
                 ref={ref}
                 className={mergeClasses(
-                    `z-[250] flex flex-col gap-1 rounded-xl p-1.5 text-xs text-gray-700 ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-3xl`,
+                    `theme-dropdown-surface z-[250] flex flex-col gap-1 rounded-xl p-1.5 text-xs text-gray-700 ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-3xl`,
                     className,
                 )}
                 {...props}

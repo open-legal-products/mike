@@ -6,6 +6,7 @@
 import { isPanelDocument } from "@/app/components/shared/types";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import {
+    markErrorHandled,
     reportApiFailure,
     reportNetworkFailure,
     trackPendingRequest,
@@ -38,6 +39,7 @@ import type {
     AssistantEvent,
     Chat,
     ChatDetailOut,
+    ActiveAssistantTurn,
     Citation,
     Document,
     Folder,
@@ -88,6 +90,7 @@ interface ServerChatDetailOut {
     is_owner?: boolean;
     access_role?: "owner" | "editor" | "viewer";
     messages: ServerMessage[];
+    active_turn?: ActiveAssistantTurn | null;
 }
 
 export const API_BASE = "/api";
@@ -148,6 +151,39 @@ export class MikeApiError extends Error {
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong. Please try again.";
 export const MALFORMED_ERROR_RESPONSE_MESSAGE =
     "The request could not be completed. Please try again.";
+/**
+ * The backend's answer when its database is missing a migration (PGRST202/
+ * 204/205, 42P01). Unlike other 5xx it tells the user something actionable
+ * — contact whoever runs the server — so it is shown instead of the generic
+ * fallback (see userFacingApiError).
+ */
+export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
+export const SCHEMA_OUT_OF_DATE_MESSAGE =
+    "The server's database needs an update before this can load. Please contact your administrator.";
+/**
+ * The Next gateway's answer (503, Retry-After) when it cannot reach the
+ * backend at all (ECONNREFUSED and friends). The gateway reports it once
+ * per outage; the user can only wait and retry.
+ */
+export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
+export const UPSTREAM_UNAVAILABLE_MESSAGE =
+    "The server is temporarily unreachable. Please try again shortly.";
+/**
+ * 5xx codes that the server side (backend or gateway) has already reported
+ * to Sentry, and that carry a message worth showing instead of the generic
+ * fallback. The browser shows the message and does not report them again.
+ */
+const REPORTED_UPSTREAM_MESSAGES: Readonly<Record<string, string>> = {
+    [SCHEMA_OUT_OF_DATE_CODE]: SCHEMA_OUT_OF_DATE_MESSAGE,
+    [UPSTREAM_UNAVAILABLE_CODE]: UPSTREAM_UNAVAILABLE_MESSAGE,
+};
+
+/** The fixed user-facing message for a server-reported code, or null. */
+export function reportedUpstreamMessage(code: string): string | null {
+    return Object.hasOwn(REPORTED_UPSTREAM_MESSAGES, code)
+        ? REPORTED_UPSTREAM_MESSAGES[code]
+        : null;
+}
 
 export function isMfaRequiredError(error: unknown) {
     return (
@@ -259,9 +295,28 @@ async function toApiError(
             code: parsed.code,
             requestId,
         });
+        const code = typeof parsed.code === "string" ? parsed.code : null;
+        const upstreamMessage = code ? reportedUpstreamMessage(code) : null;
+        if (upstreamMessage) {
+            // The backend (schema_out_of_date) or the gateway
+            // (upstream_unavailable) has already reported this failure once,
+            // with detail the browser cannot see. A browser copy would be one
+            // more event per endpoint per page view for the same incident —
+            // the per-route fan-out again — so it is only marked: a screen's
+            // console.error of it is not bridged either. The message is
+            // ours, not the body's `detail`.
+            const upstreamError = new MikeApiError({
+                status: response.status,
+                code,
+                requestId,
+                message: upstreamMessage,
+            });
+            markErrorHandled(upstreamError);
+            return upstreamError;
+        }
         const apiError = new MikeApiError({
             status: response.status,
-            code: typeof parsed.code === "string" ? parsed.code : null,
+            code,
             requestId,
             // A 4xx whose body carries no usable `detail` is a malformed
             // error response, and it is treated as one. `API error: 409` used
@@ -964,7 +1019,8 @@ interface McpToolSummary {
     enabled: boolean;
     readOnly: boolean;
     destructive: boolean;
-    requiresConfirmation: boolean;
+    /** Changes data; held for approval when the connector asks for permission. */
+    write: boolean;
     lastSeenAt: string;
 }
 
@@ -975,6 +1031,9 @@ export interface McpConnectorSummary {
     serverUrl: string;
     authType: "none" | "bearer" | "oauth";
     enabled: boolean;
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
     hasAuthConfig: boolean;
     customHeaderKeys: string[];
     oauthConnected: boolean;
@@ -1021,6 +1080,8 @@ export async function updateMcpConnector(
         name?: string;
         serverUrl?: string;
         enabled?: boolean;
+        requireWriteApproval?: boolean;
+        readOnly?: boolean;
         bearerToken?: string | null;
         headers?: Record<string, string>;
     },
@@ -1081,23 +1142,7 @@ export async function setMcpToolEnabled(
 // Native Google Drive integration (first-party — not an MCP connector)
 // ---------------------------------------------------------------------------
 
-export type GoogleDriveStatus = {
-    connected: boolean;
-    scope: string | null;
-    /** Whether the backend has a Google OAuth client configured at all. */
-    configured: boolean;
-    /**
-     * Whether the Drive token tables exist. False means the deployment has
-     * not applied the Drive migration yet — a different fix from `configured`.
-     * Optional so older backends (which omit it) read as ready.
-     */
-    schemaReady?: boolean;
-    /**
-     * The redirect URI this deployment will send to Google, for the operator
-     * to register on the OAuth client. Null when the backend cannot derive it.
-     */
-    redirectUri?: string | null;
-};
+export type GoogleDriveStatus = import("@mike/contracts").GoogleDriveStatus;
 
 /**
  * Error code the backend attaches when a connector cannot start because the
@@ -1140,6 +1185,32 @@ export async function disconnectGoogleDrive(): Promise<void> {
     return apiRequest<void>("/user/integrations/google-drive", {
         method: "DELETE",
     });
+}
+
+export async function updateGoogleDriveSettings(settings: {
+    enabled?: boolean;
+    requireWriteApproval?: boolean;
+    readOnly?: boolean;
+}): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>("/user/integrations/google-drive", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+    });
+}
+
+export async function setGoogleDriveToolEnabled(
+    toolName: string,
+    enabled: boolean,
+): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>(
+        `/user/integrations/google-drive/tools/${encodeURIComponent(toolName)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
+    );
 }
 
 export async function getProject(projectId: string): Promise<Project> {
@@ -1964,7 +2035,11 @@ export async function replaceDocumentVersionFile(
     versionId: string,
     file: File,
     filename?: string,
-    options?: UploadRequestOptions<DocumentVersion>,
+    options?: UploadRequestOptions<DocumentVersion> & {
+        expectedContentSha256?: string;
+        /** Skip eager PDF generation for frequent editor saves. */
+        generatePdf?: boolean;
+    },
 ): Promise<DocumentVersion> {
     const uploadedFile = filename
         ? new File([file], filename, {
@@ -1975,7 +2050,16 @@ export async function replaceDocumentVersionFile(
     return firstUploadResult(
         await uploadFilesWithSession<DocumentVersion>({
             purpose: "document_version_replace",
-            destination: { document_id: documentId, version_id: versionId },
+            destination: {
+                document_id: documentId,
+                version_id: versionId,
+                ...(options?.expectedContentSha256
+                    ? { expected_content_sha256: options.expectedContentSha256 }
+                    : {}),
+                ...(options?.generatePdf !== undefined
+                    ? { generate_pdf: options.generatePdf }
+                    : {}),
+            },
             files: [{ file: uploadedFile }],
             onProgress: options?.onProgress,
             signal: options?.signal,
@@ -2231,7 +2315,41 @@ export async function getChat(chatId: string): Promise<ChatDetailOut> {
             access_role: raw.access_role,
         },
         messages,
+        active_turn: raw.active_turn ?? null,
     };
+}
+
+/**
+ * Attach to a turn the server is generating (or has just finished) for this
+ * chat. Frames with a sequence number >= `from` are replayed, then the live
+ * ones follow until the turn ends. `from` is the id of the last frame the
+ * caller saw plus one; 1 means everything.
+ */
+export async function streamChatTurn(payload: {
+    chatId: string;
+    turnId: string;
+    from?: number;
+    signal?: AbortSignal;
+}): Promise<Response> {
+    const { chatId, turnId, from = 1, signal } = payload;
+    return apiFetch(
+        `${API_BASE}/chat/${chatId}/turn/${turnId}/stream?from=${from}`,
+        { headers: { Accept: "text/event-stream" }, signal },
+    );
+}
+
+/**
+ * The one way to cut a generation short. Closing the stream only detaches
+ * this client; the server keeps generating for everyone else.
+ */
+export async function stopChatTurn(
+    chatId: string,
+    turnId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest<{ stopped: boolean; finished: boolean }>(
+        `/chat/${chatId}/turn/${turnId}/stop`,
+        { method: "POST" },
+    );
 }
 
 export async function renameChat(chatId: string, title: string): Promise<void> {
@@ -2350,6 +2468,18 @@ export async function getPanelDocument(
     return request;
 }
 
+/**
+ * The browser's IANA time zone (e.g. "Europe/London"), sent with chat requests
+ * so the assistant knows the user's local date and time.
+ */
+function browserTimeZone(): string | undefined {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 export async function streamChat(payload: {
     messages: {
         role: string;
@@ -2371,7 +2501,7 @@ export async function streamChat(payload: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
         signal,
     });
 }
@@ -2401,7 +2531,7 @@ export async function streamProjectChat(payload: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
         signal,
     });
 }
@@ -2599,13 +2729,34 @@ export async function streamTabularGeneration(
  * observer that takes no generation lease and enqueues nothing, so resuming a
  * run can never 409 or restart it. Used when a stream drops mid-run and when
  * the view mounts on a review that is already `is_running`.
+ *
+ * `from` is the sequence number to replay from — the last `id:` seen plus one
+ * — so a reconnect picks up where it left off instead of replaying the whole
+ * run. A server with no in-process run ignores it and tails the database.
  */
 export async function streamTabularGenerationResume(
     reviewId: string,
     signal?: AbortSignal,
+    from?: number,
 ): Promise<Response> {
-    return apiFetch(`${API_BASE}/tabular-review/${reviewId}/generate/stream`, {
-        signal: signal ?? undefined,
+    const query = from ? `?from=${from}` : "";
+    return apiFetch(
+        `${API_BASE}/tabular-review/${reviewId}/generate/stream${query}`,
+        { signal: signal ?? undefined },
+    );
+}
+
+/**
+ * Stop a generation the server is running. Closing the SSE socket no longer
+ * cancels anything, so this is the Stop control's only lever. A deployment
+ * whose extraction runs on the queue — or a run owned by another replica —
+ * has nothing in-process to stop and answers 404 `generation_not_found`.
+ */
+export async function stopTabularGeneration(
+    reviewId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest(`/tabular-review/${reviewId}/generate/stop`, {
+        method: "POST",
     });
 }
 
@@ -2628,9 +2779,45 @@ export async function streamTabularChat(
             project_name: context?.projectName ?? undefined,
             model,
             reasoning,
+            time_zone: browserTimeZone(),
         }),
         signal: signal ?? undefined,
     });
+}
+
+/**
+ * Attach to a review-chat turn the server is generating (or has just
+ * finished). Frames with a sequence number >= `from` are replayed, then the
+ * live ones follow until the turn ends; `from` is the last frame the caller
+ * saw plus one, and 1 means everything.
+ */
+export async function streamTabularChatTurn(payload: {
+    reviewId: string;
+    chatId: string;
+    turnId: string;
+    from?: number;
+    signal?: AbortSignal;
+}): Promise<Response> {
+    const { reviewId, chatId, turnId, from = 1, signal } = payload;
+    return apiFetch(
+        `${API_BASE}/tabular-review/${reviewId}/chats/${chatId}/turn/${turnId}/stream?from=${from}`,
+        { headers: { Accept: "text/event-stream" }, signal },
+    );
+}
+
+/**
+ * The one way to cut a review-chat answer short. Closing the stream only
+ * detaches this client; the server keeps generating for everyone else.
+ */
+export async function stopTabularChatTurn(
+    reviewId: string,
+    chatId: string,
+    turnId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest<{ stopped: boolean; finished: boolean }>(
+        `/tabular-review/${reviewId}/chats/${chatId}/turn/${turnId}/stop`,
+        { method: "POST" },
+    );
 }
 
 export interface TRCitationAnnotation {
@@ -2666,6 +2853,13 @@ export interface TRChat {
     reasoning_level: NonNullable<Message["reasoning"]> | null;
     created_at: string;
     updated_at: string;
+    /**
+     * Set while the server is still generating an answer into this thread. A
+     * panel that has just loaded (a refresh, a second tab, a thread opened
+     * from the list while its answer runs elsewhere) attaches to it instead
+     * of showing a transcript whose last answer is simply missing.
+     */
+    active_turn?: ActiveAssistantTurn | null;
 }
 
 const TABULAR_CHAT_SELECTION_PREFIX = "tabular-review-chat:";
@@ -3156,15 +3350,10 @@ export async function getGoogleWorkspaceStatus(
 }
 export async function startGoogleWorkspaceOAuth(
     provider: import("@mike/contracts").GoogleWorkspaceProvider,
-    write = false,
 ) {
     return apiRequest<{ authorizationUrl: string }>(
         `/user/integrations/${provider}/oauth/start`,
-        {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ write }),
-        },
+        { method: "POST" },
     );
 }
 export async function cancelGoogleWorkspaceOAuth(
@@ -3184,17 +3373,30 @@ export async function disconnectGoogleWorkspace(
         method: "DELETE",
     });
 }
-export async function listGoogleWorkspaceActions() {
-    return apiRequest<{
-        actions: import("@mike/contracts").GoogleWorkspaceActionReview[];
-    }>("/user/google-actions");
-}
-export async function decideGoogleWorkspaceAction(
-    id: string,
-    decision: "approve" | "reject",
+export async function updateGoogleWorkspaceSettings(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    settings: { enabled?: boolean; requireWriteApproval?: boolean; readOnly?: boolean },
 ) {
-    return apiRequest<{ status: string; message: string } | undefined>(
-        `/user/google-actions/${encodeURIComponent(id)}/${decision}`,
-        { method: "POST" },
+    return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
+        `/user/integrations/${provider}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(settings),
+        },
+    );
+}
+export async function setGoogleWorkspaceToolEnabled(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    toolName: string,
+    enabled: boolean,
+) {
+    return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
+        `/user/integrations/${provider}/tools/${encodeURIComponent(toolName)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
     );
 }

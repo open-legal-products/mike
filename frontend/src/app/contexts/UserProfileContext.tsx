@@ -710,8 +710,12 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     );
 }
 
+export function useOptionalUserProfile() {
+    return useContext(UserProfileContext);
+}
+
 export function useUserProfile() {
-    const context = useContext(UserProfileContext);
+    const context = useOptionalUserProfile();
     if (context === undefined) {
         throw new Error(
             "useUserProfile must be used within a UserProfileProvider",

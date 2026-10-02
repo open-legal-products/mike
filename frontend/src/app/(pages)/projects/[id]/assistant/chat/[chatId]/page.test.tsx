@@ -1,10 +1,11 @@
-import { StrictMode, Suspense, type ReactNode } from "react";
+import { StrictMode, Suspense, useEffect, type ReactNode } from "react";
 import {
     act,
     fireEvent,
     render,
     screen,
     waitFor,
+    within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -15,6 +16,7 @@ import type {
 } from "@/app/components/shared/types";
 import ProjectAssistantChatPage from "./page";
 import { getProject } from "@/app/lib/mikeApi";
+import type { DocxCloseGuard } from "@/app/components/shared/views/DocxRenderer.types";
 
 const state = vi.hoisted(() => ({
     attachmentFilename: "Budget.xlsx",
@@ -22,6 +24,8 @@ const state = vi.hoisted(() => ({
     push: vi.fn(),
     getChat: vi.fn(),
     getDocument: vi.fn(),
+    deleteDocument: vi.fn(),
+    discardDraft: vi.fn(),
     uploadProjectDocuments: vi.fn(),
     loadChats: vi.fn().mockResolvedValue(undefined),
     setCurrentChatId: vi.fn(),
@@ -44,6 +48,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ replace: state.replace, push: state.push }),
+    usePathname: () => window.location.pathname,
 }));
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
@@ -54,8 +59,13 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
         documents: [{ id: "doc1", filename: "Draft.docx" }],
         folders: [],
     }),
+    listDocumentVersions: vi.fn().mockResolvedValue({
+        current_version_id: "v1",
+        versions: [{ id: "v1", version_number: 1, filename: "Draft.docx" }],
+    }),
     getChat: state.getChat,
     getDocument: state.getDocument,
+    deleteDocument: state.deleteDocument,
     uploadProjectDocuments: state.uploadProjectDocuments,
     listProjectChats: vi
         .fn()
@@ -187,7 +197,13 @@ vi.mock("@/app/components/assistant/AssistantMessage", () => ({
     ),
 }));
 vi.mock("@/app/components/shared/views/DocxView", () => ({
-    DocxView: () => <div>Draft viewer</div>,
+    DocxView: ({ quotes, onCloseGuardReady }: { quotes?: { quote: string }[]; onCloseGuardReady?: (guard: DocxCloseGuard | null) => void }) => {
+        useEffect(() => {
+            onCloseGuardReady?.({ hasUnsavedChanges: () => false, prepareClose: async () => true, discard: state.discardDraft });
+            return () => onCloseGuardReady?.(null);
+        }, [onCloseGuardReady]);
+        return <div data-testid="draft-viewer" data-quotes={JSON.stringify(quotes ?? [])}>Draft viewer</div>;
+    },
 }));
 vi.mock("@/app/components/shared/views/PdfView", () => ({
     PdfView: () => null,
@@ -213,6 +229,7 @@ vi.mock("@/app/components/projects/ProjectWorkspaceTips", () => ({
 beforeEach(() => {
     vi.clearAllMocks();
     state.getDocument.mockReset();
+    state.deleteDocument.mockReset().mockResolvedValue(undefined);
     state.uploadProjectDocuments.mockReset();
     state.chats = [];
     state.attachmentFilename = "Budget.xlsx";
@@ -237,6 +254,67 @@ async function renderWorkspace(canSend = true, strict = false) {
         else expect(button).toBeDisabled();
     });
 }
+
+describe("project document deletion", () => {
+    async function openMenu() {
+        fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
+        await act(async () => {});
+        fireEvent.contextMenu(screen.getByRole("tab", { name: /Draft.docx/ }));
+    }
+
+    it("confirms deletion, retains the draft on cancellation, and discards only after success", async () => {
+        state.getDocument.mockResolvedValue({ id: "doc1", filename: "Draft.docx", can_edit: true, can_delete: true });
+        await renderWorkspace();
+        await openMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        expect(state.deleteDocument).not.toHaveBeenCalled();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Cancel" }));
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+        fireEvent.contextMenu(screen.getByRole("tab", { name: /Draft.docx/ }));
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
+        await waitFor(() => expect(state.deleteDocument).toHaveBeenCalledWith("doc1"));
+        await waitFor(() => expect(screen.queryByTestId("draft-viewer")).toBeNull());
+        expect(state.discardDraft).toHaveBeenCalledOnce();
+        expect(state.getDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it("rechecks document rights and keeps the viewer if permission was revoked", async () => {
+        state.getDocument.mockResolvedValueOnce({ can_edit: true, can_delete: true }).mockResolvedValue({ can_edit: false, can_delete: false });
+        await renderWorkspace();
+        await openMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
+        await screen.findByText("You do not have permission to delete this file.");
+        expect(state.deleteDocument).not.toHaveBeenCalled();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+    });
+
+    it("keeps the draft and reports a safe message after deletion fails", async () => {
+        state.getDocument.mockResolvedValue({ can_edit: true, can_delete: true });
+        state.deleteDocument.mockRejectedValue(new Error("internal database stack"));
+        await renderWorkspace();
+        await openMenu();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+        fireEvent.click(within(screen.getByRole("dialog", { name: "Delete file?" })).getByRole("button", { name: "Delete file" }));
+        await screen.findByText("This file could not be deleted. Please try again.");
+        expect(screen.queryByText("internal database stack")).toBeNull();
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+        expect(state.discardDraft).not.toHaveBeenCalled();
+    });
+
+    it.each(["viewer", "document-reader"])("hides mutation actions for %s", async (role) => {
+        if (role === "viewer") vi.mocked(getProject).mockResolvedValueOnce({ id: "p1", name: "Matter", access_role: "viewer", documents: [{ id: "doc1", filename: "Draft.docx" }], folders: [] } as unknown as Awaited<ReturnType<typeof getProject>>);
+        state.getDocument.mockResolvedValue({ can_edit: false, can_delete: false });
+        await renderWorkspace(role !== "viewer");
+        await openMenu();
+        expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Delete file" })).toBeNull();
+    });
+});
 
 describe("closing document tabs", () => {
     it("selects the next tab, then the previous tab, then clears the viewer in StrictMode", async () => {
@@ -318,7 +396,8 @@ describe("document viewer drops", () => {
         );
         expect(screen.getByText("Draft viewer")).toBe(original);
         expect(screen.queryByText("Drop files here to open")).toBeNull();
-        expect(state.getDocument).not.toHaveBeenCalled();
+        // The mounted viewer resolves its document-specific editing rights.
+        expect(state.getDocument).toHaveBeenCalledWith("doc1");
         expect(state.uploadProjectDocuments).not.toHaveBeenCalled();
     });
 
@@ -485,6 +564,8 @@ describe("project chat workspace lifecycle", () => {
             ],
         });
 
+        window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
+
         await act(async () => {
             render(
                 <Suspense fallback="Loading">
@@ -500,7 +581,17 @@ describe("project chat workspace lifecycle", () => {
         });
         expect(pill).toHaveAttribute("data-active", "false");
         fireEvent.click(pill);
-        expect(pill).toHaveAttribute("data-active", "true");
+        await waitFor(() => expect(pill).toHaveAttribute("data-active", "true"));
+        await waitFor(() => expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language")));
+
+        fireEvent.click(pill);
+        expect(pill).toHaveAttribute("data-active", "false");
+        expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", "[]");
+        expect(screen.getByTestId("draft-viewer")).toBeVisible();
+
+        fireEvent.click(pill);
+        await waitFor(() => expect(pill).toHaveAttribute("data-active", "true"));
+        await waitFor(() => expect(screen.getByTestId("draft-viewer")).toHaveAttribute("data-quotes", expect.stringContaining("Relevant language")));
 
         fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
         expect(pill).toHaveAttribute("data-active", "false");
@@ -526,6 +617,8 @@ describe("project chat workspace lifecycle", () => {
                     resolveProject = resolve;
                 }),
         );
+
+        window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
 
         await act(async () => {
             render(
@@ -835,7 +928,10 @@ describe("leaving a project chat mid-stream", () => {
         await waitFor(() =>
             expect(
                 completedRow.querySelector("img[aria-hidden='true']"),
-            ).toHaveClass("hue-rotate-[285deg]"),
+            ).toHaveAttribute(
+                "src",
+                expect.stringContaining("features/chat-complete"),
+            ),
         );
         // ...and nothing from it lands in the thread now on screen.
         expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();

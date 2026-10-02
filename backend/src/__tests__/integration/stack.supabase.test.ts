@@ -44,7 +44,6 @@ const PUBLIC_TABLES = [
   "tabular_reviews",
   "user_api_keys",
   "user_google_drive_tokens",
-  "google_drive_oauth_states",
   "user_google_workspace_tokens",
   "google_workspace_oauth_states",
   "google_workspace_actions",
@@ -356,6 +355,101 @@ maybeDescribe("Supabase stack — auth contract + RLS deny-all firewall", () => 
       .eq("user_id", userA)
       .eq("default_key", defaultKey);
   });
+
+  it.each(["default_workflow_installations", "quick_actions"] as const)(
+    "%s: populated rows are accessible only through the service role",
+    async (table) => {
+      const workflowId = randomUUID();
+      const rowId = randomUUID();
+      const workflow = await admin.from("workflows").insert({
+        id: workflowId,
+        user_id: userA,
+        title: "Workflow metadata access verification",
+        type: "assistant",
+      });
+      expect(workflow.error).toBeNull();
+
+      const row: {
+        id: string;
+        user_id: string;
+        workflow_id: string;
+        name?: string;
+        prompt?: string;
+        default_key?: string;
+      } = {
+        id: rowId,
+        user_id: userA,
+        workflow_id: workflowId,
+        ...(table === "quick_actions"
+          ? { name: "Private quick action", prompt: "Private prompt" }
+          : { default_key: `access-verification-${rowId}` }),
+      };
+      const patch =
+        table === "quick_actions"
+          ? { name: "Updated by backend" }
+          : { default_key: `updated-${rowId}` };
+
+      try {
+        const inserted = await admin.from(table).insert(row);
+        expect(inserted.error).toBeNull();
+        const updated = await admin.from(table).update(patch).eq("id", rowId);
+        expect(updated.error).toBeNull();
+        const stored = await admin
+          .from(table)
+          .select("*")
+          .eq("id", rowId)
+          .single();
+        expect(stored.error).toBeNull();
+        expect(stored.data).toMatchObject({ ...row, ...patch });
+
+        const signedInB = await createClient(url!, anonKey!, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        }).auth.signInWithPassword({ email: emailB, password });
+        expect(signedInB.error).toBeNull();
+        const clients = [
+          createClient(url!, anonKey!, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          }),
+          asUser(tokenA),
+          asUser(signedInB.data.session!.access_token),
+        ];
+        for (const client of clients) {
+          const read = await client.from(table).select("*").eq("id", rowId);
+          expect(read.error?.code).toBe("42501");
+          expect(read.data).toBeNull();
+          const insert = await client
+            .from(table)
+            .insert({ ...row, id: randomUUID() });
+          expect(insert.error?.code).toBe("42501");
+          const update = await client
+            .from(table)
+            .update({ user_id: userB })
+            .eq("id", rowId);
+          expect(update.error?.code).toBe("42501");
+          const deletion = await client.from(table).delete().eq("id", rowId);
+          expect(deletion.error?.code).toBe("42501");
+        }
+
+        const unchanged = await admin
+          .from(table)
+          .select("*")
+          .eq("id", rowId)
+          .single();
+        expect(unchanged.error).toBeNull();
+        expect(unchanged.data).toEqual(stored.data);
+        const deleted = await admin
+          .from(table)
+          .delete()
+          .eq("id", rowId)
+          .select("id");
+        expect(deleted.error).toBeNull();
+        expect(deleted.data).toEqual([{ id: rowId }]);
+      } finally {
+        await admin.from(table).delete().eq("id", rowId);
+        await admin.from("workflows").delete().eq("id", workflowId);
+      }
+    },
+  );
 
   it("leak sweep: no public table returns rows to the authenticated user path", async () => {
     const client = asUser(tokenA);

@@ -83,6 +83,9 @@ export interface Project {
 }
 
 export interface Document {
+  /** Server-computed permissions on GET /single-documents/:id; absent fails closed. */
+  can_edit?: boolean;
+  can_delete?: boolean;
   id: string;
   user_id?: string;
   project_id: string | null;
@@ -627,16 +630,6 @@ function getDocumentCitationQuotes(a: Citation): DocumentCitationQuote[] {
 }
 
 /**
- * Expand a citation into one or more (page, quote) entries suitable for
- * highlighting in the PDF viewer. A single-page citation yields one entry; a
- * cross-page citation with page "N-M" and a `[[PAGE_BREAK]]` split yields two.
- */
-export function expandCitationToEntries(a: Citation): CitationQuote[] {
-  if (a.kind === "case") return [];
-  return getDocumentCitationQuotes(a).flatMap(expandDocumentQuoteEntry);
-}
-
-/**
  * Format the page(s) of a citation for display, e.g. "Page 3" or "Page 41-42".
  * Spreadsheets have no meaningful page locator, so this returns "" for them —
  * callers join with `.filter(Boolean)` so the locator is simply omitted.
@@ -858,9 +851,24 @@ export interface WorkflowAddon {
 
 // API helpers
 
+/** A turn still generating into a chat, as served by GET /chat/:id. */
+export interface ActiveAssistantTurn {
+  id: string;
+  /** Frames emitted so far; a client attaches from the next one it needs. */
+  seq: number;
+  /** The assistant row the answer is (or will be) stored in. */
+  assistant_message_id: string;
+}
+
 export interface ChatDetailOut {
   chat: Chat;
   messages: Message[];
+  /**
+   * Set while the server is still generating an answer for this chat. A
+   * client that has just loaded (a refresh, a second tab) attaches to it
+   * instead of treating the hidden reservation as "no answer".
+   */
+  active_turn?: ActiveAssistantTurn | null;
 }
 
 export interface TabularReviewDetailOut {
@@ -868,4 +876,12 @@ export interface TabularReviewDetailOut {
   cells: TabularCell[];
   rows: TabularReviewRow[];
   documents: Document[];
+  /**
+   * A generation the server is running *in this process*: present only while
+   * the backend still holds the run's frames, which is what makes it
+   * attachable (`?from=<seq + 1>`) and stoppable through
+   * `POST /tabular-review/:id/generate/stop`. `review.is_running` is the
+   * weaker database lease, which an async or another replica's run also holds.
+   */
+  active_generation?: { id: string; seq: number } | null;
 }

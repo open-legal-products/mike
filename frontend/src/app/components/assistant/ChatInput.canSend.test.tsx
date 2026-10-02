@@ -1,5 +1,6 @@
 import { createRef } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import {
@@ -8,6 +9,7 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Document } from "@/app/components/shared/types";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
+import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 
 vi.mock("@/app/lib/mikeApi", () => ({
@@ -34,16 +36,13 @@ vi.mock("./ModelToggle", async (importOriginal) => ({
     ModelToggle: () => null,
 }));
 
-vi.mock("./AddDocButton", () => ({
-    AddDocButton: () => <button aria-label="Add documents" />,
-}));
 vi.mock("./UploadOverlay", () => ({ UploadOverlay: () => null }));
 vi.mock("../shared/FileTypeIcon", () => ({ FileTypeIcon: () => null }));
 vi.mock("../modals/AddDocumentsModal", () => ({
     AddDocumentsModal: vi.fn(() => null),
 }));
 vi.mock("./AssistantWorkflowModal", () => ({
-    AssistantWorkflowModal: () => null,
+    AssistantWorkflowModal: vi.fn(() => null),
 }));
 vi.mock("../popups/ApiKeyMissingPopup", () => ({
     ApiKeyMissingPopup: () => null,
@@ -52,6 +51,7 @@ vi.mock("../popups/ApiKeyMissingPopup", () => ({
 class ResizeObserverMock {
     observe() {}
     disconnect() {}
+    unobserve() {}
 }
 
 function mockProfile() {
@@ -86,6 +86,83 @@ describe("ChatInput canSend gating", () => {
         window.localStorage.clear();
         vi.stubGlobal("ResizeObserver", ResizeObserverMock);
         mockProfile();
+    });
+
+    it("opens documents from the dropdown and workflows from its own button", async () => {
+        const user = userEvent.setup();
+        renderInput(true);
+        await user.click(screen.getByRole("button", { name: "Add documents" }));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Upload Documents", "Saved Documents"]);
+        expect(vi.mocked(AddDocumentsModal).mock.calls.at(-1)?.[0].open).toBe(false);
+        await user.click(screen.getByRole("menuitem", { name: "Saved Documents" }));
+        expect(vi.mocked(AddDocumentsModal).mock.calls.at(-1)?.[0]).toMatchObject({ open: true, initialTab: "files" });
+        expect(screen.queryByRole("menu")).toBeNull();
+        await user.click(screen.getByRole("button", { name: "Open workflows" }));
+        expect(vi.mocked(AssistantWorkflowModal).mock.calls.at(-1)?.[0].open).toBe(true);
+    });
+
+    it.each([false, true])("uploads files using the existing project setting (%s)", async (dropUploadsToProject) => {
+        const user = userEvent.setup();
+        const upload = dropUploadsToProject ? uploadProjectDocuments : uploadStandaloneDocuments;
+        vi.mocked(upload).mockResolvedValue([]);
+        render(<ChatInput onSubmit={vi.fn()} onCancel={vi.fn()} isLoading={false} projectId="p1" dropUploadsToProject={dropUploadsToProject} />);
+        const input = screen.getByLabelText("Upload Documents");
+        const click = vi.spyOn(input, "click");
+        await user.click(screen.getByRole("button", { name: "Add documents" }));
+        await user.click(screen.getByRole("menuitem", { name: "Upload Documents" }));
+        expect(click).toHaveBeenCalledOnce();
+        expect(vi.mocked(AddDocumentsModal).mock.calls.at(-1)?.[0].open).toBe(false);
+        const file = new File(["example"], "example.pdf", { type: "application/pdf" });
+        await user.upload(input, file);
+        await waitFor(() => expect(upload).toHaveBeenCalledOnce());
+        const inputs = vi.mocked(upload).mock.calls[0][dropUploadsToProject ? 1 : 0];
+        expect(inputs).toEqual([expect.objectContaining({ file })]);
+        expect(input).toHaveValue("");
+    });
+
+    it("omits the workflow button when workflow selection is hidden", async () => {
+        const user = userEvent.setup();
+        render(<ChatInput onSubmit={vi.fn()} onCancel={vi.fn()} isLoading={false} hideWorkflowButton />);
+        expect(screen.queryByRole("button", { name: "Open workflows" })).toBeNull();
+        await user.click(screen.getByRole("button", { name: "Add documents" }));
+        expect(screen.queryByRole("menuitem", { name: "Workflows" })).toBeNull();
+    });
+
+    it.each(["", "  \n\t", "Replace this draft"])(
+        "trims pasted message edges while preserving internal formatting (draft: %j)",
+        async (draft) => {
+            const user = userEvent.setup();
+            renderInput(true);
+            const input = screen.getByRole("combobox") as HTMLTextAreaElement;
+            fireEvent.change(input, { target: { value: draft } });
+            await user.click(input);
+            input.setSelectionRange(0, draft.length);
+            await user.paste(" \n\tFirst paragraph\n\n    Indented line\nLast paragraph\n  ");
+            expect(input).toHaveValue("First paragraph\n\n    Indented line\nLast paragraph");
+            expect(input.selectionStart).toBe(input.value.length);
+            expect(input.selectionEnd).toBe(input.value.length);
+        },
+    );
+
+    it("preserves pasted spacing when inserting into an existing message", async () => {
+        const user = userEvent.setup();
+        renderInput(true);
+        const input = screen.getByRole("combobox") as HTMLTextAreaElement;
+        fireEvent.change(input, { target: { value: "Reviewclause" } });
+        await user.click(input);
+        input.setSelectionRange(6, 6);
+        await user.paste(" this ");
+        expect(input).toHaveValue("Review this clause");
+    });
+
+    it("ignores whitespace-only pasted messages and leaves Send disabled", async () => {
+        const user = userEvent.setup();
+        renderInput(true);
+        const input = screen.getByRole("combobox");
+        await user.click(input);
+        await user.paste(" \n\t ");
+        expect(input).toHaveValue("");
+        expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     });
 
     it("renders a read-only composer when canSend is false", () => {

@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import dns from "dns/promises";
 import net from "net";
+import { promisify } from "node:util";
 import { Agent, fetch as undiciFetch } from "undici";
 import { isBlockedIp } from "../privateIp";
 import { configuredApiPublicUrl } from "../runtimeConfig";
@@ -185,18 +186,62 @@ function truthyAnnotation(
     return annotations?.[key] === true;
 }
 
-export function toolRequiresConfirmation(
+export function isMcpWriteTool(
     annotations: Record<string, unknown> | null | undefined,
 ) {
-    // Gate only genuinely destructive tools behind human confirmation. We do
-    // NOT gate on openWorldHint (almost every useful connector — Gmail, Slack,
-    // GitHub — is "open world", so gating on it disables everything), and we
-    // require readOnlyHint to be *explicitly* false rather than merely absent
-    // (a missing hint must not be treated the same as readOnlyHint:false).
+    // Missing annotations do not establish read-only behavior. Only explicitly
+    // read-only, non-destructive tools may bypass the write protections.
     return (
         truthyAnnotation(annotations, "destructiveHint") ||
-        annotations?.readOnlyHint === false
+        annotations?.readOnlyHint !== true
     );
+}
+
+/** Also protect cached tools discovered before conservative classification. */
+export function mcpToolRequiresWriteAccess(
+    tool: Pick<ToolCacheRow, "annotations" | "requires_confirmation">,
+) {
+    return tool.requires_confirmation || isMcpWriteTool(tool.annotations);
+}
+
+const deriveCredentialFingerprint = promisify(crypto.scrypt);
+
+/** An opaque binding to the destination and credentials, stable across token refresh. */
+export async function mcpConnectionFingerprint(
+    connector: ConnectorRow,
+    oauthGrantId: string | null,
+) {
+    const config = decryptAuthConfig(connector);
+    // Use a slow, asynchronous derivation for potentially low-entropy custom
+    // credentials. The application key also prevents offline guessing from
+    // a fingerprint alone without blocking the request event loop.
+    const credentials =
+        connector.encrypted_auth_config || oauthGrantId
+            ? (
+                (await deriveCredentialFingerprint(
+                    JSON.stringify({
+                        oauthGrantId,
+                        bearerToken: config.bearerToken ?? null,
+                        headers: Object.entries(config.headers ?? {}).sort(([a], [b]) =>
+                            a.localeCompare(b),
+                        ),
+                    }),
+                    encryptionKey(),
+                    32,
+                )) as Buffer
+            ).toString("hex")
+            : null;
+    return crypto
+        .createHash("sha256")
+        .update(
+            JSON.stringify([
+                connector.server_url,
+                connector.transport,
+                connector.auth_type,
+                credentials,
+            ]),
+        )
+        .digest("hex");
 }
 
 function toToolSummary(row: ToolCacheRow): McpToolSummary {
@@ -209,7 +254,7 @@ function toToolSummary(row: ToolCacheRow): McpToolSummary {
         enabled: row.enabled,
         readOnly: truthyAnnotation(row.annotations, "readOnlyHint"),
         destructive: truthyAnnotation(row.annotations, "destructiveHint"),
-        requiresConfirmation: row.requires_confirmation,
+        write: mcpToolRequiresWriteAccess(row),
         lastSeenAt: row.last_seen_at,
     };
 }
@@ -228,11 +273,16 @@ export function toConnectorSummary(
         serverUrl: connector.server_url,
         authType: connector.auth_type ?? "none",
         enabled: connector.enabled,
+        requireWriteApproval: connector.require_write_approval === true,
+        readOnly: connector.read_only === true,
         hasAuthConfig: !!connector.encrypted_auth_config,
         customHeaderKeys: Object.keys(authConfig.headers ?? {}),
         oauthConnected: !!oauthToken?.encrypted_access_token,
         toolPolicy: connector.tool_policy ?? {},
-        tools: tools.map(toToolSummary),
+        tools: tools.map((tool) => ({
+            ...toToolSummary(tool),
+            enabled: tool.enabled && !(connector.read_only && mcpToolRequiresWriteAccess(tool)),
+        })),
         toolCount,
         createdAt: connector.created_at,
         updatedAt: connector.updated_at,

@@ -106,6 +106,46 @@ export type AskInputItem =
       kind: "documents";
       document_types: string[];
       response_prefix?: string;
+    }
+  | ConnectorApprovalItem;
+
+/**
+ * A connector write the server paused for the user's approval. The server
+ * creates these items, never the model's ask_inputs tool, and on approval it
+ * runs the stored `action` from the persisted event — the client supplies
+ * only the decision.
+ */
+export type ConnectorApprovalItem = {
+  id: string;
+  kind: "approval";
+  connector_name: string;
+  /** Tool name as the model called it. */
+  tool_name: string;
+  /** Human-readable action label, e.g. "Send email". */
+  title: string;
+  /** Arguments that run on approval, shown for review. */
+  arguments: Record<string, unknown>;
+  /** Current state the action changes, when the connector can read it. */
+  before?: unknown;
+  /** Account the action runs as, when known. */
+  account?: string;
+  /** Server-side binding to the connection that was reviewed. */
+  binding: ConnectorApprovalBinding;
+};
+
+export type ConnectorApprovalBinding =
+  | {
+      type: "mcp";
+      connector_id: string;
+      tool_id: string;
+      /** Absent on legacy approvals, which must be reviewed again. */
+      connection_fingerprint?: string;
+    }
+  | {
+      type: "google";
+      provider: GoogleWorkspaceProvider | "google-drive";
+      grant_id: string;
+      etag?: string;
     };
 
 export type AskInputsEvent = {
@@ -142,6 +182,11 @@ export type AskInputResponseItem =
       kind: "documents";
       filenames: string[];
       skipped?: boolean;
+    }
+  | {
+      id: string;
+      kind: "approval";
+      decision: "approve" | "reject";
     };
 
 export type AskInputsResponseRequest = {
@@ -241,8 +286,10 @@ export type McpToolEvent = {
   openai_tool_name: string;
   status: "ok" | "error";
   error?: string;
-  /** Server-owned Google proposal rendered for approval in the assistant flow. */
-  google_action_id?: string;
+  /** The approval item this call ran for, when it needed the user's approval. */
+  approval_id?: string;
+  /** Bounded tool output replayed to the model after an approved call. */
+  result?: string;
 };
 
 export type AssistantEvent =
@@ -368,21 +415,45 @@ export type WordEditResolutionStatus = "accepted" | "rejected";
 
 /** Explicit Google service connections are independent of Mike sign-in. */
 export type GoogleWorkspaceProvider = 'gmail' | 'google-calendar';
+export interface GoogleDriveStatus {
+    configured: boolean;
+    schemaReady?: boolean;
+    connected: boolean;
+    scope: string | null;
+    enabled: boolean;
+    /** Full Drive permission was granted and connection binding is available. */
+    writeEnabled: boolean;
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
+    grantId?: string;
+    /** Absent for connections made before the account was recorded. */
+    accountEmail?: string;
+    tools: NativeConnectorTool[];
+    redirectUri?: string | null;
+}
 export interface GoogleWorkspaceStatus {
     configured: boolean;
     schemaReady: boolean;
     connected: boolean;
+    /** Google granted write access; false when the user or an admin withheld it. */
     writeEnabled: boolean;
+    /** Whether the assistant may use this connection at all. */
+    enabled: boolean;
+    /** Whether each write action waits for the user's approval in the conversation. */
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
+    tools: NativeConnectorTool[];
     grantId?: string;
     accountEmail?: string;
     redirectUri: string | null;
 }
-export interface GoogleWorkspaceActionReview {
-    id: string;
-    provider: GoogleWorkspaceProvider;
-    status: 'pending' | 'expired' | 'executing' | 'succeeded' | 'failed' | 'uncertain' | 'rejected';
-    expiresAt: string;
-    createdAt: string;
-    resultMessage: string | null;
-    proposal: {tool: string; accountEmail: string; args: Record<string, unknown>; before?: unknown};
+/** A built-in connector tool and whether the user has switched it on. */
+export interface NativeConnectorTool {
+    name: string;
+    title: string;
+    description: string;
+    write: boolean;
+    enabled: boolean;
 }

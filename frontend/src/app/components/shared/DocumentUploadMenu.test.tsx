@@ -19,11 +19,11 @@ describe("DocumentUploadMenu", () => {
 
         await user.click(screen.getByRole("button", { name: "Upload" }));
         expect(screen.getAllByRole("menuitem")).toHaveLength(3);
-        await user.click(screen.getByRole("menuitem", { name: "Saved files" }));
+        await user.click(screen.getByRole("menuitem", { name: "Saved Documents" }));
         expect(onSavedFiles).toHaveBeenCalledOnce();
 
         await user.click(screen.getByRole("button", { name: "Upload" }));
-        await user.click(screen.getByRole("menuitem", { name: "Upload files" }));
+        await user.click(screen.getByRole("menuitem", { name: "Upload Documents" }));
         expect(onUploadFiles).toHaveBeenCalledOnce();
 
         await user.click(screen.getByRole("button", { name: "Upload" }));
@@ -43,7 +43,7 @@ describe("DocumentUploadMenu", () => {
         );
 
         await user.click(screen.getByRole("button", { name: "Upload" }));
-        expect(screen.queryByRole("menuitem", { name: "Saved files" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Saved Documents" })).toBeNull();
         expect(screen.getAllByRole("menuitem")).toHaveLength(2);
     });
 

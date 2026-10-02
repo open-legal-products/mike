@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { X } from "lucide-react";
 import { PillButtonUI } from "./PillButtonUI";
+import { TextButtonUI } from "./TextButtonUI";
 import { TextSlabUI } from "./TextSlabUI";
 
 export type EditCardUIBusyAction =
@@ -79,6 +79,7 @@ export function EditCardUI({
     const showAcceptAndApply =
         !!onAcceptAndApply || busyAction === "accept-and-apply";
     const hasActions =
+        !!onClose ||
         !!onView ||
         showApply ||
         showAcceptAndApply ||
@@ -91,7 +92,7 @@ export function EditCardUI({
             data-edit-status={status}
             aria-busy={ariaBusy || busyAction !== undefined || undefined}
         >
-            {(changeNumber !== undefined || reason || onClose) && (
+            {(changeNumber !== undefined || reason) && (
                 <div className="mb-2 flex items-start gap-2">
                     {changeNumber !== undefined && (
                         <span
@@ -107,25 +108,16 @@ export function EditCardUI({
                             {reason}
                         </p>
                     )}
-                    {onClose && (
-                        <PillButtonUI
-                            tone="white"
-                            size="icon-xs"
-                            aria-label="Close tracked change"
-                            title="Close tracked change"
-                            onClick={onClose}
-                            // Matches CitationPillUI and the change-number
-                            // badge beside it.
-                            className="ml-auto h-4 w-4"
-                        >
-                            <X aria-hidden="true" className="h-2.5 w-2.5" />
-                        </PillButtonUI>
-                    )}
                 </div>
             )}
 
             {(hasEditText || previewContent !== undefined) && (
-                <TextSlabUI className="font-sans text-xs leading-relaxed">
+                // Long changes scroll inside the slab so the actions stay in
+                // view; focusable so the scroll is reachable by keyboard.
+                <TextSlabUI
+                    tabIndex={0}
+                    className="max-h-40 overflow-y-auto overscroll-contain font-sans text-xs leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                >
                     {previewContent !== undefined ? (
                         previewContent
                     ) : (
@@ -157,13 +149,14 @@ export function EditCardUI({
 
             {hasActions && (
                 <div
-                    className="mt-2 flex gap-2"
+                    className="mt-2 flex items-center gap-2"
                     role="group"
                     aria-label="Edit actions"
                 >
                     {showAcceptAndApply && (
                         <PillButtonUI
                             tone="blue"
+                            size="xs"
                             onClick={onAcceptAndApply}
                             disabled={
                                 controlsDisabled || !onAcceptAndApply
@@ -180,6 +173,7 @@ export function EditCardUI({
                     {showApply && (
                         <PillButtonUI
                             tone="blue"
+                            size="xs"
                             onClick={onApply}
                             disabled={controlsDisabled || !onApply}
                             loading={busyAction === "apply"}
@@ -194,6 +188,7 @@ export function EditCardUI({
                     {onAccept && (
                         <PillButtonUI
                             tone="blue"
+                            size="xs"
                             onClick={onAccept}
                             disabled={controlsDisabled || resolved}
                             loading={busyAction === "accept"}
@@ -210,6 +205,7 @@ export function EditCardUI({
                     {onReject && (
                         <PillButtonUI
                             tone="white"
+                            size="xs"
                             onClick={onReject}
                             disabled={controlsDisabled || resolved}
                             loading={busyAction === "reject"}
@@ -223,9 +219,15 @@ export function EditCardUI({
                             )}
                         </PillButtonUI>
                     )}
+                    {onClose && (
+                        <TextButtonUI size="xs" title="Close tracked change" onClick={onClose} className="ml-auto">
+                            Close
+                        </TextButtonUI>
+                    )}
                     {onView && (
                         <PillButtonUI
                             tone="black"
+                            size="xs"
                             onClick={onView}
                             disabled={controlsDisabled || resolved}
                             loading={busyAction === "view"}
@@ -234,7 +236,7 @@ export function EditCardUI({
                                     ? "This change has been resolved and is no longer in the document."
                                     : undefined
                             }
-                            className="ml-auto"
+                            className={onClose ? undefined : "ml-auto"}
                         >
                             View
                         </PillButtonUI>

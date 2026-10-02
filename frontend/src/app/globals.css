@@ -547,6 +547,20 @@
     color: transparent;
 }
 
+/* PDF.js ends each text line with a <br>. The stock viewer stylesheet takes
+   those out of flow and hides their selection; without that they sat at the
+   layer's left edge and a drag selection painted a bar there on every line. */
+.pdf-text-layer br {
+    position: absolute;
+    color: transparent;
+    white-space: pre;
+    cursor: text;
+}
+
+.pdf-text-layer br::selection {
+    background: transparent;
+}
+
 .docx-view-container span.docx-text-highlight,
 .docx-view-container .docx-text-highlight {
     background-color: var(--docx-highlight-background) !important;
@@ -565,58 +579,17 @@
     box-decoration-break: clone;
 }
 
-/* docx-preview tracked-change styling */
-.docx-view-container ins {
-    color: #16a34a;
-    text-decoration: none;
-    background-color: rgba(22, 163, 74, 0.08);
-}
-
-.docx-view-container del {
-    color: #dc2626;
-    text-decoration: line-through;
-    background-color: rgba(220, 38, 38, 0.08);
-}
-
-/* Kill docx-preview's default dark-gray wrapper chrome — let the scroll
-   container's own bg show through. */
-.docx-view-container .docx-wrapper {
-    background: transparent !important;
-    padding: 0 !important;
-}
-
-.docx-view-container .docx-wrapper > section.docx {
-    margin: 0 auto 16px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.docx-view-container .docx-edit-flash {
-    animation: docxEditFlash 2s ease-out;
-    border-radius: 2px;
-}
-
 /* Optimistic Accept/Reject: instantly hide rejected side / de-style kept side.
    These are ephemeral DOM mutations; the real re-render replaces the markup. */
 .docx-view-container .docx-edit-hidden {
     display: none !important;
 }
 
-.docx-view-container ins.docx-edit-kept,
-.docx-view-container del.docx-edit-kept {
+.docx-view-container .docx-edit-kept {
     color: inherit !important;
     background-color: transparent !important;
     text-decoration: none !important;
-}
-
-@keyframes docxEditFlash {
-    0%, 20% {
-        background-color: rgba(59, 130, 246, 0.45);
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.45);
-    }
-    100% {
-        background-color: rgba(59, 130, 246, 0);
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0);
-    }
+    border-bottom: none !important;
 }
 
 .uploading-ellipsis {
@@ -680,4 +653,14 @@
     .uploading-ellipsis-two {
         opacity: 0;
     }
+}
+
+/* Text fields always match :focus-visible, even after a click. Keep the
+   Tailwind focus ring for keyboard navigation only; useInputModality sets the
+   attribute. Clears only the ring, not the field's own shadows. Unlayered on
+   purpose: EigenPal's unlayered `.docx-editor .focus-visible\:ring-2` rules
+   would otherwise win inside the editor chrome (comment column, composer). */
+:root[data-input-modality="pointer"] .keyboard-focus-ring:focus-visible {
+    --tw-ring-shadow: 0 0 #0000;
+    --tw-ring-offset-shadow: 0 0 #0000;
 }

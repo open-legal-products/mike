@@ -10,11 +10,6 @@
       <stop offset="0.55" stop-color="#2563EB" stop-opacity="0.95"/>
       <stop offset="1" stop-color="#1E40AF" stop-opacity="0.97"/>
     </linearGradient>
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.5"/>
-      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="#172554" stop-opacity="0.45"/>
-    </linearGradient>
     <clipPath id="clipTower">
       <path d="M29.5 54 V15.5 Q29.5 12 33 12 H52.5 Q56 12 56 15.5 V54 Z"/>
     </clipPath>
@@ -25,7 +20,7 @@
 
   <g>
     <path d="M8 54 V29 Q8 26 11 26 H24 Q27 26 27 29 V54 Z"
-          fill="url(#wing)" stroke="url(#rim)" stroke-width="1.5" stroke-linejoin="round"/>
+          fill="url(#wing)"/>
   </g>
   <g clip-path="url(#clipWing)">
     <rect x="11.6" y="33" width="4.6" height="7.5" rx="2.1" fill="#FFFFFF" opacity="0.5"/>
@@ -36,7 +31,7 @@
 
   <g>
     <path d="M29.5 54 V15.5 Q29.5 12 33 12 H52.5 Q56 12 56 15.5 V54 Z"
-          fill="url(#tower)" stroke="url(#rim)" stroke-width="1.5" stroke-linejoin="round"/>
+          fill="url(#tower)"/>
   </g>
   <g clip-path="url(#clipTower)">
     <rect x="33" y="19.5" width="5" height="10" rx="2.3" fill="#FFFFFF" opacity="0.45"/>

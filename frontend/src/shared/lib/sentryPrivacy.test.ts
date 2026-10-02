@@ -76,25 +76,92 @@ describe('outbound telemetry privacy boundary', () => {
     const transport = { send };
     privacyBoundaryIntegration().setup({ getTransport: () => transport, getDsn: () => ({ protocol: 'https', publicKey: 'public-key', host: 'sentry.example', port: '443', path: 'ingest', projectId: '123' }) });
     await transport.send([{ dsn: 'Private NDA.pdf' }, [[{ type: 'event' }, {}]]]);
-    expect(send).toHaveBeenCalledWith([{ dsn: 'https://public-key@sentry.example:443/ingest/123' }, [[{ type: 'event' }, diagnosticEvent({})]]]);
+    expect(send).toHaveBeenCalledWith([{ dsn: 'https://public-key@sentry.example:443/ingest/123' }, [[{ type: 'event' }, { ...diagnosticEvent({}), tags: { occurrence: 1 } }]]]);
   });
 
-  it('bounds event volume across distinct issues, preserves transport responses and flush ownership', async () => {
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  it('preserves transport responses and flush ownership', async () => {
     const send = vi.fn().mockResolvedValue({ statusCode: 503 });
     const transport = { send, flush: vi.fn() };
     privacyBoundaryIntegration().setup({ getTransport: () => transport });
-    const event: Parameters<typeof diagnosticEnvelope>[0] = [{}, [[{ type: 'event' }, { message: 'private' }]]];
-    expect(await transport.send(event)).toEqual({ statusCode: 503 });
-    for (let n = 0; n < 70; n++) await transport.send(event);
-    expect(send).toHaveBeenCalledTimes(60);
+    expect(await transport.send([{}, [[{ type: 'event' }, { message: 'private' }]]])).toEqual({ statusCode: 503 });
     await transport.send([{}, [[{ type: 'session' }, { did: 'private' }]]]);
-    expect(send).toHaveBeenCalledTimes(60);
-    clock.mockReturnValue(61_000);
-    await transport.send(event);
-    expect(send).toHaveBeenCalledTimes(61);
+    expect(send).toHaveBeenCalledTimes(1);
     expect(transport.flush).not.toHaveBeenCalled();
     expect(() => privacyBoundaryIntegration().setup({ getTransport: () => undefined })).not.toThrow();
+  });
+});
+
+describe('quota budget', () => {
+  const failure = (component: string, filename = 'backend/src/modules/uploads/uploads.processing.ts'): Parameters<typeof diagnosticEnvelope>[0] =>
+    [{}, [[{ type: 'event' }, { tags: { component, stage: 'claim' }, exception: { values: [{ type: 'Error', value: 'private', stacktrace: { frames: [{ filename, lineno: 10 }] } }] } }]]];
+  const setup = () => {
+    const send = vi.fn().mockResolvedValue({});
+    const transport = { send };
+    privacyBoundaryIntegration().setup({ getTransport: () => transport });
+    const sentOccurrences = () => send.mock.calls.map(([envelope]) => (envelope[1][0][1] as { tags: { occurrence: number } }).tags.occurrence);
+    return { transport, send, sentOccurrences };
+  };
+
+  // The 2026-09-23 incident: a poll loop failing once a second for nine hours.
+  it('sends a stuck loop at doubling occurrences, not every tick', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const { transport, sentOccurrences } = setup();
+    for (let tick = 0; tick < 9 * 3600; tick++) {
+      clock.mockReturnValue(tick * 1000);
+      await transport.send(failure('upload-worker'));
+    }
+    // 15 events for 32,400 failures (the old 60-a-minute cap allowed all of them).
+    expect(sentOccurrences()).toEqual(Array.from({ length: 15 }, (_, i) => 2 ** i));
+  });
+
+  it('keys issues the way Sentry groups them: rewritten text, distinct tags and code locations', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(0);
+    const { transport, send } = setup();
+    // Different private messages collapse to one diagnostic event, so one issue.
+    await transport.send([{}, [[{ type: 'event' }, { tags: { component: 'dbq' }, message: 'job 1 failed' }]]]);
+    await transport.send([{}, [[{ type: 'event' }, { tags: { component: 'dbq' }, message: 'job 2 failed' }]]]);
+    await transport.send([{}, [[{ type: 'event' }, { tags: { component: 'dbq' }, message: 'job 3 failed' }]]]);
+    expect(send).toHaveBeenCalledTimes(2);
+    await transport.send(failure('upload-worker'));
+    await transport.send(failure('app-jobs'));
+    await transport.send(failure('upload-worker', 'backend/src/lib/dbq/runner.ts'));
+    expect(send).toHaveBeenCalledTimes(5);
+  });
+
+  it('starts an issue over after an hour of quiet', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const { transport, sentOccurrences } = setup();
+    for (let n = 0; n < 3; n++) await transport.send(failure('upload-worker'));
+    clock.mockReturnValue(60 * 60_000);
+    await transport.send(failure('upload-worker'));
+    expect(sentOccurrences()).toEqual([1, 2, 1]);
+  });
+
+  it('caps a runtime at 50 events a day across distinct issues, then resets', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const { transport, send } = setup();
+    for (let n = 0; n < 80; n++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
+    expect(send).toHaveBeenCalledTimes(50);
+    clock.mockReturnValue(24 * 60 * 60_000);
+    await transport.send(failure('upload-worker', 'backend/src/next-day.ts'));
+    expect(send).toHaveBeenCalledTimes(51);
+  });
+
+  it('forgets quiet issues once a long-running process has seen a thousand', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const { transport, sentOccurrences } = setup();
+    for (let n = 0; n < 1_001; n++) await transport.send(failure('upload-worker', `backend/src/file${n}.ts`));
+    clock.mockReturnValue(24 * 60 * 60_000);
+    for (let n = 0; n < 2; n++) await transport.send(failure('upload-worker', 'backend/src/file0.ts'));
+    expect(sentOccurrences().slice(-2)).toEqual([1, 2]);
+  });
+
+  it('delivers every diagnostic test probe', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(0);
+    const { transport, send } = setup();
+    const probe: Parameters<typeof diagnosticEnvelope>[0] = [{}, [[{ type: 'event' }, { tags: { diagnostic_test: 'true' }, message: 'probe' }]]];
+    for (let n = 0; n < 5; n++) await transport.send(probe);
+    expect(send).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -217,5 +284,34 @@ it('allows only bounded network context and known model endpoints', () => {
   expect(diagnosticEvent({ tags: { network_state: 'private-network', request_origin: 'https://private.example', provider_error: 'private' } }).tags).toEqual({});
   for (const operation of ['configured', 'ollama', 'openrouter', 'vercel', 'opencode-go']) {
     expect(diagnosticRoute(`/api/models/${operation}?key=private`)).toBe(`/api/models/${operation}`);
+  }
+});
+
+// MIKE-FRONTEND-J/4: an unreachable backend is one condition, not one issue
+// per route/method/stack. A pinned caller fingerprint from a fixed vocabulary
+// replaces code-location grouping; any other caller fingerprint is ignored.
+it('groups a pinned unreachable-dependency condition as one issue per cause', () => {
+  const gateway = (method: string, route: string, code = 'ECONNREFUSED') => diagnosticEvent({
+    fingerprint: ['upstream-unavailable'], level: 'warning',
+    tags: { component: 'api-gateway', stage: 'gateway-fetch', http_method: method, http_route: route, http_status: 503, failure_code: code },
+    exception: { values: [{ type: 'TypeError', value: 'fetch failed' }] },
+  });
+  expect(gateway('POST', '/chat').fingerprint).toEqual(['upstream-unavailable', 'api-gateway', 'ECONNREFUSED']);
+  expect(gateway('GET', `/projects/${id}`).fingerprint).toEqual(gateway('POST', '/chat').fingerprint);
+  expect(gateway('GET', '/chat', 'ENOTFOUND').fingerprint).not.toEqual(gateway('GET', '/chat').fingerprint);
+  expect(gateway('POST', '/chat').level).toBe('warning');
+  expect(diagnosticEvent({ fingerprint: ['api-unreachable'], tags: { component: 'mike-api', stage: 'api-unreachable', failure_code: 'fetch_failed' } }))
+    .toMatchObject({ fingerprint: ['api-unreachable', 'mike-api', 'fetch_failed'], message: 'Failure in mike-api / api-unreachable / fetch_failed' });
+  // Unknown caller fingerprints keep the default, code-location grouping.
+  expect((diagnosticEvent({ fingerprint: ['PRIVATE_TEXT'], tags: { component: 'api-gateway' } }).fingerprint as string[])[0]).toBe('{{ default }}');
+  expect(diagnosticEvent({ tags: { error_code: 'upstream_unavailable', failure_code: 'EHOSTUNREACH' } }).tags).toEqual({ error_code: 'upstream_unavailable', failure_code: 'EHOSTUNREACH' });
+  // Migrations not applied: the backend answers 503 schema_out_of_date.
+  expect(diagnosticEvent({ tags: { error_code: 'schema_out_of_date' } }).tags).toEqual({ error_code: 'schema_out_of_date' });
+});
+
+it('keeps a bounded folded network-failure count and drops anything else', () => {
+  expect(diagnosticEvent({ tags: { network_failure_count: 37 } }).tags).toEqual({ network_failure_count: 37 });
+  for (const bad of [0, -1, 100001, 1.5, '37', 'PRIVATE']) {
+    expect(diagnosticEvent({ tags: { network_failure_count: bad } }).tags).toEqual({});
   }
 });

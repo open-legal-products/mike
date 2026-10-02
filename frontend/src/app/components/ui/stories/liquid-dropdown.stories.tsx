@@ -14,6 +14,8 @@ import {
     LiquidDropdownRadioItem,
     LiquidDropdownSurface,
 } from "@/app/components/ui/liquid-dropdown";
+import { SearchBar } from "@/app/components/ui/search-bar";
+import { FormTextInput } from "@/app/components/ui/form-field";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 
 const meta = { title: "UI / LiquidDropdown" };
@@ -102,3 +104,24 @@ export const StandaloneSurface = () => (
         </LiquidDropdownButton>
     </LiquidDropdownSurface>
 );
+
+export const Fields = () => {
+    const [search, setSearch] = useState("");
+    return (
+        <LiquidDropdownSurface className="w-72 space-y-3 p-3">
+            <SearchBar
+                size="sm"
+                label="Search dropdown options"
+                value={search}
+                onValueChange={setSearch}
+            />
+            <label className="block space-y-1 text-xs text-gray-700">
+                <span>Option name</span>
+                <FormTextInput
+                    className="h-8 text-xs"
+                    placeholder="Enter a name"
+                />
+            </label>
+        </LiquidDropdownSurface>
+    );
+};

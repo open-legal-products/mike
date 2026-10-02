@@ -1,6 +1,7 @@
 import { Worker, type Job } from "bullmq";
 import { getRedisConnection } from "../lib/queue/connection";
 import { reportError } from "../lib/observability/sentry";
+import { asReportableError } from "../lib/httpError";
 import {
     APP_JOBS_QUEUE,
     type AppJobDelivery,
@@ -33,10 +34,19 @@ export async function runAppJobDelivery(
     });
     if (error) {
         // Claim failure (transient DB trouble): do nothing — the row is
-        // untouched and the poll backstop will claim it.
+        // untouched and the poll backstop will claim it. Reported with its
+        // PostgREST code on the cause chain (failure_code), and logged as the
+        // same Error OBJECT: a logged message string is new text to the
+        // console bridge, which then files a second, context-free event.
+        const failure = asReportableError(error, runAppJobDelivery);
+        reportError(failure, {
+            tags: { component: "app-jobs", stage: "claim" },
+            extra: { db_job_id: data.dbJobId },
+            fingerprint: ["app-jobs-claim-failed"],
+        });
         console.error("[app-jobs] claim failed", {
             dbJobId: data.dbJobId,
-            error: error.message,
+            error: failure,
         });
         return;
     }

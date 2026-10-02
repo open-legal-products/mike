@@ -17,7 +17,6 @@ import { useSmoothedReveal } from "./message/useSmoothedReveal";
 import { MarkdownContent } from "./message/MarkdownContent";
 import { CitationsBlock, buildCitationAppendix } from "./message/CitationSources";
 import { EditCardsSection } from "./message/EditCardsSection";
-import { InlineGoogleWorkspaceAction } from "@/app/components/shared/GoogleWorkspaceActionCard";
 import {
     AskInputsBlock,
     CourtListenerBlock,
@@ -362,11 +361,6 @@ export function AssistantMessage({
                 event.type === "ask_inputs" &&
                 !askInputsResponseFor(group.indices[index]),
         );
-    const hasGoogleAction = (group: Extract<EventGroup, { kind: "pre" }>) =>
-        group.events.some(
-            (event) =>
-                event.type === "mcp_tool_call" && !!event.google_action_id,
-        );
 
     const renderEvent = (
         event: AssistantEvent,
@@ -418,29 +412,21 @@ export function AssistantMessage({
                 ? `${event.connector_name}: ${event.tool_name}`
                 : toolCallLabel(event.openai_tool_name);
             return (
-                <div key={globalIdx}>
-                    <EventBlock
-                        showConnector={
-                            showConnector || !!event.google_action_id
-                        }
-                        isStreaming={event.isStreaming}
-                        dotColor={isError ? "red" : "gray"}
-                    >
-                        <span className="font-medium">
-                            {event.isStreaming ? "Using connector..." : label}
-                        </span>
-                        {isError && event.error && (
-                            <p className="mt-0.5 text-xs text-red-600">
-                                {event.error}
-                            </p>
-                        )}
-                    </EventBlock>
-                    {event.google_action_id && !event.isStreaming && (
-                        <InlineGoogleWorkspaceAction
-                            actionId={event.google_action_id}
-                        />
+                <EventBlock
+                    key={globalIdx}
+                    showConnector={showConnector}
+                    isStreaming={event.isStreaming}
+                    dotColor={isError ? "red" : "gray"}
+                >
+                    <span className="font-medium">
+                        {event.isStreaming ? "Using connector..." : label}
+                    </span>
+                    {isError && event.error && (
+                        <p className="mt-0.5 text-xs text-red-600">
+                            {event.error}
+                        </p>
                     )}
-                </div>
+                </EventBlock>
             );
         }
         if (event.type === "doc_read") {
@@ -855,7 +841,6 @@ export function AssistantMessage({
                             }
                             const subsequentContent = hasContentAfter(gIdx);
                             const pendingAskInput = hasPendingAskInput(g);
-                            const googleAction = hasGoogleAction(g);
                             const wrapperIsStreaming =
                                 g.events.some(
                                     (event) =>
@@ -867,12 +852,12 @@ export function AssistantMessage({
                                     key={`p-${g.indices[0]}`}
                                     stepCount={g.events.length}
                                     shouldMinimize={
-                                        pendingAskInput || googleAction
+                                        pendingAskInput
                                             ? false
                                             : subsequentContent
                                     }
                                     isStreaming={wrapperIsStreaming}
-                                    forceOpen={pendingAskInput || googleAction}
+                                    forceOpen={pendingAskInput}
                                 >
                                     {g.events.map((event, i) =>
                                         renderEvent(

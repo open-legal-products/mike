@@ -23,8 +23,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("next/image", () => ({
-  default: ({ className }: { className?: string }) => (
-    <span aria-hidden="true" className={className} />
+  default: ({ className, src }: { className?: string; src?: string }) => (
+    <span aria-hidden="true" className={className} data-src={src} />
   ),
 }));
 
@@ -146,7 +146,10 @@ describe("AppSidebar account dropdown", () => {
     });
     expect(
       completedRow.parentElement?.querySelector("span[aria-hidden='true']"),
-    ).toHaveClass("hue-rotate-[285deg]");
+    ).toHaveAttribute(
+      "data-src",
+      expect.stringContaining("features/chat-complete"),
+    );
 
     await user.click(completedRow);
 
@@ -155,7 +158,10 @@ describe("AppSidebar account dropdown", () => {
     ).toBeInTheDocument();
     expect(
       completedRow.parentElement?.querySelector("span[aria-hidden='true']"),
-    ).not.toHaveClass("hue-rotate-[285deg]");
+    ).not.toHaveAttribute(
+      "data-src",
+      expect.stringContaining("features/chat-complete"),
+    );
   });
 
   it("does not mark a selected response green when it completes", async () => {
@@ -189,7 +195,10 @@ describe("AppSidebar account dropdown", () => {
     });
     expect(
       selectedRow.parentElement?.querySelector("span[aria-hidden='true']"),
-    ).not.toHaveClass("hue-rotate-[285deg]");
+    ).not.toHaveAttribute(
+      "data-src",
+      expect.stringContaining("features/chat-complete"),
+    );
   });
 
   it.each([
@@ -202,7 +211,7 @@ describe("AppSidebar account dropdown", () => {
 
       expect(
         screen.getByRole("button", { name: toggleName }).parentElement,
-      ).toHaveClass("h-12", "shrink-0");
+      ).toHaveClass("h-11", "shrink-0");
     },
   );
 

@@ -10,7 +10,13 @@
  * configureMikeApiClient() below before the first request leaves.
  */
 import { configureMikeApiClient } from "./client";
-import type { Chat, Document, Message, WordDocumentEdit } from "../types";
+import type {
+  ActiveWordTurn,
+  Chat,
+  Document,
+  Message,
+  WordDocumentEdit,
+} from "../types";
 import { refreshSession } from "../auth/session";
 import {
   assistantContentFromEvents,
@@ -64,6 +70,8 @@ export {
   postWordChatToolResult,
   readSSE,
   streamWordChat,
+  streamWordChatTurn,
+  stopWordChatTurn,
   updateLastSelectedChatModel,
   updateLastSelectedReasoningLevel,
   updateWorkflow,
@@ -241,7 +249,17 @@ export async function listCloudWordChats(
 export async function getCloudWordChat(
   documentId: string,
   chatId: string,
-): Promise<{ chat: Chat; messages: Message[] }> {
+): Promise<{
+  chat: Chat;
+  messages: Message[];
+  /**
+   * Present while the server is still generating an answer for this chat.
+   * The reserved (still-empty) assistant row is filtered out of `messages`,
+   * so this is the only sign of it and a pane that opens on one attaches
+   * with a live placeholder of its own.
+   */
+  activeTurn: ActiveWordTurn | null;
+}> {
   const params = new URLSearchParams({ document_id: documentId });
   const res = await fetchWithRefresh(
     `${BASE_URL}/word-chat/${encodeURIComponent(chatId)}?${params}`,
@@ -256,9 +274,11 @@ export async function getCloudWordChat(
   const raw = (await res.json()) as {
     chat: Chat;
     messages: WordChatServerMessage[];
+    active_turn?: ActiveWordTurn | null;
   };
   return {
     chat: raw.chat,
+    activeTurn: raw.active_turn ?? null,
     messages: raw.messages.map((message): Message => {
       if (message.role === "user") {
         return {

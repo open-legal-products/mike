@@ -3,11 +3,22 @@
 import { useCallback, useMemo, useState, useRef, useEffect } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
-import { ArrowDown, Pencil, Plus, Trash2, Users } from "lucide-react";
+import {
+    ArrowDown,
+    PanelRight,
+    Pencil,
+    Plus,
+    Trash2,
+    Users,
+    Zap,
+} from "lucide-react";
 import { UserMessage } from "./UserMessage";
 import { AssistantMessage } from "./AssistantMessage";
 import { ChatInput } from "./ChatInput";
 import { InitialView } from "./InitialView";
+import { QuickActionsModal } from "./QuickActionsModal";
+import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
+import { useQuickActions } from "@/app/hooks/useQuickActions";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatInputPrompt } from "./ChatInputPrompt";
@@ -27,6 +38,7 @@ import type {
     Citation,
     EditAnnotation,
     Document,
+    PanelDocument,
     Message,
 } from "../shared/types";
 import {
@@ -38,11 +50,17 @@ import { useSidebar } from "@/app/contexts/SidebarContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { usePageChrome } from "@/app/contexts/PageChromeContext";
 import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
+import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
 import { resolvePanelDocumentVersionResult } from "./panelDocumentVersion";
 import { LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS } from "@/app/components/ui/liquid-surface";
 import { HeaderButtonUI, HeaderButtonsUI } from "@/shared/ui/HeaderButtonsUI";
-import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
+import {
+    HeaderActionsMenu,
+    type HeaderActionsMenuItem,
+} from "@/app/components/shared/HeaderActionsMenu";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
+import { RenameModal } from "@/app/components/modals/RenameModal";
+import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
 import {
@@ -50,6 +68,12 @@ import {
     providerLabel,
 } from "@/app/lib/modelAvailability";
 import { can, roleFrom } from "@/app/lib/permissions";
+import {
+    getDocument,
+    renameProjectDocument,
+    renameLibraryDocument,
+    deleteDocument,
+} from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 
 interface Props {
@@ -80,11 +104,6 @@ interface Props {
     rejectedApiKey?: { model: string | null } | null;
     onDismissInvalidApiKey?: () => void;
     /**
-     * Leave the turn in flight running (New chat). The server persists the
-     * finished answer; only `cancel` may cut it short.
-     */
-    detach: () => void;
-    /**
      * Whether the caller may write in this chat. The server serves the
      * standing on GET /chat/:id; surfaces that know it must pass it, so a
      * read-only caller gets the disabled composer instead of a 403 on send.
@@ -112,14 +131,14 @@ interface Props {
     chatLoading?: boolean;
     /** Shares document previews with the initial composer before a chat exists. */
     onInitialSubmit?: (message: Message) => void;
+    /** Leaves this chat for the new-chat view, without cancelling its answer. */
+    onNewChat: () => void;
 }
 
 const ASSISTANT_PANEL_TRANSITION_MS = 500;
 const MOBILE_BREAKPOINT_PX = 768;
 const DEFAULT_ASSISTANT_BOTTOM_PADDING = 116;
 const CHAT_MESSAGE_TOP_PADDING = 76;
-const DEFAULT_MOBILE_MESSAGE_TOP_PADDING = 24;
-const DEFAULT_DESKTOP_MESSAGE_TOP_PADDING = 32;
 const SCROLL_BUTTON_INPUT_GAP = 16;
 const CHAT_INPUT_BOTTOM_OFFSET = 12;
 
@@ -141,11 +160,11 @@ export function ChatView({
     cancel,
     rejectedApiKey = null,
     onDismissInvalidApiKey,
-    detach,
     canSend,
     accessResolved = true,
     chatLoading,
     onInitialSubmit,
+    onNewChat,
 }: Props) {
     const router = useRouter();
     // The model is what we asked for, so it identifies whose key was rejected.
@@ -156,12 +175,21 @@ export function ChatView({
                 : null,
         [rejectedApiKey],
     );
+    const [deleteTarget, setDeleteTarget] = useState<PanelDocument | null>(null);
+    const [deletingDocument, setDeletingDocument] = useState(false);
     const [tabs, setTabs] = useState<AssistantSidePanelTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [panelMounted, setPanelMounted] = useState(false);
     const [panelVisible, setPanelVisible] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
     const [shareOpen, setShareOpen] = useState(false);
+    const [openDocumentsModalOpen, setOpenDocumentsModalOpen] = useState(false);
+    const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false);
+    // A new chat shows the quick actions; a started one only edits them.
+    const isNewChat = !!onInitialSubmit;
+    const { quickActions, saveQuickAction, addQuickAction } = useQuickActions(
+        isNewChat || quickActionsModalOpen,
+    );
     const [actionGate, setActionGate] = useState<{
         action: string;
         requiredRole: "owner" | "editor";
@@ -171,6 +199,8 @@ export function ChatView({
         title?: string;
         message?: string;
     } | null>(null);
+    const [renameOpen, setRenameOpen] = useState(false);
+    const [renaming, setRenaming] = useState(false);
     const [actionError, setActionError] = useState<{
         title: string;
         message: string;
@@ -193,8 +223,6 @@ export function ChatView({
         chats,
         renameChat,
         deleteChat,
-        setCurrentChatId,
-        setNewChatMessages,
     } = useChatHistoryContext();
     const activeChat =
         (chatId ? chats?.find((entry) => entry.id === chatId) : null) ??
@@ -274,17 +302,10 @@ export function ChatView({
 
     const closeTab = useCallback(
         (id: string) => {
+            // Closing the last tab leaves the panel open on its "Open Documents"
+            // placeholder; only the panel's own close control dismisses it.
             setTabs((prev) => {
                 const next = prev.filter((t) => t.id !== id);
-                if (next.length === 0) {
-                    hidePanel(() =>
-                        unmountPanel(() => {
-                            setActiveTabId(null);
-                            setTabs([]);
-                        }),
-                    );
-                    return prev;
-                }
                 if (activeTabId === id) {
                     const idx = prev.findIndex((t) => t.id === id);
                     const neighbour = next[idx] ?? next[idx - 1] ?? next[0];
@@ -293,7 +314,7 @@ export function ChatView({
                 return next;
             });
         },
-        [activeTabId, hidePanel, unmountPanel],
+        [activeTabId],
     );
 
     const reorderTabs = useCallback(
@@ -315,12 +336,8 @@ export function ChatView({
     );
 
     /**
-     * One tab per normalized document version. If a tab already exists,
-     * the panel stays mounted and only the header-relevant fields swap
-     * (kind, citation/edit, version, filename). Per-tab UI state — the
-     * dismissable warning and the saved scroll position — is preserved
-     * so switching headers doesn't blow away viewer state. If no tab
-     * exists for the version, a new one is appended.
+     * One tab per document. New citations, edits and version selections update
+     * that tab; changing versions resets version-specific scroll and warnings.
      */
     const upsertTab = useCallback(
         (tab: AssistantSidePanelTab) => {
@@ -672,6 +689,7 @@ export function ChatView({
     );
 
     const messagesContainerRef = useRef<HTMLDivElement>(null);
+    const messagesContentRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<ChatInputHandle | null>(null);
@@ -689,6 +707,7 @@ export function ChatView({
         () => messages.length > 0 && !chatLoading,
     );
     const [showScrollButton, setShowScrollButton] = useState(false);
+    const scrollButtonVisibleRef = useRef(false);
     const [inputHeight, setInputHeight] = useState(0);
     const [minHeight, setMinHeight] = useState("0px");
 
@@ -705,38 +724,73 @@ export function ChatView({
     }, [accessResolved]);
 
     useEffect(() => {
-        if (latestUserMessageRef.current) {
-            const mobile = window.innerWidth < MOBILE_BREAKPOINT_PX;
-            const headerHeight = mobile ? 56 : 0;
-            const messageGap = mobile ? 24 : 32;
-            const addedHeaderClearance =
-                CHAT_MESSAGE_TOP_PADDING -
-                (mobile
-                    ? DEFAULT_MOBILE_MESSAGE_TOP_PADDING
-                    : DEFAULT_DESKTOP_MESSAGE_TOP_PADDING);
-            const paddingBottom = DEFAULT_ASSISTANT_BOTTOM_PADDING;
-            const userMessageHeight = latestUserMessageRef.current.offsetHeight;
+        const container = messagesContainerRef.current;
+        const userMessage = latestUserMessageRef.current;
+        if (!container || !userMessage) return;
+        // Size the latest response so that, scrolled to the bottom, the latest
+        // user message sits CHAT_MESSAGE_TOP_PADDING below the viewport top —
+        // the same place scrollLatestUserToTop puts it. Measure the real
+        // scroll viewport: it is not the full dynamic viewport height.
+        const update = () => {
+            const messageGap =
+                window.innerWidth < MOBILE_BREAKPOINT_PX ? 24 : 32;
             setMinHeight(
-                `calc(100dvh - ${headerHeight + messageGap * 2 + userMessageHeight + paddingBottom + addedHeaderClearance}px)`,
+                `${Math.max(
+                    0,
+                    container.clientHeight -
+                        CHAT_MESSAGE_TOP_PADDING -
+                        userMessage.offsetHeight -
+                        // One list gap before the response and one before
+                        // the trailing scroll anchor (messagesEndRef).
+                        messageGap * 2 -
+                        DEFAULT_ASSISTANT_BOTTOM_PADDING,
+                )}px`,
             );
-        }
+        };
+        update();
+        const observer = new ResizeObserver(update);
+        observer.observe(container);
+        observer.observe(userMessage);
+        return () => observer.disconnect();
     }, [messages.length]);
 
-    const updateScrollButton = useCallback(() => {
-        const c = messagesContainerRef.current;
-        if (!c) return;
-        const isScrolledUp = c.scrollHeight - c.scrollTop - c.clientHeight > 10;
-        setShowScrollButton(isScrolledUp && c.scrollHeight > c.clientHeight);
-    }, []);
-
+    const isInitialView = Boolean(onInitialSubmit);
     useEffect(() => {
         const c = messagesContainerRef.current;
-        if (!c) return;
-        c.addEventListener("scroll", updateScrollButton);
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- initial scroll-button state must be measured from the live DOM
-        updateScrollButton();
-        return () => c.removeEventListener("scroll", updateScrollButton);
-    }, [messages, updateScrollButton]);
+        const content = messagesContentRef.current;
+        if (!c || !content) return;
+        let frame: number | null = null;
+        const measure = () => {
+            frame = null;
+            const height = c.scrollHeight;
+            const visible =
+                height > c.clientHeight &&
+                height - c.scrollTop - c.clientHeight > 10;
+            // Avoid dispatching even an unchanged value during a busy stream:
+            // React cannot always bail out eagerly while other work is queued.
+            if (visible !== scrollButtonVisibleRef.current) {
+                scrollButtonVisibleRef.current = visible;
+                setShowScrollButton(visible);
+            }
+        };
+        const scheduleMeasure = () => {
+            if (frame === null) frame = requestAnimationFrame(measure);
+        };
+        // Measure actual layout changes, including smoothed text reveal.
+        // Depending on `messages` dispatches state from an effect on every
+        // streamed chunk and can exceed React's nested passive-update limit.
+        const observer = new ResizeObserver(scheduleMeasure);
+        observer.observe(c);
+        observer.observe(content);
+        c.addEventListener("scroll", scheduleMeasure, { passive: true });
+        scheduleMeasure();
+        return () => {
+            observer.disconnect();
+            c.removeEventListener("scroll", scheduleMeasure);
+            if (frame !== null) cancelAnimationFrame(frame);
+        };
+        // The container mounts when the initial screen becomes a conversation.
+    }, [isInitialView]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -790,6 +844,10 @@ export function ChatView({
             return scrollLatestUserToTop();
     }, [chatLoading, isResponseLoading, scrollLatestUserToTop]);
 
+    const hasMessages = messages.length > 0;
+    const userMessageCount = messages.filter(
+        (message) => message.role === "user",
+    ).length;
     /* eslint-disable react-hooks/set-state-in-effect -- visibility is synchronized with completion of the selected chat's DOM positioning */
     useEffect(() => {
         const viewingUnpositionedChat = positionedChatRef.current !== chatId;
@@ -801,16 +859,13 @@ export function ChatView({
             setMessagesVisible(false);
             return;
         }
-        if (messages.length === 0) {
+        if (!hasMessages) {
             hasScrolledRef.current = false;
             positionedChatRef.current = undefined;
             setMessagesVisible(false);
         } else if (!hasScrolledRef.current || viewingUnpositionedChat) {
-            const userMsgCount = messages.filter(
-                (m) => m.role === "user",
-            ).length;
             if (
-                userMsgCount >= 2 &&
+                userMessageCount >= 2 &&
                 latestUserMessageRef.current &&
                 messagesContainerRef.current
             ) {
@@ -825,7 +880,15 @@ export function ChatView({
                 setMessagesVisible(true);
             }
         }
-    }, [chatId, chatLoading, messages, scrollLatestUserToTop]);
+        // Keep the two-frame positioning operation alive while text streams.
+        // Depending on messages would cancel it before its reveal callback.
+    }, [
+        chatId,
+        chatLoading,
+        hasMessages,
+        userMessageCount,
+        scrollLatestUserToTop,
+    ]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
     useEffect(() => {
@@ -838,13 +901,6 @@ export function ChatView({
             document.body.style.overflow = "unset";
         };
     }, [panelMounted]);
-
-    const handleNewChat = () => {
-        detach();
-        setCurrentChatId(null);
-        setNewChatMessages(null);
-        router.push("/assistant");
-    };
 
     const handleShareChat = () => {
         if (!activeChat) return;
@@ -867,14 +923,17 @@ export function ChatView({
             });
             return;
         }
-        const title = window.prompt(
-            "Rename chat",
-            activeChat.title?.trim() || "Untitled chat",
-        );
-        if (!title?.trim()) return;
+        setRenameOpen(true);
+    };
+
+    const handleRenameSave = async (title: string) => {
+        if (!activeChat) return;
+        setRenaming(true);
         try {
-            await renameChat(activeChat.id, title.trim());
+            await renameChat(activeChat.id, title);
+            setRenameOpen(false);
         } catch (error) {
+            setRenameOpen(false);
             setActionError({
                 title: "Chat not renamed",
                 message: userFacingApiError(
@@ -882,6 +941,8 @@ export function ChatView({
                     "The chat could not be renamed. Please try again.",
                 ),
             });
+        } finally {
+            setRenaming(false);
         }
     };
 
@@ -908,71 +969,101 @@ export function ChatView({
         }
     };
 
+    const chatActionItems: HeaderActionsMenuItem[] = [
+        {
+            label: "Share",
+            icon: Users,
+            onSelect: handleShareChat,
+            disabled: !activeChat,
+        },
+        {
+            label: "Rename",
+            icon: Pencil,
+            onSelect: () => void handleRenameChat(),
+            disabled: !activeChat,
+        },
+        {
+            label: "Delete",
+            icon: Trash2,
+            onSelect: () => void handleDeleteChat(),
+            disabled: !activeChat,
+            variant: "danger",
+        },
+    ];
+
     const renderChatHeaderActions = () => (
         <HeaderButtonsUI className="pointer-events-auto">
-            <HeaderButtonUI
-                iconOnly
-                aria-label="New chat"
-                title="New chat"
-                onClick={handleNewChat}
-            >
-                <Plus className="h-4 w-4" />
-            </HeaderButtonUI>
+            {!isNewChat && (
+                <HeaderButtonUI
+                    iconOnly
+                    aria-label="New chat"
+                    title="New chat"
+                    onClick={onNewChat}
+                >
+                    <Plus className="h-4 w-4" />
+                </HeaderButtonUI>
+            )}
             <HeaderActionsMenu
                 title="Chat actions"
                 items={[
                     {
-                        label: "Share",
-                        icon: Users,
-                        onSelect: handleShareChat,
-                        disabled: !activeChat,
+                        label: "Open side panel",
+                        icon: PanelRight,
+                        onSelect: showPanel,
                     },
                     {
-                        label: "Rename",
-                        icon: Pencil,
-                        onSelect: () => void handleRenameChat(),
-                        disabled: !activeChat,
+                        label: "Edit quick actions",
+                        icon: Zap,
+                        onSelect: () => setQuickActionsModalOpen(true),
                     },
-                    {
-                        label: "Delete",
-                        icon: Trash2,
-                        onSelect: () => void handleDeleteChat(),
-                        disabled: !activeChat,
-                        variant: "danger",
-                    },
+                    ...(isNewChat ? [] : chatActionItems),
                 ]}
             />
         </HeaderButtonsUI>
     );
 
+    const renderHeaderActionSlots = () => (
+        <>
+            <div
+                data-slot="chat-header-actions"
+                className="pointer-events-none absolute right-4 top-4.5 z-30 hidden md:block md:right-8"
+            >
+                {renderChatHeaderActions()}
+            </div>
+
+            {mobileActionsContainer
+                ? createPortal(
+                      <div className="flex min-w-0 items-center justify-end overflow-visible py-2 -my-2">
+                          {renderChatHeaderActions()}
+                      </div>,
+                      mobileActionsContainer,
+                  )
+                : null}
+        </>
+    );
+
     const messagesBottomPadding = DEFAULT_ASSISTANT_BOTTOM_PADDING;
+    // Readers of a shared chat may view its documents but not change them.
+    const canWrite =
+        accessResolved && (canSend === undefined || canSend === true);
 
     return (
         <div className="h-full w-full flex relative">
             {/* Chat column */}
             <div className="flex min-w-0 flex-col h-full flex-1 relative">
+                {renderHeaderActionSlots()}
                 {onInitialSubmit ? (
                     <InitialView
+                        inputRef={chatInputRef}
                         onSubmit={onInitialSubmit}
                         onDocumentClick={handleAttachedDocumentClick}
+                        quickActions={quickActions}
+                        onEditQuickActions={() =>
+                            setQuickActionsModalOpen(true)
+                        }
                     />
                 ) : (
                     <>
-                        <div
-                            data-slot="chat-header-actions"
-                            className="pointer-events-none absolute right-4 top-4.5 z-30 hidden md:block md:right-8"
-                        >
-                            {renderChatHeaderActions()}
-                        </div>
-
-                        {mobileActionsContainer
-                            ? createPortal(
-                                  <div className="flex min-w-0 items-center justify-end overflow-visible py-2 -my-2">
-                                      {renderChatHeaderActions()}
-                                  </div>,
-                                  mobileActionsContainer,
-                              )
-                            : null}
 
                         {/* Scrollable messages */}
                         <div
@@ -981,6 +1072,7 @@ export function ChatView({
                             style={{ scrollbarGutter: "stable both-edges" }}
                         >
                             <div
+                                ref={messagesContentRef}
                                 data-slot="chat-messages-content"
                                 className="w-full max-w-4xl mx-auto px-6 md:px-8 min-h-full flex flex-col relative"
                                 style={{
@@ -1074,9 +1166,13 @@ export function ChatView({
                                                         activeCitation={
                                                             activeCitation
                                                         }
-                                                        onCitationClick={(citation) =>
-                                                            void openCitation(citation)
-                                                        }
+                                                        onCitationClick={(citation) => {
+                                                            if (activeCitation === citation && activeTab) {
+                                                                handleCloseAnnotation(activeTab.id);
+                                                            } else {
+                                                                void openCitation(citation);
+                                                            }
+                                                        }}
                                                         onOpenCitationSource={(
                                                             citation,
                                                         ) =>
@@ -1147,6 +1243,8 @@ export function ChatView({
                                 }}
                             >
                                 <button
+                                    type="button"
+                                    aria-label="Scroll to bottom"
                                     onClick={scrollToBottom}
                                     className={`cursor-pointer rounded-full p-2 transition-all ${LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS}`}
                                 >
@@ -1244,11 +1342,55 @@ export function ChatView({
                 } was rejected. If it is your own key, check it in Settings; otherwise contact your administrator.`}
                 onClose={() => onDismissInvalidApiKey?.()}
             />
+            <RenameModal
+                open={renameOpen}
+                breadcrumbs={["Assistant", "Rename Chat"]}
+                label="Chat title"
+                initialValue={activeChat?.title?.trim() || "Untitled chat"}
+                saving={renaming}
+                onClose={() => {
+                    if (!renaming) setRenameOpen(false);
+                }}
+                onSave={(title) => void handleRenameSave(title)}
+            />
             <WarningPopup
                 open={!!actionError}
                 title={actionError?.title ?? "Chat action failed"}
                 message={actionError?.message ?? null}
                 onClose={() => setActionError(null)}
+            />
+
+            <ConfirmPopup
+                open={!!deleteTarget}
+                title="Delete file?"
+                message={`Delete “${deleteTarget?.title ?? "this file"}” and its versions? This cannot be undone.`}
+                confirmLabel="Delete file"
+                confirmVariant="danger"
+                confirmStatus={deletingDocument ? "loading" : "idle"}
+                onCancel={() => { if (!deletingDocument) setDeleteTarget(null); }}
+                onConfirm={() => {
+                    if (!deleteTarget || deletingDocument || !canWrite) return;
+                    const target = deleteTarget;
+                    setDeletingDocument(true);
+                    void (async () => {
+                        try {
+                            const file = await getDocument(target.document_id);
+                            if (file.can_delete !== true) {
+                                setActionError({ title: "Delete failed", message: "You do not have permission to delete this file." });
+                                return;
+                            }
+                            await deleteDocument(target.document_id);
+                            setTabs((current) => {
+                                const remaining = current.filter((tab) => tab.document.document_id !== target.document_id);
+                                setActiveTabId((id) => remaining.some((tab) => tab.id === id) ? id : remaining[0]?.id ?? null);
+                                return remaining;
+                            });
+                            setDeleteTarget(null);
+                        } catch (cause) {
+                            setActionError({ title: "Delete failed", message: userFacingApiError(cause, "This file could not be deleted. Please try again.") });
+                        } finally { setDeletingDocument(false); }
+                    })();
+                }}
             />
 
             {panelMounted && (
@@ -1257,10 +1399,54 @@ export function ChatView({
                 >
                     <AssistantSidePanel
                         tabs={tabs}
+                        canEdit={canWrite}
+                        documentActions={(document) => ({
+                            addToChatDisabled: !canWrite || !!chatLoading,
+                            onAddToChat: async () => {
+                                const file = await getDocument(
+                                    document.document_id,
+                                );
+                                chatInputRef.current?.addDoc(file);
+                            },
+                            onRename: async (filename) => {
+                                const file = await getDocument(
+                                    document.document_id,
+                                );
+                                const updated = file.project_id
+                                    ? await renameProjectDocument(
+                                          file.project_id,
+                                          file.id,
+                                          filename,
+                                      )
+                                    : await renameLibraryDocument(
+                                          file.library_kind === "template"
+                                              ? "templates"
+                                              : "files",
+                                          file.id,
+                                          filename,
+                                      );
+                                setTabs((current) =>
+                                    current.map((tab) =>
+                                        tab.document.document_id === file.id
+                                            ? {
+                                                  ...tab,
+                                                  document: {
+                                                      ...tab.document,
+                                                      title: updated.filename,
+                                                  },
+                                              }
+                                            : tab,
+                                    ),
+                                );
+                            },
+                            onDelete: canWrite ? () => setDeleteTarget(document) : undefined,
+                        })}
                         activeTabId={activeTabId}
                         onActivateTab={setActiveTabId}
                         onCloseTab={closeTab}
                         onCloseAll={closeAllTabs}
+                        onVersionChange={(tabId, version) => setTabs((current) => current.map((tab) =>
+                            tab.id === tabId ? { id: tab.id, kind: "document", document: panelDocumentAtVersion(tab.document, version) } : tab))}
                         onReorderTabs={reorderTabs}
                         isEditorReloading={(documentId) =>
                             reloadingDocIds.has(documentId)
@@ -1274,9 +1460,28 @@ export function ChatView({
                         onWarningDismiss={handleWarningDismiss}
                         onCloseAnnotation={handleCloseAnnotation}
                         onScrollChange={handleScrollChange}
+                        onOpenDocuments={() => setOpenDocumentsModalOpen(true)}
                     />
                 </div>
             )}
+
+            <AddDocumentsModal
+                open={openDocumentsModalOpen}
+                onClose={() => setOpenDocumentsModalOpen(false)}
+                onSelect={(documents) => {
+                    setOpenDocumentsModalOpen(false);
+                    documents.forEach(handleAttachedDocumentClick);
+                }}
+                breadcrumb={["Assistant", "Open Documents"]}
+                uploadStateId="assistant-side-panel"
+            />
+            <QuickActionsModal
+                open={quickActionsModalOpen}
+                onClose={() => setQuickActionsModalOpen(false)}
+                actions={quickActions}
+                onSave={saveQuickAction}
+                onCreate={addQuickAction}
+            />
         </div>
     );
 }

@@ -50,6 +50,35 @@ describe("useResolvedPanelDocument", () => {
         expect(result.current.document.subdocuments).toHaveLength(1);
     });
 
+    it("updates quotes without refetching the same case when its summary changes", async () => {
+        getPanelDocumentMock.mockResolvedValue({
+            ...summary,
+            subdocuments: [
+                {
+                    document_id: "opinion",
+                    title: "Opinion",
+                    type: "html",
+                    html: "<p>Case content</p>",
+                },
+            ],
+        });
+        const { result, rerender } = renderHook(
+            ({ document }) => useResolvedPanelDocument(document),
+            {
+                initialProps: { document: summary },
+            },
+        );
+        await waitFor(() => expect(result.current.isLoading).toBe(false));
+        const updated = {
+            ...summary,
+            quotes: [{ ...summary.quotes[0], quote: "Another passage" }],
+        };
+        rerender({ document: updated });
+        expect(result.current.document.quotes).toEqual(updated.quotes);
+        expect(result.current.document.subdocuments).toHaveLength(1);
+        expect(getPanelDocumentMock).toHaveBeenCalledOnce();
+    });
+
     it("retries a failed hydration request", async () => {
         getPanelDocumentMock
             .mockRejectedValueOnce(new Error("temporary failure"))

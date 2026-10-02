@@ -82,7 +82,7 @@ type LibraryWorkspaceContextValue = {
 };
 
 const LIBRARY_TABS: { id: LibraryKind; label: string }[] = [
-    { id: "files", label: "Files" },
+    { id: "files", label: "Documents" },
     { id: "templates", label: "Templates" },
 ];
 
@@ -522,7 +522,7 @@ export function LibraryCollectionPage({
     const search = searchByKind[kind];
     const collectionRootPath = kind === "files" ? "/library" : "/library/templates";
   const debouncedSearch = useDebouncedValue(search, 250);
-    const title = kind === "files" ? "Files" : "Templates";
+    const title = kind === "files" ? "Documents" : "Templates";
   const [documentTypeOptions, setDocumentTypeOptions] = useState<string[]>([]);
   const [tableQuery, setTableQuery] = useState<DocTableQuery>({
     search: "",

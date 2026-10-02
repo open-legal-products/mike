@@ -13,7 +13,24 @@ import type {
 import { toProviderStreamError } from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
-const MAX_OUTPUT_TOKENS = 16_384;
+/**
+ * Per-step output limit, or undefined to leave it to the provider.
+ *
+ * Unset by default: each provider applies its own model-aware ceiling
+ * (`@ai-sdk/anthropic` fills in the model's maximum for the required
+ * `max_tokens`), which a single shared number cannot track. Operators who want
+ * a backstop set `LLM_MAX_OUTPUT_TOKENS`; an unusable value is ignored rather
+ * than sent upstream.
+ *
+ * OpenCode Go keeps the previous 16,384: its Messages models (MiniMax, Qwen)
+ * go through the Anthropic adapter, which does not recognise them and would
+ * otherwise fall back to 4,096.
+ */
+export function maxOutputTokensFor(provider: Provider): number | undefined {
+  const value = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
+  if (Number.isSafeInteger(value) && value > 0) return value;
+  return provider === "opencode-go" ? 16_384 : undefined;
+}
 
 /**
  * Tool-call rounds allowed per turn before `stopWhen` halts the run.
@@ -391,6 +408,19 @@ export async function streamAiSdk(
           { cause: e },
         );
   const cacheHints = withPrefixCacheHints(params);
+  const providerOptions: StreamTextProviderOptions = {
+    ...(cacheHints.providerOptions ?? {}),
+    ...(config.provider === "openrouter"
+      ? {
+          // OpenRouter's adapter does not consume AI SDK's call-level
+          // `reasoning` option. Its per-request namespace is merged into the
+          // outbound body, so mirror the selected level there as well.
+          openrouter: {
+            reasoning: { effort: params.reasoning ?? "none" },
+          },
+        }
+      : {}),
+  };
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,
@@ -406,11 +436,11 @@ export async function streamAiSdk(
       model: config.model,
       system: params.systemPrompt,
       messages: cacheHints.messages,
-      ...(cacheHints.providerOptions
-        ? { providerOptions: cacheHints.providerOptions }
+      ...(Object.keys(providerOptions).length
+        ? { providerOptions }
         : {}),
       tools,
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens: maxOutputTokensFor(config.provider),
       stopWhen: sdk.stepCountIs(maxIterations),
       abortSignal: internalAbort.signal,
       reasoning:

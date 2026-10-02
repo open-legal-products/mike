@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 
 const {
@@ -84,6 +84,35 @@ function mockSupabase() {
     };
 }
 
+// Title generation runs on every new chat and is not awaited before the
+// stream starts. Without this stub each streaming test made a real HTTPS call
+// to the title model's provider with the fake key below, and the suite passed
+// only because the provider rejected that key quickly: a slow response held
+// the test to its 20 s timeout. Same stub as chat.routes.test.ts.
+vi.mock("../../modules/chat/chat.title", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../modules/chat/chat.title")>()),
+    generateAssistantChatTitle: vi.fn(async () => "Generated Title"),
+}));
+
+// A tripwire for the next unmocked network path: it fails the test at once,
+// naming the URL, instead of letting it wait on a socket.
+const unexpectedFetch = vi.fn((input: unknown) => {
+    const url = input instanceof Request ? input.url : String(input);
+    throw new Error(`Unexpected network request in project chat route tests: ${url}`);
+});
+
+beforeEach(() => {
+    unexpectedFetch.mockClear();
+    vi.stubGlobal("fetch", unexpectedFetch);
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+    // Asserted here as well because a caller that swallows the throw (the
+    // title flow catches its own errors) would otherwise hide it.
+    expect(unexpectedFetch).not.toHaveBeenCalled();
+});
+
 vi.mock("../../lib/supabase", () => ({
     createServerSupabase: vi.fn(() => mockSupabase()),
 }));
@@ -156,6 +185,7 @@ vi.mock("../../lib/access", () => ({
 }));
 
 import { app } from "../../app";
+import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { spotlight } from "../../modules/chat/engine/index";
 import { createServerSupabase } from "../../lib/supabase";
 
@@ -166,6 +196,7 @@ const VALID_BODY = {
 
 describe("POST /projects/:projectId/chat", () => {
     beforeEach(() => {
+        resetAssistantTurnRunsForTests();
         vi.clearAllMocks();
     dbInserts.length = 0;
         buildMessages.mockReturnValue([]);

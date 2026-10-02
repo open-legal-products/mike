@@ -34,6 +34,9 @@
       "@mike/edit-cards-section-ui": [
         "../frontend/src/shared/ui/EditCardsSectionUI.tsx"
       ],
+      "@mike/reasoning-disclosure": [
+        "../frontend/src/shared/hooks/useReasoningDisclosure.ts"
+      ],
       "@mike/pre-response-wrapper-ui": [
         "../frontend/src/shared/ui/PreResponseWrapperUI.tsx"
       ],

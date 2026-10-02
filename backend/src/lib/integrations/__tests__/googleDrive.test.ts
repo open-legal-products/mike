@@ -90,26 +90,36 @@ describe("startGoogleDriveOAuth", () => {
         const url = new URL(authorizationUrl);
         expect(url.hostname).toBe("accounts.google.com");
         expect(url.searchParams.get("client_id")).toBe("drive-client-id");
-        expect(url.searchParams.get("scope")).toBe(GOOGLE_DRIVE_SCOPE);
+        expect(url.searchParams.get("scope")).toBe(
+            `openid email ${GOOGLE_DRIVE_SCOPE}`,
+        );
         expect(url.searchParams.get("code_challenge_method")).toBe("S256");
         // Without these two params Google never issues a refresh token and the
         // connection silently dies when the first access token expires.
         expect(url.searchParams.get("access_type")).toBe("offline");
         expect(url.searchParams.get("prompt")).toBe("select_account consent");
         expect(inserts).toHaveLength(1);
-        expect(inserts[0].table).toBe("google_drive_oauth_states");
+        // Drive's pending sign-ins share the Gmail/Calendar state table.
+        expect(inserts[0].table).toBe("google_workspace_oauth_states");
+        expect(inserts[0].row.provider).toBe("google-drive");
     });
 });
 
 describe("getGoogleDriveStatus", () => {
     it("reports the schema as ready and the client as configured", async () => {
         const status = await getGoogleDriveStatus("user-1", makeDb({}));
-        expect(status).toEqual({
+        expect(status).toMatchObject({
             connected: false,
             scope: null,
             configured: true,
             schemaReady: true,
+            enabled: true,
         });
+        expect(status.tools.filter((tool) => !tool.write).map((tool) => [tool.name, tool.write, tool.enabled])).toEqual([
+            ["google_drive_search", false, true],
+            ["google_drive_read_file", false, true],
+            ["google_drive_list_recent", false, true],
+        ]);
     });
 
     it("reports a missing Drive migration instead of failing the status call", async () => {
@@ -141,12 +151,18 @@ describe("getGoogleDriveStatus", () => {
             },
         } as unknown as Db;
         const status = await getGoogleDriveStatus("user-1", db);
-        expect(status).toEqual({
+        expect(status).toMatchObject({
             connected: false,
             scope: null,
             configured: true,
             schemaReady: false,
+            enabled: true,
         });
+        expect(status.tools.filter((tool) => !tool.write).map((tool) => [tool.name, tool.write, tool.enabled])).toEqual([
+            ["google_drive_search", false, true],
+            ["google_drive_read_file", false, true],
+            ["google_drive_list_recent", false, true],
+        ]);
     });
 
     it("still surfaces unrelated database errors", async () => {
@@ -185,10 +201,10 @@ describe("buildGoogleDriveTools", () => {
         expect(tools).toEqual([]);
     });
 
-    it("offers the three read-only tools once connected", async () => {
+    it("offers only the three read tools with a read-only grant", async () => {
         const tools = (await buildGoogleDriveTools(
             "user-1",
-            makeDb({ tokenRow: encryptedTokenRow() }),
+            makeDb({ tokenRow: encryptedTokenRow({ scope: "https://www.googleapis.com/auth/drive.readonly" }) }),
         )) as { function: { name: string } }[];
         expect(tools.map((t) => t.function.name)).toEqual([
             "google_drive_search",

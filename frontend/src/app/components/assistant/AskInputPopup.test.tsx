@@ -182,4 +182,102 @@ describe("AskInputPopup", () => {
             "Audit rights, Non-solicitation",
         );
     });
+
+    const sendEmail = {
+        id: "approve-send",
+        kind: "approval" as const,
+        connector_name: "Gmail",
+        tool_name: "gmail_send",
+        title: "Send email",
+        arguments: {
+            to: ["counsel@example.com"],
+            subject: "Draft NDA",
+            body: "Please review.",
+        },
+        account: "me@example.com",
+        binding: {
+            type: "google" as const,
+            provider: "gmail" as const,
+            grant_id: "g1",
+        },
+    };
+    const postMessage = {
+        id: "approve-post",
+        kind: "approval" as const,
+        connector_name: "Slack",
+        tool_name: "mcp_slack_post",
+        title: "Post message",
+        arguments: { channel: "legal", text: "NDA sent" },
+        binding: {
+            type: "mcp" as const,
+            connector_id: "c1",
+            tool_id: "t1",
+        },
+    };
+
+    it("shows the exact connector action and submits an approval decision", async () => {
+        const onSubmit = vi.fn();
+        render(
+            <AskInputPopup
+                assistantMessageId="assistant-1"
+                event={{
+                    type: "ask_inputs",
+                    event_id: "ask-1",
+                    items: [sendEmail],
+                }}
+                onSubmit={onSubmit}
+            />,
+        );
+
+        expect(screen.getByText("Approval")).toBeInTheDocument();
+        expect(screen.getByText("Send email")).toBeInTheDocument();
+        expect(screen.getByText("Gmail · me@example.com")).toBeInTheDocument();
+        expect(screen.getByText("counsel@example.com")).toBeInTheDocument();
+        expect(screen.getByText("Please review.")).toBeInTheDocument();
+        // An approval has no Skip: rejecting is the way to decline.
+        expect(
+            screen.queryByRole("button", { name: "Skip" }),
+        ).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0]).toEqual({
+            type: "ask_inputs_response",
+            assistant_message_id: "assistant-1",
+            ask_event_id: "ask-1",
+            responses: [
+                { id: "approve-send", kind: "approval", decision: "approve" },
+            ],
+        });
+        expect(onSubmit.mock.calls[0][1]).toBe(
+            "Decisions on Mike's requested actions:\n1. Approved: Send email (Gmail)",
+        );
+    });
+
+    it("collects a decision for every pending action before submitting", async () => {
+        const onSubmit = vi.fn();
+        render(
+            <AskInputPopup
+                assistantMessageId="assistant-1"
+                event={{
+                    type: "ask_inputs",
+                    event_id: "ask-1",
+                    items: [sendEmail, postMessage],
+                }}
+                onSubmit={onSubmit}
+            />,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+        expect(onSubmit).not.toHaveBeenCalled();
+        expect(screen.getByText("Post message")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+        await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+        expect(onSubmit.mock.calls[0][0].responses).toEqual([
+            { id: "approve-send", kind: "approval", decision: "reject" },
+            { id: "approve-post", kind: "approval", decision: "approve" },
+        ]);
+    });
 });

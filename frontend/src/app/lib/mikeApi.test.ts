@@ -1,4 +1,4 @@
-import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, listGoogleWorkspaceActions, decideGoogleWorkspaceAction } from "./mikeApi";
+import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 
@@ -7,14 +7,19 @@ import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 // the reporter's own suite covers what it does with it.
 const reportApiFailure = vi.hoisted(() => vi.fn());
 const reportNetworkFailure = vi.hoisted(() => vi.fn());
+const markErrorHandled = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/errorReporting", () => ({
     trackPendingRequest: () => () => {},
+    markErrorHandled,
     reportApiFailure,
     reportNetworkFailure,
 }));
 
+import { userFacingApiError } from "./userFacingError";
 import {
     MikeApiError,
+    SCHEMA_OUT_OF_DATE_MESSAGE,
+    UPSTREAM_UNAVAILABLE_MESSAGE,
     addDocumentToProject,
     clearTabularCells,
     completeUserOnboarding,
@@ -169,8 +174,13 @@ import {
     startMcpConnectorOAuth,
     startUserExport,
     streamChat,
+    streamChatTurn,
+    stopChatTurn,
     streamProjectChat,
     streamTabularChat,
+    streamTabularChatTurn,
+    stopTabularChatTurn,
+    stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
     syncUserPasswordSet,
@@ -246,6 +256,10 @@ afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
 });
+
+
+// Chat requests carry the browser's IANA time zone for the assistant.
+const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 describe("MikeApiError / isMfaRequiredError", () => {
     it("carries status and code, defaulting code to null", () => {
@@ -453,6 +467,35 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
             // console.error(..., error) is not reported twice.
             error: expect.any(MikeApiError),
         });
+    });
+
+    // MIKE-BACKEND-H / MIKE-FRONTEND-F: a missing migration used to reach
+    // the screen as "Something went wrong" and be filed twice (backend and
+    // browser). An unreachable backend made the gateway answer 502 and the
+    // browser file one issue PER ENDPOINT. The server side now answers 503
+    // with a code and reports it once itself; the browser shows the
+    // intentional message and only marks the error.
+    it.each([
+        ["schema_out_of_date", SCHEMA_OUT_OF_DATE_MESSAGE, "The server's database needs an update before this can load. Please contact your administrator."],
+        ["upstream_unavailable", UPSTREAM_UNAVAILABLE_MESSAGE, "The server is temporarily unreachable. Please try again shortly."],
+    ])("shows the %s message and leaves the report to the server side", async (code, message, sentence) => {
+        markErrorHandled.mockClear();
+        fetchMock.mockResolvedValue(
+            jsonResponse(
+                {
+                    code,
+                    detail: "raw server text that must not be trusted",
+                    request_id: "req-503-1",
+                },
+                { status: 503 },
+            ),
+        );
+
+        const error = await getUserProfile().catch((caught: unknown) => caught);
+        expect(error).toMatchObject({ status: 503, code, requestId: "req-503-1", message });
+        expect(userFacingApiError(error, "Fallback")).toBe(sentence);
+        expect(reportApiFailure).not.toHaveBeenCalled();
+        expect(markErrorHandled).toHaveBeenCalledExactlyOnceWith(error);
     });
 
     it("reports a 5xx without a code and never reports a 4xx", async () => {
@@ -848,6 +891,35 @@ describe("getChat message mapping", () => {
     });
 });
 
+describe("getChat active turn", () => {
+    const chat: Chat = {
+        id: "c1",
+        project_id: null,
+        user_id: "u1",
+        title: "T",
+        created_at: "2026-01-01",
+    };
+
+    it("passes through the turn the server is still generating", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({
+                chat,
+                messages: [],
+                active_turn: { id: "t1", seq: 4, assistant_message_id: "m9" },
+            }),
+        );
+        const detail = await getChat("c1");
+        expect(detail.active_turn).toEqual({ id: "t1", seq: 4, assistant_message_id: "m9" });
+    });
+
+    it("is null when the server reports none, or predates the field", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [] }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [], active_turn: null }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+    });
+});
+
 describe("mapTRMessages", () => {
     it("maps user and assistant rows including annotations", () => {
         const events: AssistantEvent[] = [{ type: "content", text: "Answer" }];
@@ -974,6 +1046,25 @@ describe("API transport cancellation", () => {
 });
 
 describe("streamChat", () => {
+    it.each(["unavailable", "empty"])("still sends the chat when the browser time zone is %s", async (mode) => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const formatter = Intl.DateTimeFormat();
+        const options = formatter.resolvedOptions();
+        const spy = vi.spyOn(Intl, "DateTimeFormat");
+        if (mode === "unavailable") {
+            spy.mockImplementation(() => { throw new Error("Intl unavailable"); });
+        } else {
+            vi.spyOn(formatter, "resolvedOptions").mockReturnValue({ ...options, timeZone: "" });
+            spy.mockReturnValue(formatter);
+        }
+        try {
+            await streamChat({ messages: [{ role: "user", content: "Hello" }] });
+            expect(JSON.parse(lastFetchCall().init.body as string)).not.toHaveProperty("time_zone");
+            expect(JSON.parse(lastFetchCall().init.body as string).messages).toEqual([{ role: "user", content: "Hello" }]);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
     it("POSTs with the SSE accept header and forwards the signal outside the body", async () => {
         fetchMock.mockResolvedValue(streamResponse([]));
         const controller = new AbortController();
@@ -998,6 +1089,7 @@ describe("streamChat", () => {
             messages: [{ role: "user", content: "hi" }],
             chat_id: "c1",
             model: "gemini-3-flash-preview",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 
@@ -1014,6 +1106,43 @@ describe("streamChat", () => {
 
         expect(response.bodyUsed).toBe(false);
         expect(await readAll(response)).toBe(chunks.join(""));
+    });
+});
+
+describe("streamChatTurn / stopChatTurn (server-owned turns)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+        await streamChatTurn({
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stream?from=7");
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        await streamChatTurn({ chatId: "c1", turnId: "t1" });
+        expect(lastFetchCall().url).toBe("/api/chat/c1/turn/t1/stream?from=1");
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+        await expect(stopChatTurn("c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
     });
 });
 
@@ -1035,6 +1164,7 @@ describe("streamProjectChat", () => {
         expect(JSON.parse(init.body as string)).toEqual({
             messages: [{ role: "user", content: "hi" }],
             displayed_doc: { filename: "a.pdf", document_id: "d1" },
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -1060,6 +1190,7 @@ describe("streamTabularChat", () => {
             review_title: "Leases",
             model: "openai-gpt-5.2",
             reasoning: "low",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -1110,6 +1241,83 @@ describe("streamTabularGenerationResume", () => {
         await streamTabularGenerationResume("r1");
 
         expect(lastFetchCall().init.signal).toBeUndefined();
+    });
+
+    it("resumes from a sequence number when the client has already seen frames", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularGenerationResume("r1", undefined, 12);
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/generate/stream?from=12",
+        );
+    });
+});
+
+describe("streamTabularChatTurn / stopTabularChatTurn (server-owned review chat)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+
+        const { url, init } = lastFetchCall();
+        expect(url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=7",
+        );
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+        });
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=1",
+        );
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularChatTurn("r1", "c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/chats/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
+    });
+});
+
+describe("stopTabularGeneration", () => {
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularGeneration("r1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/generate/stop");
+        expect(init.method).toBe("POST");
     });
 });
 
@@ -1834,6 +2042,7 @@ describe("tabular review chats", () => {
         expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
             messages: [{ role: "user", content: "q" }],
             chat_id: "c9",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -2300,13 +2509,13 @@ describe("thin endpoint wrappers", () => {
             method: "DELETE",
         },
         { name: "getGoogleWorkspaceStatus", call: () => getGoogleWorkspaceStatus("gmail"), url: "/user/integrations/gmail" },
-        { name: "startGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("gmail"), url: "/user/integrations/gmail/oauth/start", method: "POST", body: { write: false } },
-        { name: "upgradeGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("google-calendar", true), url: "/user/integrations/google-calendar/oauth/start", method: "POST", body: { write: true } },
+        { name: "startGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("gmail"), url: "/user/integrations/gmail/oauth/start", method: "POST" },
         { name: "cancelGoogleWorkspaceOAuth", call: () => cancelGoogleWorkspaceOAuth("gmail", "state"), url: "/user/integrations/gmail/oauth/cancel", method: "POST", body: { state: "state" } },
         { name: "disconnectGoogleWorkspace", call: () => disconnectGoogleWorkspace("gmail"), url: "/user/integrations/gmail", method: "DELETE" },
-        { name: "listGoogleWorkspaceActions", call: () => listGoogleWorkspaceActions(), url: "/user/google-actions" },
-        { name: "approveGoogleWorkspaceAction", call: () => decideGoogleWorkspaceAction("a1", "approve"), url: "/user/google-actions/a1/approve", method: "POST" },
-        { name: "rejectGoogleWorkspaceAction", call: () => decideGoogleWorkspaceAction("a1", "reject"), url: "/user/google-actions/a1/reject", method: "POST" },
+        { name: "updateGoogleWorkspaceSettings", call: () => updateGoogleWorkspaceSettings("gmail", { requireWriteApproval: true }), url: "/user/integrations/gmail", method: "PATCH", body: { requireWriteApproval: true } },
+        { name: "setGoogleWorkspaceToolEnabled", call: () => setGoogleWorkspaceToolEnabled("google-calendar", "google_calendar_create_event", false), url: "/user/integrations/google-calendar/tools/google_calendar_create_event", method: "PATCH", body: { enabled: false } },
+        { name: "updateGoogleDriveSettings", call: () => updateGoogleDriveSettings({ enabled: false }), url: "/user/integrations/google-drive", method: "PATCH", body: { enabled: false } },
+        { name: "setGoogleDriveToolEnabled", call: () => setGoogleDriveToolEnabled("google_drive_read_file", true), url: "/user/integrations/google-drive/tools/google_drive_read_file", method: "PATCH", body: { enabled: true } },
         // Projects
         {
             name: "getProject",

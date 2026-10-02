@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { authenticatedFetch } from "@/app/lib/authEvents";
@@ -10,6 +10,7 @@ import {
     type ProjectDocumentTab,
 } from "./ProjectDocumentPanels";
 
+const localExport = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/app/lib/authEvents", () => ({ authenticatedFetch: vi.fn() }));
 vi.mock("./ProjectWorkspaceTips", () => ({
     ProjectWorkspaceTips: () => <p>Open a document</p>,
@@ -66,11 +67,15 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
         versionId,
         refetchKey,
         cacheBytes,
+        defaultMode,
+        onDownloadReady,
     }: {
         documentId: string;
         versionId?: string | null;
         refetchKey: string;
         cacheBytes: boolean;
+        defaultMode: string;
+        onDownloadReady?: (download: (() => Promise<void>) | null) => void;
     }) => {
         const { bytes } = useFetchDocxBytes(
             documentId,
@@ -79,7 +84,12 @@ vi.mock("@/app/components/shared/views/DocxView", () => ({
             null,
             cacheBytes,
         );
-        return <Viewer id={documentId} loaded={!!bytes} />;
+        useEffect(() => {
+            if (!bytes) return;
+            onDownloadReady?.(localExport);
+            return () => onDownloadReady?.(null);
+        }, [bytes, onDownloadReady]);
+        return <div data-testid="docx-mode" data-mode={defaultMode}><Viewer id={documentId} loaded={!!bytes} /></div>;
     },
 }));
 
@@ -96,6 +106,7 @@ const documents = tabs.map((tab) => ({
 })) as Document[];
 const dismiss = vi.fn();
 beforeEach(() => {
+    localExport.mockClear();
     vi.mocked(authenticatedFetch)
         .mockReset()
         .mockImplementation(
@@ -125,6 +136,7 @@ function panels(openTabs = tabs, activeTabId = "pdf", docs = documents) {
 it("retains loaded files, zoom, and scroll across tab switches and releases viewers on close", async () => {
     const { rerender } = render(panels());
     await waitFor(() => expect(screen.getAllByText("Loaded")).toHaveLength(3));
+    expect(screen.getByTestId("docx-mode")).toHaveAttribute("data-mode", "edit");
     const viewer = screen.getByTestId("pdf");
     viewer.scrollTop = 340;
     fireEvent.click(screen.getByRole("button", { name: "Zoom 1" }));
@@ -244,4 +256,23 @@ it("detects content changes to the same current version, including a pinned curr
         ),
     );
     await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(6));
+});
+
+
+it.each(["Draft.docx", "Brief.pdf", "Budget.xlsx", "Slides.pptx", "Legacy.doc"])("renders %s with the shared compact title bar", (filename) => {
+    render(panels([{ documentId: "file", filename }], "file"));
+    expect(screen.getByRole("heading", { name: filename })).toHaveClass("text-xs", "font-normal");
+    expect(screen.getByRole("button", { name: "Download" })).toBeVisible();
+    expect(screen.getByRole("tabpanel").querySelector('img[src*="/icons/file-types/"]')).toHaveClass("h-3.5", "w-3.5");
+});
+
+it("retains the live DOCX export for the title and tab download actions", async () => {
+    const onDownloadReady = vi.fn();
+    render(<ProjectDocumentPanels tabs={tabs} documents={documents} activeTabId="docx"
+        onWarningDismiss={dismiss} onDownloadReady={onDownloadReady} />);
+    await waitFor(() => expect(onDownloadReady).toHaveBeenCalledWith("docx", localExport));
+    await onDownloadReady.mock.calls.find(([id, download]) => id === "docx" && download)?.[1]();
+    expect(localExport).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(localExport).toHaveBeenCalledTimes(2));
 });

@@ -7,11 +7,14 @@ import {
     useState,
     type CSSProperties,
 } from "react";
+import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
+import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
+import { type DocumentActions } from "../shared/DocumentTabActions";
+import type { DocumentVersion } from "@/app/lib/mikeApi";
 import Image from "next/image";
-import { X } from "lucide-react";
+import { BookOpenText } from "lucide-react";
 import { DocPanel, type DocPanelMode } from "./DocPanel";
-import { FileTypeIcon } from "../shared/FileTypeIcon";
-import { VersionChip } from "../shared/VersionChip";
+import { DocumentTabBar } from "../shared/DocumentTabBar";
 import type { Citation, EditAnnotation, PanelDocument } from "../shared/types";
 import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/app/components/ui/liquid-surface";
@@ -25,9 +28,8 @@ import { reorderTabs, type TabDropPosition } from "@/app/lib/reorderTabs";
 //   - a document view (no specific annotation),
 //   - a single citation quote,
 //   - a single tracked change.
-// There is no selector UI inside the panel — the user picks what to view
-// by clicking a different tab (or opening a new one from a citation pill,
-// an EditCard's View button, or the download card).
+// Each document has one tab. Its shared title row selects the version;
+// citation pills and edit cards select the annotation within that tab.
 
 type CommonTab = {
     id: string;
@@ -51,25 +53,20 @@ export type EditTab = CommonTab & {
 
 export type AssistantSidePanelTab = DocumentTab | CitationTab | EditTab;
 
-/**
- * A document version owns one panel tab. Explicit versions use their stable
- * version id; older links without one fall back to the version number and then
- * to the document's current version.
- */
+/** One tab per document; the title row selects the displayed version. */
 export function assistantSidePanelTabId(document: PanelDocument): string {
-    const version = document.version_id
-        ? `id:${document.version_id}`
-        : document.version_number != null
-          ? `number:${document.version_number}`
-          : "current";
-    return `${document.document_id}::${version}`;
+    return document.document_id;
 }
 
 export function mergeAssistantSidePanelTab(
     existing: AssistantSidePanelTab,
     incoming: AssistantSidePanelTab,
 ): AssistantSidePanelTab {
-    if (existing.id !== incoming.id) {
+    if (
+        existing.id !== incoming.id ||
+        existing.document.version_id !== incoming.document.version_id ||
+        existing.document.version_number !== incoming.document.version_number
+    ) {
         return incoming;
     }
     if (existing.kind === "document" && incoming.kind === "document") {
@@ -116,15 +113,25 @@ export function reorderAssistantSidePanelTabs(
     targetTabId: string,
     position: AssistantTabDropPosition,
 ): AssistantSidePanelTab[] {
-    return reorderTabs(tabs, draggedTabId, targetTabId, position, (tab) => tab.id);
+    return reorderTabs(
+        tabs,
+        draggedTabId,
+        targetTabId,
+        position,
+        (tab) => tab.id,
+    );
 }
 
 interface Props {
     tabs: AssistantSidePanelTab[];
+    /** Whether the viewer may edit the documents; read-only otherwise. */
+    canEdit?: boolean;
     activeTabId: string | null;
     onActivateTab: (id: string) => void;
     onCloseTab: (id: string) => void;
     onCloseAll: () => void;
+    onVersionChange?: (tabId: string, version: DocumentVersion) => void;
+    documentActions?: (document: PanelDocument) => DocumentActions;
     onReorderTabs?: (
         draggedTabId: string,
         targetTabId: string,
@@ -167,6 +174,11 @@ interface Props {
      */
     onCloseAnnotation?: (tabId: string) => void;
     onScrollChange?: (tabId: string, scrollTop: number) => void;
+    /**
+     * Offered when the panel has no tabs. Without it an empty panel renders
+     * nothing; with it the panel stays open on an "Open Documents" placeholder.
+     */
+    onOpenDocuments?: () => void;
 }
 
 const MIN_WIDTH = 300;
@@ -180,16 +192,15 @@ function maxPanelWidth() {
     );
 }
 
-function tabTitle(tab: AssistantSidePanelTab): string {
-    return tab.document.title;
-}
-
 export function AssistantSidePanel({
     tabs,
+    canEdit = false,
     activeTabId,
     onActivateTab,
     onCloseTab,
     onCloseAll,
+    onVersionChange,
+    documentActions,
     onReorderTabs,
     isEditorReloading,
     isEditReloading,
@@ -199,8 +210,11 @@ export function AssistantSidePanel({
     onWarningDismiss,
     onCloseAnnotation,
     onScrollChange,
+    onOpenDocuments,
 }: Props) {
     const panelRef = useRef<HTMLDivElement>(null);
+    const permissions = useDocumentPermissions(tabs.filter((tab) => !["case", "legislation"].includes(tab.document.type)).map((tab) => tab.document.document_id), canEdit);
+    const viewers = useDocumentViewers();
     const [panelWidth, setPanelWidth] = useState(() =>
         typeof window !== "undefined"
             ? Math.min(
@@ -212,19 +226,6 @@ export function AssistantSidePanel({
 
     const dragStartX = useRef<number>(0);
     const dragStartWidth = useRef<number>(0);
-    const draggedTabIdRef = useRef<string | null>(null);
-    const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
-    const [dropTarget, setDropTarget] = useState<{
-        tabId: string;
-        position: AssistantTabDropPosition;
-    } | null>(null);
-
-    const clearTabDrag = useCallback(() => {
-        draggedTabIdRef.current = null;
-        setDraggedTabId(null);
-        setDropTarget(null);
-    }, []);
-
     const onMouseDown = useCallback(
         (e: React.MouseEvent) => {
             e.preventDefault();
@@ -268,8 +269,7 @@ export function AssistantSidePanel({
     }, []);
 
     const active = tabs.find((t) => t.id === activeTabId) ?? tabs[0] ?? null;
-    if (!active) return null;
-    const lastTab = tabs[tabs.length - 1];
+    if (!active && !onOpenDocuments) return null;
 
     return (
         <div
@@ -296,212 +296,69 @@ export function AssistantSidePanel({
                 style={{ marginLeft: -2 }}
             />
 
-            {/* Tab strip (Chrome-style) */}
-            <div
-                className={cn(
-                    "document-tab-strip flex items-end gap-1 pt-2",
-                )}
-            >
-                <div className="flex-1 flex items-end gap-1 overflow-hidden px-2">
-                    {tabs.map((tab) => {
-                        const isActive = tab.id === active.id;
-                        const showVersionBadge =
-                            typeof tab.document.version_number === "number" &&
-                            Number.isFinite(tab.document.version_number) &&
-                            tab.document.version_number > 1;
-                        const title = tabTitle(tab);
-                        return (
-                            <div
-                                key={tab.id}
-                                draggable={!!onReorderTabs && tabs.length > 1}
-                                onDragStart={(event) => {
-                                    if (!onReorderTabs) return;
-                                    draggedTabIdRef.current = tab.id;
-                                    setDraggedTabId(tab.id);
-                                    event.dataTransfer.effectAllowed = "move";
-                                    event.dataTransfer.setData(
-                                        "text/plain",
-                                        tab.id,
-                                    );
-                                }}
-                                onDragOver={(event) => {
-                                    const draggedId =
-                                        draggedTabIdRef.current ??
-                                        event.dataTransfer.getData(
-                                            "text/plain",
-                                        );
-                                    if (!onReorderTabs || !draggedId) {
-                                        return;
-                                    }
-                                    if (draggedId === tab.id) {
-                                        setDropTarget(null);
-                                        return;
-                                    }
-                                    event.preventDefault();
-                                    event.dataTransfer.dropEffect = "move";
-                                    const rect =
-                                        event.currentTarget.getBoundingClientRect();
-                                    const position =
-                                        event.clientX <
-                                        rect.left + rect.width / 2
-                                            ? "before"
-                                            : "after";
-                                    setDropTarget((current) =>
-                                        current?.tabId === tab.id &&
-                                        current.position === position
-                                            ? current
-                                            : { tabId: tab.id, position },
-                                    );
-                                }}
-                                onDrop={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    const draggedId =
-                                        draggedTabIdRef.current ??
-                                        event.dataTransfer.getData(
-                                            "text/plain",
-                                        );
-                                    if (
-                                        onReorderTabs &&
-                                        draggedId &&
-                                        draggedId !== tab.id
-                                    ) {
-                                        const rect =
-                                            event.currentTarget.getBoundingClientRect();
-                                        onReorderTabs(
-                                            draggedId,
-                                            tab.id,
-                                            event.clientX <
-                                                rect.left + rect.width / 2
-                                                ? "before"
-                                                : "after",
-                                        );
-                                    }
-                                    clearTabDrag();
-                                }}
-                                onDragEnd={clearTabDrag}
-                                onClick={() => onActivateTab(tab.id)}
-                                data-active={isActive ? "true" : "false"}
-                                className={cn(
-                                    "document-tab group relative flex items-center gap-1.5 pl-3 pr-1.5 h-7 min-w-0 max-w-[220px] rounded-t-lg cursor-pointer select-none transition-colors",
-                                    isActive ? "z-20" : "z-10",
-                                    onReorderTabs && tabs.length > 1
-                                        ? "cursor-grab active:cursor-grabbing"
-                                        : "",
-                                    draggedTabId === tab.id ? "opacity-55" : "",
-                                )}
-                            >
-                                {dropTarget?.tabId === tab.id &&
-                                    draggedTabId !== tab.id && (
-                                        <span
-                                            aria-hidden="true"
-                                            className={cn(
-                                                "pointer-events-none absolute inset-y-1 z-30 w-0.5 rounded-full bg-blue-500",
-                                                dropTarget.position === "before"
-                                                    ? "left-0"
-                                                    : "right-0",
-                                            )}
-                                        />
-                                    )}
-                                <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
-                                    {tab.document.type === "case" ||
-                                    tab.document.type === "legislation" ? (
-                                        <Image
-                                            src={
-                                                tab.document.type === "case"
-                                                    ? "/icons/legal-sources/case-law.svg"
-                                                    : "/icons/legal-sources/legislation.svg"
-                                            }
-                                            alt=""
-                                            aria-hidden="true"
-                                            width={14}
-                                            height={14}
-                                            className="h-3.5 w-3.5 shrink-0 object-contain"
-                                        />
-                                    ) : (
-                                        <FileTypeIcon
-                                            fileType={tab.document.title}
-                                            className="h-3.5 w-3.5 shrink-0"
-                                        />
-                                    )}
-                                    <span
-                                        className={`min-w-0 flex-1 truncate text-xs ${isActive ? "font-medium" : "font-normal"}`}
-                                        title={title}
-                                    >
-                                        {title}
-                                    </span>
-                                    {showVersionBadge && (
-                                        <VersionChip
-                                            n={tab.document.version_number}
-                                            size="sm"
-                                        />
-                                    )}
-                                </div>
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        onCloseTab(tab.id);
-                                    }}
-                                    className="shrink-0 rounded-full p-0.5 text-gray-400 hover:text-gray-700"
-                                >
-                                    <X className="h-3 w-3" />
-                                </button>
-                            </div>
-                        );
-                    })}
-                    <div
-                        className="h-7 min-w-4 flex-1"
-                        onDragOver={(event) => {
-                            const draggedId =
-                                draggedTabIdRef.current ??
-                                event.dataTransfer.getData("text/plain");
-                            if (!onReorderTabs || !draggedId) return;
-
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = "move";
-                            setDropTarget(
-                                draggedId === lastTab.id
-                                    ? null
-                                    : {
-                                          tabId: lastTab.id,
-                                          position: "after",
-                                      },
-                            );
-                        }}
-                        onDrop={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            const draggedId =
-                                draggedTabIdRef.current ??
-                                event.dataTransfer.getData("text/plain");
-                            if (
-                                onReorderTabs &&
-                                draggedId &&
-                                draggedId !== lastTab.id
-                            ) {
-                                onReorderTabs(draggedId, lastTab.id, "after");
-                            }
-                            clearTabDrag();
-                        }}
-                    />
-                </div>
-                <button
-                    type="button"
-                    onClick={onCloseAll}
-                    className="mr-1 shrink-0 self-center rounded-lg px-1.5 pb-1.5 text-gray-400 hover:text-gray-700"
-                    aria-label="Close panel"
-                    title="Close panel"
-                >
-                    <X className="h-4 w-4" />
-                </button>
-            </div>
+            <DocumentTabBar
+                label="Assistant documents"
+                idPrefix="assistant-document"
+                activeTabId={active?.id ?? null}
+                onActivate={onActivateTab}
+                onClose={(id) => viewers.requestClose([id], () => onCloseTab(id))}
+                onClosePanel={() => viewers.requestClose(tabs.map((tab) => tab.id), onCloseAll)}
+                onAdd={onOpenDocuments}
+                addLabel="Open Documents"
+                onReorder={onReorderTabs}
+                tabs={tabs.map((tab) => {
+                    const isLegalSource =
+                        tab.document.type === "case" ||
+                        tab.document.type === "legislation";
+                    const actions = isLegalSource
+                        ? undefined
+                        : documentActions?.(tab.document);
+                    return {
+                        id: tab.id,
+                        title: tab.document.title,
+                        versionNumber: tab.document.version_number,
+                        icon: isLegalSource ? (
+                            <Image
+                                src={
+                                    tab.document.type === "case"
+                                        ? "/icons/legal-sources/case-law.svg"
+                                        : "/icons/legal-sources/legislation.svg"
+                                }
+                                alt=""
+                                aria-hidden="true"
+                                width={14}
+                                height={14}
+                                className="h-3.5 w-3.5 shrink-0 object-contain"
+                            />
+                        ) : undefined,
+                        actions: {
+                            ...actions,
+                            onRename: permissions(tab.document.document_id).canEdit ? actions?.onRename : undefined,
+                            onDownload: isLegalSource ? undefined : () => viewers.download(tab.id, tab.document.document_id, tab.document.version_id, tab.document.title),
+                            onDelete: permissions(tab.document.document_id).canDelete ? actions?.onDelete : undefined,
+                        },
+                    };
+                })}
+            />
 
             {/* Tab bodies — all mounted, inactive ones hidden. Each tab
-                preserves its state (scroll, docx-preview render, etc.)
+                preserves its state (scroll, DOCX renderer, etc.)
                 when inactive. */}
             <div className="flex-1 min-h-0 relative">
+                {!active && onOpenDocuments ? (
+                    <div className="flex h-full items-center justify-center">
+                        <button
+                            type="button"
+                            onClick={onOpenDocuments}
+                            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
+                        >
+                            <BookOpenText aria-hidden="true" className="h-4 w-4" />
+                            Open Documents
+                        </button>
+                    </div>
+                ) : null}
                 {tabs.map((tab) => {
-                    const isActive = tab.id === active.id;
+                    const isActive = tab.id === active?.id;
                     const mode: DocPanelMode =
                         tab.kind === "citation"
                             ? {
@@ -524,12 +381,25 @@ export function AssistantSidePanel({
                     return (
                         <div
                             key={tab.id}
+                            role="tabpanel"
+                            id={`assistant-document-panel-${tab.id}`}
+                            aria-labelledby={`assistant-document-tab-${tab.id}`}
                             className={`absolute inset-0 flex flex-col ${isActive ? "" : "invisible pointer-events-none"}`}
                             aria-hidden={!isActive}
                             inert={!isActive}
                         >
                             <DocPanel
+                                showToolbarToggle
+                                canEdit={permissions(tab.document.document_id).canEdit}
+                                onDownloadReady={(download) => viewers.registerDownload(tab.id, download)}
+                                onCloseGuardReady={(guard) => viewers.registerCloseGuard(tab.id, guard)}
                                 active={isActive}
+                                onVersionChange={
+                                    onVersionChange
+                                        ? (version) =>
+                                              viewers.requestClose([tab.id], () => onVersionChange(tab.id, version))
+                                        : undefined
+                                }
                                 document={tab.document}
                                 mode={mode}
                                 isReloading={
@@ -537,14 +407,12 @@ export function AssistantSidePanel({
                                         tab.document.document_id,
                                     ) ?? false
                                 }
-                                compactActions={panelWidth < 600}
                                 warning={tab.warning ?? null}
                                 onWarningDismiss={() =>
                                     onWarningDismiss?.(tab.id)
                                 }
                                 onCloseAnnotation={
-                                    tab.kind !== "document" &&
-                                    onCloseAnnotation
+                                    tab.kind !== "document" && onCloseAnnotation
                                         ? () => onCloseAnnotation(tab.id)
                                         : undefined
                                 }
@@ -557,6 +425,7 @@ export function AssistantSidePanel({
                     );
                 })}
             </div>
+            {viewers.confirmation}
         </div>
     );
 }

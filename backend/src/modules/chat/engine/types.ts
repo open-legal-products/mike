@@ -122,6 +122,8 @@ export type { AskInputOption } from "@mike/contracts";
 import type { AskInputOption } from "@mike/contracts";
 
 export const MAX_ASK_INPUT_TEXT_LENGTH = 5_000;
+/** What the user sees for a failed tool call; the raw error stays server-side. */
+export const TOOL_ERROR_MESSAGE = "This tool could not complete its request.";
 
 export type { AskInputItem } from "@mike/contracts";
 import type { AskInputItem } from "@mike/contracts";

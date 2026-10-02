@@ -274,7 +274,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 className={cn(
                     isOpen
                         ? "w-64 h-[calc(100dvh-1rem)] md:h-[calc(100dvh-1.5rem)]"
-                        : "max-md:hidden w-[50px] md:h-[calc(100dvh-1.5rem)] h-auto pointer-events-none md:pointer-events-auto",
+                        : "max-md:hidden w-[46px] md:h-[calc(100dvh-1.5rem)] h-auto pointer-events-none md:pointer-events-auto",
                     "my-2 ml-2 mr-0 md:my-3 md:ml-3 md:mr-0 rounded-2xl backdrop-blur-2xl overflow-visible",
                     LIQUID_GLASS_FLOAT_CLASS,
                     "absolute z-[99] flex shrink-0 flex-col transition-all duration-300 md:relative",
@@ -282,7 +282,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             >
                 {/* Toggle + Logo */}
                 <div
-                    className={`h-12 shrink-0 items-center justify-between px-2 ${
+                    className={`h-11 shrink-0 items-center justify-between px-1.5 ${
                         !isOpen ? "hidden md:flex" : "flex"
                     }`}
                 >
@@ -319,7 +319,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 </div>
 
                 {/* Nav items */}
-                <div className="pt-2">
+                <div className="pt-1.5">
                     {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
                         const isActive =
                             href === "/assistant"
@@ -329,12 +329,12 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                   : pathname === href ||
                                     pathname.startsWith(href + "/");
                         return (
-                            <div key={href} className="px-2 py-0.5">
+                            <div key={href} className="px-1.5 py-0.5">
                                 <button
                                     onClick={() => router.push(href)}
                                     title={!isOpen ? label : ""}
                                     className={cn(
-                                        "w-full h-9 flex items-center gap-3 px-2 py-2 rounded-md transition-colors text-left",
+                                        "w-full h-8 flex items-center gap-3 px-2 py-2 rounded-md transition-colors text-left",
                                         isActive
                                             ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
                                             : `text-gray-700 ${LIQUID_GLASS_HOVER_CLASS}`,
@@ -371,7 +371,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                         <div>
                             <button
                                 onClick={() => setProjectsCollapsed((v) => !v)}
-                                className={`mb-2 flex w-full items-center justify-between px-4 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 ${
+                                className={`mb-2 flex w-full items-center justify-between px-3.5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 ${
                                     shouldAnimate ? "sidebar-fade-in" : ""
                                 }`}
                             >
@@ -391,7 +391,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     onScroll={handleRecentProjectsScroll}
                                 >
                                     {!displayedRecentProjects ? (
-                                        <div className="space-y-1 px-2">
+                                        <div className="space-y-1 px-1.5">
                                             {[50, 65, 45].map((w, i) => (
                                                 <div
                                                     key={i}
@@ -408,7 +408,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         </div>
                                     ) : displayedRecentProjects.length === 0 ? (
                                         <div
-                                            className={`px-5 py-2 text-xs text-gray-500 ${
+                                            className={`px-4.5 py-2 text-xs text-gray-500 ${
                                                 shouldAnimate
                                                     ? "sidebar-fade-in-2"
                                                     : ""
@@ -418,7 +418,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         </div>
                                     ) : (
                                         <div
-                                            className={`space-y-1 px-2 pb-1 ${
+                                            className={`space-y-1 px-1.5 pb-1 ${
                                                 shouldAnimate
                                                     ? "sidebar-fade-in-2"
                                                     : ""
@@ -479,7 +479,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                         >
                             <button
                                 onClick={() => setHistoryCollapsed((v) => !v)}
-                                className={`mb-2 flex w-full items-center justify-between px-4 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 ${
+                                className={`mb-2 flex w-full items-center justify-between px-3.5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 ${
                                     shouldAnimate ? "sidebar-fade-in" : ""
                                 }`}
                             >
@@ -498,7 +498,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 onScroll={handleChatHistoryScroll}
                             >
                                 {!chats ? (
-                                    <div className="space-y-1.5 px-2">
+                                    <div className="space-y-1.5 px-1.5">
                                         {[40, 60, 50, 70, 45].map((w, i) => (
                                             <div
                                                 key={i}
@@ -514,7 +514,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     </div>
                                 ) : chats.length === 0 ? (
                                     <div
-                                        className={`text-xs text-gray-500 py-2 px-4 ${
+                                        className={`text-xs text-gray-500 py-2 px-3.5 ${
                                             shouldAnimate
                                                 ? "sidebar-fade-in-2"
                                                 : ""
@@ -525,7 +525,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 ) : (
                                     <>
                                         <div
-                                            className={`space-y-1.5 px-2 ${
+                                            className={`space-y-1.5 px-1.5 ${
                                                 shouldAnimate
                                                     ? "sidebar-fade-in-2"
                                                     : ""
@@ -588,7 +588,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     setIsDropdownOpen(!isDropdownOpen)
                                 }
                                 className={cn(
-                                    "flex h-12 w-full shrink-0 items-center rounded-xl px-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                                    "flex h-12 w-full shrink-0 items-center rounded-xl px-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
                                     !isOpen ? "hidden md:flex" : "",
                                     pathname.startsWith("/settings") ||
                                         pathname === "/history" ||

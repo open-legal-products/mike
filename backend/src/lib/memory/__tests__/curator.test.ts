@@ -1,4 +1,6 @@
+import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { diagnosticErrorTags } from "../../observability/sentryPrivacy";
 import type { StreamChatParams } from "../../llm";
 import {
   buildMemoryCuratorTranscript,
@@ -6,6 +8,8 @@ import {
   MEMORY_CURATOR_WRITE_TOOL,
   memoryCuratorModelForChat,
   matchesLatestConversationActivity,
+  memoryScopeFailure,
+  memoryScopeFailureCause,
   runMemoryCuratorScope,
   type CuratorScopeServices,
   type MemoryCuratorStoredMessage,
@@ -659,6 +663,71 @@ describe("scope-bound memory curator tool", () => {
     await expect(runMemoryCuratorScope(args(), svc)).rejects.toThrow(
       /^Memory curator scope failed$/,
     );
+  });
+
+  it("keeps the failure's classification, never its text, so Sentry can say why", async () => {
+    // MIKE-BACKEND-F: the fixed message hid every cause. A rejected provider
+    // key must show up as provider_error / dependency_status on the event,
+    // while the secret-bearing message stays out of the error, its cause and
+    // anything console.error would render.
+    const svc = services({
+      stream: vi.fn(async () => {
+        throw Object.assign(
+          new Error("SECRET transcript and provider credential"),
+          { name: "AI_APICallError", statusCode: 401 },
+        );
+      }),
+    });
+    let thrown: unknown;
+    await runMemoryCuratorScope(args(), svc).catch((error) => {
+      thrown = error;
+    });
+    expect(thrown).toBeInstanceOf(Error);
+    const failure = thrown as Error;
+    expect(failure.message).toBe("Memory curator scope failed");
+    expect(failure.cause).toEqual({ name: "AI_APICallError", statusCode: 401 });
+    expect(diagnosticErrorTags(failure)).toMatchObject({
+      provider_error: "api_call",
+      dependency_status: 401,
+    });
+    expect(inspect(failure, { depth: 6 })).not.toContain("SECRET");
+  });
+});
+
+describe("memoryScopeFailureCause", () => {
+  it("copies only allowlist-shaped name, code and HTTP status", () => {
+    expect(
+      memoryScopeFailureCause(
+        Object.assign(new Error("raw postgrest text with a table name"), {
+          code: "PGRST202",
+          details: "private",
+          hint: "private",
+        }),
+      ),
+    ).toEqual({ code: "PGRST202" });
+    expect(
+      memoryScopeFailureCause({ name: "bad name with spaces", code: "x", status: 503 }),
+    ).toEqual({ statusCode: 503 });
+  });
+
+  it("reuses the classification of an already-wrapped scope failure", () => {
+    // The job-level throw wraps whichever scope failed first; that scope
+    // already reduced its provider error to a classification, and the plain
+    // Error around it carries nothing of its own.
+    const inner = memoryScopeFailure(
+      Object.assign(new Error("secret"), { name: "InvalidApiKeyError" }),
+    );
+    expect(memoryScopeFailureCause(inner)).toEqual({ name: "InvalidApiKeyError" });
+    expect(diagnosticErrorTags(memoryScopeFailure(inner))).toMatchObject({
+      provider_error: "invalid_api_key",
+    });
+  });
+
+  it("carries no cause when there is nothing safe to say", () => {
+    expect(memoryScopeFailureCause(undefined)).toBeUndefined();
+    expect(memoryScopeFailureCause("string error")).toBeUndefined();
+    expect(memoryScopeFailureCause(new Error("plain"))).toBeUndefined();
+    expect(memoryScopeFailure(new Error("plain")).cause).toBeUndefined();
   });
 });
 

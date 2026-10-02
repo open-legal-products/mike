@@ -26,7 +26,7 @@
  * Prerequisite: auth.setup.ts has already saved the session to e2e/.auth/user.json
  * (tests 2–4 inherit the authenticated storageState from playwright.config.ts).
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 import AxeBuilder from "@axe-core/playwright";
 
 /** Impact levels that fail the test. Ratchet by adding "serious" here. */

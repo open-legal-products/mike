@@ -171,22 +171,30 @@ export function CitationsBlock({
                         return (
                             <div
                                 key={row.key}
-                                className="flex items-center gap-3 px-3 py-3"
+                                className="flex items-start gap-3 px-3 py-3"
                             >
                                 <button
                                     type="button"
                                     onClick={() => onOpenSource?.(row.source)}
                                     disabled={!sourceIsClickable}
-                                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left text-sm font-serif text-gray-700 transition-colors enabled:hover:text-gray-950 disabled:cursor-default"
+                                    title={row.label}
+                                    // The name takes whatever the pills leave and
+                                    // wraps to two lines before truncating.
+                                    className="flex min-w-0 flex-1 items-start gap-2 rounded-lg text-left text-sm font-serif text-gray-700 transition-colors enabled:hover:text-gray-950 disabled:cursor-default"
                                 >
-                                    <CitationSourceIcon
-                                        annotation={row.source}
-                                    />
-                                    <span className="truncate">
+                                    <span className="mt-[3px] flex shrink-0">
+                                        <CitationSourceIcon
+                                            annotation={row.source}
+                                        />
+                                    </span>
+                                    <span className="line-clamp-2 [overflow-wrap:anywhere]">
                                         {row.label}
                                     </span>
                                 </button>
-                                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                                {/* Only as wide as its pills, up to 60% of the
+                                    row; beyond that the pills wrap, so every
+                                    pill shows and the name keeps 40%. */}
+                                <div className="flex max-w-[60%] shrink-0 flex-wrap justify-end gap-1">
                                     {row.entries.map(
                                         ({ annotation, index }) => (
                                             <CitationPillUI
