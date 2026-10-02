@@ -408,6 +408,19 @@ export async function streamAiSdk(
           { cause: e },
         );
   const cacheHints = withPrefixCacheHints(params);
+  const providerOptions: StreamTextProviderOptions = {
+    ...(cacheHints.providerOptions ?? {}),
+    ...(config.provider === "openrouter"
+      ? {
+          // OpenRouter's adapter does not consume AI SDK's call-level
+          // `reasoning` option. Its per-request namespace is merged into the
+          // outbound body, so mirror the selected level there as well.
+          openrouter: {
+            reasoning: { effort: params.reasoning ?? "none" },
+          },
+        }
+      : {}),
+  };
   const rawStreamRecorder = createRawLlmStreamRecorder({
     provider: config.provider,
     model: config.modelId,
@@ -423,8 +436,8 @@ export async function streamAiSdk(
       model: config.model,
       system: params.systemPrompt,
       messages: cacheHints.messages,
-      ...(cacheHints.providerOptions
-        ? { providerOptions: cacheHints.providerOptions }
+      ...(Object.keys(providerOptions).length
+        ? { providerOptions }
         : {}),
       tools,
       maxOutputTokens: maxOutputTokensFor(config.provider),
