@@ -56,7 +56,7 @@ export async function listVersions(
     const { data: rows } = await db
         .from("document_versions")
         .select(
-            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, deleted_at, deleted_by",
+            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, textless_page_count, deleted_at, deleted_by",
         )
         .eq("document_id", documentId)
         .order("created_at", { ascending: true });
@@ -251,6 +251,7 @@ export async function createVersionFromDocument(
             file_type: sourceType || null,
             size_bytes: active.size_bytes ?? bytes.byteLength,
             page_count: active.page_count,
+            textless_page_count: active.textless_page_count,
             content_sha256: contentSha256(bytes),
         },
     );
@@ -355,7 +356,7 @@ export async function renameVersion(
         .eq("document_id", documentId)
         .is("deleted_at", null)
         .select(
-            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count",
+            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, textless_page_count",
         )
         .single();
     if (error || !updated) {

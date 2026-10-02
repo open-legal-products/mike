@@ -145,7 +145,7 @@ export async function copyDocumentsToWorkflowAssets(
   const { data: sourceVersions, error: versionsError } = await db
     .from("document_versions")
     .select(
-      "id, document_id, storage_path, pdf_storage_path, filename, file_type, size_bytes, page_count, content_sha256",
+      "id, document_id, storage_path, pdf_storage_path, filename, file_type, size_bytes, page_count, textless_page_count, content_sha256",
     )
     .in("id", versionIds)
     .is("deleted_at", null);
@@ -234,6 +234,7 @@ export async function copyDocumentsToWorkflowAssets(
           file_type: plan.sourceVersion.file_type,
           size_bytes: plan.sourceVersion.size_bytes,
           page_count: plan.sourceVersion.page_count,
+          textless_page_count: plan.sourceVersion.textless_page_count,
           content_sha256: plan.sourceVersion.content_sha256,
         });
       if (error) throw error;

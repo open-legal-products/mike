@@ -739,6 +739,8 @@ create table if not exists public.document_versions (
   file_type text,
   size_bytes integer,
   page_count integer,
+  -- PDF pages without a text layer (scanned without OCR); null = not measured.
+  textless_page_count integer,
   content_sha256 text,
   deleted_at timestamptz,
   deleted_by uuid references auth.users(id) on delete set null,
@@ -2935,6 +2937,7 @@ returns table (
   pdf_storage_path text,
   size_bytes integer,
   page_count integer,
+  textless_page_count integer,
   active_version_number integer
 )
 language sql
@@ -2957,6 +2960,7 @@ as $$
     v.pdf_storage_path,
     v.size_bytes,
     v.page_count,
+    v.textless_page_count,
     v.version_number as active_version_number
   from public.documents d
   left join public.document_versions v
@@ -6881,12 +6885,14 @@ begin
   end if;
   insert into public.document_versions(
     id, document_id, storage_path, pdf_storage_path, source, version_number,
-    filename, file_type, size_bytes, page_count, content_sha256
+    filename, file_type, size_bytes, page_count, textless_page_count,
+    content_sha256
   ) values (
     v_id, p_document_id, p_version->>'storage_path', p_version->>'pdf_storage_path',
     coalesce(p_version->>'source', 'upload'), v_number,
     p_version->>'filename', p_version->>'file_type',
     (p_version->>'size_bytes')::integer, (p_version->>'page_count')::integer,
+    (p_version->>'textless_page_count')::integer,
     p_version->>'content_sha256'
   ) returning * into v_row;
   if p_activate then

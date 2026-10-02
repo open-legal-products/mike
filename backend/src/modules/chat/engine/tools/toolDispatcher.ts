@@ -1781,6 +1781,7 @@ export async function runToolCalls(
                 // it must not see a size that disagrees with content_sha256.
                 size_bytes: raw.byteLength,
                 page_count: active?.page_count ?? null,
+                textless_page_count: active?.textless_page_count ?? null,
                 content_sha256: contentSha256(raw),
               }));
               const { data: insertedVersions, error: verErr } = await createDocumentVersions(db, versionRows);

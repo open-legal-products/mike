@@ -203,7 +203,7 @@ export async function assignOrCopyDocument(
     const { data: srcV } = await db
       .from("document_versions")
       .select(
-        "storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count",
+        "storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count",
       )
       .eq("id", doc.current_version_id)
       .single();
@@ -259,6 +259,8 @@ export async function assignOrCopyDocument(
             (srcV.size_bytes as number | null) ?? doc.size_bytes ?? null,
           page_count:
             (srcV.page_count as number | null) ?? doc.page_count ?? null,
+          textless_page_count:
+            (srcV.textless_page_count as number | null) ?? null,
           content_sha256: contentSha256(srcBytes),
         });
       const copyVersionRowId = (newV?.id as string | null) ?? null;

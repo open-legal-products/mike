@@ -101,6 +101,8 @@ export interface Document {
   pdf_storage_path: string | null;
   size_bytes: number | null;
   page_count: number | null;
+  /** PDF pages without a text layer; null for non-PDFs and unmeasured versions. */
+  textless_page_count?: number | null;
   structure_tree: StructureNode[] | null;
   status: "pending" | "processing" | "ready" | "error";
   created_at: string | null;

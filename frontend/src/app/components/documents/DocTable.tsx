@@ -88,6 +88,7 @@ import {
     writeDocumentDragPayload,
 } from "@/app/lib/docTableSelection";
 import { setDocumentRowsDragPreview } from "@/app/lib/docTableDragPreview";
+import { textLayerWarning } from "@/app/lib/textLayerWarning";
 import {
     DOC_NAME_COL_W,
     DocIcon,
@@ -2643,7 +2644,13 @@ export function DocTable({
                                                         {isError ? (
                                                             <AlertCircle className="h-4 w-4 text-red-500" />
                                                         ) : (
-                                                            <DocIcon fileType={doc.file_type} />
+                                                            <DocIcon
+                                                                fileType={doc.file_type}
+                                                                warning={textLayerWarning(
+                                                                    doc.page_count,
+                                                                    doc.textless_page_count,
+                                                                )}
+                                                            />
                                                         )}
                                                     </span>
                                                     {renamingDocumentId === doc.id ? (
@@ -4300,7 +4307,13 @@ export function DocTable({
                                                                         {isError ? (
                                                                             <AlertCircle className="h-4 w-4 text-red-500" />
                                                                         ) : (
-                                                                            <DocIcon fileType={doc.file_type} />
+                                                                            <DocIcon
+                                                                                fileType={doc.file_type}
+                                                                                warning={textLayerWarning(
+                                                                                    doc.page_count,
+                                                                                    doc.textless_page_count,
+                                                                                )}
+                                                                            />
                                                                         )}
                                                                     </span>
                                                                     {renamingDocumentId === doc.id ? (
