@@ -145,8 +145,23 @@ Open `http://localhost:3000`.
 
 ## Useful Checks
 
+Backend:
+
 ```bash
 npm run build --prefix backend
+```
+
+Frontend build requires the public Supabase and API base URL environment variables at build time. For a local build check, you can use placeholder public values:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321 \
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=dummy \
+NEXT_PUBLIC_API_BASE_URL=http://localhost:3001 \
 npm run build --prefix frontend
+```
+
+Frontend lint:
+
+```bash
 npm run lint --prefix frontend
 ```
