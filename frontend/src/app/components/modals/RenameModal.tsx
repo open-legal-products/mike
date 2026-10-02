@@ -6,8 +6,8 @@ import { FieldLabel, FormTextInput } from "../ui/form-field";
 
 interface RenameModalProps {
     open: boolean;
-    /** Modal heading, e.g. "Rename chat". */
-    title: string;
+    /** Breadcrumb trail, e.g. ["Assistant", "Rename Chat"]. */
+    breadcrumbs: string[];
     initialValue: string;
     label?: string;
     saving?: boolean;
@@ -23,7 +23,7 @@ export function RenameModal(props: RenameModalProps) {
 
 function RenameModalForm({
     open,
-    title,
+    breadcrumbs,
     initialValue,
     label = "Name",
     saving = false,
@@ -40,7 +40,7 @@ function RenameModalForm({
             onClose={onClose}
             size="sm"
             className="h-auto"
-            breadcrumbs={[title]}
+            breadcrumbs={breadcrumbs}
             cancelAction={{ label: "Cancel", onClick: onClose, disabled: saving }}
             primaryAction={{
                 label: saving ? "Saving..." : "Save",

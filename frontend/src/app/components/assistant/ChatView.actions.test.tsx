@@ -548,7 +548,7 @@ describe("ChatView header actions", () => {
 
         openActions();
         fireEvent.click(await screen.findByText("Rename"));
-        const input = await screen.findByRole("textbox", { name: "Chat name" });
+        const input = await screen.findByRole("textbox", { name: "Chat title" });
         fireEvent.change(input, { target: { value: "Renamed chat" } });
         fireEvent.click(screen.getByRole("button", { name: "Save" }));
         expect(prompt).not.toHaveBeenCalled();

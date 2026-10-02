@@ -1344,8 +1344,8 @@ export function ChatView({
             />
             <RenameModal
                 open={renameOpen}
-                title="Rename chat"
-                label="Chat name"
+                breadcrumbs={["Assistant", "Rename Chat"]}
+                label="Chat title"
                 initialValue={activeChat?.title?.trim() || "Untitled chat"}
                 saving={renaming}
                 onClose={() => {
