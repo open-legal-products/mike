@@ -58,32 +58,11 @@ authentication behavior, Ollama setup, and first-run guidance.
 
 ### Telemetry
 
-Error reports are sent to the Mike project's own Sentry by default, so the
-maintainers can fix failures encountered by forks and self-hosted installs.
-Before network transmission, every runtime rebuilds reports from an explicit
-allowlist: code locations and line numbers, controlled operation labels,
-HTTP method/status and normalized routes, validated correlation IDs, release,
-and environment. Client document filenames, document text, raw error and
-console messages, request URLs/queries/headers/bodies, user identities, and
-breadcrumbs are excluded. Automatic sessions, replay, attachments, traces,
-and other non-error payloads are blocked. The same boundary applies to
-community and official installations. See the [observability guide](docs/observability.md)
-for the exact policy, source-map behavior, and limitations.
-To opt out, set `SENTRY_DISABLED=true`
-(`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
-browser and add-in builds); to use your own Sentry instead, set the matching
-`*_SENTRY_DSN`.
-
-The built-in DSNs are public submission addresses; stored error reports are
-accessible to authorized Sentry organization members. The guide documents
-[public-DSN and default-on precedents](docs/observability.md#public-dsns-and-default-on-reporting)
-(Zulip Desktop, Element Web, and GitLab's distinct Service Ping mechanism),
-and [quota protections and remaining limits](docs/observability.md#quota-protection-and-its-limits).
-
-The [Sentry data audit](docs/sentry-data-audit.md) records the original privacy
-findings, their fixes, and the current outbound data inventory. Source-map
-uploads are separate and send application source code only when operators
-configure upload credentials.
+Mike sends scrubbed error reports (no document content, user identities, or
+request data) to the project's Sentry by default. Set `SENTRY_DISABLED=true` to
+opt out, or set `SENTRY_DSN` to use your own. See the
+[observability guide](docs/observability.md) for the exact policy, per-runtime
+variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 
 ## Repository
 
