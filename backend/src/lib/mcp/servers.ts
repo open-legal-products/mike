@@ -14,6 +14,8 @@ import {
     openaiToolName,
     toConnectorSummary,
     isMcpWriteTool,
+    mcpToolRequiresWriteAccess,
+    mcpConnectionFingerprint,
     validateCustomHeaders,
     validateRemoteMcpUrl,
 } from "./client";
@@ -441,7 +443,7 @@ export async function buildUserMcpTools(
     const { data, error } = await db
         .from("user_mcp_connector_tools")
         .select(
-            "openai_tool_name, tool_name, title, description, input_schema, requires_confirmation, enabled, user_mcp_connectors!inner(id, user_id, name, enabled, read_only)",
+            "openai_tool_name, tool_name, title, description, input_schema, annotations, requires_confirmation, enabled, user_mcp_connectors!inner(id, user_id, name, enabled, read_only)",
         )
         .eq("enabled", true)
         .eq("user_mcp_connectors.user_id", userId)
@@ -457,7 +459,7 @@ export async function buildUserMcpTools(
     return (data ?? []).filter((row) => {
         const joined = row.user_mcp_connectors as { read_only?: boolean } | { read_only?: boolean }[];
         const connector = Array.isArray(joined) ? joined[0] : joined;
-        return !(connector?.read_only && row.requires_confirmation);
+        return !(connector?.read_only && mcpToolRequiresWriteAccess(row));
     }).map((row) => {
         const raw = row as Record<string, unknown>;
         const connector = raw.user_mcp_connectors as
@@ -504,7 +506,7 @@ async function resolveCallableTool(
     const connector = Array.isArray(row.user_mcp_connectors)
         ? row.user_mcp_connectors[0]
         : row.user_mcp_connectors;
-    if (connector.read_only && row.requires_confirmation) return null;
+    if (connector.read_only && mcpToolRequiresWriteAccess(row)) return null;
     return { connector, tool: row };
 }
 
@@ -555,7 +557,10 @@ export async function planMcpToolCall(
     const resolved = await resolveCallableTool(userId, openaiToolName, db);
     if (!resolved) return { type: "result", ...unavailableTool(openaiToolName) };
     const { connector, tool } = resolved;
-    if (!tool.requires_confirmation || connector.require_write_approval !== true)
+    if (
+        !mcpToolRequiresWriteAccess(tool) ||
+        connector.require_write_approval !== true
+    )
         return { type: "run" };
     if (JSON.stringify(args).length > MAX_APPROVAL_ARGUMENT_CHARS) {
         return {
@@ -566,6 +571,15 @@ export async function planMcpToolCall(
             ),
         };
     }
+    const fingerprint = await connectionFingerprint(connector, db);
+    if (!fingerprint)
+        return {
+            type: "result",
+            ...unavailableTool(
+                openaiToolName,
+                "Reconnect this connector before reviewing its actions.",
+            ),
+        };
     return {
         type: "approval",
         item: {
@@ -578,6 +592,7 @@ export async function planMcpToolCall(
                 type: "mcp",
                 connector_id: connector.id,
                 tool_id: tool.id,
+                connection_fingerprint: fingerprint,
             },
         },
     };
@@ -621,19 +636,35 @@ export async function executeApprovedMcpToolCall(
         resolved &&
         item.binding.type === "mcp" &&
         resolved.connector.id === item.binding.connector_id &&
-        resolved.tool.id === item.binding.tool_id
+        resolved.tool.id === item.binding.tool_id &&
+        !!item.binding.connection_fingerprint &&
+        item.binding.connection_fingerprint ===
+            (await connectionFingerprint(resolved.connector, db))
             ? await callResolvedTool(
-                  userId,
-                  resolved.connector,
-                  resolved.tool,
-                  item.arguments,
-                  db,
-              )
+                    userId,
+                    resolved.connector,
+                    resolved.tool,
+                    item.arguments,
+                    db,
+                    item.binding.connection_fingerprint,
+                )
             : unavailableTool(
-                  item.tool_name,
-                  "This connector tool was changed, turned off, or removed after it was reviewed.",
-              );
+                    item.tool_name,
+                    "This connector tool was changed, turned off, or removed after it was reviewed.",
+                );
     return { ...result, event: { ...result.event, approval_id: item.id } };
+}
+
+async function connectionFingerprint(
+    connector: ConnectorRow,
+    db: Db,
+): Promise<string | null> {
+    const token =
+        connector.auth_type === "oauth"
+            ? await loadOAuthToken(connector.id, db)
+            : null;
+    if (connector.auth_type === "oauth" && !token?.grant_id) return null;
+    return mcpConnectionFingerprint(connector, token?.grant_id ?? null);
 }
 
 async function callResolvedTool(
@@ -642,17 +673,39 @@ async function callResolvedTool(
     tool: ToolCacheRow,
     args: Record<string, unknown>,
     db: Db,
+    approvedFingerprint?: string,
 ): Promise<{ content: string; event: McpToolEvent }> {
     const started = Date.now();
     try {
+        const fingerprint =
+            approvedFingerprint ?? (await connectionFingerprint(connector, db));
+        if (!fingerprint)
+            throw new Error("Reconnect this connector before using its tools.");
         const result = await withMcpClient(
             connector,
             async (client) => {
-                if (tool.requires_confirmation) {
-                    const current = await resolveCallableTool(userId, tool.openai_tool_name, db);
-                    if (!current || current.connector.id !== connector.id || current.tool.id !== tool.id)
-                        throw new Error("This connector tool was changed, turned off, or set to read-only.");
-                }
+                const current = await resolveCallableTool(
+                    userId,
+                    tool.openai_tool_name,
+                    db,
+                );
+                if (
+                    !current ||
+                    current.connector.id !== connector.id ||
+                    current.tool.id !== tool.id ||
+                    (await connectionFingerprint(current.connector, db)) !== fingerprint
+                )
+                    throw new Error(
+                        "This connector tool was changed, turned off, or set to read-only.",
+                    );
+                if (
+                    mcpToolRequiresWriteAccess(current.tool) &&
+                    current.connector.require_write_approval &&
+                    !approvedFingerprint
+                )
+                    throw new Error(
+                        "This connector action requires approval in the assistant.",
+                    );
                 return client.callTool(
                     {
                         name: tool.tool_name,

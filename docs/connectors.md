@@ -108,7 +108,7 @@ for example, the Drive endpoint is
 Every connector — MCP servers such as Slack, and Google Drive, Gmail and
 Calendar — has write access by default: the assistant can use a tool that
 changes data as soon as the connector is installed. A tool counts as a write
-when its server marks it destructive or explicitly not read-only; the Manage
+unless its server explicitly marks it read-only and non-destructive; the Manage
 dialog labels those tools **Write**.
 
 Turn on **Read-only** in the Manage dialog to disable every write tool. The
@@ -119,7 +119,8 @@ and survives tool refreshes and Google reconnection. MCP write classification
 uses the server's annotations, so servers must report their tools accurately.
 
 Existing deployments must apply
-`backend/migrations/20261002_03_connector_read_only.sql`. Fresh installations
+`backend/migrations/20261002_03_connector_read_only.sql` and
+`backend/migrations/20261002_05_mcp_oauth_grants.sql`. Fresh installations
 already include these settings in `backend/schema.sql`.
 
 Turn on **Ask for permission for write actions** in a connector's Manage
@@ -129,7 +130,9 @@ its arguments. **Approve** runs that action and the turn continues with its
 result; **Reject** tells the assistant it did not run. The server runs the
 action it stored with the approval, never arguments sent by the browser, and
 each approval runs at most once. It does not run if the connector or tool was
-turned off, deleted, or replaced in the meantime.
+turned off, deleted, or replaced in the meantime. Changing the server URL,
+credentials, or authorized account invalidates a pending approval. Routine
+OAuth token refresh does not.
 
 Approvals are available in the Mike assistant and project chats. The Word
 add-in and tabular review cannot show them, so a write that needs approval is

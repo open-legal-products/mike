@@ -1315,6 +1315,7 @@ describe("ask_inputs frames", () => {
     { binding: null },
     { binding: { type: "google", provider: "unknown", grant_id: "g1" } },
     { binding: { type: "mcp", connector_id: "c1" } },
+    { binding: { type: "mcp", connector_id: "c1", tool_id: "t1", connection_fingerprint: "invalid" } },
   ])("does not render an incomplete approval: %j", async (invalid) => {
     const items = [{ ...calendarApproval, ...invalid }, calendarApproval];
     expect(await eventsOf([{ type: "ask_inputs", event_id: "ask-calendar", items }])).toEqual([
@@ -1342,7 +1343,7 @@ describe("ask_inputs frames", () => {
       tool_name: "mcp_slack_post",
       title: "Post message",
       arguments: { channel: "general", text: "Hello" },
-      binding: { type: "mcp", connector_id: "slack-1", tool_id: "post-1" },
+      binding: { type: "mcp", connector_id: "slack-1", tool_id: "post-1", connection_fingerprint: "a".repeat(64) },
     };
     const question = { id: "q1", kind: "text", question: "Anything else?" };
     const events = await eventsOf([{ type: "ask_inputs", event_id: "ask-mixed", items: [question, approval] }]);

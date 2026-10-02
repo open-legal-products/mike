@@ -37,7 +37,7 @@ export type McpToolSummary = {
     enabled: boolean;
     readOnly: boolean;
     destructive: boolean;
-    /** The server marks this tool as changing data (see isMcpWriteTool). */
+    /** Potentially changes data, including tools without read-only annotations. */
     write: boolean;
     lastSeenAt: string;
 };
@@ -75,6 +75,8 @@ export type ConnectorRow = {
 
 export type OAuthTokenRow = {
     id: string;
+    /** Changes on interactive authorization, not access-token refresh. */
+    grant_id?: string;
     connector_id: string;
     encrypted_access_token: string | null;
     access_token_iv: string | null;

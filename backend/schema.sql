@@ -449,6 +449,7 @@ alter table public.user_mcp_connectors enable row level security;
 
 create table if not exists public.user_mcp_oauth_tokens (
   id uuid primary key default gen_random_uuid(),
+  grant_id uuid not null default gen_random_uuid(),
   connector_id uuid not null references public.user_mcp_connectors(id) on delete cascade,
   encrypted_access_token text,
   access_token_iv text,

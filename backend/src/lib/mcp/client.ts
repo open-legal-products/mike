@@ -188,16 +188,52 @@ function truthyAnnotation(
 export function isMcpWriteTool(
     annotations: Record<string, unknown> | null | undefined,
 ) {
-    // A write tool is one a connector's "Ask for permission for write actions"
-    // setting holds for approval. Only genuinely changing tools count. We do
-    // NOT use openWorldHint (almost every useful connector — Gmail, Slack,
-    // GitHub — is "open world", so it would catch everything), and we
-    // require readOnlyHint to be *explicitly* false rather than merely absent
-    // (a missing hint must not be treated the same as readOnlyHint:false).
+    // Missing annotations do not establish read-only behavior. Only explicitly
+    // read-only, non-destructive tools may bypass the write protections.
     return (
         truthyAnnotation(annotations, "destructiveHint") ||
-        annotations?.readOnlyHint === false
+        annotations?.readOnlyHint !== true
     );
+}
+
+/** Also protect cached tools discovered before conservative classification. */
+export function mcpToolRequiresWriteAccess(
+    tool: Pick<ToolCacheRow, "annotations" | "requires_confirmation">,
+) {
+    return tool.requires_confirmation || isMcpWriteTool(tool.annotations);
+}
+
+/** An opaque binding to the destination and credentials, stable across token refresh. */
+export function mcpConnectionFingerprint(
+    connector: ConnectorRow,
+    oauthGrantId: string | null,
+) {
+    const config = decryptAuthConfig(connector);
+    const credentials = connector.encrypted_auth_config
+        ? crypto
+                .createHmac("sha256", encryptionKey())
+                .update(
+                    JSON.stringify({
+                        bearerToken: config.bearerToken ?? null,
+                        headers: Object.entries(config.headers ?? {}).sort(([a], [b]) =>
+                            a.localeCompare(b),
+                        ),
+                    }),
+                )
+                .digest("hex")
+        : null;
+    return crypto
+        .createHash("sha256")
+        .update(
+            JSON.stringify([
+                connector.server_url,
+                connector.transport,
+                connector.auth_type,
+                credentials,
+                oauthGrantId,
+            ]),
+        )
+        .digest("hex");
 }
 
 function toToolSummary(row: ToolCacheRow): McpToolSummary {
@@ -210,7 +246,7 @@ function toToolSummary(row: ToolCacheRow): McpToolSummary {
         enabled: row.enabled,
         readOnly: truthyAnnotation(row.annotations, "readOnlyHint"),
         destructive: truthyAnnotation(row.annotations, "destructiveHint"),
-        write: row.requires_confirmation,
+        write: mcpToolRequiresWriteAccess(row),
         lastSeenAt: row.last_seen_at,
     };
 }
@@ -237,7 +273,7 @@ export function toConnectorSummary(
         toolPolicy: connector.tool_policy ?? {},
         tools: tools.map((tool) => ({
             ...toToolSummary(tool),
-            enabled: tool.enabled && !(connector.read_only && tool.requires_confirmation),
+            enabled: tool.enabled && !(connector.read_only && mcpToolRequiresWriteAccess(tool)),
         })),
         toolCount,
         createdAt: connector.created_at,

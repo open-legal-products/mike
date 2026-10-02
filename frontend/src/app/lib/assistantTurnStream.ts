@@ -79,7 +79,10 @@ function isConnectorApprovalItem(
       typeof binding.connector_id === "string" &&
       !!binding.connector_id.trim() &&
       typeof binding.tool_id === "string" &&
-      !!binding.tool_id.trim()
+      !!binding.tool_id.trim() &&
+      (binding.connection_fingerprint === undefined ||
+        (typeof binding.connection_fingerprint === "string" &&
+          /^[a-f0-9]{64}$/.test(binding.connection_fingerprint)))
     );
   }
   return (

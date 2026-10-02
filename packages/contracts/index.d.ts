@@ -134,7 +134,13 @@ export type ConnectorApprovalItem = {
 };
 
 export type ConnectorApprovalBinding =
-  | { type: "mcp"; connector_id: string; tool_id: string }
+  | {
+      type: "mcp";
+      connector_id: string;
+      tool_id: string;
+      /** Absent on legacy approvals, which must be reviewed again. */
+      connection_fingerprint?: string;
+    }
   | {
       type: "google";
       provider: GoogleWorkspaceProvider | "google-drive";
