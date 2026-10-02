@@ -1,0 +1,166 @@
+# CI: the Mac app (desktop/).
+#
+# Until this workflow existed nothing in CI ran a line of desktop/, so the
+# branch drifted from main silently: main merged a migration written for
+# psql (#505, CREATE INDEX CONCURRENTLY) and the app's own migration runner
+# — which fresh installs never exercise — broke every existing workspace at
+# boot while all sixteen main checks stayed green. Two jobs close that:
+#
+#   unit       `npm test --prefix desktop` on an Apple Silicon runner with
+#              the bundled Postgres fetched, so src/local/upgrade.test.js
+#              really boots a cluster, builds an installation from the
+#              schema baseline and upgrades it through the app's runner
+#              (the desktop counterpart of schema-drift.yml). Every
+#              migration or schema.sql change re-runs it.
+#
+#   packaged   the whole pipeline a release would run — fetch binaries,
+#              build backend + standalone frontend, stage, package Mike.app
+#              (unsigned) — then e2e/local.e2e.mjs drives the PACKAGED app:
+#              cold first run (initdb → signup → project → upload →
+#              blob-token download → guest ×2), quit, and the returning-user
+#              relaunch on the same workspace.
+#
+# Both are macOS runners because the stack is darwin/arm64 only (the fetch
+# script pulls darwin-arm64 Postgres/PostgREST and builds GoTrue for it).
+# No secrets, no external services: everything binds to loopback.
+name: Desktop (Mac app)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "backend/**"
+      - "frontend/**"
+      - "e2e/fixtures/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    branches: [main, upstream-main]
+    paths:
+      - "desktop/**"
+      - "backend/**"
+      - "frontend/**"
+      - "e2e/fixtures/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  unit:
+    name: Desktop unit and upgrade tests
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # upgrade.test.js reads the baseline schema straight out of git
+          # (`git show <BASELINE_REF>:backend/schema.sql`), like schema-drift.yml.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Validate package.json and lockfile parse
+        run: node -e "for (const f of ['package.json','package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
+
+      - run: npm ci
+
+      # The pinned Postgres build (~60 MB); the key is the fetch script, so a
+      # pin bump invalidates it.
+      - name: Cache bundled Postgres
+        uses: actions/cache@v4
+        with:
+          path: desktop/local-stack/bin/pg
+          key: local-stack-pg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/fetch-local-stack.sh') }}
+
+      - name: Fetch bundled Postgres
+        run: MIKE_LOCAL_FETCH_ONLY=postgres npm run local:fetch
+
+      # MIKE_REQUIRE_LOCAL_STACK turns upgrade.test.js's "binaries missing →
+      # skip" (a developer convenience) into a hard failure here, so a broken
+      # fetch can never pass as a green run.
+      - name: Unit, catalog, gateway and schema-upgrade tests
+        run: MIKE_REQUIRE_LOCAL_STACK=1 npm test
+
+  packaged:
+    name: Packaged app first run and returning user
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      # GoTrue has no usable macOS release binary (the darwin-arm64 asset is
+      # Linux ELF — see fetch-local-stack.sh), so the pinned tag is built
+      # from source. Cached with the other binaries below.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Validate lockfiles parse
+        run: node -e "for (const f of ['backend/package-lock.json','frontend/package-lock.json','desktop/package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
+
+      - run: npm ci --prefix backend
+      - run: npm ci --prefix frontend
+      - run: npm ci --prefix desktop
+
+      - name: Cache bundled service binaries
+        uses: actions/cache@v4
+        with:
+          path: desktop/local-stack/bin
+          key: local-stack-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/fetch-local-stack.sh', 'desktop/scripts/fetch-service-notices.mjs') }}
+
+      - name: Fetch Postgres, PostgREST, GoTrue and their notices
+        run: npm run local:fetch --prefix desktop
+
+      # backend tsc + offline workflow bundle + Next standalone build, with the
+      # same isolated environment the release build uses (env -i inside the
+      # script: no runner variables leak into the bundled frontend).
+      #
+      # The workflow bundle resolves Open-Legal-Products/mike-workflows@main
+      # through the GitHub API. Unauthenticated calls share a 60/hour budget
+      # per source IP, which hosted runners exhaust — the API answers 403 —
+      # so the importer gets the job's own read-only token
+      # (MIKE_WORKFLOWS_GITHUB_TOKEN, see backend/src/lib/workflowCatalogSource.ts).
+      - name: Build backend and standalone frontend
+        run: npm run local:build --prefix desktop
+        env:
+          MIKE_WORKFLOWS_GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Stage the stack and package Mike.app (unsigned)
+        run: |
+          npm run local:stage --prefix desktop
+          npm run dist:local --prefix desktop
+
+      - name: Packaged first-run + returning-user e2e
+        run: npm run e2e:local --prefix desktop
+
+      - name: Upload e2e artifacts (screenshots, summary)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-local-e2e
+          path: desktop/e2e/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
