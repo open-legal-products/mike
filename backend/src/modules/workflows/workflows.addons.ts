@@ -13,6 +13,7 @@ import crypto from "crypto";
 import type { Db } from "../../lib/supabase";
 import { downloadFile, storageKey, uploadFile } from "../../lib/storage";
 import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
+import { chunkArray } from "../../lib/arrays";
 import {
   contentTypeForDocumentType,
   shouldConvertToPdf,
@@ -36,6 +37,11 @@ import {
 // select list stays byte-identical to the pre-move query.
 const ADDON_LIST_COLUMNS =
   "id, workflow_key, pack_key, pack_title, pack_description, pack_version, version, title, description, type, contributors, language, practice, jurisdictions, active, updated_at";
+
+// PostgREST filters travel in the query string (and PostgREST echoes them back
+// in Content-Location), so an unbounded `in.(...)` list grows with the catalog
+// until a proxy rejects the request or response. 50 UUIDs keep it under ~2 KB.
+const ASSET_LOOKUP_BATCH_SIZE = 50;
 
 type AddonAssetRow = {
   id: string;
@@ -70,19 +76,20 @@ export async function listWorkflowAddons(
   const assistantIds = addons
     .filter((addon) => addon.type === "assistant")
     .map((addon) => addon.id as string);
-  const { data: assets, error: assetsError } =
-    assistantIds.length > 0
-      ? await db
-          .from("mike_workflow_assets")
-          .select(
-            "id, mike_workflow_id, filename, file_type, size_bytes, created_at",
-          )
-          .in("mike_workflow_id", assistantIds)
-          .order("created_at", { ascending: true })
-      : { data: [] as AddonAssetRow[], error: null };
-  if (assetsError) return internalFailure(assetsError);
+  // Each add-on's assets land in exactly one batch, so per-batch ordering by
+  // created_at is enough to keep every add-on's asset list ordered.
+  const assets: AddonAssetRow[] = [];
+  for (const batch of chunkArray(assistantIds, ASSET_LOOKUP_BATCH_SIZE)) {
+    const { data, error: assetsError } = await db
+      .from("mike_workflow_assets")
+      .select("id, mike_workflow_id, filename, file_type, size_bytes, created_at")
+      .in("mike_workflow_id", batch)
+      .order("created_at", { ascending: true });
+    if (assetsError) return internalFailure(assetsError);
+    assets.push(...((data ?? []) as AddonAssetRow[]));
+  }
   const assetsByAddon = new Map<string, AddonAssetRow[]>();
-  for (const asset of (assets ?? []) as AddonAssetRow[]) {
+  for (const asset of assets) {
     const current = assetsByAddon.get(asset.mike_workflow_id) ?? [];
     current.push(asset);
     assetsByAddon.set(asset.mike_workflow_id, current);
