@@ -231,7 +231,7 @@ actual Cloud client, consent configuration and Workspace policy work together.
    or prove the lifecycle RPCs were deployed.
 2. **Consent:** choose Add on the Google Drive card. Complete Mike MFA if
    enrolled, choose your test
-   Google account, and approve Drive read access. Expect Google Drive under
+   Google account, and approve full Drive access (read and write). Expect Google Drive under
    Installed, including after page reload and backend restart. No access/refresh tokens should appear
    in browser API responses. If Google denies consent, close the popup and use
    Cancel in Mike to end its polling attempt; a retry should work.

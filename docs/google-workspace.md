@@ -21,7 +21,7 @@ Gmail Trash is recoverable through Gmail; permanently deleting received/sent mai
 
 ## Operator setup
 
-1. Apply `backend/migrations/20260922_01_google_workspace.sql` and `backend/migrations/20261001_01_connector_write_access.sql` to the intended deployment after the Drive migration. Fresh installs include it in `backend/schema.sql`; Compose's db-init replays it. No remote database changes are performed by the tests below.
+1. Apply `backend/migrations/20260922_01_google_workspace.sql`, `backend/migrations/20261001_01_connector_write_access.sql`, and `backend/migrations/20261002_03_connector_read_only.sql` to the intended deployment after the Drive migration. Fresh installs include their final schema in `backend/schema.sql`; Compose's db-init replays these migrations. No remote database changes are performed by the tests below.
 2. Enable **Gmail API** (`gmail.googleapis.com`) and **Google Calendar API** (`calendar-json.googleapis.com`) in the OAuth client's Google Cloud project. These are the REST APIs, not the Google MCP preview services.
 3. Configure a Web application OAuth client. The existing Drive client may be reused. Register these exact local redirect URIs:
 
@@ -88,7 +88,7 @@ Use two test Google accounts and synthetic mail/events; do not use real client i
 3. Search for a synthetic email marker and read the message and thread. Verify text, headers, labels, attachment metadata, pagination, and truncation. List calendars and events in a known time range, including an all-day event and a recurring occurrence.
 4. Ask to send/edit/delete while connected read-only. No mutation occurs. Delete the connector, connect it again, and grant write access; the write tools then appear.
 5. With **Ask for permission for write actions** off, ask for a new email to a test recipient: exactly one email is sent. Turn the setting on and ask again: the turn pauses on an approval showing every recipient, subject, body, and the connected account, and nothing is sent. Approve it: exactly one email is sent and the assistant continues with the result. Reload and double-click must not send it again. Reject a second request and verify no send.
-6. Create a draft, replace its content, and delete it. Modify a test message's labels and move another to Trash. Modify a test message's labels and move another to Trash. Try header-injection text, attachment-bearing draft replacement, and reply-draft replacement; all must be rejected safely.
+6. Create a draft, replace its content, and delete it. Modify a test message's labels and move another to Trash. Try header-injection text, attachment-bearing draft replacement, and reply-draft replacement; all must be rejected safely.
 7. Create a calendar event with a test attendee, then edit and delete it. Verify invitation/update/cancellation notices. With approvals on, change an event directly in Calendar after the approval appears: approving must reject the stale version. Entire recurring-series edits must be rejected; a single occurrence is supported.
 8. Switch off a tool, then the whole connection: the assistant must lose those tools. With an approval pending, change Google accounts or delete the connection: approving must not run against either account. A second Mike user must not be able to answer the first user's approval.
 9. Cancel immediately after clicking Add, close the popup, and test with popup blocking. Confirm retry works without a dangling authorization. For MFA-enrolled users, test connection, reconnect, settings changes, and Delete through the verification prompt.

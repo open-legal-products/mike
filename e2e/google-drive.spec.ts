@@ -68,6 +68,8 @@ test("Google Drive add, cancel and delete work like Slack", async ({
                     configured: true,
                     schemaReady: true,
                     enabled: true,
+                    writeEnabled: connected,
+                    requireWriteApproval: false,
                     tools: [
                         {
                             name: "google_drive_search",
@@ -105,8 +107,9 @@ test("Google Drive add, cancel and delete work like Slack", async ({
     await installed.getByRole("button", { name: "Manage Google Drive" }).click();
     const dialog = page.getByRole("dialog", { name: "Google Drive", exact: true });
     await expect(dialog.getByText("Search files")).toBeVisible();
-    // Drive is read-only, so it has no write-approval setting.
-    await expect(dialog.getByText("Ask for permission for write actions")).toHaveCount(0);
+    const writeApproval = dialog.getByRole("switch", { name: "Ask for permission for write actions" });
+    await expect(writeApproval).toBeVisible();
+    await expect(writeApproval).toHaveAttribute("aria-checked", "false");
     await dialog.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(add).toBeEnabled();

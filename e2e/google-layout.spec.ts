@@ -104,10 +104,8 @@ for (const addressKind of ["normal", "long"] as const) {
               schemaReady: true,
               connected: true,
               enabled: true,
-              // Drive is read-only: its status carries no write settings.
-              ...(path.endsWith("/google-drive")
-                ? {}
-                : { writeEnabled: true, requireWriteApproval: true }),
+              writeEnabled: true,
+              requireWriteApproval: true,
               accountEmail,
               tools: [
                 {
@@ -193,13 +191,9 @@ for (const addressKind of ["normal", "long"] as const) {
         expect(bounds.overflow).toBeLessThanOrEqual(1);
         await page.screenshot({ path: testInfo.outputPath(`${name.toLowerCase().replaceAll(" ", "-")}-details.png`), animations: "disabled" });
         await expect(dialog.getByText(accountEmail, { exact: true })).toBeVisible();
-        if (name === "Google Drive") {
-          await expect(dialog.getByText("Ask for permission for write actions")).toHaveCount(0);
-        } else {
-          await expect(
-            dialog.getByRole("switch", { name: "Ask for permission for write actions" }),
-          ).toHaveAttribute("aria-checked", "true");
-        }
+        await expect(
+          dialog.getByRole("switch", { name: "Ask for permission for write actions" }),
+        ).toHaveAttribute("aria-checked", "true");
         for (const text of await dialog.locator("p").all()) {
           const overflow = await text.evaluate((element) => ({
             horizontal: element.scrollWidth - element.clientWidth,
