@@ -22,18 +22,13 @@ import {
   deleteFile,
   deleteFileBestEffort,
   deleteFilesBestEffort,
-  downloadFile,
-  downloadFileHead,
+  downloadFileRange,
   getSignedUploadUrl,
   headFile,
   StorageOperationError,
 } from "../../lib/storage";
 import type { Db } from "../../lib/supabase";
-import {
-  needsFullObjectForValidation,
-  HEAD_BYTES,
-  validateDocumentContent,
-} from "./uploads.content";
+import { validateDocumentContent } from "./uploads.content";
 import {
   uploadSessionExpiresAt,
   UPLOAD_URL_TTL_SECONDS,
@@ -187,11 +182,23 @@ async function verifyAndSealSessionFiles(
     }
 
     // The declared type is a claim; check the staged bytes before sealing.
-    const head = needsFullObjectForValidation(file.file_type)
-      ? await downloadFile(file.staging_storage_path)
-      : await downloadFileHead(file.staging_storage_path, HEAD_BYTES);
-    if (!head) throw new Error("Failed to read staged upload for validation");
-    if (!(await validateDocumentContent(file.file_type, new Uint8Array(head)))) {
+    // Only byte ranges are read, never the whole (up to 100 MB) object. A
+    // failed read is a storage error, not a verdict on the file, so it throws
+    // and the file stays retryable.
+    const valid = await validateDocumentContent(
+      file.file_type,
+      staged.size,
+      async (start, end) => {
+        const bytes = await downloadFileRange(
+          file.staging_storage_path,
+          start,
+          end,
+        );
+        if (!bytes) throw new Error("Failed to read staged upload");
+        return bytes;
+      },
+    );
+    if (!valid) {
       await deleteFileBestEffort(file.staging_storage_path, "seal-mismatch");
       await writeSealResult(file, {
         status: "error",

@@ -265,10 +265,11 @@ export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
   }
 }
 
-/** Read only the first `length` bytes of an object. */
-export async function downloadFileHead(
+/** Read the inclusive byte range [start, end] of an object. */
+export async function downloadFileRange(
   key: string,
-  length: number,
+  start: number,
+  end: number,
 ): Promise<Uint8Array | null> {
   if (!storageEnabled) return null;
   try {
@@ -277,13 +278,13 @@ export async function downloadFileHead(
       new GetObjectCommand({
         Bucket: BUCKET,
         Key: key,
-        Range: `bytes=0-${Math.max(0, length - 1)}`,
+        Range: `bytes=${start}-${end}`,
       }),
     )) as any;
     if (!response.Body) return null;
     return await response.Body.transformToByteArray();
   } catch (error) {
-    console.error("[storage] downloadFileHead failed", { key, error });
+    console.error("[storage] downloadFileRange failed", { key, error });
     return null;
   }
 }

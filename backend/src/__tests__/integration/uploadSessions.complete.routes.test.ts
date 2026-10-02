@@ -5,8 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   copyFile: vi.fn(),
   deleteFile: vi.fn(),
-  downloadFile: vi.fn(),
-  downloadFileHead: vi.fn(),
+  downloadFileRange: vi.fn(),
   getSignedUploadUrl: vi.fn(),
   headFile: vi.fn(),
   rpc: vi.fn(),
@@ -117,8 +116,7 @@ vi.mock("../../lib/storage", () => ({
   getSignedUploadUrl: mocks.getSignedUploadUrl,
   copyFile: mocks.copyFile,
   deleteFile: mocks.deleteFile,
-  downloadFile: mocks.downloadFile,
-  downloadFileHead: mocks.downloadFileHead,
+  downloadFileRange: mocks.downloadFileRange,
   deleteFileBestEffort: (key: string) =>
     Promise.resolve(mocks.deleteFile(key)).catch(() => undefined),
   deleteFilesBestEffort: async (keys: Array<string | null | undefined>) => {
@@ -169,7 +167,7 @@ describe("upload session completion", () => {
       },
     ];
     mocks.copyFile.mockResolvedValue(undefined);
-    mocks.downloadFileHead.mockResolvedValue(
+    mocks.downloadFileRange.mockResolvedValue(
       new Uint8Array(Buffer.from("%PDF-1.7")),
     );
     mocks.deleteFile.mockResolvedValue(undefined);
@@ -554,7 +552,7 @@ describe("upload session completion", () => {
   });
 
   it("rejects an object whose bytes do not match its declared type", async () => {
-    mocks.downloadFileHead.mockResolvedValueOnce(
+    mocks.downloadFileRange.mockResolvedValueOnce(
       new Uint8Array(Buffer.from("MZ\x90\x00")),
     );
     mocks.headFile.mockResolvedValueOnce(null).mockResolvedValueOnce({
