@@ -1490,6 +1490,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                     type: "custom",
                                     render: (
                                         <ModelToggle
+                                            tone="default"
                                             value={tabularModel}
                                             onChange={(model) =>
                                                 void handleReviewModelChange(

@@ -410,3 +410,20 @@ describe("ModelToggle provider grouping", () => {
         expect(screen.getByText("OpenRouter")).toBeInTheDocument();
     });
 });
+
+describe("ModelToggle tone", () => {
+    it("uses the toolbar button colour for the default tone", () => {
+        render(
+            <ModelToggle
+                tone="default"
+                value="gemini-3-flash-preview"
+                onChange={vi.fn()}
+                apiKeys={keys({ gemini: true })}
+            />,
+        );
+
+        expect(screen.getByRole("button", { name: "Choose model" })).toHaveClass(
+            "text-gray-700",
+        );
+    });
+});

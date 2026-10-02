@@ -182,6 +182,7 @@ interface Props {
   vercelModels?: string[];
   openCodeGoModels?: string[];
   compact?: boolean;
+  tone?: "muted" | "default";
   /** Render as a full-width liquid-glass control inside a modal form. */
   modalInput?: boolean;
   onNoModelsClick?: (reason: NoModelsReason) => void;
@@ -251,6 +252,7 @@ export function ModelToggle({
   vercelModels = [],
   openCodeGoModels = [],
   compact = false,
+  tone,
   modalInput = false,
   onNoModelsClick,
   reasoningLevel,
@@ -309,6 +311,7 @@ export function ModelToggle({
       selectedAvailable={selected !== undefined}
       loading={apiKeysLoading}
       compact={compact}
+      tone={tone}
       modalInput={modalInput}
       emptyLabel="No Models"
       onEmptyClick={

@@ -59,6 +59,7 @@ import {
     type HeaderActionsMenuItem,
 } from "@/app/components/shared/HeaderActionsMenu";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
+import { RenameModal } from "@/app/components/modals/RenameModal";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
@@ -198,6 +199,8 @@ export function ChatView({
         title?: string;
         message?: string;
     } | null>(null);
+    const [renameOpen, setRenameOpen] = useState(false);
+    const [renaming, setRenaming] = useState(false);
     const [actionError, setActionError] = useState<{
         title: string;
         message: string;
@@ -920,14 +923,17 @@ export function ChatView({
             });
             return;
         }
-        const title = window.prompt(
-            "Rename chat",
-            activeChat.title?.trim() || "Untitled chat",
-        );
-        if (!title?.trim()) return;
+        setRenameOpen(true);
+    };
+
+    const handleRenameSave = async (title: string) => {
+        if (!activeChat) return;
+        setRenaming(true);
         try {
-            await renameChat(activeChat.id, title.trim());
+            await renameChat(activeChat.id, title);
+            setRenameOpen(false);
         } catch (error) {
+            setRenameOpen(false);
             setActionError({
                 title: "Chat not renamed",
                 message: userFacingApiError(
@@ -935,6 +941,8 @@ export function ChatView({
                     "The chat could not be renamed. Please try again.",
                 ),
             });
+        } finally {
+            setRenaming(false);
         }
     };
 
@@ -1333,6 +1341,17 @@ export function ChatView({
                         : "That API key"
                 } was rejected. If it is your own key, check it in Settings; otherwise contact your administrator.`}
                 onClose={() => onDismissInvalidApiKey?.()}
+            />
+            <RenameModal
+                open={renameOpen}
+                title="Rename chat"
+                label="Chat name"
+                initialValue={activeChat?.title?.trim() || "Untitled chat"}
+                saving={renaming}
+                onClose={() => {
+                    if (!renaming) setRenameOpen(false);
+                }}
+                onSave={(title) => void handleRenameSave(title)}
             />
             <WarningPopup
                 open={!!actionError}

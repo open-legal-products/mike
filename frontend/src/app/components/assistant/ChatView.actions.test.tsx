@@ -543,11 +543,15 @@ describe("ChatView header actions", () => {
     });
 
     it("renames and deletes the active chat", async () => {
-        vi.spyOn(window, "prompt").mockReturnValue("Renamed chat");
+        const prompt = vi.spyOn(window, "prompt");
         renderView();
 
         openActions();
         fireEvent.click(await screen.findByText("Rename"));
+        const input = await screen.findByRole("textbox", { name: "Chat name" });
+        fireEvent.change(input, { target: { value: "Renamed chat" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        expect(prompt).not.toHaveBeenCalled();
         await waitFor(() =>
             expect(renameChat).toHaveBeenCalledWith("chat-1", "Renamed chat"),
         );

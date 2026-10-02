@@ -588,7 +588,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     setIsDropdownOpen(!isDropdownOpen)
                                 }
                                 className={cn(
-                                    "flex h-12 w-full shrink-0 items-center rounded-xl px-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                                    "flex h-12 w-full shrink-0 items-center rounded-xl px-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
                                     !isOpen ? "hidden md:flex" : "",
                                     pathname.startsWith("/settings") ||
                                         pathname === "/history" ||
