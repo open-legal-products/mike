@@ -1,4 +1,3 @@
-import { resolveRequestTimeZone } from "../../lib/userTime";
 // Business logic + data-access for the project-chat module.
 //
 // Service layer behind projectChat.routes.ts. Takes an explicit Supabase client
@@ -10,6 +9,7 @@ import { resolveRequestTimeZone } from "../../lib/userTime";
 // is delicate. Only the pre-stream preparation lives here.
 
 import type { Db } from "../../lib/supabase";
+import { resolveRequestTimeZone } from "../../lib/userTime";
 import type { McpToolEvent } from "@mike/contracts";
 import {
     buildProjectDocContext,
@@ -512,6 +512,7 @@ export async function prepareProjectChatStream(
             "chat_messages",
             chatId,
             messagesForLLM,
+            !!args.askInputsResponse,
         );
         const apiMessages = buildMessages(
             messagesForLLM,

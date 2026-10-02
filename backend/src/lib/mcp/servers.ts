@@ -38,6 +38,7 @@ import {
     type Db,
     type McpConnectorAuthConfig,
     type McpConnectorSummary,
+    type ConnectorCallPlan,
     type McpToolEvent,
     type OAuthTokenRow,
     type ToolCacheRow,
@@ -540,11 +541,6 @@ function unavailableTool(
 
 const MAX_APPROVAL_ARGUMENT_CHARS = 200_000;
 
-export type McpToolPlan =
-    | { type: "run" }
-    | { type: "approval"; item: Omit<ConnectorApprovalItem, "id"> }
-    | { type: "result"; content: string; event: McpToolEvent };
-
 /**
  * Decides whether a call runs now or waits for the user's approval: a write
  * tool on a connector whose "Ask for permission for write actions" setting is
@@ -555,7 +551,7 @@ export async function planMcpToolCall(
     openaiToolName: string,
     args: Record<string, unknown>,
     db: Db = createServerSupabase(),
-): Promise<McpToolPlan> {
+): Promise<ConnectorCallPlan> {
     const resolved = await resolveCallableTool(userId, openaiToolName, db);
     if (!resolved) return { type: "result", ...unavailableTool(openaiToolName) };
     const { connector, tool } = resolved;

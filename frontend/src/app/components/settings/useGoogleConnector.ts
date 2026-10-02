@@ -22,15 +22,6 @@ import {
 
 export type GoogleConnectorProvider = "google-drive" | GoogleWorkspaceProvider;
 
-export const GOOGLE_CONNECTORS: {
-  provider: GoogleConnectorProvider;
-  name: string;
-}[] = [
-  { provider: "google-drive", name: "Google Drive" },
-  { provider: "gmail", name: "Gmail" },
-  { provider: "google-calendar", name: "Google Calendar" },
-];
-
 /** What the Settings page needs from Drive's and Workspace's status shapes. */
 export type GoogleConnectorStatus = {
   connected: boolean;
@@ -39,10 +30,7 @@ export type GoogleConnectorStatus = {
   enabled: boolean;
   requireWriteApproval?: boolean;
   readOnly?: boolean;
-  /** False when Google withheld write access. */
-  writeEnabled?: boolean;
   accountEmail?: string;
-  grantId?: string;
   tools: NativeConnectorTool[];
 };
 
@@ -100,8 +88,6 @@ export function useGoogleConnector(
   // "adding" covers the start request; "authorizing" the Google window.
   const [phase, setPhase] = useState<"idle" | "adding" | "authorizing">("idle");
   const abortRef = useRef<AbortController | null>(null);
-  const statusRef = useRef<GoogleConnectorStatus | null>(null);
-  statusRef.current = status;
   const api = connectorApi(provider);
 
   const refresh = useCallback(async () => {
@@ -139,9 +125,6 @@ export function useGoogleConnector(
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
-    const previousGrant = statusRef.current?.connected
-      ? (statusRef.current.grantId ?? "connected")
-      : null;
     // Open synchronously so the browser treats it as user-initiated.
     const popup = window.open(
       "about:blank",
@@ -180,10 +163,7 @@ export function useGoogleConnector(
         const next: GoogleConnectorStatus | null = await api
           .status()
           .catch(() => null);
-        if (
-          next?.connected &&
-          (next.grantId ?? "connected") !== previousGrant
-        ) {
+        if (next?.connected) {
           pending = null;
           setStatus(next);
           return next;

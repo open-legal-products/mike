@@ -43,7 +43,7 @@ export {
   buildProjectDocContext,
   buildMessages,
   loadUserMessageSentTimes,
-  stampUserMessageContent,
+  userMessageStamper,
   type MessageTimeContext,
   buildUserPersonalisationPrompt,
   buildWorkflowStore,

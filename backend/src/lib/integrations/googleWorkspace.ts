@@ -5,7 +5,7 @@ import type {
 } from "@mike/contracts";
 import { z } from "zod";
 import type { Db } from "../supabase";
-import type { McpToolEvent } from "../mcp/types";
+import type { ConnectorCallPlan, McpToolEvent } from "../mcp/types";
 import { safeError } from "../safeError";
 import {
   GOOGLE_PROVIDERS,
@@ -231,14 +231,6 @@ async function recheckWorkspaceWrite(
     throw new GoogleWorkspaceError("This Google action requires approval in the assistant.");
 }
 
-export type GoogleWorkspacePlan =
-  | { type: "run" }
-  | {
-      type: "approval";
-      item: Omit<ConnectorApprovalItem, "id">;
-    }
-  | { type: "result"; content: string; event: McpToolEvent };
-
 /**
  * Decides whether a call runs now or waits for the user's approval. For an
  * approval, the action is prepared (and the current state read) now, so the
@@ -249,7 +241,7 @@ export async function planGoogleWorkspaceCall(
   name: string,
   input: Record<string, unknown>,
   db: Db,
-): Promise<GoogleWorkspacePlan> {
+): Promise<ConnectorCallPlan> {
   const event = baseEvent(providerFor(name), name);
   try {
     const { provider, tool, args, grant } = await resolveCall(

@@ -201,6 +201,33 @@ describe("message time stamps", () => {
             await loadUserMessageSentTimes(db, "chat_messages", null, history),
         ).toEqual([null, null]);
     });
+
+    it("leaves an unsaved continuation message unstamped without shifting the rest", async () => {
+        const rows = [
+            { created_at: "2026-09-30T08:00:00Z" },
+            { created_at: "2026-10-01T13:04:00Z" },
+        ];
+        const query = {
+            select: () => query,
+            eq: () => query,
+            order: () => Promise.resolve({ data: rows, error: null }),
+        };
+        const db = { from: vi.fn(() => query) } as unknown as Db;
+        const continued = [
+            ...history,
+            { role: "assistant", content: "Which matter?" },
+            { role: "user", content: "The Acme one" },
+        ] as typeof history;
+        expect(
+            await loadUserMessageSentTimes(
+                db,
+                "chat_messages",
+                "chat-1",
+                continued,
+                true,
+            ),
+        ).toEqual(["2026-09-30T08:00:00Z", "2026-10-01T13:04:00Z", null]);
+    });
 });
 
 describe("resolveRequestTimeZone", () => {

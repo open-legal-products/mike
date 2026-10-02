@@ -460,8 +460,7 @@ export function buildMessages(
     }
   }
 
-  const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
-  let userIndex = 0;
+  const stamp = userMessageStamper(messages, time);
   for (const [index, msg] of messages.entries()) {
     let content = msg.content ?? "";
     if (msg.role === "user" && msg.workflow) {
@@ -482,17 +481,29 @@ export function buildMessages(
       });
       content = `[The user attached the following document(s) to this message:\n${lines.join("\n")}]\n\n${content}`;
     }
-    if (msg.role === "user" && time)
-      content = stampUserMessageContent(
-        content,
-        time,
-        userIndex,
-        index === lastUserIndex,
-      );
-    if (msg.role === "user") userIndex += 1;
-    formatted.push({ role: msg.role, content });
+    formatted.push({ role: msg.role, content: stamp(msg, index, content) });
   }
   return formatted;
+}
+
+/**
+ * Stamps a history's user messages in order. Call the returned function once
+ * per message, in order; it leaves other roles (and everything, when `time`
+ * is absent) unchanged.
+ */
+export function userMessageStamper(
+  messages: readonly { role: string }[],
+  time: MessageTimeContext | undefined,
+) {
+  const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
+  let userIndex = 0;
+  return (msg: { role: string }, index: number, content: string): string => {
+    if (msg.role !== "user") return content;
+    const position = userIndex++;
+    return time
+      ? stampUserMessageContent(content, time, position, index === lastUserIndex)
+      : content;
+  };
 }
 
 /**
@@ -500,7 +511,7 @@ export function buildMessages(
  * never change, so earlier turns stay byte-identical for prompt caching; only
  * the newest message may fall back to the current time.
  */
-export function stampUserMessageContent(
+function stampUserMessageContent(
   content: string,
   time: MessageTimeContext,
   userIndex: number,
@@ -529,12 +540,17 @@ export type MessageTimeContext = {
  * history, the database holds when each user message was saved (the current
  * one is saved before the prompt is built). Both are in order, so they are
  * aligned from the newest message back; unmatched older messages get null.
+ *
+ * A continuation (an ask-inputs answer or a connector approval) ends the
+ * history with a user message that is never stored. `latestUnsaved` leaves it
+ * null and aligns the stored times to the messages before it.
  */
 export async function loadUserMessageSentTimes(
   db: Db,
   messageTable: string,
   chatId: string | null | undefined,
   messages: readonly ChatMessage[],
+  latestUnsaved = false,
 ): Promise<(string | null)[]> {
   const userCount = messages.filter((m) => m.role === "user").length;
   const times: (string | null)[] = new Array(userCount).fill(null);
@@ -549,8 +565,9 @@ export async function loadUserMessageSentTimes(
   const stored = (data as { created_at?: unknown }[]).map((row) =>
     typeof row.created_at === "string" ? row.created_at : null,
   );
-  for (let k = 1; k <= Math.min(userCount, stored.length); k++) {
-    times[userCount - k] = stored[stored.length - k];
+  const savedCount = latestUnsaved ? userCount - 1 : userCount;
+  for (let k = 1; k <= Math.min(savedCount, stored.length); k++) {
+    times[savedCount - k] = stored[stored.length - k];
   }
   return times;
 }

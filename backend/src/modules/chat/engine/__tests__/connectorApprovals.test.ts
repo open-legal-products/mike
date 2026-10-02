@@ -201,6 +201,49 @@ describe("runApprovedConnectorActions", () => {
     expect(row.content.at(-1)).toMatchObject({ approval_id: "approve-gmail" });
   });
 
+  it("stores and returns a fixed message in place of a connector's raw error", async () => {
+    const { db, row } = messageDb([askEvent]);
+    await appendAskInputsResponseToAssistantMessage(
+      db,
+      "chat-1",
+      {
+        assistant_message_id: "assistant-1",
+        ask_event_id: "ask-1",
+        responses: [
+          { id: "approve-gmail", kind: "approval", decision: "reject" },
+          { id: "approve-slack", kind: "approval", decision: "approve" },
+        ],
+      },
+      "user-1",
+    );
+    mocks.mcp.mockResolvedValue({
+      content: "upstream said: token xoxb-secret rejected",
+      event: {
+        type: "mcp_tool_call",
+        connector_id: "c1",
+        connector_name: "Slack",
+        tool_name: "post",
+        openai_tool_name: "mcp_slack_post",
+        status: "error",
+        error: "upstream said: token xoxb-secret rejected",
+      },
+    });
+
+    const events = await runApprovedConnectorActions({
+      db,
+      chatId: "chat-1",
+      messageId: "assistant-1",
+      askEventId: "ask-1",
+      userId: "user-1",
+    });
+
+    expect(events[0].error).toBe("This tool could not complete its request.");
+    expect(row.content.at(-1)).toMatchObject({
+      status: "error",
+      error: "This tool could not complete its request.",
+    });
+  });
+
   it("runs nothing when there is no recorded decision", async () => {
     const { db } = messageDb([askEvent]);
     expect(

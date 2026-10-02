@@ -8,7 +8,7 @@ import {
     loadUserMessageSentTimes,
     parseOptionalModel,
     parseOptionalReasoning,
-    stampUserMessageContent,
+    userMessageStamper,
     type ChatMessage,
     type MessageTimeContext,
     type TabularCellStore,
@@ -146,20 +146,12 @@ Rules:
     }`;
 
     const formatted: unknown[] = [{ role: "system", content: systemContent }];
-    const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
-    let userIndex = 0;
+    const stamp = userMessageStamper(messages, time);
     for (const [index, msg] of messages.entries()) {
-        let content = msg.content ?? "";
-        if (msg.role === "user" && time) {
-            content = stampUserMessageContent(
-                content,
-                time,
-                userIndex,
-                index === lastUserIndex,
-            );
-        }
-        if (msg.role === "user") userIndex += 1;
-        formatted.push({ role: msg.role, content });
+        formatted.push({
+            role: msg.role,
+            content: stamp(msg, index, msg.content ?? ""),
+        });
     }
     return formatted;
 }

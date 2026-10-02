@@ -29,7 +29,12 @@ import {
 } from "../mcp/client";
 import { ConnectorSetupError } from "../mcp/errors";
 import type { Db } from "../supabase";
-import type { McpToolEvent } from "../mcp/types";
+import type { ConnectorCallPlan, McpToolEvent } from "../mcp/types";
+import {
+    connectorSettingsPatch,
+    toggleDisabledTool,
+    type NativeConnectorSettings,
+} from "./connectorSettings";
 import type {
     ConnectorApprovalItem,
     NativeConnectorTool,
@@ -40,6 +45,7 @@ import {
     parseDriveWrite,
     prepareDriveWrite,
     executeDriveWrite,
+    runDriveWrite,
     type DriveWriteSnapshot,
 } from "./googleDriveWrites";
 import { safeError } from "../safeError";
@@ -442,14 +448,10 @@ export async function getGoogleDriveStatus(
 /** Settings live on the token row, so they exist only while connected. */
 export async function updateGoogleDriveSettings(
     userId: string,
-    settings: { enabled?: boolean; requireWriteApproval?: boolean; readOnly?: boolean },
+    settings: NativeConnectorSettings,
     db: Db = createServerSupabase(),
 ): Promise<void> {
-    const patch: Record<string, unknown> = {};
-    if (typeof settings.enabled === "boolean") patch.enabled = settings.enabled;
-    if (typeof settings.readOnly === "boolean") patch.read_only = settings.readOnly;
-    if (typeof settings.requireWriteApproval === "boolean")
-        patch.require_write_approval = settings.requireWriteApproval;
+    const patch = connectorSettingsPatch(settings);
     if (!Object.keys(patch).length) return;
     const { data, error } = await db
         .from("user_google_drive_tokens")
@@ -472,14 +474,19 @@ export async function setGoogleDriveToolEnabled(
     const row = await loadTokenRow(userId, db);
     if (!row?.encrypted_access_token)
         throw new GoogleDriveUserError("Connect Google Drive first.");
-    const current = row.disabled_tools ?? [];
-    const next = enabled
-        ? current.filter((name) => name !== toolName)
-        : [...new Set([...current, toolName])];
-    const { error } = await db
+    const next = toggleDisabledTool(
+        row.disabled_tools ?? [],
+        toolName,
+        enabled,
+    );
+    // Scoped to the grant that was read, so a connection replaced in between
+    // does not inherit a list computed from the old one.
+    let update = db
         .from("user_google_drive_tokens")
         .update({ disabled_tools: next, updated_at: new Date().toISOString() })
         .eq("user_id", userId);
+    if (row.grant_id) update = update.eq("grant_id", row.grant_id);
+    const { error } = await update;
     if (error) throw error;
 }
 
@@ -972,11 +979,7 @@ export async function planGoogleDriveCall(
     name: string,
     input: Record<string, unknown>,
     db: Db,
-): Promise<
-    | { type: "run" }
-    | { type: "approval"; item: Omit<ConnectorApprovalItem, "id"> }
-    | { type: "result"; content: string; event: McpToolEvent }
-> {
+): Promise<ConnectorCallPlan> {
     if (!driveWriteTool(name)) return { type: "run" };
     try {
         const { tool, args, row } = await resolveDriveWrite(
@@ -1124,8 +1127,7 @@ export async function executeGoogleDriveToolCall(
                 );
             const grantId = row.grant_id!;
             const token = await getAccessToken(userId, db, grantId);
-            const action = await prepareDriveWrite(toolName, parsed, token);
-            const data = await executeDriveWrite(action, token, () =>
+            const data = await runDriveWrite(toolName, parsed, token, () =>
                 recheckDriveWrite(userId, toolName, parsed, db, grantId, false),
             );
             return {

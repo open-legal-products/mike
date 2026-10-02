@@ -4,11 +4,16 @@
 alter table public.user_google_drive_tokens
   add column if not exists account_email text;
 
+-- The one definition of this function for the connector changes in
+-- 20261001_01 and 20261002_01: it reads the merged OAuth state table, rotates
+-- grant_id on reconnect, and records the account. Connection replacement and
+-- disconnect serialize on the owning auth row, and state is consumed in the
+-- same transaction as the token write, so a cancelled, expired or replayed
+-- callback cannot recreate a connection after disconnect.
 create or replace function public.complete_google_drive_oauth(p_state_hash text, p_tokens jsonb)
 returns boolean language plpgsql security definer set search_path = '' as $$
 declare
   v_user_id uuid;
-  v_consumed uuid;
 begin
   select user_id into v_user_id from public.google_workspace_oauth_states
     where state_hash = p_state_hash and provider = 'google-drive';
@@ -17,8 +22,7 @@ begin
   if not found then return false; end if;
   delete from public.google_workspace_oauth_states
     where state_hash = p_state_hash and provider = 'google-drive'
-      and user_id = v_user_id and expires_at > now()
-    returning user_id into v_consumed;
+      and user_id = v_user_id and expires_at > now();
   if not found then return false; end if;
   insert into public.user_google_drive_tokens (
     user_id, account_email, encrypted_access_token, access_token_iv, access_token_tag,

@@ -1,4 +1,3 @@
-import { resolveRequestTimeZone } from "../../lib/userTime";
 // Business logic + data-access for the word-chat module.
 //
 // Service layer behind wordChat.routes.ts. Every function takes an explicit
@@ -14,6 +13,7 @@ import { resolveRequestTimeZone } from "../../lib/userTime";
 
 import { randomUUID } from "node:crypto";
 import type { Db } from "../../lib/supabase";
+import { resolveRequestTimeZone } from "../../lib/userTime";
 import {
   beginMemoryConversationTurn,
   releaseMemoryConversationTurn,

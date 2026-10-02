@@ -121,6 +121,14 @@ describe("Drive write access", () => {
     expect(vi.mocked(fetch).mock.calls.every(([,init]) => !init?.method || init.method === "GET")).toBe(true);
   });
 
+  it("reads a file's state once for a write that needs no approval", async () => {
+    const s = store();
+    const result = await executeGoogleDriveToolCall("user-1", "google_drive_update_file", { file_id: "file-1", name: "Changed" }, s.db);
+    expect(result.event.status).toBe("ok");
+    expect(mutations()).toHaveLength(1);
+    expect(calls.length - mutations().length).toBe(1);
+  });
+
   it("discovers all write tools only with a full grant, honoring settings", async () => {
     const s = store();
     const names = async () =>

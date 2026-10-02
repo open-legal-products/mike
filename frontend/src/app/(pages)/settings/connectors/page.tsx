@@ -553,7 +553,8 @@ export default function ConnectorsPage() {
       } else if (
         action.type === "save" ||
         action.type === "google-update" ||
-        action.type === "write-approval"
+        action.type === "write-approval" ||
+        action.type === "read-only"
       )
         setDetailError(message);
       else setError(message);
@@ -1468,18 +1469,13 @@ export default function ConnectorsPage() {
         connector={selectedGoogleView}
         busyKey={busyKey}
         toolsLoading={false}
-        reconnecting={selectedGoogle?.phase === "authorizing"}
-        onClose={() => {
-          selectedGoogle?.cancel();
-          setSelectedGoogleProvider(null);
-        }}
+        onClose={() => setSelectedGoogleProvider(null)}
         onRefresh={() =>
           selectedGoogle &&
           void runGoogleUpdate(`refresh:${selectedGoogle.provider}`, () =>
             selectedGoogle.refresh().then(() => undefined),
           )
         }
-        onCancelReconnect={() => selectedGoogle?.cancel()}
         onDelete={() =>
           selectedGoogle && void handleDeleteGoogle(selectedGoogle)
         }

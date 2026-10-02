@@ -1,4 +1,3 @@
-import { resolveRequestTimeZone } from "../../lib/userTime";
 // chat prepare — implementation behind the module facade.
 // Business logic + data-access for the chat module.
 //
@@ -14,6 +13,7 @@ import { resolveRequestTimeZone } from "../../lib/userTime";
 // DB preparation live here. `prepareChatStream` returns the prepared data the
 // route needs to run the stream; it does not stream.
 import { type Db } from "../../lib/supabase";
+import { resolveRequestTimeZone } from "../../lib/userTime";
 import { buildDocContext, buildMessages, buildUserPersonalisationPrompt, devLog, enrichWithPriorEvents, loadUserMessageSentTimes, buildWorkflowStore, appendAskInputsResponseToAssistantMessage, runApprovedConnectorActions, generateSpotlightNonce, type AskInputsResponseRequest, type ChatMessage } from "./engine/index";
 import type { McpToolEvent } from "@mike/contracts";
 import { getUserModelSettings, resolveUserChatSelection } from "../user/user.service";
@@ -407,6 +407,7 @@ export async function prepareChatStream(
             "chat_messages",
             chatId,
             enrichedMessages,
+            !!args.askInputsResponse,
         );
         const apiMessages = buildMessages(
             enrichedMessages,

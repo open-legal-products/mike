@@ -190,6 +190,17 @@ export async function prepareDriveWrite(
   return { name, args, before, etag };
 }
 
+/** Run a write the user did not review: read the current state once, then send. */
+export async function runDriveWrite(
+  name: string,
+  input: unknown,
+  token: string,
+  beforeWrite: () => Promise<void>,
+) {
+  const current = await prepareDriveWrite(name, input, token);
+  return sendDriveWrite(current, token, beforeWrite);
+}
+
 /** Recheck reviewed versions before writing. If Google supplies an ETag, also
  * use its HTTP precondition to cover edits between the check and the write. */
 export async function executeDriveWrite(
@@ -211,7 +222,15 @@ export async function executeDriveWrite(
         "This Drive file or destination changed after it was reviewed. Read it again and review a new action.",
       );
   }
-  const { name, args, before } = current;
+  return sendDriveWrite({ ...current, etag: action.etag }, token, beforeWrite);
+}
+
+async function sendDriveWrite(
+  action: DriveWriteAction,
+  token: string,
+  beforeWrite: () => Promise<void>,
+) {
+  const { name, args, before } = action;
   const filePath = `/files/${encodeURIComponent(String(args.file_id))}`;
   let path = filePath;
   let method = "PATCH";

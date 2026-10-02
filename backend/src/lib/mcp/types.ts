@@ -43,7 +43,17 @@ export type McpToolSummary = {
 };
 
 export type { McpToolEvent } from "@mike/contracts";
-import type { McpToolEvent } from "@mike/contracts";
+import type { ConnectorApprovalItem, McpToolEvent } from "@mike/contracts";
+
+/**
+ * What to do with a connector tool call: run it now, pause for the user's
+ * approval, or answer without running (the tool is unavailable or failed to
+ * prepare). Shared by MCP, Google Workspace and Google Drive.
+ */
+export type ConnectorCallPlan =
+    | { type: "run" }
+    | { type: "approval"; item: Omit<ConnectorApprovalItem, "id"> }
+    | { type: "result"; content: string; event: McpToolEvent };
 
 export type ConnectorRow = {
     id: string;

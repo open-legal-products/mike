@@ -1400,4 +1400,22 @@ describe("Connector read-only mode", () => {
         expect(screen.getByText("Connector update failed")).toBeVisible();
         expect(screen.queryByText("private backend detail")).not.toBeInTheDocument();
     });
+
+    it("shows a failed MCP save in the dialog", async () => {
+        const mcp = makeSummary({ name: "Slack", serverUrl: "https://mcp.slack.com/mcp", readOnly: false });
+        vi.mocked(listMcpConnectors).mockResolvedValue([mcp]);
+        vi.mocked(getMcpConnector).mockResolvedValue(mcp);
+        vi.mocked(updateMcpConnector).mockRejectedValue(new Error("private backend detail"));
+        render(<ConnectorsPage />);
+        await act(flushMicrotasks);
+        await act(async () => {
+            fireEvent.click(within(screen.getByRole("region", { name: "Installed" })).getByRole("button", { name: "Manage Slack" }));
+            await flushMicrotasks();
+        });
+        const toggle = within(screen.getByRole("dialog")).getByRole("switch", { name: "Read-only" });
+        await act(async () => { fireEvent.click(toggle); await flushMicrotasks(); });
+        expect(toggle).toHaveAttribute("aria-checked", "false");
+        expect(screen.getByText("Connector update failed")).toBeVisible();
+        expect(screen.queryByText("private backend detail")).not.toBeInTheDocument();
+    });
 });

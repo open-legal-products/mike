@@ -13,6 +13,11 @@ import {
 import { googleDriveOAuthEnv } from "./googleDrive";
 import { ConnectorSetupError } from "../mcp/errors";
 import { googleDriveRequest } from "./googleDriveHttp";
+import {
+  connectorSettingsPatch,
+  toggleDisabledTool,
+  type NativeConnectorSettings,
+} from "./connectorSettings";
 
 export type GoogleProvider = GoogleWorkspaceProvider;
 export const GOOGLE_PROVIDERS = {
@@ -166,13 +171,9 @@ export async function updateWorkspaceSettings(
   db: Db,
   userId: string,
   provider: GoogleProvider,
-  settings: { enabled?: boolean; requireWriteApproval?: boolean; readOnly?: boolean },
+  settings: NativeConnectorSettings,
 ) {
-  const patch: Record<string, unknown> = {};
-  if (typeof settings.enabled === "boolean") patch.enabled = settings.enabled;
-  if (typeof settings.readOnly === "boolean") patch.read_only = settings.readOnly;
-  if (typeof settings.requireWriteApproval === "boolean")
-    patch.require_write_approval = settings.requireWriteApproval;
+  const patch = connectorSettingsPatch(settings);
   if (!Object.keys(patch).length) return;
   const { data, error } = await db
     .from("user_google_workspace_tokens")
@@ -199,12 +200,11 @@ export async function setWorkspaceToolEnabled(
     throw new GoogleWorkspaceError(
       `Connect ${GOOGLE_PROVIDERS[provider].name} first.`,
     );
-  const current = Array.isArray(row.disabled_tools)
-    ? (row.disabled_tools as string[])
-    : [];
-  const next = enabled
-    ? current.filter((name) => name !== toolName)
-    : [...new Set([...current, toolName])];
+  const next = toggleDisabledTool(
+    Array.isArray(row.disabled_tools) ? (row.disabled_tools as string[]) : [],
+    toolName,
+    enabled,
+  );
   const { error } = await db
     .from("user_google_workspace_tokens")
     .update({ disabled_tools: next })

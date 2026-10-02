@@ -29,6 +29,7 @@ import {
   type EditAnnotation,
   devLog,
   resolveDocLabel,
+  TOOL_ERROR_MESSAGE,
 } from "./types";
 import {
   TOOLS,
@@ -91,7 +92,6 @@ export class AssistantStreamError extends Error {
 
 export const ASSISTANT_ERROR_MESSAGE =
   "The response could not be completed. Please try again.";
-const TOOL_ERROR_MESSAGE = "This tool could not complete its request.";
 
 /**
  * What to tell the client about a failed stream.

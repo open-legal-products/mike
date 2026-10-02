@@ -15,6 +15,7 @@ import type {
   McpToolEvent,
 } from "@mike/contracts";
 import type { Db } from "../../../../lib/supabase";
+import type { ConnectorCallPlan } from "../../../../lib/mcp/types";
 import {
   planGoogleDriveCall,
   executeApprovedGoogleDriveCall,
@@ -32,14 +33,10 @@ import {
   appendAssistantEventsToMessage,
   loadAssistantMessage,
 } from "../contextBuilders";
+import { TOOL_ERROR_MESSAGE } from "../types";
 
 /** Tool output replayed to the model after an approved call, per call. */
 export const MAX_APPROVAL_RESULT_CHARS = 4_000;
-
-export type ConnectorCallPlan =
-  | { type: "run" }
-  | { type: "approval"; item: Omit<ConnectorApprovalItem, "id"> }
-  | { type: "result"; content: string; event: McpToolEvent };
 
 /** All writable connectors share the same assistant approval flow. */
 export async function planConnectorToolCall(
@@ -106,8 +103,11 @@ export async function runApprovedConnectorActions(args: {
           ? await executeApprovedGoogleDriveCall(userId, item, db)
           : await executeApprovedGoogleWorkspaceCall(userId, item, db)
         : await executeApprovedMcpToolCall(userId, item, db);
+    // These events are stored and streamed outside runLLMStream, so apply its
+    // rule here: the user never sees a connector's raw error text.
     events.push({
       ...event,
+      ...(event.error ? { error: TOOL_ERROR_MESSAGE } : {}),
       approval_id: item.id,
       result: result.slice(0, MAX_APPROVAL_RESULT_CHARS),
     });
