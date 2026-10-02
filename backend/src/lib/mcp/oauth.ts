@@ -622,6 +622,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
             typeof tokens.expires_in === "number" ? tokens.expires_in : null;
         const row = {
             connector_id: this.connector.id,
+            ...(this.mode === "initiate" ? { grant_id: crypto.randomUUID() } : {}),
             ...tokenSecretPatch("access_token", tokens.access_token),
             ...tokenSecretPatch(
                 "refresh_token",

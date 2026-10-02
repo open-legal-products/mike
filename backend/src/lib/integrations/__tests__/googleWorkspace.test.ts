@@ -1,22 +1,26 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
+import type { ConnectorApprovalItem } from "@mike/contracts";
 import { workspaceDb } from "./googleWorkspaceDb";
+import { ConnectorSetupError } from "../../mcp/errors";
 import {
+  GOOGLE_PROVIDERS,
   startWorkspaceOAuth,
   completeWorkspaceOAuth,
   cancelWorkspaceOAuth,
   disconnectWorkspace,
   workspaceStatus,
   workspaceAccessToken,
-  requiredScopes,
-  encryptFields,
+  requestedScopes,
   decryptFields,
+  updateWorkspaceSettings,
+  setWorkspaceToolEnabled,
 } from "../googleWorkspaceAuth";
 import {
   buildGoogleWorkspaceTools,
+  executeApprovedGoogleWorkspaceCall,
   executeGoogleWorkspaceToolCall,
-  approveWorkspaceAction,
-  listWorkspaceActions,
-  rejectWorkspaceAction,
+  planGoogleWorkspaceCall,
+  workspaceConnectorStatus,
 } from "../googleWorkspace";
 import {
   parseWorkspaceTool,
@@ -43,6 +47,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+/** The scope string Google returns, with or without the write permission. */
+function grantedScope(
+  provider: "gmail" | "google-calendar",
+  write: boolean,
+): string {
+  const config = GOOGLE_PROVIDERS[provider];
+  return [...config.read, ...(write ? config.write : [])].join(" ");
+}
 async function connected(
   write = false,
   provider: "gmail" | "google-calendar" = "gmail",
@@ -53,14 +65,13 @@ async function connected(
     "u1",
     provider,
     "http://localhost:3000/api/callback",
-    write,
   );
   fetchMock
     .mockResolvedValueOnce(
       json({
         access_token: "access-secret",
         refresh_token: "refresh-secret",
-        scope: requiredScopes(provider, write).join(" "),
+        scope: grantedScope(provider, write),
         expires_in: 3600,
       }),
     )
@@ -86,15 +97,11 @@ const email = {
   subject: "Test email",
   body: "Test body",
 };
-async function proposal(store: ReturnType<typeof workspaceDb>) {
-  const result = await executeGoogleWorkspaceToolCall(
-    "u1",
-    "gmail_propose_send",
-    email,
-    store.db,
-  );
-  expect(JSON.parse(result.content).data.status).toBe("awaiting_approval");
-  return String(store.tables.google_workspace_actions.at(-1)!.id);
+async function approvalFor(store: ReturnType<typeof workspaceDb>) {
+  store.tables.user_google_workspace_tokens[0].require_write_approval = true;
+  const plan = await planGoogleWorkspaceCall("u1", "gmail_send", email, store.db);
+  if (plan.type !== "approval") throw new Error(`expected approval: ${plan.type}`);
+  return { ...plan.item, id: "approval-1" } as ConnectorApprovalItem;
 }
 
 describe("Google Workspace opt-in and OAuth", () => {
@@ -108,7 +115,7 @@ describe("Google Workspace opt-in and OAuth", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
   it.each(["gmail", "google-calendar"] as const)(
-    "requests only read permissions by default and always offers account choice: %s",
+    "requests read and write permissions and always offers account choice: %s",
     async (provider) => {
       const store = workspaceDb();
       const { authorizationUrl } = await startWorkspaceOAuth(
@@ -119,7 +126,10 @@ describe("Google Workspace opt-in and OAuth", () => {
       );
       const url = new URL(authorizationUrl);
       expect(url.searchParams.get("scope")?.split(" ")).toEqual(
-        requiredScopes(provider, false),
+        requestedScopes(provider),
+      );
+      expect(url.searchParams.get("scope")).toContain(
+        GOOGLE_PROVIDERS[provider].write[0],
       );
       expect(url.searchParams.get("prompt")).toBe("select_account consent");
       expect(url.searchParams.has("login_hint")).toBe(false);
@@ -127,9 +137,6 @@ describe("Google Workspace opt-in and OAuth", () => {
       expect(url.searchParams.get("access_type")).toBe("offline");
       expect(JSON.stringify(store.tables)).not.toContain(
         url.searchParams.get("state"),
-      );
-      expect(store.tables.google_workspace_oauth_states[0].write_enabled).toBe(
-        false,
       );
     },
   );
@@ -149,9 +156,16 @@ describe("Google Workspace opt-in and OAuth", () => {
   it("does not mix credentials from an incomplete dedicated profile", async () => {
     vi.stubEnv("GOOGLE_WORKSPACE_OAUTH_CLIENT_SECRET", "");
     vi.stubEnv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", "other-secret");
-    await expect(
-      startWorkspaceOAuth(workspaceDb().db, "u", "gmail", "http://localhost"),
-    ).rejects.toThrow("Configure");
+    const started = startWorkspaceOAuth(
+      workspaceDb().db,
+      "u",
+      "gmail",
+      "https://mike.test/callback",
+    );
+    await expect(started).rejects.toBeInstanceOf(ConnectorSetupError);
+    await expect(started).rejects.toThrow(
+      /Gmail needs an OAuth client.*https:\/\/mike\.test\/callback/,
+    );
   });
   it("rejects cross-provider and cancelled states before contacting Google", async () => {
     const s = workspaceDb();
@@ -182,7 +196,6 @@ describe("Google Workspace opt-in and OAuth", () => {
         "attacker",
         provider,
         "https://mike.test/api/callback",
-        false,
       );
       const state = new URL(authorizationUrl).searchParams.get("state")!;
       await expect(
@@ -193,28 +206,37 @@ describe("Google Workspace opt-in and OAuth", () => {
       expect(s.tables.google_workspace_oauth_states).toHaveLength(1);
     },
   );
-  it("rejects missing write scopes and never saves a partial grant", async () => {
+  it.each(["gmail", "google-calendar"] as const)(
+    "connects %s read-only when Google withholds write access",
+    async (provider) => {
+      const s = await connected(false, provider);
+      expect(await workspaceStatus(s.db, "u1", provider)).toMatchObject({
+        connected: true,
+        writeEnabled: false,
+      });
+    },
+  );
+  it("rejects missing read scopes and never saves a partial grant", async () => {
     const s = workspaceDb();
     const start = await startWorkspaceOAuth(
       s.db,
       "u1",
-      "gmail",
+      "google-calendar",
       "https://mike.test",
-      true,
     );
     fetchMock.mockResolvedValueOnce(
       json({
         access_token: "a",
         refresh_token: "r",
         expires_in: 3600,
-        scope: requiredScopes("gmail", false).join(" "),
+        scope: "https://www.googleapis.com/auth/calendar.events",
       }),
     );
     await expect(
       completeWorkspaceOAuth(
         s.db,
         "u1",
-        "gmail",
+        "google-calendar",
         new URL(start.authorizationUrl).searchParams.get("state")!,
         "code",
       ),
@@ -236,7 +258,7 @@ describe("Google Workspace opt-in and OAuth", () => {
           access_token: "a",
           refresh_token: "r",
           expires_in: 3600,
-          scope: requiredScopes("gmail", false).join(" "),
+          scope: grantedScope("gmail", false),
         });
       })
       .mockResolvedValueOnce(
@@ -291,7 +313,104 @@ describe("Google Workspace opt-in and OAuth", () => {
   });
 });
 
-describe("Google action approval boundary", () => {
+describe("Google connector settings", () => {
+  it.each(["gmail", "google-calendar"] as const)("read-only overrides %s writes and restores individual choices", async (provider) => {
+    const s = await connected(true, provider);
+    const definitions = WORKSPACE_TOOLS.filter(t => t.provider === provider);
+    const write = definitions.find(t => t.write)!;
+    const read = definitions.find(t => !t.write)!;
+    await setWorkspaceToolEnabled(s.db, "u1", provider, write.name, false);
+    await updateWorkspaceSettings(s.db, "u1", provider, { readOnly: true });
+    const status = await workspaceConnectorStatus(s.db, "u1", provider);
+    expect(status.readOnly).toBe(true);
+    expect(status.tools.filter(t => t.write).every(t => !t.enabled)).toBe(true);
+    expect(status.tools.find(t => t.name === read.name)?.enabled).toBe(true);
+    const names = JSON.stringify(await buildGoogleWorkspaceTools("u1", s.db));
+    expect(names).toContain(read.name);
+    for (const t of definitions.filter(t => t.write)) expect(names).not.toContain(t.name);
+    await updateWorkspaceSettings(s.db, "u1", provider, { readOnly: false });
+    const restored = await workspaceConnectorStatus(s.db, "u1", provider);
+    expect(restored.readOnly).toBe(false);
+    expect(restored.tools.find(t => t.name === write.name)?.enabled).toBe(false);
+    expect(restored.tools.some(t => t.write && t.enabled)).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("blocks direct Gmail writes when read-only is set", async () => {
+    const s = await connected(true);
+    await updateWorkspaceSettings(s.db, "u1", "gmail", { readOnly: true });
+    expect((await planGoogleWorkspaceCall("u1", "gmail_send", email, s.db)).type).toBe("result");
+    const result = await executeGoogleWorkspaceToolCall("u1", "gmail_send", email, s.db);
+    expect(result.event.status).toBe("error");
+    expect(result.content).toContain("read-only");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lists every tool with its write flag and on/off state", async () => {
+    const s = await connected(true);
+    await setWorkspaceToolEnabled(s.db, "u1", "gmail", "gmail_send", false);
+    const status = await workspaceConnectorStatus(s.db, "u1", "gmail");
+    expect(status).toMatchObject({ enabled: true, requireWriteApproval: false });
+    expect(status.tools.find((t) => t.name === "gmail_send")).toMatchObject({
+      title: "Send email",
+      write: true,
+      enabled: false,
+    });
+    expect(status.tools.find((t) => t.name === "gmail_search")).toMatchObject({
+      write: false,
+      enabled: true,
+    });
+    expect(status.tools.every((t) => !t.name.startsWith("google_calendar"))).toBe(
+      true,
+    );
+  });
+  it("hides and refuses a turned-off connection or tool", async () => {
+    const s = await connected(true);
+    await setWorkspaceToolEnabled(s.db, "u1", "gmail", "gmail_send", false);
+    const names = JSON.stringify(await buildGoogleWorkspaceTools("u1", s.db));
+    expect(names).not.toContain("gmail_send");
+    expect(names).toContain("gmail_search");
+    expect(
+      (await executeGoogleWorkspaceToolCall("u1", "gmail_send", email, s.db))
+        .event.status,
+    ).toBe("error");
+    await updateWorkspaceSettings(s.db, "u1", "gmail", { enabled: false });
+    expect(await buildGoogleWorkspaceTools("u1", s.db)).toEqual([]);
+    expect(
+      (
+        await executeGoogleWorkspaceToolCall(
+          "u1",
+          "gmail_search",
+          { query: "x" },
+          s.db,
+        )
+      ).event.status,
+    ).toBe("error");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("rechecks read-only after Calendar metadata loads and before mutation", async () => {
+    const s = await connected(true, "google-calendar");
+    fetchMock.mockImplementationOnce(async () => {
+      s.tables.user_google_workspace_tokens[0].read_only = true;
+      return json({ id: "event-1", etag: '"v1"', summary: "Before", start: { date: "2026-10-03" }, end: { date: "2026-10-04" } });
+    });
+    const result = await executeGoogleWorkspaceToolCall("u1", "google_calendar_update_event", {
+      event_id: "event-1", summary: "After", start: { date: "2026-10-03" }, end: { date: "2026-10-04" },
+    }, s.db);
+    expect(result.event.status).toBe("error");
+    expect(result.content).toContain("read-only");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]?.method ?? "GET").toBe("GET");
+  });
+  it("requires a connection before saving settings", async () => {
+    await expect(
+      updateWorkspaceSettings(workspaceDb().db, "u1", "gmail", {
+        enabled: false,
+      }),
+    ).rejects.toThrow("Connect Gmail first");
+  });
+});
+
+describe("Google write access", () => {
   it.each([
     ["gmail", false],
     ["google-calendar", false],
@@ -305,126 +424,125 @@ describe("Google action approval boundary", () => {
         function: { name: string; description: string };
       }>;
       expect(tools.length).toBeGreaterThan(0);
-      expect(
-        tools.some((tool) => tool.function.name.includes("_propose_")),
-      ).toBe(write);
+      const writeNames = WORKSPACE_TOOLS.filter(
+        (t) => t.provider === provider && t.write,
+      ).map((t) => t.name);
+      expect(tools.some((t) => writeNames.includes(t.function.name))).toBe(
+        write,
+      );
       for (const tool of tools) {
-        expect(tool.function.description).toContain(
-          "approval in the Assistant conversation",
-        );
-        if (write) {
-          expect(tool.function.description).toContain(
-            "Write access is enabled",
-          );
+        expect(tool.function.description).not.toContain("propos");
+        if (write)
           expect(tool.function.description).not.toContain(
             "connection is read-only",
           );
-        } else {
+        else
           expect(tool.function.description).toContain(
-            "connection is read-only",
+            "reconnect it in Settings → Connectors",
           );
-          expect(tool.function.description).toContain(
-            "Manage → Enable writes with approval",
-          );
-          expect(tool.function.description).toContain(
-            "user can do this themselves",
-          );
-        }
       }
     },
   );
-  it("hides write tools by default and rejects fabricated direct calls including a model approval flag", async () => {
+  it("hides write tools on a read-only grant and rejects fabricated direct calls including a model approval flag", async () => {
     const s = await connected();
     const tools = await buildGoogleWorkspaceTools("u1", s.db);
-    expect(JSON.stringify(tools)).not.toContain("gmail_propose");
+    expect(JSON.stringify(tools)).not.toContain("gmail_send");
     const result = await executeGoogleWorkspaceToolCall(
       "u1",
-      "gmail_propose_send",
+      "gmail_send",
       email,
       s.db,
     );
     expect(result.event.status).toBe("error");
-    expect(s.tables.google_workspace_actions).toHaveLength(0);
+    expect(result.event.error).toContain("did not grant write access");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(() =>
-      parseWorkspaceTool("gmail_propose_send", { ...email, approved: true }),
+      parseWorkspaceTool("gmail_send", { ...email, approved: true }),
     ).toThrow("Invalid");
   });
-  it("only persists an encrypted proposal until approved, then sends exactly once", async () => {
+  it("runs a write directly when the connection does not ask for permission", async () => {
     const s = await connected(true);
-    const id = await proposal(s);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(JSON.stringify(s.tables.google_workspace_actions)).not.toContain(
-      "recipient@example.com",
-    );
-    expect(await listWorkspaceActions(s.db, "u2")).toEqual([]);
-    expect((await listWorkspaceActions(s.db, "u1"))[0].proposal.args).toEqual(
-      email,
-    );
+    expect(
+      await planGoogleWorkspaceCall("u1", "gmail_send", email, s.db),
+    ).toEqual({ type: "run" });
     fetchMock.mockResolvedValueOnce(json({ id: "sent-id" }));
-    const results = await Promise.allSettled([
-      approveWorkspaceAction(s.db, "u1", id),
-      approveWorkspaceAction(s.db, "u1", id),
-    ]);
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const result = await executeGoogleWorkspaceToolCall(
+      "u1",
+      "gmail_send",
+      email,
+      s.db,
+    );
+    expect(result.event.status).toBe("ok");
+    expect(JSON.parse(result.content)).toMatchObject({
+      ok: true,
+      data: { id: "sent-id" },
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toContain("/messages/send");
-    expect(s.tables.google_workspace_actions[0].status).toBe("succeeded");
   });
-  it.each(["wrong-user", "expired", "rejected", "disconnected", "replaced"])(
-    "blocks %s proposals without sending",
+  it("plans an approval bound to the grant without sending, then sends exactly what was reviewed", async () => {
+    const s = await connected(true);
+    const item = await approvalFor(s);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(item).toMatchObject({
+      kind: "approval",
+      connector_name: "Gmail",
+      title: "Send email",
+      arguments: email,
+      account: "different-google-account@example.com",
+      binding: {
+        type: "google",
+        provider: "gmail",
+        grant_id: s.tables.user_google_workspace_tokens[0].grant_id,
+      },
+    });
+    // Reads never wait for approval.
+    expect(
+      await planGoogleWorkspaceCall("u1", "gmail_search", { query: "x" }, s.db),
+    ).toEqual({ type: "run" });
+    fetchMock.mockResolvedValueOnce(json({ id: "sent-id" }));
+    const result = await executeApprovedGoogleWorkspaceCall("u1", item, s.db);
+    expect(result.event).toMatchObject({ status: "ok", approval_id: "approval-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const raw = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).raw;
+    expect(Buffer.from(raw, "base64url").toString()).toContain(
+      "recipient@example.com",
+    );
+  });
+  it.each(["wrong-user", "disconnected", "replaced", "read-only", "read-only-mode", "tool-off"])(
+    "refuses an approved action whose connection is %s without sending",
     async (kind) => {
       const s = await connected(true);
-      const id = await proposal(s);
-      if (kind === "expired")
-        s.tables.google_workspace_actions[0].expires_at = "2000-01-01";
-      if (kind === "rejected") await rejectWorkspaceAction(s.db, "u1", id);
-      if (kind === "disconnected")
-        await disconnectWorkspace(s.db, "u1", "gmail");
-      if (kind === "replaced")
-        s.tables.user_google_workspace_tokens[0].grant_id = "new";
-      await expect(
-        approveWorkspaceAction(s.db, kind === "wrong-user" ? "u2" : "u1", id),
-      ).rejects.toThrow("proposal");
+      const item = await approvalFor(s);
+      const grant = s.tables.user_google_workspace_tokens[0];
+      if (kind === "disconnected") await disconnectWorkspace(s.db, "u1", "gmail");
+      if (kind === "replaced") grant.grant_id = "new";
+      if (kind === "read-only") grant.write_enabled = false;
+      if (kind === "read-only-mode") grant.read_only = true;
+      if (kind === "tool-off") grant.disabled_tools = ["gmail_send"];
+      const result = await executeApprovedGoogleWorkspaceCall(
+        kind === "wrong-user" ? "u2" : "u1",
+        item,
+        s.db,
+      );
+      expect(result.event.status).toBe("error");
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
-  it("keeps an uncertain send consumed instead of retrying it", async () => {
+  it("reports an uncertain send instead of retrying it or leaking provider text", async () => {
     const s = await connected(true);
-    const id = await proposal(s);
     fetchMock.mockRejectedValueOnce(
       new Error("provider response lost with secret"),
     );
-    expect(await approveWorkspaceAction(s.db, "u1", id)).toMatchObject({
-      status: "uncertain",
-    });
-    await expect(approveWorkspaceAction(s.db, "u1", id)).rejects.toThrow(
-      "proposal",
+    const result = await executeGoogleWorkspaceToolCall(
+      "u1",
+      "gmail_send",
+      email,
+      s.db,
     );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(s.tables)).not.toContain("provider response lost");
-  });
-  it("does not call Google when the claim transaction fails", async () => {
-    const s = await connected(true);
-    const id = await proposal(s);
-    s.failures.set("claim_google_workspace_action", new Error("database"));
-    await expect(approveWorkspaceAction(s.db, "u1", id)).rejects.toThrow();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-  it("does not replay when recording the outcome fails", async () => {
-    const s = await connected(true);
-    const id = await proposal(s);
-    fetchMock.mockResolvedValueOnce(json({ id: "sent" }));
-    s.failures.set(
-      "google_workspace_actions:update",
-      new Error("db write failed"),
-    );
-    await expect(approveWorkspaceAction(s.db, "u1", id)).rejects.toThrow(
-      "will not run again",
-    );
-    await expect(approveWorkspaceAction(s.db, "u1", id)).rejects.toThrow(
-      "proposal",
-    );
+    expect(result.event.status).toBe("error");
+    expect(result.event.error).toContain("uncertain");
+    expect(result.content).not.toContain("provider response lost");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -494,7 +612,7 @@ describe("Gmail and Calendar API behavior", () => {
   });
   it("rejects header injection, unsafe IDs, and unexpected fields", () => {
     expect(() =>
-      parseWorkspaceTool("gmail_propose_send", {
+      parseWorkspaceTool("gmail_send", {
         ...email,
         to: ["a@example.com\r\nBcc:b@example.com"],
       }),
@@ -503,7 +621,7 @@ describe("Gmail and Calendar API behavior", () => {
       parseWorkspaceTool("gmail_read_message", { message_id: ".." }),
     ).toThrow();
     expect(() =>
-      parseWorkspaceTool("gmail_propose_send", {
+      parseWorkspaceTool("gmail_send", {
         ...email,
         subject: "hello\r\nFrom:evil",
       }),
@@ -514,7 +632,7 @@ describe("Gmail and Calendar API behavior", () => {
     await executeWorkspaceAction(
       "gmail",
       {
-        tool: "gmail_propose_send",
+        tool: "gmail_send",
         args: {
           ...email,
           subject: "Résumé",
@@ -541,7 +659,7 @@ describe("Gmail and Calendar API behavior", () => {
     );
     const action = await prepareWorkspaceAction(
       "google-calendar",
-      "google_calendar_propose_update",
+      "google_calendar_update_event",
       args,
       "t",
     );
@@ -564,7 +682,7 @@ describe("Gmail and Calendar API behavior", () => {
       executeWorkspaceAction(
         "google-calendar",
         {
-          tool: "google_calendar_propose_delete",
+          tool: "google_calendar_delete_event",
           args: { calendar_id: "primary", event_id: "e" },
           etag: "v1",
         },
@@ -577,7 +695,7 @@ describe("Gmail and Calendar API behavior", () => {
     await expect(
       prepareWorkspaceAction(
         "google-calendar",
-        "google_calendar_propose_delete",
+        "google_calendar_delete_event",
         { calendar_id: "primary", event_id: "e" },
         "t",
       ),
@@ -587,7 +705,7 @@ describe("Gmail and Calendar API behavior", () => {
     await expect(
       prepareWorkspaceAction(
         "google-calendar",
-        "google_calendar_propose_create",
+        "google_calendar_create_event",
         { start: { date: "2026-09-25" }, end: { date: "2026-09-24" } },
         "t",
       ),
@@ -595,7 +713,7 @@ describe("Gmail and Calendar API behavior", () => {
     await expect(
       prepareWorkspaceAction(
         "google-calendar",
-        "google_calendar_propose_create",
+        "google_calendar_create_event",
         { start: { date: "2026-02-30" }, end: { date: "2026-03-04" } },
         "t",
       ),
@@ -606,7 +724,7 @@ describe("Gmail and Calendar API behavior", () => {
     fetchMock.mockResolvedValueOnce(json({ id: "m" }));
     await executeWorkspaceAction(
       "gmail",
-      { tool: "gmail_propose_trash", args: { message_id: "m" } },
+      { tool: "gmail_trash", args: { message_id: "m" } },
       "t",
     );
     expect(String(fetchMock.mock.calls[0][0])).toContain("/messages/m/trash");
@@ -618,7 +736,7 @@ describe("Gmail and Calendar API behavior", () => {
 });
 
 describe("additional Google service regression coverage", () => {
-  it("keeps broad returned scopes read-only unless the OAuth attempt opted into writes", async () => {
+  it("records write access from the scopes Google granted", async () => {
     const s = workspaceDb();
     const start = await startWorkspaceOAuth(
       s.db,
@@ -650,11 +768,11 @@ describe("additional Google service regression coverage", () => {
       "code",
     );
     expect((await workspaceStatus(s.db, "u1", "gmail")).writeEnabled).toBe(
-      false,
+      true,
     );
     expect(
       JSON.stringify(await buildGoogleWorkspaceTools("u1", s.db)),
-    ).not.toContain("gmail_propose");
+    ).toContain("gmail_send");
   });
   it("uses the exact encrypted PKCE verifier and redirect, and rejects an unverified account", async () => {
     const s = workspaceDb();
@@ -677,7 +795,7 @@ describe("additional Google service regression coverage", () => {
           access_token: "a",
           refresh_token: "r",
           expires_in: 3600,
-          scope: requiredScopes("gmail", false).join(" "),
+          scope: grantedScope("gmail", false),
         });
       })
       .mockResolvedValueOnce(
@@ -769,7 +887,7 @@ describe("additional Google service regression coverage", () => {
         expect(value).toMatchObject({ truncated: true });
     },
   );
-  it.each(["gmail_propose_save_draft", "gmail_propose_delete_draft"] as const)(
+  it.each(["gmail_save_draft", "gmail_delete_draft"] as const)(
     "prepares %s without modifying the draft and rejects stale versions",
     async (name) => {
       fetchMock.mockResolvedValueOnce(
@@ -778,7 +896,7 @@ describe("additional Google service regression coverage", () => {
       const action = await prepareWorkspaceAction(
         "gmail",
         name,
-        name === "gmail_propose_save_draft"
+        name === "gmail_save_draft"
           ? { ...email, draft_id: "d" }
           : { draft_id: "d" },
         "token",
@@ -810,7 +928,7 @@ describe("additional Google service regression coverage", () => {
       await expect(
         prepareWorkspaceAction(
           "gmail",
-          "gmail_propose_save_draft",
+          "gmail_save_draft",
           { ...email, draft_id: "d" },
           "token",
         ),
@@ -821,7 +939,7 @@ describe("additional Google service regression coverage", () => {
         executeWorkspaceAction(
           "gmail",
           {
-            tool: "gmail_propose_save_draft",
+            tool: "gmail_save_draft",
             args: { ...email, draft_id: "d" },
             before: { message: { id: "m", historyId: "h" } },
           },
@@ -847,24 +965,24 @@ describe("additional Google service regression coverage", () => {
     await expect(
       prepareWorkspaceAction(
         "gmail",
-        "gmail_propose_save_draft",
+        "gmail_save_draft",
         { ...email, draft_id: "d" },
         "token",
       ),
     ).rejects.toThrow("attachments");
   });
   it.each([
-    ["gmail", "gmail_propose_save_draft", email, "POST", "/drafts"],
+    ["gmail", "gmail_save_draft", email, "POST", "/drafts"],
     [
       "gmail",
-      "gmail_propose_modify",
+      "gmail_modify_labels",
       { message_id: "m", add_label_ids: ["UNREAD"], remove_label_ids: [] },
       "POST",
       "/messages/m/modify",
     ],
     [
       "google-calendar",
-      "google_calendar_propose_create",
+      "google_calendar_create_event",
       {
         calendar_id: "primary",
         summary: "Meeting",
@@ -876,7 +994,7 @@ describe("additional Google service regression coverage", () => {
     ],
     [
       "google-calendar",
-      "google_calendar_propose_delete",
+      "google_calendar_delete_event",
       { calendar_id: "primary", event_id: "e" },
       "DELETE",
       "/calendars/primary/events/e",
@@ -906,15 +1024,15 @@ describe("additional Google service regression coverage", () => {
     await expect(
       prepareWorkspaceAction(
         "gmail",
-        "gmail_propose_modify",
+        "gmail_modify_labels",
         { message_id: "m", add_label_ids: ["TRASH"], remove_label_ids: [] },
         "t",
       ),
-    ).rejects.toThrow("Trash proposal");
+    ).rejects.toThrow("gmail_trash");
     await expect(
       prepareWorkspaceAction(
         "gmail",
-        "gmail_propose_modify",
+        "gmail_modify_labels",
         {
           message_id: "m",
           add_label_ids: ["INBOX"],
@@ -929,7 +1047,7 @@ describe("additional Google service regression coverage", () => {
     await executeWorkspaceAction(
       "gmail",
       {
-        tool: "gmail_propose_send",
+        tool: "gmail_send",
         accountEmail: "chosen@example.com",
         args: { ...email, subject: "😀".repeat(100) },
       },

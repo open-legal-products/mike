@@ -5,6 +5,7 @@ import { readSseFrames } from "@/app/lib/sse";
 import { isPanelDocument } from "@/app/components/shared/types";
 import type { AssistantEvent, Citation } from "@/app/components/shared/types";
 import type { AssistantTurnHandle } from "@/app/lib/assistantTurns";
+import type { ConnectorApprovalItem } from "@mike/contracts";
 
 /**
  * Reading an assistant turn's SSE stream into its turn record.
@@ -52,6 +53,45 @@ function readableStreamError(value: unknown, safeToDisplay: boolean): string {
     return value.trim();
   }
   return "Sorry, something went wrong.";
+}
+
+function isConnectorApprovalItem(
+  item: Record<string, unknown>,
+): item is ConnectorApprovalItem {
+  if (
+    item.kind !== "approval" ||
+    !["id", "connector_name", "tool_name", "title"].every(
+      (key) => typeof item[key] === "string" && item[key].trim(),
+    ) ||
+    !item.arguments ||
+    typeof item.arguments !== "object" ||
+    Array.isArray(item.arguments) ||
+    (item.account !== undefined && typeof item.account !== "string") ||
+    !item.binding ||
+    typeof item.binding !== "object" ||
+    Array.isArray(item.binding)
+  ) {
+    return false;
+  }
+  const binding = item.binding as Record<string, unknown>;
+  if (binding.type === "mcp") {
+    return (
+      typeof binding.connector_id === "string" &&
+      !!binding.connector_id.trim() &&
+      typeof binding.tool_id === "string" &&
+      !!binding.tool_id.trim() &&
+      (binding.connection_fingerprint === undefined ||
+        (typeof binding.connection_fingerprint === "string" &&
+          /^[a-f0-9]{64}$/.test(binding.connection_fingerprint)))
+    );
+  }
+  return (
+    binding.type === "google" &&
+    (binding.provider === "gmail" || binding.provider === "google-calendar" || binding.provider === "google-drive") &&
+    typeof binding.grant_id === "string" &&
+    !!binding.grant_id.trim() &&
+    (binding.etag === undefined || typeof binding.etag === "string")
+  );
 }
 
 function parseCourtlistenerEventCases(value: unknown) {
@@ -177,6 +217,14 @@ export function createTurnEventSink(
     publish();
   };
 
+  // A turn that failed outside an error frame (the request was refused, or
+  // the connection broke for good): nothing is still running, so no
+  // "Thinking…" line or in-progress step may keep spinning beside the error.
+  const endStreamingAfterFailure = () => {
+    eventsRef.current = cancelStreamingEvents(eventsRef.current);
+    publish();
+  };
+
   const clearStreamingPlaceholders = () => {
     const before = eventsRef.current;
     const after = before.filter((e) => !isStreamingPlaceholder(e));
@@ -229,6 +277,7 @@ export function createTurnEventSink(
     finalizeStreamingContent,
     finalizeStreamingReasoning,
     clearStreamingPlaceholders,
+    endStreamingAfterFailure,
     pushThinkingPlaceholder,
     pushEvent,
     updateMatchingEvent,
@@ -553,9 +602,9 @@ export async function consumeAssistantTurnStream(
                 typeof data.error === "string"
                   ? (data.error as string)
                   : undefined,
-              google_action_id:
-                typeof data.google_action_id === "string"
-                  ? (data.google_action_id as string)
+              approval_id:
+                typeof data.approval_id === "string"
+                  ? (data.approval_id as string)
                   : undefined,
               isStreaming: false,
             }),
@@ -822,6 +871,13 @@ export async function consumeAssistantTurnStream(
           >((acc, item, index) => {
             if (!item || typeof item !== "object") return acc;
             const row = item as Record<string, unknown>;
+            if (row.kind === "approval") {
+              // The dispatcher creates approvals independently of the model's
+              // questions. Keep their exact IDs and reviewed action data so a
+              // live pause renders the same prompt as restored chat history.
+              if (isConnectorApprovalItem(row)) acc.push(row);
+              return acc;
+            }
             const id =
               typeof row.id === "string" && row.id.trim()
                 ? row.id.trim()

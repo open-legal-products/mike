@@ -493,7 +493,7 @@ export function DocumentSidePanel({
                 className="absolute inset-y-0 left-0 z-20 hidden w-1 cursor-col-resize bg-transparent transition-colors hover:bg-blue-400/60 md:block"
                 title="Resize document view"
             />
-            <div className="flex shrink-0 justify-end px-3 py-2 md:absolute md:right-3 md:top-3.5 md:z-20 md:p-0">
+            <div className="flex shrink-0 justify-end px-3 py-2 md:absolute md:right-3 md:top-3 md:z-20 md:p-0">
                 <div className="flex shrink-0 items-center gap-1.5">
                     <div className="flex h-7 items-center rounded-full bg-gray-200/70 p-0.5 md:hidden">
                         <button

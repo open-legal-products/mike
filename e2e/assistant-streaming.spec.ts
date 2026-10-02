@@ -105,7 +105,6 @@ for (const scope of ["assistant", "project", "tabular"] as const) {
                         }));
                     }
                     if (path === "/api/chat") return json([chat]);
-                    if (path === "/api/user/google-actions") return json({ actions: [] });
                     return json([]);
                 };
             }, { streamKind, scope });

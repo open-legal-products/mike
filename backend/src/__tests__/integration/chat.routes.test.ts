@@ -8,7 +8,7 @@ import {
     textStep,
     tick,
 } from "../../lib/llm/__tests__/mockLanguageModel";
-import type { AssistantEvent } from "@mike/contracts";
+import type { AssistantEvent, ConnectorApprovalItem } from "@mike/contracts";
 
 // #383's model-selection describes grew this file past the chat limiter's
 // 30-requests-per-window budget, so the last describe began answering 429
@@ -83,6 +83,23 @@ vi.mock("../../lib/llm/providers", async (importOriginal) => ({
 vi.mock("../../lib/mcpConnectors", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../lib/mcpConnectors")>()),
     buildUserMcpTools: vi.fn(async () => []),
+}));
+
+const { executeApprovedGoogleWorkspaceCall } = vi.hoisted(() => ({
+    executeApprovedGoogleWorkspaceCall: vi.fn(),
+}));
+
+const { executeApprovedGoogleDriveCall } = vi.hoisted(() => ({
+    executeApprovedGoogleDriveCall: vi.fn(),
+}));
+vi.mock("../../lib/integrations/googleDrive", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/integrations/googleDrive")>()),
+    executeApprovedGoogleDriveCall,
+}));
+
+vi.mock("../../lib/integrations/googleWorkspace", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/integrations/googleWorkspace")>()),
+    executeApprovedGoogleWorkspaceCall,
 }));
 
 beforeEach(() => {
@@ -560,6 +577,45 @@ describe("POST /chat — streaming endpoint", () => {
     });
     expect(scheduleMemoryConsolidation).toHaveBeenCalledTimes(1);
     expect(releaseMemoryConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("gives the model the browser's time zone and today's date", async () => {
+    const chatLib = await import("../../modules/chat/engine/index.js");
+    runLLMStream.mockResolvedValue({
+      fullText: "hi",
+      events: [{ type: "content", text: "hi" }],
+      citations: [],
+    });
+    const res = await request(app)
+      .post("/chat")
+      .set("Authorization", "Bearer test")
+      .send({ ...VALID_BODY, time_zone: "Europe/London" });
+    expect(res.status).toBe(200);
+    const call = vi.mocked(chatLib.buildMessages).mock.calls.at(-1)!;
+    const time = call[7] as { timeZone: string; now: Date; userSentAt: unknown[] };
+    expect(time.timeZone).toBe("Europe/London");
+    expect(time.now).toBeInstanceOf(Date);
+    expect(time.userSentAt).toHaveLength(1);
+    // buildMessages is stubbed in this file; run the real one on the
+    // arguments the route passed.
+    const actual = await vi.importActual<
+      typeof import("../../modules/chat/engine/contextBuilders")
+    >("../../modules/chat/engine/contextBuilders");
+    const [system, user] = actual.buildMessages(
+      ...(call as Parameters<typeof actual.buildMessages>),
+    ) as { content: string }[];
+    expect(system.content).toContain("MESSAGE TIMES:");
+    expect(user.content).toMatch(/^\[Sent: .+ \(Europe\/London\)\]\nhello$/);
+
+    const invalid = await request(app)
+      .post("/chat")
+      .set("Authorization", "Bearer test")
+      .send({ ...VALID_BODY, time_zone: "Not/AZone" });
+    expect(invalid.status).toBe(200);
+    expect(
+      (vi.mocked(chatLib.buildMessages).mock.calls.at(-1)![7] as { timeZone: string })
+        .timeZone,
+    ).toBe("UTC");
   });
 
   it("stops before streaming or scheduling when the user message is not durable", async () => {
@@ -1486,6 +1542,100 @@ describe("POST /chat — streaming endpoint", () => {
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
     });
+
+    it.each([
+        ["google-calendar", "approve"], ["google-calendar", "reject"],
+        ["google-drive", "approve"], ["google-drive", "reject"],
+    ] as const)(
+        "resumes a %s approval through the chat route with a %s decision",
+        async (provider, decision) => {
+            const execute = provider === "google-drive" ? executeApprovedGoogleDriveCall : executeApprovedGoogleWorkspaceCall;
+            const approval: ConnectorApprovalItem = {
+                id: "calendar-approval",
+                kind: "approval",
+                connector_name: provider === "google-drive" ? "Google Drive" : "Google Calendar",
+                tool_name: provider === "google-drive" ? "google_drive_update_file" : "google_calendar_update_event",
+                title: "Move meeting",
+                arguments: provider === "google-drive" ? { file_id: "file-1", name: "Final" } : {
+                    calendar_id: "primary",
+                    event_id: "event-1",
+                    start: { dateTime: "2026-10-01T15:00:00+08:00" },
+                },
+                binding: {
+                    type: "google",
+                    provider,
+                    grant_id: "reviewed-grant",
+                    etag: "reviewed-version",
+                },
+            };
+            const row = {
+                id: "assistant-existing",
+                chat_id: "chat-1",
+                role: "assistant",
+                content: [{ type: "ask_inputs", event_id: "ask-1", items: [approval] }],
+                citations: null,
+                author_user_id: "u1",
+                created_at: "2026-01-01T00:00:00Z",
+            };
+            dbControl.assistantMessageRows = [row];
+            execute.mockResolvedValue({
+                content: '{"ok":true,"data":{"id":"event-1"}}',
+                event: {
+                    type: "mcp_tool_call",
+                    connector_id: "google-calendar-native",
+                    connector_name: "Google Calendar",
+                    tool_name: approval.tool_name,
+                    openai_tool_name: approval.tool_name,
+                    status: "ok",
+                },
+            });
+            const response = { id: approval.id, kind: "approval", decision };
+            const body = {
+                ...VALID_BODY,
+                chat_id: "chat-1",
+                ask_inputs_response: {
+                    assistant_message_id: row.id,
+                    ask_event_id: "ask-1",
+                    responses: [{ ...response, arguments: { event_id: "unreviewed-event" } }],
+                },
+            };
+            const res = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(body);
+
+            expect(res.status).toBe(200);
+            expect(res.text).not.toContain('"type":"error"');
+            expect(res.text).toContain("data: [DONE]");
+            expect(runLLMStream).toHaveBeenCalledTimes(1);
+            expect(row.content).toContainEqual(expect.objectContaining({
+                type: "ask_inputs_response",
+                responses: [response],
+            }));
+            if (decision === "approve") {
+                expect(execute).toHaveBeenCalledExactlyOnceWith(
+                    "u1", approval, expect.anything(),
+                );
+                expect(row.content).toContainEqual(expect.objectContaining({
+                    type: "mcp_tool_call", approval_id: approval.id, status: "ok",
+                }));
+                expect(res.text).toContain('"type":"mcp_tool_result"');
+            } else {
+                expect(execute).not.toHaveBeenCalled();
+                expect(res.text).not.toContain('"type":"mcp_tool_result"');
+            }
+
+            const retry = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(body);
+            expect(retry.status).toBe(409);
+            expect(retry.body.code).toBe("ask_inputs_stale");
+            expect(execute).toHaveBeenCalledTimes(
+                decision === "approve" ? 1 : 0,
+            );
+        },
+    );
 
     it("does not allocate or insert a new assistant message for an ask-input continuation", async () => {
     dbControl.assistantMessageRows = [

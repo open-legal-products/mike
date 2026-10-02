@@ -467,7 +467,12 @@ export function TRSidePanel({
                             )}
                         </button>
                     )}
-                    <CloseButton onClick={onClose} label="Close panel" />
+                    {/* 12px from the top, like the document panel's close. */}
+                    <CloseButton
+                        onClick={onClose}
+                        label="Close panel"
+                        className="mt-3 self-start"
+                    />
                 </div>
 
                 {/* Analysis panel */}

@@ -397,6 +397,18 @@ export async function getProjectDirectoryLevel(
   );
 }
 
+/**
+ * The task pane's IANA time zone (e.g. "Europe/London"), sent with chat
+ * requests so the assistant knows the user's local date and time.
+ */
+function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function streamWordChat(payload: {
   messages: {
     role: string;
@@ -425,7 +437,7 @@ export async function streamWordChat(payload: {
       Accept: "text/event-stream",
       ...authHeaders,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
     signal,
   });
 }

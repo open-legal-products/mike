@@ -928,7 +928,10 @@ describe("leaving a project chat mid-stream", () => {
         await waitFor(() =>
             expect(
                 completedRow.querySelector("img[aria-hidden='true']"),
-            ).toHaveClass("hue-rotate-[285deg]"),
+            ).toHaveAttribute(
+                "src",
+                expect.stringContaining("features/chat-complete"),
+            ),
         );
         // ...and nothing from it lands in the thread now on screen.
         expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();

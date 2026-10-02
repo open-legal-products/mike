@@ -265,6 +265,7 @@ export function resumeAssistantTurn(
         sink.appendCancellation();
         return;
       }
+      sink.endStreamingAfterFailure();
       handle.update((message) => ({
         ...message,
         error: "Sorry, something went wrong.",

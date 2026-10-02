@@ -31,7 +31,6 @@ test("tabular chat keeps the latest of sixteen selections when long histories ar
             if (path === "/api/user/profile") return json({ onboardingComplete: true, displayName: "Synthetic", apiKeyStatus: {}, creditsRemaining: 100 });
             if (path === "/api/models/configured") return json({ models: [{ id: "test-model", label: "Test model", source: "Configured" }] });
             if (path.startsWith("/api/models/")) return json({ models: [] });
-            if (path === "/api/user/google-actions") return json({ actions: [] });
             if (path === "/api/tabular-review/history-stress") return json({
                 review: { id: "history-stress", title: "History stress", columns_config: [], model: "test-model", is_owner: true, access_role: "owner" },
                 cells: [], rows: [], documents: [],

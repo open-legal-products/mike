@@ -44,7 +44,6 @@ const PUBLIC_TABLES = [
   "tabular_reviews",
   "user_api_keys",
   "user_google_drive_tokens",
-  "google_drive_oauth_states",
   "user_google_workspace_tokens",
   "google_workspace_oauth_states",
   "google_workspace_actions",

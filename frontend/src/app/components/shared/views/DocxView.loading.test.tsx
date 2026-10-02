@@ -133,8 +133,8 @@ it("activates the native revision without painting word highlights", async () =>
         quotes={[{ quote: "Payment in thirty days." }, { quote: "Confidential information." }]}
         highlightEdit={{ key: "edit-8", ins_w_id: "8", inserted_text: "Repeated edit" }} />);
     await screen.findByText("EigenPal preview");
+    await waitFor(() => expect(activateRevision).toHaveBeenCalledWith({ ins: "8", del: undefined }));
     expect(container.querySelectorAll(".docx-text-highlight")).toHaveLength(0);
-    expect(activateRevision).toHaveBeenCalledWith({ ins: "8", del: undefined });
     expect(container.querySelector(".docx-edit-flash")).toBeNull();
     expect(selectText).not.toHaveBeenCalled();
 });

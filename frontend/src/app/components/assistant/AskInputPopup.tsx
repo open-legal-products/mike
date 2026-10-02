@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Check, X } from "lucide-react";
+import { CloseButton } from "@/shared/ui/CloseButton";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import type { AssistantEvent, Document, MessageFile } from "../shared/types";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
+import { ConnectorActionCard } from "../shared/ConnectorActionCard";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 import {
     LIQUID_GLASS_SUBTLE_CLASS,
@@ -22,6 +24,9 @@ type AskInputsResponse = Extract<
     AssistantEvent,
     { type: "ask_inputs_response" }
 >;
+type ApprovalDecision = "approve" | "reject";
+/** A decision made by the handler that is about to submit, before its state lands. */
+type PendingDecision = { id: string; decision: ApprovalDecision };
 
 const OPEN_TEXT_MAX_LENGTH = 5_000;
 
@@ -86,6 +91,7 @@ export function AskInputPopup({
 
     const itemAnswered = useCallback(
         (item: AskInputItem) => {
+            if (item.kind === "approval") return !!answers[item.id];
             if (item.kind === "multi_choice") {
                 return (
                     (multiAnswers[item.id]?.length ?? 0) > 0 ||
@@ -224,8 +230,26 @@ export function AskInputPopup({
 
     // `pendingSkipId` covers the item being skipped by the very handler that
     // triggers the submit — its `skipped` state update hasn't landed yet.
-    const buildResponse = (pendingSkipId?: string): AskInputsResponse => {
+    const buildResponse = (
+        pendingSkipId?: string,
+        pendingDecision?: PendingDecision,
+    ): AskInputsResponse => {
         const responses = event.items.map((item) => {
+            if (item.kind === "approval") {
+                const decision =
+                    pendingDecision?.id === item.id
+                        ? pendingDecision.decision
+                        : answers[item.id];
+                // Only an explicit approval runs the action.
+                return {
+                    id: item.id,
+                    kind: "approval" as const,
+                    decision:
+                        decision === "approve"
+                            ? ("approve" as const)
+                            : ("reject" as const),
+                };
+            }
             if (skipped.has(item.id) || item.id === pendingSkipId) {
                 if (item.kind === "documents") {
                     return {
@@ -314,7 +338,16 @@ export function AskInputPopup({
     };
 
     const buildContent = (response: AskInputsResponse) => {
+        const itemsById = new Map(event.items.map((item) => [item.id, item]));
         const lines = response.responses.map((item, index) => {
+            if (item.kind === "approval") {
+                const asked = itemsById.get(item.id);
+                const action =
+                    asked?.kind === "approval"
+                        ? `${asked.title} (${asked.connector_name})`
+                        : "Connector action";
+                return `${index + 1}. ${item.decision === "approve" ? "Approved" : "Rejected"}: ${action}`;
+            }
             if (item.kind === "multi_choice") {
                 if (item.skipped)
                     return `${index + 1}. Skipped: ${item.question}`;
@@ -328,17 +361,31 @@ export function AskInputPopup({
             if (item.skipped) return `${index + 1}. Skipped document request.`;
             return `${index + 1}. Documents attached: ${item.filenames.join(", ")}`;
         });
-        return `Responses to Mike's questions:\n${lines.join("\n\n")}`;
+        const onlyApprovals = response.responses.every(
+            (item) => item.kind === "approval",
+        );
+        return `${onlyApprovals ? "Decisions on Mike's requested actions" : "Responses to Mike's questions"}:\n${lines.join("\n\n")}`;
     };
 
     // Called straight from the handler that resolves the last outstanding
     // item. It used to run from an effect with no dependency array, which
     // re-ran after every render and double-fired under StrictMode.
-    const submit = (pendingSkipId?: string) => {
+    const submit = (
+        pendingSkipId?: string,
+        pendingDecision?: PendingDecision,
+    ) => {
         if (submitted || !onSubmit) return;
-        const response = buildResponse(pendingSkipId);
+        const response = buildResponse(pendingSkipId, pendingDecision);
         setSubmitted(true);
         onSubmit(response, buildContent(response), responseFiles(response));
+    };
+
+    const decide = (id: string, decision: ApprovalDecision) => {
+        if (submitted) return;
+        setAnswers((prev) => ({ ...prev, [id]: decision }));
+        setConfirmed((prev) => new Set(prev).add(id));
+        goToNextUnresolved(id);
+        if (!firstUnresolvedId(id)) submit(undefined, { id, decision });
     };
 
     const dismiss = useCallback(() => {
@@ -366,7 +413,7 @@ export function AskInputPopup({
             <div
                 className={`w-full overflow-hidden rounded-[18px] pb-3 font-serif md:rounded-[22px] ${LIQUID_GLASS_TRANSLUCENT_CLASS}`}
             >
-                <div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2">
+                <div className="flex min-w-0 items-center justify-between gap-2 px-3 pt-3 pb-2">
                     <div className="flex min-w-0 items-center">
                         <div className="text-sm text-gray-500">
                             {submitted ? (
@@ -380,7 +427,9 @@ export function AskInputPopup({
                                         const label =
                                             item.kind === "documents"
                                                 ? "Documents"
-                                                : "Question";
+                                                : item.kind === "approval"
+                                                  ? "Approval"
+                                                  : "Question";
                                         return (
                                             <TabPillButtonUI
                                                 key={item.id}
@@ -405,14 +454,11 @@ export function AskInputPopup({
                         </div>
                     </div>
                     {!submitted && (
-                        <TabPillButtonUI
-                            type="button"
+                        <CloseButton
                             onClick={dismiss}
-                            aria-label="Dismiss"
-                            className="h-6 w-6 shrink-0 px-0"
-                        >
-                            <X className="h-3 w-3" />
-                        </TabPillButtonUI>
+                            label="Dismiss"
+                            size="md"
+                        />
                     )}
                 </div>
 
@@ -422,12 +468,17 @@ export function AskInputPopup({
                             <div>
                                 <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0 flex-1">
-                                        {activeItem.kind !== "documents" ? (
+                                        {activeItem.kind === "documents" ? (
+                                            <DocumentPrompt />
+                                        ) : activeItem.kind === "approval" ? (
+                                            <p className="text-sm text-gray-800">
+                                                Mike wants to run this action.
+                                                Approve it to run it now.
+                                            </p>
+                                        ) : (
                                             <p className="text-sm text-gray-800">
                                                 {activeItem.question}
                                             </p>
-                                        ) : (
-                                            <DocumentPrompt />
                                         )}
                                     </div>
                                 </div>
@@ -528,6 +579,12 @@ export function AskInputPopup({
                                                     );
                                             }}
                                         />
+                                    ) : activeItem.kind === "approval" ? (
+                                        <div className="mt-2 max-h-72 overflow-y-auto rounded-lg bg-gray-100/70 px-3 py-2">
+                                            <ConnectorActionCard
+                                                item={activeItem}
+                                            />
+                                        </div>
                                     ) : activeItem.kind === "text" ? (
                                         <OpenTextInput
                                             item={activeItem}
@@ -579,7 +636,47 @@ export function AskInputPopup({
                                     )}
                                 </div>
                             </div>
-                            {!submitted && (
+                            {!submitted && activeItem.kind === "approval" && (
+                                <div className="mt-auto flex items-center justify-end gap-2 pt-3">
+                                    <PillButtonUI
+                                        tone="white"
+                                        size="xs"
+                                        type="button"
+                                        aria-pressed={
+                                            answers[activeItem.id] === "reject"
+                                        }
+                                        onClick={() =>
+                                            decide(activeItem.id, "reject")
+                                        }
+                                        className="font-sans"
+                                    >
+                                        Reject
+                                    </PillButtonUI>
+                                    <PillButtonUI
+                                        tone="black"
+                                        size="xs"
+                                        type="button"
+                                        aria-pressed={
+                                            answers[activeItem.id] === "approve"
+                                        }
+                                        onClick={() =>
+                                            decide(activeItem.id, "approve")
+                                        }
+                                        className="font-sans"
+                                    >
+                                        {answers[activeItem.id] ===
+                                        "approve" ? (
+                                            <>
+                                                Approved
+                                                <Check className="h-3 w-3" />
+                                            </>
+                                        ) : (
+                                            "Approve"
+                                        )}
+                                    </PillButtonUI>
+                                </div>
+                            )}
+                            {!submitted && activeItem.kind !== "approval" && (
                                 <div className="mt-auto flex items-center justify-end gap-2 pt-3">
                                     <button
                                         type="button"

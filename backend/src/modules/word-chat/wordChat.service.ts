@@ -13,6 +13,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { Db } from "../../lib/supabase";
+import { resolveRequestTimeZone } from "../../lib/userTime";
 import {
   beginMemoryConversationTurn,
   releaseMemoryConversationTurn,
@@ -26,6 +27,7 @@ import {
   buildWordChatSystemPrompt,
   buildWorkflowStore,
   enrichWithPriorEvents,
+  loadUserMessageSentTimes,
   generateSpotlightNonce,
   withoutEmptyAssistantReservations,
   type ChatMessage,
@@ -587,6 +589,8 @@ export async function prepareWordChatStream(
     requestedModel: string | null | undefined;
     requestedReasoning:
       ReturnType<typeof resolveEffectiveReasoningLevel> | undefined;
+    /** The task pane's IANA time zone; unvalidated request input. */
+    requestedTimeZone?: unknown;
   },
 ): Promise<
   | { ok: true; prepared: PreparedWordChatStream }
@@ -767,6 +771,7 @@ export async function prepareWordChatStream(
       })),
     ];
     const nonce = generateSpotlightNonce(persistChat ? chatId : null);
+    const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
     const enrichedMessages = await enrichWithPriorEvents(
       messages,
       persistChat ? chatId : null,
@@ -774,6 +779,7 @@ export async function prepareWordChatStream(
       docIndex,
       nonce,
       "word_chat_messages",
+      timeZone,
     );
     const { api_keys: configuredApiKeys, personalisation } = modelSettings;
     const apiKeys = { ...configuredApiKeys };
@@ -788,6 +794,14 @@ export async function prepareWordChatStream(
     ]
       .filter(Boolean)
       .join("\n\n");
+    // A local-only chat stores no messages, so only its newest message is
+    // stamped (with the current time).
+    const userSentAt = await loadUserMessageSentTimes(
+      db,
+      "word_chat_messages",
+      persistChat ? chatId : null,
+      enrichedMessages,
+    );
     const apiMessages = buildMessages(
       enrichedMessages,
       docAvailability,
@@ -796,6 +810,7 @@ export async function prepareWordChatStream(
       false,
       nonce,
       "replace",
+      { timeZone, now: new Date(), userSentAt },
     );
     const workflowStore = await buildWorkflowStore(userId, userEmail, db);
 

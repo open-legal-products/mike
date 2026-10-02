@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Message } from "@/app/components/shared/types";
+import type { ConnectorApprovalItem } from "@mike/contracts";
 import { streamChatTurn } from "./mikeApi";
 import { beginAssistantTurn } from "./assistantTurns";
 import {
@@ -573,7 +574,7 @@ describe("MCP tool frames", () => {
     ]);
   });
 
-  it("keeps the Google action id a result names, so the approval card can render", async () => {
+  it("keeps the approval id a result names, so the timeline can tie it to its decision", async () => {
     expect(
       await eventsOf([
         { type: "mcp_tool_start", name: "gmail__send" },
@@ -583,7 +584,7 @@ describe("MCP tool frames", () => {
           connector_name: "Gmail",
           tool_name: "send",
           status: "ok",
-          google_action_id: "action-1",
+          approval_id: "approve-1",
         },
       ]),
     ).toEqual([
@@ -595,7 +596,7 @@ describe("MCP tool frames", () => {
         openai_tool_name: "gmail__send",
         status: "ok",
         error: undefined,
-        google_action_id: "action-1",
+        approval_id: "approve-1",
         isStreaming: false,
       },
       thinking,
@@ -1280,6 +1281,75 @@ describe("document frames", () => {
 });
 
 describe("ask_inputs frames", () => {
+  const calendarApproval: ConnectorApprovalItem = {
+    id: "approve-calendar",
+    kind: "approval",
+    connector_name: "Google Calendar",
+    tool_name: "google_calendar_update_event",
+    title: "Update event",
+    arguments: {
+      calendar_id: "primary",
+      event_id: "event-1",
+      start: { dateTime: "2026-10-01T15:00:00+08:00" },
+      end: { dateTime: "2026-10-01T16:00:00+08:00" },
+    },
+    before: { summary: "Client meeting", etag: "original-etag" },
+    account: "calendar@example.com",
+    binding: {
+      type: "google",
+      provider: "google-calendar",
+      grant_id: "grant-1",
+      etag: "original-etag",
+    },
+  };
+
+  it("keeps a live calendar approval when the turn pauses without an answer", async () => {
+    const event = { type: "ask_inputs", event_id: "ask-calendar", items: [calendarApproval] };
+    expect(await eventsOf([event])).toEqual([event]);
+  });
+
+  it.each([
+    { id: "" },
+    { arguments: null },
+    { arguments: [] },
+    { binding: null },
+    { binding: { type: "google", provider: "unknown", grant_id: "g1" } },
+    { binding: { type: "mcp", connector_id: "c1" } },
+    { binding: { type: "mcp", connector_id: "c1", tool_id: "t1", connection_fingerprint: "invalid" } },
+  ])("does not render an incomplete approval: %j", async (invalid) => {
+    const items = [{ ...calendarApproval, ...invalid }, calendarApproval];
+    expect(await eventsOf([{ type: "ask_inputs", event_id: "ask-calendar", items }])).toEqual([
+      { type: "ask_inputs", event_id: "ask-calendar", items: [calendarApproval] },
+    ]);
+  });
+
+  it("keeps live Google Drive approvals and their reviewed source", async () => {
+    const approval: ConnectorApprovalItem = {
+      id: "approve-drive", kind: "approval", connector_name: "Google Drive",
+      tool_name: "google_drive_update_file", title: "Rename file",
+      arguments: { file_id: "file-1", name: "Final" },
+      before: { file: { id: "file-1", name: "Draft", version: "1" } },
+      binding: { type: "google", provider: "google-drive", grant_id: "drive-grant" },
+    };
+    const event = { type: "ask_inputs", event_id: "ask-drive", items: [approval] };
+    expect(await eventsOf([event])).toEqual([event]);
+  });
+
+  it("keeps MCP approvals alongside questions in the same live prompt", async () => {
+    const approval: ConnectorApprovalItem = {
+      id: "approve-slack",
+      kind: "approval",
+      connector_name: "Slack",
+      tool_name: "mcp_slack_post",
+      title: "Post message",
+      arguments: { channel: "general", text: "Hello" },
+      binding: { type: "mcp", connector_id: "slack-1", tool_id: "post-1", connection_fingerprint: "a".repeat(64) },
+    };
+    const question = { id: "q1", kind: "text", question: "Anything else?" };
+    const events = await eventsOf([{ type: "ask_inputs", event_id: "ask-mixed", items: [question, approval] }]);
+    expect(events).toEqual([{ type: "ask_inputs", event_id: "ask-mixed", items: [question, approval] }]);
+  });
+
   it("normalizes choice and multi-choice questions", async () => {
     expect(
       await eventsOf([

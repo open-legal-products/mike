@@ -551,6 +551,14 @@ export function AskInputsBlock({
     const responseById = new Map(
         response?.responses.map((item) => [item.id, item]) ?? [],
     );
+    const onlyApprovals = event.items.every((item) => item.kind === "approval");
+    const label = onlyApprovals
+        ? response
+            ? "Asked for approval"
+            : "Asking for approval"
+        : response
+          ? "Asked for input"
+          : "Asking for input";
     return (
         <EventBlock
             showConnector={showConnector}
@@ -559,7 +567,7 @@ export function AskInputsBlock({
             <EventDisclosureButton
                 open={isOpen}
                 onToggle={() => setIsOpen((open) => !open)}
-                label={response ? "Asked for input" : "Asking for input"}
+                label={label}
             />
             {isOpen && (
                 <div className="mt-2 space-y-2 text-gray-800">
@@ -567,6 +575,10 @@ export function AskInputsBlock({
                         const itemResponse = responseById.get(item.id);
                         const responseText = (() => {
                             if (!itemResponse) return null;
+                            if (itemResponse.kind === "approval")
+                                return itemResponse.decision === "approve"
+                                    ? "Approved"
+                                    : "Rejected";
                             if (itemResponse.skipped) return "Skipped";
                             if (itemResponse.kind === "multi_choice") {
                                 return itemResponse.answers?.join(", ") ?? "";
@@ -585,13 +597,17 @@ export function AskInputsBlock({
                                     {index + 1}.{" "}
                                     {item.kind === "documents"
                                         ? "Documents"
-                                        : "Question"}
+                                        : item.kind === "approval"
+                                          ? "Approval"
+                                          : "Question"}
                                 </p>
-                                <p className="mt-0.5">
+                                <p className="mt-0.5 [overflow-wrap:anywhere]">
                                     {item.kind === "documents"
                                         ? item.document_types.join(", ") ||
                                           "Documents requested"
-                                        : item.question}
+                                        : item.kind === "approval"
+                                          ? `${item.connector_name}: ${item.title}`
+                                          : item.question}
                                 </p>
                                 {responseText !== null && (
                                     <p className="mt-0.5 text-gray-600">

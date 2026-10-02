@@ -1,4 +1,4 @@
-import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, listGoogleWorkspaceActions, decideGoogleWorkspaceAction } from "./mikeApi";
+import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 
@@ -251,6 +251,10 @@ afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
 });
+
+
+// Chat requests carry the browser's IANA time zone for the assistant.
+const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 describe("MikeApiError / isMfaRequiredError", () => {
     it("carries status and code, defaulting code to null", () => {
@@ -1008,6 +1012,25 @@ describe("API transport cancellation", () => {
 });
 
 describe("streamChat", () => {
+    it.each(["unavailable", "empty"])("still sends the chat when the browser time zone is %s", async (mode) => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const formatter = Intl.DateTimeFormat();
+        const options = formatter.resolvedOptions();
+        const spy = vi.spyOn(Intl, "DateTimeFormat");
+        if (mode === "unavailable") {
+            spy.mockImplementation(() => { throw new Error("Intl unavailable"); });
+        } else {
+            vi.spyOn(formatter, "resolvedOptions").mockReturnValue({ ...options, timeZone: "" });
+            spy.mockReturnValue(formatter);
+        }
+        try {
+            await streamChat({ messages: [{ role: "user", content: "Hello" }] });
+            expect(JSON.parse(lastFetchCall().init.body as string)).not.toHaveProperty("time_zone");
+            expect(JSON.parse(lastFetchCall().init.body as string).messages).toEqual([{ role: "user", content: "Hello" }]);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
     it("POSTs with the SSE accept header and forwards the signal outside the body", async () => {
         fetchMock.mockResolvedValue(streamResponse([]));
         const controller = new AbortController();
@@ -1032,6 +1055,7 @@ describe("streamChat", () => {
             messages: [{ role: "user", content: "hi" }],
             chat_id: "c1",
             model: "gemini-3-flash-preview",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 
@@ -1106,6 +1130,7 @@ describe("streamProjectChat", () => {
         expect(JSON.parse(init.body as string)).toEqual({
             messages: [{ role: "user", content: "hi" }],
             displayed_doc: { filename: "a.pdf", document_id: "d1" },
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -1131,6 +1156,7 @@ describe("streamTabularChat", () => {
             review_title: "Leases",
             model: "openai-gpt-5.2",
             reasoning: "low",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -1982,6 +2008,7 @@ describe("tabular review chats", () => {
         expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
             messages: [{ role: "user", content: "q" }],
             chat_id: "c9",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -2448,13 +2475,13 @@ describe("thin endpoint wrappers", () => {
             method: "DELETE",
         },
         { name: "getGoogleWorkspaceStatus", call: () => getGoogleWorkspaceStatus("gmail"), url: "/user/integrations/gmail" },
-        { name: "startGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("gmail"), url: "/user/integrations/gmail/oauth/start", method: "POST", body: { write: false } },
-        { name: "upgradeGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("google-calendar", true), url: "/user/integrations/google-calendar/oauth/start", method: "POST", body: { write: true } },
+        { name: "startGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("gmail"), url: "/user/integrations/gmail/oauth/start", method: "POST" },
         { name: "cancelGoogleWorkspaceOAuth", call: () => cancelGoogleWorkspaceOAuth("gmail", "state"), url: "/user/integrations/gmail/oauth/cancel", method: "POST", body: { state: "state" } },
         { name: "disconnectGoogleWorkspace", call: () => disconnectGoogleWorkspace("gmail"), url: "/user/integrations/gmail", method: "DELETE" },
-        { name: "listGoogleWorkspaceActions", call: () => listGoogleWorkspaceActions(), url: "/user/google-actions" },
-        { name: "approveGoogleWorkspaceAction", call: () => decideGoogleWorkspaceAction("a1", "approve"), url: "/user/google-actions/a1/approve", method: "POST" },
-        { name: "rejectGoogleWorkspaceAction", call: () => decideGoogleWorkspaceAction("a1", "reject"), url: "/user/google-actions/a1/reject", method: "POST" },
+        { name: "updateGoogleWorkspaceSettings", call: () => updateGoogleWorkspaceSettings("gmail", { requireWriteApproval: true }), url: "/user/integrations/gmail", method: "PATCH", body: { requireWriteApproval: true } },
+        { name: "setGoogleWorkspaceToolEnabled", call: () => setGoogleWorkspaceToolEnabled("google-calendar", "google_calendar_create_event", false), url: "/user/integrations/google-calendar/tools/google_calendar_create_event", method: "PATCH", body: { enabled: false } },
+        { name: "updateGoogleDriveSettings", call: () => updateGoogleDriveSettings({ enabled: false }), url: "/user/integrations/google-drive", method: "PATCH", body: { enabled: false } },
+        { name: "setGoogleDriveToolEnabled", call: () => setGoogleDriveToolEnabled("google_drive_read_file", true), url: "/user/integrations/google-drive/tools/google_drive_read_file", method: "PATCH", body: { enabled: true } },
         // Projects
         {
             name: "getProject",

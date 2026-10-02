@@ -1,0 +1,30 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2FE594" stop-opacity="0.96"/>
+      <stop offset="0.45" stop-color="#02C46C" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#008A4C" stop-opacity="0.97"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#053D24" stop-opacity="0.45"/>
+    </linearGradient>
+    <radialGradient id="sheen">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="clip">
+      <path d="M18 6 H46 C52.6 6 58 11.4 58 18 V34 C58 40.6 52.6 46 46 46 H30 L19.4 55.4 C17.7 56.9 15 55.7 15 53.4 V45.6 C9.8 44.2 6 39.5 6 34 V18 C6 11.4 11.4 6 18 6 Z"/>
+    </clipPath>
+  </defs>
+
+  <path d="M18 6 H46 C52.6 6 58 11.4 58 18 V34 C58 40.6 52.6 46 46 46 H30 L19.4 55.4 C17.7 56.9 15 55.7 15 53.4 V45.6 C9.8 44.2 6 39.5 6 34 V18 C6 11.4 11.4 6 18 6 Z"
+        fill="url(#body)" stroke="url(#rim)" stroke-width="1.5"/>
+
+  <g clip-path="url(#clip)">
+    <ellipse cx="32" cy="10" rx="23" ry="6" fill="url(#sheen)" opacity="0.16"/>
+    <ellipse cx="14" cy="18" rx="5" ry="10" fill="url(#sheen)" opacity="0.1"/>
+  </g>
+</svg>

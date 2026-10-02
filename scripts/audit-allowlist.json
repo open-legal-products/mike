@@ -1,5 +1,9 @@
 [
     {
+        "ghsa": "GHSA-86w9-cpqp-85rv",
+        "reason": "node-forge <=1.4.0 RSA signature-verification flaw; no patched release is available as of 2026-10-02. Present only in word-addin devDependencies through office-addin-dev-certs -> mkcert and office-addin-debugging -> @microsoft/teamsfx-core. Their local certificate helpers generate/sign certificates and parse local key/certificate files; they do not call the vulnerable signature verifier. The production add-in image contains only the static bundle and server.mjs, not these development dependencies. REMOVE WHEN: node-forge publishes a patched release and these chains can resolve it; reassess if the dependency gains a production or signature-verification caller."
+    },
+    {
         "ghsa": "GHSA-ph9p-34f9-6g65",
         "reason": "tmp 0.0.33 path traversal via prefix/postfix, reachable in word-addin only through @inquirer/editor -> external-editor, i.e. the interactive prompts of @microsoft/teamsapp-cli under office-addin-debugging — a devDependency, and the prefixes are literals inside that CLI rather than anything this repo or a document supplies. Same downgrade-only 'fix' as adm-zip above. REMOVE WHEN: external-editor resolves tmp >0.2.5 (or the teamsapp-cli chain drops external-editor) inside office-addin-debugging's declared range."
     }

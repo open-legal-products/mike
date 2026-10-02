@@ -26,6 +26,7 @@ import {
 
     runLLMStream,
     stripTransientAssistantEvents,
+    writeApprovedConnectorFrames,
     PROJECT_EXTRA_TOOLS,
     parseChatMessages,
     parseOptionalAskInputsResponse,
@@ -122,6 +123,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         askInputsResponse,
         requestedModel: model,
         requestedReasoning: parsedReasoning.value,
+        requestedTimeZone: req.body?.time_zone,
     });
     if (!prep.ok) {
         if ("internal" in prep) return void sendInternalError(res, prep.error);
@@ -147,6 +149,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         selectedModel,
         selectedReasoningLevel,
         nonce,
+        approvalEvents,
     } = prep.prepared;
     // Mutable: the title-generation flow below reassigns it once a title
     // has been persisted.
@@ -190,6 +193,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                     ...(assistantMessageId ? { assistantMessageId } : {}),
                 })}\n\n`,
             );
+            writeApprovedConnectorFrames(write, approvalEvents);
 
             const shouldGenerateTitle =
                 !chatTitle && !!lastUser?.content && !askInputsResponse;
@@ -253,6 +257,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 projectId,
                 conversationId: chatId,
                 includeMemory: true,
+                connectorApprovals: true,
                 memoryProjectId: projectId,
                 memorySharedAudience,
                 nonce,

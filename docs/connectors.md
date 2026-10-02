@@ -73,10 +73,10 @@ rights in the workspace.
    and approve the consent screen. A workspace owner or administrator may
    need to approve the app first.
 
-Slack requests read/search scopes and several write scopes. Mike currently
-keeps tools Slack marks as writes disabled because it does not yet have a
-human-confirmation step for MCP write tools. If granting those scopes is not
-acceptable, remove the corresponding user scopes from the app manifest.
+Slack requests read/search scopes and several write scopes, so the assistant
+can post and edit messages. See [write actions](#write-actions-and-approvals)
+to require approval for each one. If granting write scopes is not acceptable,
+remove the corresponding user scopes from the app manifest.
 
 ## Google-hosted MCP servers
 
@@ -101,6 +101,44 @@ for example, the Drive endpoint is
   rest using `MCP_CONNECTORS_ENCRYPTION_SECRET`.
 - Remote URLs are subject to Mike's outbound SSRF protections.
 - Connector tools are cached after successful registration and can be enabled
-  or disabled from the connector details view.
-- Tools requiring human confirmation remain disabled until Mike supports that
-  confirmation flow.
+  or disabled from the connector's Manage dialog.
+
+## Write actions and approvals
+
+Every connector — MCP servers such as Slack, and Google Drive, Gmail and
+Calendar — has write access by default: the assistant can use a tool that
+changes data as soon as the connector is installed. A tool counts as a write
+unless its server explicitly marks it read-only and non-destructive; the Manage
+dialog labels those tools **Write**.
+
+Turn on **Read-only** in the Manage dialog to disable every write tool. The
+write switches stay off and unavailable while this setting is on; read tools
+keep their individual settings. Turning it off restores the saved per-tool
+choices. This also covers newly discovered write tools and pending approvals,
+and survives tool refreshes and Google reconnection. MCP write classification
+uses the server's annotations, so servers must report their tools accurately.
+
+Existing deployments must apply
+`backend/migrations/20261002_03_connector_read_only.sql` and
+`backend/migrations/20261002_05_mcp_oauth_grants.sql`. Fresh installations
+already include these settings in `backend/schema.sql`.
+
+Turn on **Ask for permission for write actions** in a connector's Manage
+dialog to review each write first. The assistant's turn then pauses with an
+approval in the same popup it uses for questions, showing the exact action and
+its arguments. **Approve** runs that action and the turn continues with its
+result; **Reject** tells the assistant it did not run. The server runs the
+action it stored with the approval, never arguments sent by the browser, and
+each approval runs at most once. It does not run if the connector or tool was
+turned off, deleted, or replaced in the meantime. Changing the server URL,
+credentials, or authorized account invalidates a pending approval. Routine
+OAuth token refresh does not.
+
+Approvals are available in the Mike assistant and project chats. The Word
+add-in and tabular review cannot show them, so a write that needs approval is
+refused there with an explanation.
+
+Tool results, including connector content, are untrusted: a message or email
+can contain instructions meant for the assistant. Leaving writes unapproved
+lets such content trigger actions as the connected account. Turn the setting
+on for connectors whose actions you want to review.
