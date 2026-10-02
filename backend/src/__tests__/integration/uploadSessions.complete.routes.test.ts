@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   copyFile: vi.fn(),
   deleteFile: vi.fn(),
+  downloadFile: vi.fn(),
+  downloadFileHead: vi.fn(),
   getSignedUploadUrl: vi.fn(),
   headFile: vi.fn(),
   rpc: vi.fn(),
@@ -115,6 +117,8 @@ vi.mock("../../lib/storage", () => ({
   getSignedUploadUrl: mocks.getSignedUploadUrl,
   copyFile: mocks.copyFile,
   deleteFile: mocks.deleteFile,
+  downloadFile: mocks.downloadFile,
+  downloadFileHead: mocks.downloadFileHead,
   deleteFileBestEffort: (key: string) =>
     Promise.resolve(mocks.deleteFile(key)).catch(() => undefined),
   deleteFilesBestEffort: async (keys: Array<string | null | undefined>) => {
@@ -165,6 +169,9 @@ describe("upload session completion", () => {
       },
     ];
     mocks.copyFile.mockResolvedValue(undefined);
+    mocks.downloadFileHead.mockResolvedValue(
+      new Uint8Array(Buffer.from("%PDF-1.7")),
+    );
     mocks.deleteFile.mockResolvedValue(undefined);
     mocks.getSignedUploadUrl.mockResolvedValue(
       "https://upload.example/refreshed",
@@ -543,6 +550,29 @@ describe("upload session completion", () => {
       status: "error",
       error_code: "content_type_mismatch",
     });
+    expect(mocks.deleteFile).toHaveBeenCalledWith("staging-key");
+  });
+
+  it("rejects an object whose bytes do not match its declared type", async () => {
+    mocks.downloadFileHead.mockResolvedValueOnce(
+      new Uint8Array(Buffer.from("MZ\x90\x00")),
+    );
+    mocks.headFile.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      size: 4,
+      etag: "staged-etag",
+      contentType: "application/pdf",
+    });
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.files[0]).toMatchObject({
+      status: "error",
+      error_code: "invalid_file_content",
+    });
+    expect(mocks.copyFile).not.toHaveBeenCalled();
     expect(mocks.deleteFile).toHaveBeenCalledWith("staging-key");
   });
 

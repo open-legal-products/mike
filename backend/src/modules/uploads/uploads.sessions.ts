@@ -22,11 +22,18 @@ import {
   deleteFile,
   deleteFileBestEffort,
   deleteFilesBestEffort,
+  downloadFile,
+  downloadFileHead,
   getSignedUploadUrl,
   headFile,
   StorageOperationError,
 } from "../../lib/storage";
 import type { Db } from "../../lib/supabase";
+import {
+  needsFullObjectForValidation,
+  PDF_HEAD_BYTES,
+  validateDocumentContent,
+} from "./uploads.content";
 import {
   uploadSessionExpiresAt,
   UPLOAD_URL_TTL_SECONDS,
@@ -175,6 +182,22 @@ async function verifyAndSealSessionFiles(
         observed_size_bytes: staged.size,
         etag: staged.etag,
         error_code: errorCode,
+      });
+      return false;
+    }
+
+    // The declared type is a claim; check the staged bytes before sealing.
+    const head = needsFullObjectForValidation(file.file_type)
+      ? await downloadFile(file.staging_storage_path)
+      : await downloadFileHead(file.staging_storage_path, PDF_HEAD_BYTES);
+    if (!head) throw new Error("Failed to read staged upload for validation");
+    if (!(await validateDocumentContent(file.file_type, new Uint8Array(head)))) {
+      await deleteFileBestEffort(file.staging_storage_path, "seal-mismatch");
+      await writeSealResult(file, {
+        status: "error",
+        observed_size_bytes: staged.size,
+        etag: staged.etag,
+        error_code: "invalid_file_content",
       });
       return false;
     }

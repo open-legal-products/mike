@@ -102,6 +102,7 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
   "content_type_mismatch",
+  "invalid_file_content",
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
