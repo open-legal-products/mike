@@ -241,6 +241,12 @@ When changing dependencies, update the `package-lock.json` belonging to the
 affected package. Before handing off work, run `git diff --check`, inspect the
 diff for unrelated changes, and report which verification commands were run.
 
+## Branch Names
+
+Name branches after the change they contain, using a descriptive prefix such as
+`docs/`, `fix/`, `feat/`, `refactor/`, `test/`, or `chore/` (for example,
+`docs/shorten-readme-telemetry`). Never use `claude/` as a prefix.
+
 ## Pull Requests
 
 Keep a pull request focused on one feature, bug, or cleanup. Write PR
