@@ -52,6 +52,28 @@ function errorMessage(error: unknown, label: string): string {
   return `${label} stream failed.`;
 }
 
+// The AI SDK's own silence limits (`timeout.firstChunkMs` / `chunkMs`) abort
+// the step with a TimeoutError whose message names the limit.
+const STALL_PATTERN = /\b(?:first chunk|chunk) timeout of \d+ms exceeded/i;
+
+/**
+ * A user-facing error when `reason` is the SDK's chunk timeout (the provider
+ * stopped sending), else null. It must not read as a user cancel: the caller's
+ * signal is not aborted, the model simply went quiet.
+ */
+export function asProviderStallError(
+  reason: unknown,
+  context: ProviderContext,
+): UserFacingError | null {
+  const text =
+    reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason ?? "");
+  if (!STALL_PATTERN.test(text)) return null;
+  return new UserFacingError(
+    `${context.label} stopped responding, so the request was ended. Please try again, or select another model.`,
+    { cause: reason },
+  );
+}
+
 /**
  * Convert a provider failure into the error we throw.
  *
@@ -64,6 +86,8 @@ export function toProviderStreamError(
   error: unknown,
   context: ProviderContext,
 ): Error {
+  const stalled = asProviderStallError(error, context);
+  if (stalled) return stalled;
   const apiError = findApiCallError(error);
   const invalidKey = asInvalidApiKeyError(apiError ?? error, context.label);
   if (invalidKey) return invalidKey;
