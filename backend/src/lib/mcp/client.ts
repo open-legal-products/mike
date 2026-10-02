@@ -209,11 +209,12 @@ export function mcpConnectionFingerprint(
     oauthGrantId: string | null,
 ) {
     const config = decryptAuthConfig(connector);
-    const credentials = connector.encrypted_auth_config
+    const credentials = connector.encrypted_auth_config || oauthGrantId
         ? crypto
                 .createHmac("sha256", encryptionKey())
                 .update(
                     JSON.stringify({
+                        oauthGrantId,
                         bearerToken: config.bearerToken ?? null,
                         headers: Object.entries(config.headers ?? {}).sort(([a], [b]) =>
                             a.localeCompare(b),
@@ -230,7 +231,6 @@ export function mcpConnectionFingerprint(
                 connector.transport,
                 connector.auth_type,
                 credentials,
-                oauthGrantId,
             ]),
         )
         .digest("hex");

@@ -315,10 +315,10 @@ function tokenSecretPatch(prefix: string, value?: string | null) {
 // user reconnects and grants full access.
 function hasDriveScope(scope: unknown): boolean {
     if (typeof scope !== "string") return false;
-    const scopes = scope.split(/\s+/);
+    const scopes = new Set(scope.split(/\s+/));
     return (
-        scopes.includes(GOOGLE_DRIVE_SCOPE) ||
-        scopes.includes(GOOGLE_DRIVE_READONLY_SCOPE)
+        scopes.has(GOOGLE_DRIVE_SCOPE) ||
+        scopes.has(GOOGLE_DRIVE_READONLY_SCOPE)
     );
 }
 
@@ -912,7 +912,7 @@ const ALL_GOOGLE_DRIVE_TOOLS = [
 function hasDriveWriteAccess(row: TokenRow | null) {
     return (
         !!row?.grant_id &&
-        !!row.scope?.split(/\s+/).includes(GOOGLE_DRIVE_SCOPE)
+        new Set(row.scope?.split(/\s+/) ?? []).has(GOOGLE_DRIVE_SCOPE)
     );
 }
 
