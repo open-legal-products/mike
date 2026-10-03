@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { CustomInstructionsSection } from "@/app/components/settings/CustomInstructionsSection";
 import { SettingsCard } from "@/app/components/settings/SettingsCard";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
@@ -189,6 +190,8 @@ function PersonalisationForm({
           )}
         </SettingsCard>
       </section>
+
+      <CustomInstructionsSection />
     </div>
   );
 }

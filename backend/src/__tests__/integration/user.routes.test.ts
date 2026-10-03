@@ -631,6 +631,68 @@ describe("user.routes", () => {
     });
 
     // ── POST /user/profile (bootstrap upsert) ─────────────────────────────
+    describe("custom instructions", () => {
+        it("returns the stored instructions", async () => {
+            supabaseState.tables.user_profiles = {
+                data: { custom_instructions: "Use British spelling." },
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/custom-instructions")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({ content: "Use British spelling." });
+            expect(res.headers["cache-control"]).toBe("private, no-store");
+        });
+
+        it("reads as empty before the migration is applied", async () => {
+            supabaseState.missingColumns = ["custom_instructions"];
+
+            const res = await request(app)
+                .get("/user/custom-instructions")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({ content: "" });
+        });
+
+        it("saves normalized instructions for the caller only", async () => {
+            supabaseState.tables.user_profiles = {
+                data: { custom_instructions: "Be concise." },
+                error: null,
+            };
+
+            const res = await request(app)
+                .put("/user/custom-instructions")
+                .set(...AUTH)
+                .send({ content: "Be concise.\r\n\n" });
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({ content: "Be concise." });
+            expect(supabaseState.updates.user_profiles).toEqual([
+                expect.objectContaining({ custom_instructions: "Be concise." }),
+            ]);
+        });
+
+        it("rejects over-long or non-string content", async () => {
+            const tooLong = await request(app)
+                .put("/user/custom-instructions")
+                .set(...AUTH)
+                .send({ content: "x".repeat(8001) });
+            expect(tooLong.status).toBe(400);
+            expect(tooLong.body.detail).toMatch(/8000 characters or fewer/);
+
+            const wrongType = await request(app)
+                .put("/user/custom-instructions")
+                .set(...AUTH)
+                .send({ content: 1 });
+            expect(wrongType.status).toBe(400);
+            expect(supabaseState.updates.user_profiles).toBeUndefined();
+        });
+    });
+
     describe("POST /user/profile", () => {
         it("ensures the profile row and returns ok", async () => {
             const res = await request(app)

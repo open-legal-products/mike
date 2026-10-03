@@ -56,6 +56,11 @@ create table if not exists public.user_profiles (
   -- Whether projects this user creates start with shared memory enabled. Any
   -- project owner can still turn a given project's memory on or off later.
   project_memory_default boolean not null default true,
+  -- Free-form instructions added to the system prompt of every assistant
+  -- conversation. Edited in Settings > Personalisation.
+  custom_instructions text not null default ''
+    constraint user_profiles_custom_instructions_length
+    check (char_length(custom_instructions) <= 8000),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

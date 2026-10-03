@@ -27,6 +27,7 @@ function profileDb(row: Record<string, unknown> | null) {
         chain[method] = vi.fn(() => chain);
     }
     chain.single = vi.fn(async () => ({ data: row, error: null }));
+    chain.maybeSingle = vi.fn(async () => ({ data: row, error: null }));
     return chain as never;
 }
 
@@ -63,6 +64,7 @@ describe("getUserModelSettings router-model allowlist", () => {
                 practice_setting: "private_practice",
                 professional_title: "Partner",
                 practice_areas: ["Litigation"],
+                custom_instructions: "Use British spelling.",
             }),
         );
 
@@ -73,6 +75,7 @@ describe("getUserModelSettings router-model allowlist", () => {
             practiceSetting: "private_practice",
             professionalTitle: "Partner",
             practiceAreas: ["Litigation"],
+            customInstructions: "Use British spelling.",
         });
     });
 

@@ -7,6 +7,18 @@ const { updatePersonalisation } = vi.hoisted(() => ({
   updatePersonalisation: vi.fn(),
 }));
 
+vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
+  getCustomInstructions: vi.fn(async () => ({ content: "" })),
+  updateCustomInstructions: vi.fn(async (content: string) => ({ content })),
+}));
+
+vi.mock("@/app/components/ui/markdown-editor", () => ({
+  MarkdownEditor: ({ ariaLabel }: { ariaLabel?: string }) => (
+    <textarea aria-label={ariaLabel} readOnly />
+  ),
+}));
+
 vi.mock("@/app/contexts/UserProfileContext", () => ({
   useUserProfile: () => ({
     profile: {

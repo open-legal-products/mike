@@ -888,6 +888,28 @@ export async function updateUserProfile(payload: {
     });
 }
 
+export interface CustomInstructions {
+    content: string;
+}
+
+export async function getCustomInstructions(
+    signal?: AbortSignal,
+): Promise<CustomInstructions> {
+    return apiRequest<CustomInstructions>("/user/custom-instructions", {
+        signal,
+    });
+}
+
+export async function updateCustomInstructions(
+    content: string,
+): Promise<CustomInstructions> {
+    return apiRequest<CustomInstructions>("/user/custom-instructions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+    });
+}
+
 export async function completeUserOnboarding(
     payload: PersonalisationDetails = {},
 ): Promise<UserProfile> {

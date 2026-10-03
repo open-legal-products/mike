@@ -164,6 +164,7 @@ services:
       - ./backend/migrations/20261002_03_connector_read_only.sql:/connector-read-only-migration.sql:ro
       - ./backend/migrations/20261002_04_remove_user_time_zone.sql:/remove-user-time-zone-migration.sql:ro
       - ./backend/migrations/20261002_05_mcp_oauth_grants.sql:/mcp-oauth-grants-migration.sql:ro
+      - ./backend/migrations/20261002_06_user_custom_instructions.sql:/user-custom-instructions-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -212,6 +213,7 @@ services:
         psql "$$DB" -v ON_ERROR_STOP=1 -f /connector-read-only-migration.sql || exit 1;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /remove-user-time-zone-migration.sql || exit 1;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /mcp-oauth-grants-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /user-custom-instructions-migration.sql || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;

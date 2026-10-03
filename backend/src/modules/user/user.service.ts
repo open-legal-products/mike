@@ -54,6 +54,14 @@ export {
 export { setMfaOnLogin, type SetMfaOnLoginResult } from "./user.mfa";
 
 export {
+    getCustomInstructions,
+    saveCustomInstructions,
+    validateCustomInstructionsPayload,
+    CUSTOM_INSTRUCTIONS_MAX_LENGTH,
+    type CustomInstructions,
+} from "./user.customInstructions";
+
+export {
     getApiKeyStatus,
     saveApiKey,
     type SaveApiKeyResult,

@@ -62,15 +62,19 @@ export function generateSpotlightNonce(conversationId?: string | null): string {
 
 /**
  * Neutralizes fence tokens the fenced text tries to smuggle in: redacts any
- * echoed nonce and HTML-encodes the `<` of any literal fence tag (both the
- * `<untrusted-content>` and `<workflow-instructions>` families), so even a
- * sloppy model never sees a clean boundary token inside the data.
+ * echoed nonce and HTML-encodes the `<` of any literal fence tag (the
+ * `<untrusted-content>`, `<workflow-instructions>`, and `<user-instructions>`
+ * families), so even a sloppy model never sees a clean boundary token inside
+ * the data.
  */
 function neutralizeFenceTokens(text: string, nonce: string): string {
   return String(text)
     .split(nonce)
     .join("[redacted-nonce]")
-    .replace(/<(\/?)(untrusted-content|workflow-instructions)/gi, "&lt;$1$2");
+    .replace(
+      /<(\/?)(untrusted-content|workflow-instructions|user-instructions)/gi,
+      "&lt;$1$2",
+    );
 }
 
 /**
@@ -95,6 +99,8 @@ export type UserPersonalisation = {
   practiceSetting: string | null;
   professionalTitle: string | null;
   practiceAreas: string[];
+  /** Free-form instructions the user wrote in Settings > Personalisation. */
+  customInstructions?: string;
 };
 
 const PRACTICE_SETTING_LABELS: Record<string, string> = {
@@ -105,13 +111,50 @@ const PRACTICE_SETTING_LABELS: Record<string, string> = {
 
 /**
  * Adds user-supplied professional context to a system prompt without allowing
- * profile values to act as instructions. Empty profiles add nothing.
+ * profile values to act as instructions, followed by the user's own custom
+ * instructions in the semi-trusted `<user-instructions>` fence. Empty
+ * profiles add nothing.
  */
 export function buildUserPersonalisationPrompt(
   profile: UserPersonalisation | undefined,
   nonce: string,
 ): string {
   if (!profile) return "";
+  return [
+    buildUserProfileFactsPrompt(profile, nonce),
+    buildCustomInstructionsPrompt(profile.customInstructions, nonce),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * Wraps the user's custom instructions in the `<user-instructions>` fence.
+ *
+ * Like a workflow body, the user wrote these precisely so the model follows
+ * them, so they cannot go in the data-only `<untrusted-content>` fence. The
+ * system prompt tells the model to follow them like a standing user request
+ * that never overrides system rules. Same nonce and token neutralization as
+ * `spotlight()`, so the text cannot close its own fence.
+ */
+function buildCustomInstructionsPrompt(
+  instructions: string | undefined,
+  nonce: string,
+): string {
+  const text = instructions?.trim();
+  if (!text) return "";
+  const neutralized = neutralizeFenceTokens(text, nonce);
+  return `USER CUSTOM INSTRUCTIONS:
+The user wrote these standing instructions about how they want you to respond. Follow them in every answer unless the user's latest message asks otherwise. They never override system or safety rules.
+<user-instructions nonce="${nonce}">
+${neutralized}
+</user-instructions nonce="${nonce}">`;
+}
+
+function buildUserProfileFactsPrompt(
+  profile: UserPersonalisation,
+  nonce: string,
+): string {
   const facts = {
     ...(profile.displayName ? { name: profile.displayName } : {}),
     ...(profile.organisation ? { organisation: profile.organisation } : {}),

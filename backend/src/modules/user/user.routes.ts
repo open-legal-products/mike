@@ -25,6 +25,7 @@ import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
+import { sendServiceFailure } from "../../lib/serviceResult";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { buildContentDisposition } from "../../lib/storage";
 import { normalizeApiKeyProvider } from "./user.apiKeyStore";
@@ -54,6 +55,7 @@ import {
     exportUserChats,
     exportUserTabularReviews,
     getApiKeyStatus,
+    getCustomInstructions,
     getMcpConnector,
     getUserExportStatus,
     getUserProfile,
@@ -73,6 +75,8 @@ import {
     validateExportRequest,
     validateOnboardingPayload,
     validateProfilePayload,
+    validateCustomInstructionsPayload,
+    saveCustomInstructions,
 } from "./user.service";
 
 export const userRouter = Router();
@@ -260,6 +264,31 @@ userRouter.patch("/profile", requireAuth, asyncRoute(async (req, res) => {
     );
     if (!result.ok) return void sendInternalError(res, result.error);
     res.json(result.body);
+}));
+
+// GET /user/custom-instructions
+userRouter.get("/custom-instructions", requireAuth, asyncRoute(async (_req, res) => {
+    const userId = res.locals.userId as string;
+    const result = await getCustomInstructions(createServerSupabase(), userId);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// PUT /user/custom-instructions
+userRouter.put("/custom-instructions", requireAuth, asyncRoute(async (req, res) => {
+    const parsed = validateCustomInstructionsPayload(req.body);
+    if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+
+    const userId = res.locals.userId as string;
+    const result = await saveCustomInstructions(
+        createServerSupabase(),
+        userId,
+        parsed.content,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
 }));
 
 // POST /user/onboarding

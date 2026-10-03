@@ -2,6 +2,8 @@ import { createServerSupabase, type Db } from "../../lib/supabase";
 import { type UserApiKeys } from "../../lib/llm";
 import { type ReasoningLevel } from "../../lib/llm";
 import { getUserApiKeys as getStoredUserApiKeys } from "./user.apiKeyStore";
+import { loadCustomInstructions } from "./user.customInstructions";
+import { safeError } from "../../lib/safeError";
 import {
     getAllUserRouterModels,
 } from "../../lib/routerModels";
@@ -30,6 +32,8 @@ export type UserModelSettings = {
         practiceSetting: string | null;
         professionalTitle: string | null;
         practiceAreas: string[];
+        /** Free-form instructions from Settings > Personalisation. */
+        customInstructions?: string;
     };
 };
 
@@ -38,7 +42,8 @@ export async function getUserModelSettings(
     db?: Db,
 ): Promise<UserModelSettings> {
     const client = db ?? createServerSupabase();
-    const [profileResult, api_keys, routerModels] = await Promise.all([
+    const [profileResult, api_keys, routerModels, customInstructions] =
+        await Promise.all([
         client
             .from("user_profiles")
             .select(
@@ -48,6 +53,14 @@ export async function getUserModelSettings(
             .single(),
         getStoredUserApiKeys(userId, client),
         getAllUserRouterModels(userId, client),
+        // Instructions are an enhancement: a failed read must not block chat.
+        loadCustomInstructions(client, userId).catch((error: unknown) => {
+            console.error(
+                "[user-settings] custom instructions load failed",
+                safeError(error),
+            );
+            return "";
+        }),
     ]);
     let data = profileResult.data;
     let profileError = profileResult.error;
@@ -167,6 +180,7 @@ export async function getUserModelSettings(
                       (area): area is string => typeof area === "string",
                   )
                 : [],
+            customInstructions,
         },
         api_keys,
     };
