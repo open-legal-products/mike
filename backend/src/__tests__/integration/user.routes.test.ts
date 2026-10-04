@@ -1455,6 +1455,77 @@ describe("user.routes", () => {
         });
     });
 
+    // ── GET /user/mcp-connectors/oauth/callback (popup hand-off page) ─────
+    describe("GET /user/mcp-connectors/oauth/callback", () => {
+        // The 400 path (missing state/code) renders the same popup HTML via
+        // the same header helper as the success path, without needing any
+        // real OAuth machinery — so it is the regression probe for both.
+        it("relaxes COOP so window.opener survives, alongside the nonce CSP", async () => {
+            const log = vi
+                .spyOn(console, "error")
+                .mockImplementation(() => undefined);
+
+            const res = await request(app).get(
+                "/user/mcp-connectors/oauth/callback",
+            );
+
+            expect(res.status).toBe(400);
+            // Load-bearing: helmet's default COOP of same-origin would sever
+            // window.opener the moment the popup returns from the
+            // cross-origin consent page, silently breaking the postMessage
+            // hand-off. This must hold through the full app assembly (helmet
+            // runs on this very request), not just on the bare router.
+            expect(res.headers["cross-origin-opener-policy"]).toBe(
+                "unsafe-none",
+            );
+            // The route-scoped CSP (with the per-response script nonce) must
+            // survive alongside the COOP relaxation.
+            expect(res.headers["content-security-policy"]).toContain(
+                "script-src 'nonce-",
+            );
+            log.mockRestore();
+        });
+
+        it("keeps helmet's default COOP on every other route", async () => {
+            // Contrast probe: the relaxation must stay scoped to the popup
+            // page. If it ever leaks app-wide, this fails.
+            supabaseState.tables.user_profiles = {
+                data: profileRow(),
+                error: null,
+            };
+
+            const res = await request(app).get("/user/profile").set(...AUTH);
+
+            expect(res.headers["cross-origin-opener-policy"]).toBe(
+                "same-origin",
+            );
+        });
+
+        it("neutralizes a </script> breakout in the attacker-controlled error detail", async () => {
+            const log = vi
+                .spyOn(console, "error")
+                .mockImplementation(() => undefined);
+
+            // ?error= flows into the inline script's JSON literal.
+            // JSON.stringify leaves "<" alone, so an unescaped payload of
+            // </script><script>… would close the legitimate script element
+            // and inject markup.
+            const res = await request(app).get(
+                "/user/mcp-connectors/oauth/callback?error=" +
+                    encodeURIComponent("</script><script>evil()</script>"),
+            );
+
+            expect(res.status).toBe(400);
+            // No breakout: the only </script> left is the page's own closing
+            // tag, and the payload's "<" chars were escaped to \u003c inside
+            // the JS string literal.
+            expect(res.text).not.toContain("</script><script");
+            expect(res.text.match(/<\/script>/g)).toHaveLength(1);
+            expect(res.text).toContain("\\u003c/script>");
+            log.mockRestore();
+        });
+    });
+
     // ── PATCH /user/security/mfa-login (factor-gated, MFA-guarded) ────────
     describe("PATCH /user/security/mfa-login", () => {
         it("returns 400 when enabling without a verified TOTP factor", async () => {
