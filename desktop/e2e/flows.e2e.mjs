@@ -497,7 +497,7 @@ try {
   await step("library upload + row-menu Download stays in-shell", page, async () => {
     await page.goto(`${SERVER_URL}/library`);
     // The library's "Upload" menu (same selectors as local.e2e.mjs step 4):
-    // "Upload files" opens the hidden file input. The old "Add Files"
+    // "Upload Documents" opens the hidden file input. The old "Add Files"
     // PageHeader button this step used to click no longer exists.
     const addBtn = page.getByRole("button", { name: "Upload", exact: true }).first();
     await addBtn.waitFor({ timeout: 15_000 });
@@ -505,7 +505,7 @@ try {
       timeout: 10_000,
     });
     await addBtn.click();
-    await page.getByRole("menuitem", { name: "Upload files", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Upload Documents", exact: true }).click();
     const chooser = await chooserPromise;
     await chooser.setFiles({
       name: DOC_NAME,
