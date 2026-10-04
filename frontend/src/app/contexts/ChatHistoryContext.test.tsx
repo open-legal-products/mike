@@ -25,8 +25,6 @@ import {
     useChatHistoryContext,
 } from "./ChatHistoryContext";
 
-const retrySpy = vi.fn();
-
 function Probe() {
     const { chats, hasMoreChats, loadMoreChats, saveChat } =
         useChatHistoryContext();
@@ -34,13 +32,6 @@ function Probe() {
         <div>
             <button onClick={() => void loadMoreChats()}>more</button>
             <button onClick={() => void saveChat()}>save</button>
-            <button
-                onClick={() =>
-                    void saveChat(undefined, undefined, { onRetry: retrySpy })
-                }
-            >
-                save-with-retry
-            </button>
             <span data-testid="count">{chats?.length ?? "null"}</span>
             <span data-testid="has-more">{String(hasMoreChats)}</span>
         </div>
@@ -115,27 +106,6 @@ describe("ChatHistoryProvider failures", () => {
         );
         // The page already on screen is untouched.
         expect(screen.getByTestId("count")).toHaveTextContent("20");
-    });
-
-    it("offers Retry only when the caller can re-run its submit", async () => {
-        createChat.mockRejectedValue(new Error("boom"));
-
-        renderProvider();
-        await waitFor(() => expect(listChats).toHaveBeenCalled());
-
-        fireEvent.click(screen.getByRole("button", { name: "save" }));
-        await waitFor(() => expect(screen.getByRole("alert")).toBeVisible());
-        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-
-        fireEvent.click(
-            screen.getByRole("button", { name: "Dismiss notification" }),
-        );
-        fireEvent.click(
-            screen.getByRole("button", { name: "save-with-retry" }),
-        );
-        const retry = await screen.findByRole("button", { name: "Retry" });
-        fireEvent.click(retry);
-        expect(retrySpy).toHaveBeenCalledOnce();
     });
 
     it("tells the user when a new chat cannot be created", async () => {
