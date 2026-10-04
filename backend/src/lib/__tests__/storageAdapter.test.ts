@@ -245,4 +245,23 @@ describe("not-configured degradation (shared policy)", () => {
     );
     log.mockRestore();
   });
+
+  it("names delete failures and skips keys that name no object", async () => {
+    const failure = new Error("AccessDenied");
+    const adapter = fakeAdapter({
+      deleteFile: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+    storage.setStorageAdapter(adapter);
+
+    // Durable cleanup jobs and the Sentry privacy boundary read
+    // `operation` and `cause`, so both must survive the seam.
+    const rejection = await storage.deleteFile("k").catch((e: unknown) => e);
+    expect(rejection).toBeInstanceOf(storage.StorageOperationError);
+    expect(rejection).toMatchObject({ operation: "delete", cause: failure });
+
+    await storage.deleteFile("");
+    expect(adapter.deleteFile).toHaveBeenCalledTimes(1);
+  });
 });
