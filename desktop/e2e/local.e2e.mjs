@@ -195,7 +195,7 @@ try {
   await addBtn.waitFor({ timeout: 15_000 });
   const chooserPromise = page.waitForEvent("filechooser", { timeout: 10_000 });
   await addBtn.click();
-  await page.getByRole("menuitem", { name: "Upload files", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Upload Documents", exact: true }).click();
   const chooser = await chooserPromise;
   await chooser.setFiles({
     name: DOC_NAME,
