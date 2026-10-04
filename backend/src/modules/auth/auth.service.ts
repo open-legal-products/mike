@@ -56,9 +56,18 @@ function passwordField(minimumCharacters: number) {
     });
 }
 
+/**
+ * Sign-in validates presence only. The policy (10 characters, 72 bytes)
+ * governs passwords we are about to SET; an existing account may hold one
+ * set under main's earlier 8-character rule, by an admin, or before GoTrue
+ * refused >72 bytes (bcrypt compares only the first 72, so it still
+ * matches). Rejecting those here would lock their owners out with a
+ * message telling them to change a password they cannot reach. GoTrue is
+ * the only judge of a match; the 4096 cap is just a request-size bound.
+ */
 export const credentialsSchema = z.object({
   email: emailSchema,
-  password: passwordField(1),
+  password: z.string().min(1).max(4096),
 });
 /** Sign-up applies the length policy; login accepts whatever was set. */
 export const signupSchema = credentialsSchema.extend({

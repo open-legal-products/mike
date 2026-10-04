@@ -399,6 +399,65 @@ describe("auth routes", () => {
     });
   });
 
+  // Sign-in must accept any password the account might already have: one
+  // set under main's old 8-character rule, one set before GoTrue began
+  // refusing >72 bytes (bcrypt compared only the first 72), or one created
+  // through the Supabase dashboard/admin API, which skip our forms. The
+  // provider is the only judge of whether it matches.
+  it.each([
+    ["an 8-character password set under the old rule", "eightch8"],
+    ["a 1-character password created by an admin", "x"],
+    ["an 80-byte ASCII password set before the 72-byte cap", "a".repeat(80)],
+    ["a 19-emoji (76-byte) password", "\u{1F600}".repeat(19)],
+  ])("lets sign-in through with %s", async (_label, password) => {
+    authClient.auth.signInWithPassword.mockResolvedValue({
+      data: { user, session },
+      error: null,
+    });
+
+    const response = await request(app)
+      .post("/auth/login")
+      .set("Origin", origin)
+      .send({ email: user.email, password });
+
+    expect(response.status).toBe(200);
+    expect(authClient.auth.signInWithPassword).toHaveBeenCalledWith(
+      expect.objectContaining({ password }),
+    );
+  });
+
+  // bcrypt counts bytes. Each row is exactly 72 bytes (legal) and its
+  // one-more sibling (illegal), across 1-, 2-, 3- and 4-byte UTF-8.
+  it.each([
+    ["ASCII", "a", 72],
+    ["2-byte Latin (é)", "é", 36],
+    ["3-byte CJK (密)", "密", 24],
+    ["4-byte emoji (😀), 2 UTF-16 units each", "\u{1F600}", 18],
+  ])("puts the sign-up byte boundary at 72 for %s", (_label, unit, count) => {
+    const atLimit = unit.repeat(count);
+    const overLimit = unit.repeat(count + 1);
+    expect(Buffer.byteLength(atLimit, "utf8")).toBe(72);
+    expect(
+      signupSchema.safeParse({ email: user.email, password: atLimit }).success,
+    ).toBe(true);
+    const over = signupSchema.safeParse({ email: user.email, password: overLimit });
+    expect(over.success).toBe(false);
+    expect(over.error?.issues[0]?.code).toBe("too_big");
+  });
+
+  it("counts a decomposed accent (e + U+0301) as the 3 bytes it is", () => {
+    // Looks like 24 "é" but is 24 × (1 + 2) = 72 bytes; one more is 75.
+    const decomposed = "é";
+    expect(
+      signupSchema.safeParse({ email: user.email, password: decomposed.repeat(24) })
+        .success,
+    ).toBe(true);
+    expect(
+      signupSchema.safeParse({ email: user.email, password: decomposed.repeat(25) })
+        .success,
+    ).toBe(false);
+  });
+
   it("does not reveal whether a password-reset email exists", async () => {
     authClient.auth.resetPasswordForEmail.mockRejectedValue(
       new Error("account not found"),
