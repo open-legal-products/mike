@@ -677,6 +677,8 @@ export function TRChatPanel({
 
     // History requests can finish out of order (including A → B → A). Only
     // the latest selection owns the transcript, loading state and warning.
+    // Resolves to the stored rows when this request still owns the
+    // transcript, or null when it failed or a newer selection replaced it.
     async function loadHistory(chatId: string) {
         const generation = ++historyRequestGeneration.current;
         setIsLoadingMessages(true);
@@ -685,11 +687,14 @@ export function TRChatPanel({
             const raw = await getTabularChatMessages(reviewId, chatId);
             if (generation === historyRequestGeneration.current) {
                 setMessages(mapTRMessages(raw) as TRMessage[]);
+                return raw;
             }
+            return null;
         } catch {
             if (generation === historyRequestGeneration.current) {
                 setMessageLoadWarning(true);
             }
+            return null;
         } finally {
             if (generation === historyRequestGeneration.current) {
                 setIsLoadingMessages(false);
@@ -2107,11 +2112,21 @@ export function TRChatPanel({
                               );
                               return;
                           }
-                          await loadHistory(serverChatId);
+                          const stored = await loadHistory(serverChatId);
                           if (
+                              !stored ||
                               streamGenerationRef.current !== gen ||
                               currentChatIdRef.current !== serverChatId
                           ) {
+                              return;
+                          }
+                          // The server stores the answer under the turn's
+                          // id once the run ends (the assistant chat makes
+                          // the same check in loadAssistantChat). If it is
+                          // already in the transcript there is nothing to
+                          // re-attach to: the replay window can still
+                          // answer 200 and would draw the answer twice.
+                          if (stored.some((row) => row.id === serverTurnId)) {
                               return;
                           }
                           await resumeTurn(serverChatId, serverTurnId);

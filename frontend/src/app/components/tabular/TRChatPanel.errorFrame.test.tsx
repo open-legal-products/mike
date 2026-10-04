@@ -300,4 +300,89 @@ describe("TRChatPanel dropped connection", () => {
             screen.queryByText("The answer stopped before it finished."),
         ).not.toBeInTheDocument();
     }, 10_000);
+
+    it("does not replay a dropped turn the reloaded history already holds", async () => {
+        // Live check 2026-10-04 (LIVE.md A.5b): after a dropped connection,
+        // Retry re-read the transcript, which already held the finished
+        // answer (its row id is the turn id), then still opened the turn's
+        // replay stream from frame 1 (the server keeps it for a retention
+        // window and answers 200, not 404) and rendered the answer twice.
+        let pulls = 0;
+        const dropped = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                if (pulls++ > 0) {
+                    controller.error(new TypeError("network error"));
+                    return;
+                }
+                controller.enqueue(
+                    new TextEncoder().encode(
+                        'id: 1\ndata: {"type":"chat_id","chatId":"chat-9","turnId":"turn-1"}\n\n' +
+                            'id: 2\ndata: {"type":"content_delta","text":"Clause 4 says"}\n\n',
+                    ),
+                );
+            },
+        });
+        vi.mocked(streamTabularChat).mockResolvedValue(
+            new Response(dropped, {
+                status: 200,
+                headers: { "Content-Type": "text/event-stream" },
+            }),
+        );
+        vi.mocked(streamTabularChatTurn).mockRejectedValue(
+            new TypeError("network error"),
+        );
+        const user = userEvent.setup();
+        render(
+            <>
+                <TRChatPanel reviewId="review-1" onCitationClick={vi.fn()} />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(await screen.findByRole("button", { name: "Ask" }));
+        const alert = await screen.findByRole("alert", {}, { timeout: 5000 });
+
+        // The run has finished and stored its answer under the turn id; the
+        // replay window still answers with the whole turn.
+        const replayCallsBeforeRetry = vi.mocked(streamTabularChatTurn).mock
+            .calls.length;
+        vi.mocked(streamTabularChatTurn).mockImplementation(async () =>
+            sseResponse([
+                '{"type":"content_delta","text":"Clause 4 says the tenant pays."}',
+            ]),
+        );
+        vi.mocked(getTabularChatMessages).mockResolvedValue([
+            {
+                id: "u1",
+                chat_id: "chat-9",
+                role: "user",
+                content: "What does clause 4 say?",
+                created_at: "2026-10-03T00:00:00Z",
+            },
+            {
+                id: "turn-1",
+                chat_id: "chat-9",
+                role: "assistant",
+                content: [
+                    { type: "content", text: "Clause 4 says the tenant pays." },
+                ],
+                created_at: "2026-10-03T00:00:01Z",
+            },
+        ]);
+        await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+        expect(
+            await screen.findByText(/Clause 4 says the tenant pays\./),
+        ).toBeVisible();
+        // Give a stray replay time to land before counting.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(
+            screen.getAllByText(/Clause 4 says the tenant pays\./),
+        ).toHaveLength(1);
+        expect(vi.mocked(streamTabularChatTurn).mock.calls).toHaveLength(
+            replayCallsBeforeRetry,
+        );
+        expect(streamTabularChat).toHaveBeenCalledTimes(1);
+        expect(screen.getAllByText("What does clause 4 say?")).toHaveLength(1);
+    }, 10_000);
 });
