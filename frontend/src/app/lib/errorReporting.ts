@@ -90,7 +90,9 @@ export function reportError(
  * either when a screen logs or rethrows it.
  */
 export function markErrorHandled(error: unknown): void {
-    scrubber.markReported(error);
+    // Same registry as a real report: `isReported` must also say yes, or a
+    // screen's notifyError would file the incident the server already filed.
+    markReported(error);
 }
 
 /**

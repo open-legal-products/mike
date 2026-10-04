@@ -130,6 +130,12 @@ describe("markErrorHandled", () => {
             ),
         ).toBeNull();
     });
+
+    it("counts as reported for notification callers, so they do not file it again", () => {
+        const error = new Error("schema_out_of_date, filed by the backend");
+        markErrorHandled(error);
+        expect(isReported(error)).toBe(true);
+    });
 });
 
 describe("reportApiFailure", () => {
