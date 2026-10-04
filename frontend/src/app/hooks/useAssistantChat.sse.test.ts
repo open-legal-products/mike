@@ -601,7 +601,10 @@ describe("useAssistantChat SSE parsing", () => {
         const assistant = result.current.messages.findLast(
             (m) => m.role === "assistant",
         );
-        expect(assistant?.error).toBe("The answer may still be running. Check chat history before sending the question again.");
+        // The bubble names the failure (describeError), not a generic line.
+        expect(assistant?.error).toBe(
+            "The answer may still be running. Check chat history before sending the question again.",
+        );
         expect(assistant?.events).toContainEqual(
             expect.objectContaining({ type: "mcp_tool_call", status: "ok" }),
         );
@@ -616,48 +619,20 @@ describe("useAssistantChat SSE parsing", () => {
         expect(result.current.isResponseLoading).toBe(false);
     });
 
-    it("raises a retryable notice when the stream dies mid-answer", async () => {
-        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    it("offers a history check, not another POST, when delivery is uncertain", async () => {
         clearToasts();
         fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-        fetchMock.mockResolvedValueOnce(
-            sseResponse(['data: {"type":"content_delta","text":"Second go."}\n\n']),
-        );
         const { result } = renderHook(() => ({
-            chat: useAssistantChat(),
-            toasts: useToasts(),
+            chat: useAssistantChat(), toasts: useToasts(),
         }));
-
-        await act(async () => {
-            await result.current.chat.handleChat(userMessage("why?"));
-        });
-
-        const failed = result.current.chat.messages.findLast(
-            (m) => m.role === "assistant",
-        );
-        expect(failed?.error).toBe(
-            "Mike couldn't reach the server. Check your connection and try again.",
-        );
+        await act(async () => { await result.current.chat.handleChat(userMessage("why?")); });
         const toast = result.current.toasts[0];
-        expect(toast?.title).toBe("Couldn't get a response");
-        const retry = toast?.actions?.find((a) => a.label === "Retry");
-        expect(retry).toBeDefined();
-
+        expect(toast?.message).toContain("may still be running");
+        expect(toast?.actions?.find(a => a.label === "Retry")).toBeUndefined();
         await act(async () => {
-            await retry?.onClick();
+            await toast?.actions?.find(a => a.label === "Refresh history")?.onClick();
         });
-
-        // The retry re-sends the same question, and the failed bubble is
-        // replaced rather than stacked under a second copy of it.
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-        const resent = JSON.parse(
-            (fetchMock.mock.calls.at(-1)?.[1] as RequestInit).body as string,
-        ) as { messages: { role: string; content: string }[] };
-        expect(resent.messages).toEqual([{ role: "user", content: "why?" }]);
-        expect(
-            result.current.chat.messages.filter((m) => m.role === "user"),
-        ).toHaveLength(1);
-        errorSpy.mockRestore();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("raises a retryable notice when the server sends an error event", async () => {
