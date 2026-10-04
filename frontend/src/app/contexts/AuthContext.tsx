@@ -20,7 +20,7 @@ import {
 } from "@/app/lib/authApi";
 import { AUTH_SESSION_INVALIDATED_EVENT } from "@/app/lib/authEvents";
 import { setReportingUser } from "@/app/lib/errorReporting";
-import { notifyError } from "@/app/lib/userFacingError";
+import { isOnAuthRoute, notifyError } from "@/app/lib/userFacingError";
 import { clearToasts } from "@/shared/ui/ToastUI";
 
 type User = AuthUser;
@@ -105,6 +105,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const reportSessionFailure = useCallback(
         (error: unknown) => {
             setAuthError(SESSION_ERROR_MESSAGE);
+            // Sign-in screens show `authError` inline with their own Retry;
+            // a toast there repeated it and then contradicted the form's
+            // next error.
+            if (isOnAuthRoute()) return;
             notifyError(error, {
                 action: "check your session",
                 dedupeKey: SESSION_TOAST_KEY,

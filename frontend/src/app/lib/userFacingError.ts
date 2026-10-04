@@ -101,20 +101,26 @@ const AUTH_ROUTES = [
 ];
 
 /**
+ * Is the user looking at a sign-in screen? Those screens are the way back
+ * in and render their own inline error, so session failures and "Sign in"
+ * actions are not raised over them.
+ */
+export function isOnAuthRoute(): boolean {
+    // No window (server render) reads as "/", which is not an auth route.
+    const pathname = typeof window === "undefined" ? "" : window.location.pathname;
+    const path = pathname.replace(/\/+$/, "") || "/";
+    return AUTH_ROUTES.some(
+        (route) => path === route || path.startsWith(`${route}/`),
+    );
+}
+
+/**
  * Where "Sign in" goes, or null when the user is already on an auth screen
  * (and would be sent to the page they are looking at).
  */
 function signInActionHref(): string | null {
-    if (typeof window === "undefined") return null;
+    if (typeof window === "undefined" || isOnAuthRoute()) return null;
     const { pathname, search } = window.location;
-    const path = pathname.replace(/\/+$/, "") || "/";
-    if (
-        AUTH_ROUTES.some(
-            (route) => path === route || path.startsWith(`${route}/`),
-        )
-    ) {
-        return null;
-    }
     return `/login?next=${encodeURIComponent(`${pathname}${search}`)}`;
 }
 

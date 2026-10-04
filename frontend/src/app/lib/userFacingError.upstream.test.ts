@@ -29,6 +29,12 @@ describe("notifyError for server-reported 5xx codes", () => {
         expect(reporting.reportError).not.toHaveBeenCalled();
     });
 
+    it("handles a thrown value that is not an object", () => {
+        notifyError("plain string failure");
+
+        expect(getSnapshot().at(-1)?.message).not.toContain("plain string");
+    });
+
     it("lets a call site's own code message win", () => {
         notifyError(
             new MikeApiError({ status: 503, code: "schema_out_of_date", message: "x" }),

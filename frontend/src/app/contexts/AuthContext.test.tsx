@@ -82,6 +82,42 @@ describe("AuthProvider", () => {
         );
     });
 
+    it.each([
+        ["/login", 0],
+        ["/signup", 0],
+        ["/reset-password", 0],
+        ["/assistant", 1],
+    ])(
+        "on %s, a failed session check raises %i session toasts",
+        async (path, toasts) => {
+            // Live check (2026-10-04, backend down): /login showed its inline
+            // "We could not check your session" AND a toast saying the same,
+            // and the two disagreed once the user tried to sign in. Auth
+            // screens own their error; the toast is for every other page.
+            window.history.pushState({}, "", path);
+            clearToasts();
+            getAuthSession.mockRejectedValue(new Error("gateway unavailable"));
+
+            render(
+                <AuthProvider>
+                    <Consumer />
+                    <ToastViewportUI />
+                </AuthProvider>,
+            );
+
+            await waitFor(() =>
+                expect(screen.getByTestId("error")).toHaveTextContent(
+                    "We could not check your session",
+                ),
+            );
+            expect(
+                screen.queryAllByText(/Couldn't check your session/),
+            ).toHaveLength(toasts);
+            clearToasts();
+            window.history.pushState({}, "", "/");
+        },
+    );
+
     it("clears stale in-memory auth when an API request returns 401", async () => {
         getAuthSession.mockResolvedValue(user);
         render(
