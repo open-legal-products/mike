@@ -6,8 +6,23 @@
 // req/res — the route maps the result onto status codes, headers, and body.
 
 import type { Db } from "../../lib/supabase";
-import { downloadFile } from "../../lib/storage";
-import { verifyDownload } from "../../lib/downloadTokens";
+import type { Readable } from "node:stream";
+import {
+    discardBlob,
+    downloadFile,
+    writeBlobFromStream,
+} from "../../lib/storage";
+import {
+    verifyBlobToken,
+    verifyBlobUploadToken,
+    verifyDownload,
+} from "../../lib/downloadTokens";
+import {
+    failure,
+    internalFailure,
+    ok,
+    type ServiceResult,
+} from "../../lib/serviceResult";
 import { ensureDocAccess } from "../../lib/access";
 import {
     contentTypeForDocumentType,
@@ -16,6 +31,59 @@ import {
 
 function contentTypeFor(filename: string): string {
     return contentTypeForDocumentType(documentSuffix(filename));
+}
+
+/**
+ * Resolve a filesystem-driver blob token (the fs stand-in for an S3 presigned
+ * GET) to its bytes. The token itself is the authorization: it is minted only
+ * after an authenticated caller's access check, matching the S3 presigned URLs
+ * used by the cloud storage driver.
+ */
+export async function resolveBlobDownload(token: string): Promise<
+    ServiceResult<{ bytes: Buffer; contentType: string; filename: string }>
+> {
+    const info = verifyBlobToken(token);
+    if (!info) return failure("not_found", "Invalid or expired link");
+    const bytes = await downloadFile(info.path);
+    if (!bytes) return failure("not_found", "File not found");
+    return ok({
+        bytes: Buffer.from(bytes),
+        contentType: contentTypeFor(info.filename),
+        filename: info.filename,
+    });
+}
+
+/**
+ * Redeem a filesystem-driver upload token (the fs stand-in for an S3 presigned
+ * PUT) by streaming the request body to disk.
+ *
+ * The declared content type and byte count are inside the signature, so an
+ * oversized or mistyped body is rejected and the partial file removed, which
+ * is how the S3 URL behaves (S3 fails signature validation on a Content-Length
+ * that differs from the signed one).
+ */
+export async function storeBlobUpload(args: {
+    token: string;
+    contentType: string;
+    body: Readable;
+}): Promise<ServiceResult<void>> {
+    const info = verifyBlobUploadToken(args.token);
+    if (!info) return failure("forbidden", "Invalid or expired upload link");
+    const declaredType = args.contentType.split(";")[0].trim();
+    if (declaredType && declaredType !== info.contentType) {
+        return failure("validation", "Upload content type does not match the link");
+    }
+    try {
+        const written = await writeBlobFromStream(info.path, args.body);
+        if (written !== info.sizeBytes) {
+            await discardBlob(info.path);
+            return failure("validation", "Upload size does not match the link");
+        }
+    } catch (error) {
+        await discardBlob(info.path);
+        return internalFailure(error);
+    }
+    return ok(undefined);
 }
 
 /**

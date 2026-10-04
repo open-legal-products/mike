@@ -17,7 +17,10 @@ import { quickActionsRouter } from "./modules/quick-actions/quickActions.routes"
 import { workflowAddonsRouter } from "./modules/workflows/workflowAddons.routes";
 import { userRouter } from "./modules/user/user.routes";
 import { modelsRouter } from "./modules/models/models.routes";
-import { downloadsRouter } from "./modules/downloads/downloads.routes";
+import {
+  blobUploadHandler,
+  downloadsRouter,
+} from "./modules/downloads/downloads.routes";
 import { sourceDocumentsRouter } from "./modules/source-documents/sourceDocuments.routes";
 import { auditRouter } from "./modules/audit/audit.routes";
 import { authRouter } from "./modules/auth/auth.routes";
@@ -281,6 +284,11 @@ app.delete("/user/account", dataDeleteLimiter);
 app.delete("/user/chats", dataDeleteLimiter);
 app.delete("/user/projects", dataDeleteLimiter);
 app.delete("/user/tabular-reviews", dataDeleteLimiter);
+
+// Registered ahead of the global JSON parser: the filesystem storage driver's
+// signed PUT streams its body straight to disk (see downloads.routes.ts), so
+// no body parser may consume it first — a .json upload otherwise would be.
+app.put("/download/signed/:token", blobUploadHandler);
 
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 

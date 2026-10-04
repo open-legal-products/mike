@@ -21,8 +21,63 @@ import * as S3Commands from "@aws-sdk/client-s3";
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { bestEffort } from "./observability/sentry";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import fs, { stat } from "node:fs/promises";
+import path from "node:path";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { signBlobToken, signBlobUploadToken } from "./downloadTokens";
+
+// ---------------------------------------------------------------------------
+// Driver selection — STORAGE_DRIVER=fs swaps the S3 client for the local
+// filesystem, keeping this module's public API identical. Built for the
+// self-contained desktop app (no storage daemon to supervise), but works for
+// any single-node deploy. Everything below the dispatch points is unchanged
+// S3 code.
+//
+// fs mode has no presigned URLs, so getSignedUrl returns a backend-served
+// URL instead: an expiring HMAC "blob token" (see downloadTokens.ts) on the
+// unauthenticated /download/signed/:token route — the same capability
+// semantics a presigned URL has. BACKEND_PUBLIC_URL must be the
+// browser-reachable base URL of this backend (the desktop supervisor sets
+// it; defaults to localhost:PORT which is correct for local single-machine
+// use).
+// ---------------------------------------------------------------------------
+
+const FS_DRIVER = process.env.STORAGE_DRIVER === "fs";
+const FS_ROOT = process.env.STORAGE_FS_ROOT;
+
+function backendPublicUrl(): string {
+  return (
+    process.env.BACKEND_PUBLIC_URL ??
+    `http://localhost:${process.env.PORT ?? 3001}`
+  ).replace(/\/+$/, "");
+}
+
+// Storage keys are backend-constructed, but resolve-and-check anyway so a
+// corrupted key can never escape the storage root.
+function fsPathFor(key: string): string {
+  const root = path.resolve(FS_ROOT!);
+  const resolved = path.resolve(root, key);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new Error(`storage key escapes STORAGE_FS_ROOT: ${key}`);
+  }
+  return resolved;
+}
+
+async function fsWalk(dir: string, out: string[], root: string): Promise<void> {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) await fsWalk(full, out, root);
+    else if (entry.isFile())
+      out.push(path.relative(root, full).split(path.sep).join("/"));
+  }
+}
 
 const GetObjectCommand = (S3Commands as any).GetObjectCommand;
 
@@ -88,16 +143,20 @@ function getBrowserSigningClient(): S3Client {
 
 const BUCKET = process.env.R2_BUCKET_NAME ?? "mike";
 
-export const storageEnabled = Boolean(
-  process.env.R2_ENDPOINT_URL &&
-  process.env.R2_ACCESS_KEY_ID &&
-  process.env.R2_SECRET_ACCESS_KEY,
-);
+export const storageEnabled = FS_DRIVER
+  ? Boolean(FS_ROOT)
+  : Boolean(
+      process.env.R2_ENDPOINT_URL &&
+      process.env.R2_ACCESS_KEY_ID &&
+      process.env.R2_SECRET_ACCESS_KEY,
+    );
 
 function requireStorageConfig(): void {
   if (!storageEnabled) {
     throw new Error(
-      "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY must be set",
+      FS_DRIVER
+        ? "STORAGE_FS_ROOT must be set when STORAGE_DRIVER=fs"
+        : "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY must be set",
     );
   }
 }
@@ -120,6 +179,12 @@ export async function uploadFile(
   contentType: string,
 ): Promise<void> {
   requireStorageConfig();
+  if (FS_DRIVER) {
+    const target = fsPathFor(key);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, Buffer.from(content));
+    return;
+  }
   const client = getClient();
   await client.send(
     new PutObjectCommand({
@@ -137,6 +202,18 @@ export async function uploadFileFromPath(
   contentType: string,
 ): Promise<void> {
   requireStorageConfig();
+  if (FS_DRIVER) {
+    const target = fsPathFor(key);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    try {
+      // copyFile streams internally, so a large generated PDF never has to be
+      // buffered whole the way the ArrayBuffer overload above would.
+      await fs.copyFile(filePath, target);
+    } catch (error) {
+      throw new StorageOperationError("upload", { cause: error });
+    }
+    return;
+  }
   const metadata = await stat(filePath);
   const body = createReadStream(filePath);
   try {
@@ -169,6 +246,20 @@ export async function getSignedUploadUrl(
   expiresIn = 900,
 ): Promise<string | null> {
   if (!storageEnabled) return null;
+  if (FS_DRIVER) {
+    // There is no object store to presign against, so mint the write-side
+    // twin of the blob token: an expiring HMAC capability naming exactly one
+    // key, content type and byte count, redeemed by PUT on the same
+    // /download/signed/:token route the read tokens use. The declared type and
+    // size are inside the signature, so — as with the S3 URL this replaces —
+    // the capability cannot be replayed with a different body.
+    return `${backendPublicUrl()}/download/signed/${signBlobUploadToken(
+      key,
+      contentType,
+      expectedSizeBytes,
+      expiresIn,
+    )}`;
+  }
   try {
     const client = getBrowserSigningClient();
     return await awsGetSignedUrl(
@@ -207,6 +298,18 @@ export async function headFile(
   key: string,
 ): Promise<StoredObjectMetadata | null> {
   if (!storageEnabled) return null;
+  if (FS_DRIVER) {
+    try {
+      const info = await stat(fsPathFor(key));
+      // No etag: the filesystem has no equivalent, and every caller treats a
+      // null etag as "not available" rather than "mismatch".
+      return { size: info.size, etag: null, contentType: null };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      console.error("[storage] headFile failed", { key, error });
+      throw new StorageOperationError("HEAD", { cause: error });
+    }
+  }
   try {
     const client = getClient();
     const response = await client.send(
@@ -233,6 +336,16 @@ export async function copyFile(
   targetKey: string,
 ): Promise<void> {
   requireStorageConfig();
+  if (FS_DRIVER) {
+    const target = fsPathFor(targetKey);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    try {
+      await fs.copyFile(fsPathFor(sourceKey), target);
+    } catch (error) {
+      throw new StorageOperationError("copy", { cause: error });
+    }
+    return;
+  }
   const client = getClient();
   const copySource = encodeURIComponent(`${BUCKET}/${sourceKey}`).replace(
     /%2F/g,
@@ -257,6 +370,23 @@ export async function copyFile(
 
 export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
   if (!storageEnabled) return null;
+  if (FS_DRIVER) {
+    try {
+      const bytes = await fs.readFile(fsPathFor(key));
+      return bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        console.error("[storage] downloadFile failed", {
+          key,
+          error: error,
+        });
+      }
+      return null;
+    }
+  }
   try {
     const client = getClient();
     const response = (await client.send(
@@ -283,6 +413,20 @@ export function createFileReadStream(key: string): Readable {
   return Readable.from(
     (async function* () {
       requireStorageConfig();
+      if (FS_DRIVER) {
+        try {
+          // createReadStream keeps the same lazy, backpressure-respecting
+          // contract the S3 branch has: nothing is read until a consumer pulls.
+          yield* createReadStream(fsPathFor(key));
+        } catch (error) {
+          console.error("[storage] createFileReadStream failed", {
+            key,
+            error,
+          });
+          throw new StorageOperationError("download", { cause: error });
+        }
+        return;
+      }
       try {
         const response = (await getClient().send(
           new GetObjectCommand({ Bucket: BUCKET, Key: key }),
@@ -304,6 +448,17 @@ export function createFileReadStream(key: string): Readable {
 
 export async function listFiles(prefix: string): Promise<string[]> {
   if (!storageEnabled) return [];
+  if (FS_DRIVER) {
+    // S3 prefixes are plain string prefixes, not directories ("documents/u1/d"
+    // matches "documents/u1/d2/…"). Walk the deepest whole directory in the
+    // prefix, then string-filter, so the two drivers agree exactly.
+    const root = path.resolve(FS_ROOT!);
+    const lastSlash = prefix.lastIndexOf("/");
+    const dirPart = lastSlash >= 0 ? prefix.slice(0, lastSlash) : "";
+    const all: string[] = [];
+    await fsWalk(dirPart ? fsPathFor(dirPart) : root, all, root);
+    return all.filter((k) => k.startsWith(prefix)).sort();
+  }
   const client = getClient();
   const keys: string[] = [];
   let ContinuationToken: string | undefined;
@@ -346,6 +501,14 @@ export async function deleteFile(key: string): Promise<void> {
   // An empty key names no object. Sent anyway, the SDK either rejects it
   // (a missing URI label) or, on some stores, addresses the bucket itself.
   if (!key) return;
+  if (FS_DRIVER) {
+    try {
+      await fs.unlink(fsPathFor(key));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    }
+    return;
+  }
   const client = getClient();
   try {
     await client.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
@@ -410,6 +573,12 @@ export async function getSignedUrl(
   downloadFilename?: string,
 ): Promise<string | null> {
   if (!storageEnabled) return null;
+  if (FS_DRIVER) {
+    const filename =
+      downloadFilename ?? normalizeDownloadFilename(path.posix.basename(key));
+    const token = signBlobToken(key, filename, expiresIn);
+    return `${backendPublicUrl()}/download/signed/${token}`;
+  }
   try {
     // Signed download URLs are followed by the browser too, so they need the
     // same browser-reachable signing endpoint the direct-upload URLs use.
@@ -434,6 +603,42 @@ export async function getSignedUrl(
     });
     return null;
   }
+}
+
+/**
+ * Stream a request body straight onto disk for the filesystem driver's signed
+ * PUT route. Streaming (rather than an express body parser) is what keeps a
+ * multi-hundred-megabyte upload from being buffered in the process.
+ * Returns the number of bytes written so the caller can enforce the size the
+ * capability was signed for.
+ */
+export async function writeBlobFromStream(
+  key: string,
+  body: Readable,
+): Promise<number> {
+  if (!FS_DRIVER) {
+    throw new Error("writeBlobFromStream is only available on the fs driver");
+  }
+  const target = fsPathFor(key);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const handle = await fs.open(target, "w");
+  let written = 0;
+  try {
+    const sink = handle.createWriteStream();
+    body.on("data", (chunk: Buffer) => {
+      written += chunk.length;
+    });
+    await pipeline(body, sink);
+  } finally {
+    await handle.close().catch(() => {});
+  }
+  return written;
+}
+
+/** Remove a partially written blob after a failed or oversized upload. */
+export async function discardBlob(key: string): Promise<void> {
+  if (!FS_DRIVER) return;
+  await fs.rm(fsPathFor(key), { force: true }).catch(() => {});
 }
 
 export function normalizeDownloadFilename(name: string): string {
