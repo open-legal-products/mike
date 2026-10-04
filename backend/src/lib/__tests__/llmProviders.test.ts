@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fallbackReasoningLevelFromProviderError } from "../llm/providers";
+import {
+  completeWithProvider,
+  fallbackReasoningLevelFromProviderError,
+} from "../llm/providers";
 
 // A minimal OpenAI Responses-API payload, enough for generateText to parse.
 function responsesApiPayload(text: string) {
@@ -94,7 +97,6 @@ describe("OPENAI_BASE_URL gateway routing", () => {
         }),
     );
     vi.stubEnv("OPENAI_API_KEY", "test-key");
-    const { completeWithProvider } = await import("../llm/providers");
     const text = await completeWithProvider({
       model: "gpt-5.4",
       user: "hello",
