@@ -271,6 +271,17 @@ function ollamaBaseUrl(): string {
   ).replace(/\/$/, "");
 }
 
+// OPENAI_BASE_URL points the built-in OpenAI models at an OpenAI-protocol
+// gateway (an Azure OpenAI v1 endpoint, a LiteLLM proxy). Mike resolves it
+// itself instead of leaving it to @ai-sdk/openai's env fallback: the SDK
+// rejects an empty value, and .env.example ships the line blank, so a copied
+// .env would otherwise break every OpenAI model.
+function openAiBaseUrl(): string {
+  return (
+    process.env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1"
+  ).replace(/\/$/, "");
+}
+
 function ollamaModelName(model: string): string {
   const tag = model.replace(/^ollama\/?/, "");
   return tag || process.env.OLLAMA_MODEL?.trim() || "qwen3.6";
@@ -310,6 +321,7 @@ async function createProviderAdapter(
     const { createOpenAI } = await import("@ai-sdk/openai");
     const openai = createOpenAI({
       apiKey: requiredKey("OpenAI", "OPENAI_API_KEY", apiKeys?.openai),
+      baseURL: openAiBaseUrl(),
       fetch: aiSdkFetch,
     });
     return {
