@@ -177,7 +177,12 @@ async function toApiError(
     });
     const apiError = new MikeApiError({
       status: response.status,
-      message: text || `API error: ${response.status}`,
+      // A body that is not our JSON came from something in front of the
+      // API (a proxy's HTML error page, a load balancer's plain text). It
+      // is not written for users, so it never becomes the message; the
+      // devLog above keeps a preview for debugging. describeError turns
+      // this placeholder into the sentence for the status.
+      message: `API error: ${response.status}`,
     });
     if (response.status >= 500) {
       reportApiFailure({
