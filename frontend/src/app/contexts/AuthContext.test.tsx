@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider, useAuth } from "./AuthContext";
 import { AUTH_SESSION_INVALIDATED_EVENT } from "@/app/lib/authEvents";
 import {
@@ -55,7 +55,9 @@ function Consumer() {
 }
 
 describe("AuthProvider", () => {
+    afterEach(() => clearToasts());
     beforeEach(() => {
+        clearToasts();
         getAuthSession.mockReset();
         logout.mockReset();
         clearLegacyBrowserAuthStorage.mockReset();
@@ -213,4 +215,28 @@ describe("AuthProvider", () => {
         await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
         clearToasts();
     });
+    it.each(["invalidation", "null refresh", "account switch"])(
+        "clears previous-session actions on %s",
+        async (transition) => {
+            getAuthSession.mockResolvedValue(user);
+            render(<AuthProvider><Consumer /><ToastViewportUI /></AuthProvider>);
+            await screen.findByText(user.email);
+            showToast({ tone: "error", title: "Save failed", message: "Try again.",
+                actions: [{ label: "Retry old write", onClick: vi.fn() }] });
+            expect(await screen.findByRole("button", { name: "Retry old write" })).toBeVisible();
+            if (transition === "invalidation") {
+                fireEvent(window, new Event(AUTH_SESSION_INVALIDATED_EVENT));
+            } else {
+                getAuthSession.mockResolvedValue(transition === "null refresh" ? null : {
+                    ...user, id: "user-2", email: "second@example.test",
+                });
+                fireEvent(window, new Event("focus"));
+            }
+            await waitFor(() => expect(screen.getByTestId("user")).toHaveTextContent(
+                transition === "account switch" ? "second@example.test" : "signed-out",
+            ));
+            expect(screen.queryByRole("button", { name: "Retry old write" })).not.toBeInTheDocument();
+        },
+    );
+
 });

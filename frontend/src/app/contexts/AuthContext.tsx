@@ -58,6 +58,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const channelRef = useRef<BroadcastChannel | null>(null);
     const sessionRequestRef = useRef<Promise<User | null> | null>(null);
 
+    const sessionUserIdRef = useRef<string | null>(null);
+    const applySessionUser = useCallback((nextUser: User | null) => {
+        // Notifications can hold write closures from the previous account.
+        // Every session-ending or identity-changing path must discard them.
+        if (!nextUser || sessionUserIdRef.current !== nextUser.id) clearToasts();
+        sessionUserIdRef.current = nextUser?.id ?? null;
+        setUser(nextUser);
+    }, []);
+
     const broadcastAuthState = useCallback(
         (state: AuthSyncMessage["state"]) => {
             const message: AuthSyncMessage = {
@@ -93,10 +102,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             });
         }
         const nextUser = await sessionRequestRef.current;
-        setUser(nextUser);
+        applySessionUser(nextUser);
         setAuthError(null);
         return nextUser;
-    }, []);
+    }, [applySessionUser]);
 
     // Background session checks (focus, tab visibility, another tab signing
     // in) have no screen of their own: without this the user sees a silently
@@ -137,11 +146,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const applySyncMessage = (message: AuthSyncMessage) => {
             if (message.state === "signed-out") {
-                setUser(null);
+                applySessionUser(null);
                 setAuthError(null);
                 setAuthLoading(false);
-                // Signed out in another tab: same reasoning as above.
-                clearToasts();
                 return;
             }
 
@@ -171,7 +178,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
         };
         const onInvalidated = () => {
-            setUser(null);
+            applySessionUser(null);
             setAuthError(EXPIRED_SESSION_MESSAGE);
             setAuthLoading(false);
             broadcastAuthState("signed-out");
@@ -209,7 +216,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 onVisibilityChange,
             );
         };
-    }, [broadcastAuthState, fetchAndApplySession, reportSessionFailure]);
+    }, [applySessionUser, broadcastAuthState, fetchAndApplySession, reportSessionFailure]);
 
     const refreshSession = useCallback(async () => {
         try {
@@ -227,33 +234,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const signOut = useCallback(async () => {
         try {
             await logout("local");
-            setUser(null);
+            applySessionUser(null);
             setAuthError(null);
-            // Toasts outlive the screen that raised them. After a sign-out
-            // the next screen is the login form, and "Couldn't save the
-            // document — Retry" floating over it is both confusing and a
-            // button that now acts as a different user.
-            clearToasts();
             broadcastAuthState("signed-out");
         } catch (error) {
             setAuthError("Unable to sign out. Please try again.");
             throw error;
         }
-    }, [broadcastAuthState]);
+    }, [applySessionUser, broadcastAuthState]);
 
     const updateEmail = useCallback(async (email: string) => {
         const { user: nextUser } = await updateAuthEmail(
             email,
             "/settings?emailChange=processed",
         );
-        setUser(nextUser);
+        applySessionUser(nextUser);
         return nextUser;
-    }, []);
+    }, [applySessionUser]);
 
     const setPassword = useCallback(async (password: string) => {
         const { user: nextUser } = await updateAuthPassword(password);
-        setUser(nextUser);
-    }, []);
+        applySessionUser(nextUser);
+    }, [applySessionUser]);
 
     // A fresh object here re-renders every consumer of this context on every
     // provider render, sign-in state change or not. Each callback above is
