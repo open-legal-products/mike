@@ -2071,14 +2071,52 @@ export function TRChatPanel({
                 const last = updated[updated.length - 1];
                 if (last?.role === "assistant") {
                     // Whatever arrived before the break is real answer text
-                    // and stays on screen; only the streaming state is closed.
+                    // and stays on screen; only the streaming state is closed,
+                    // and the bubble says it is unfinished once the toast is
+                    // gone.
                     updated[updated.length - 1] = {
                         ...last,
                         isStreaming: false,
+                        ...(isAbort
+                            ? {}
+                            : {
+                                  error: "The answer stopped before it finished.",
+                              }),
                     };
                 }
                 return updated;
             });
+            // Once the server has named the turn it owns the run: it is still
+            // generating or has stored the answer. Re-sending would store the
+            // question twice (and, while the run is alive, be refused with
+            // 409 turn_in_progress after that insert), so Retry re-reads the
+            // thread and re-attaches instead. This also gives a resumed turn,
+            // which has no request of its own to re-send, a way back.
+            const serverChatId = cursor.chatId;
+            const serverTurnId = cursor.turnId;
+            const retry =
+                serverChatId && serverTurnId
+                    ? async () => {
+                          if (
+                              streamGenerationRef.current !== gen ||
+                              abortRef.current ||
+                              currentChatIdRef.current !== serverChatId
+                          ) {
+                              notifyInfo(
+                                  "This chat has changed. Send the message again from the chat it belongs to.",
+                              );
+                              return;
+                          }
+                          await loadHistory(serverChatId);
+                          if (
+                              streamGenerationRef.current !== gen ||
+                              currentChatIdRef.current !== serverChatId
+                          ) {
+                              return;
+                          }
+                          await resumeTurn(serverChatId, serverTurnId);
+                      }
+                    : args.settings.retry;
             // The failure used to be written into the answer as if the model
             // had said it, which left no way to tell a real answer from a
             // transport error and offered nothing to do about it.
@@ -2087,7 +2125,7 @@ export function TRChatPanel({
                 fallback:
                     "The answer stopped before it finished. Anything already shown is kept.",
                 dedupeKey: `tr-chat-stream:${reviewId}`,
-                onRetry: isAbort ? undefined : args.settings.retry,
+                onRetry: isAbort ? undefined : retry,
             });
         } finally {
             if (streamGenerationRef.current === gen) setIsLoading(false);

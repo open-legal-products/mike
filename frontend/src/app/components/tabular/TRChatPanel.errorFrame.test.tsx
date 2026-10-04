@@ -5,6 +5,7 @@ import {
     getTabularChats,
     getTabularChatMessages,
     streamTabularChat,
+    streamTabularChatTurn,
 } from "@/app/lib/mikeApi";
 import type { Message } from "@/app/components/shared/types";
 import { TRChatPanel } from "./TRChatPanel";
@@ -17,6 +18,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     getTabularChats: vi.fn(),
     getTabularChatMessages: vi.fn(),
     streamTabularChat: vi.fn(),
+    streamTabularChatTurn: vi.fn(),
 }));
 
 // A stub composer so a test can send the question without driving the real
@@ -186,4 +188,116 @@ describe("TRChatPanel terminal error frame", () => {
             within(alert).queryByRole("button", { name: "Retry" }),
         ).not.toBeInTheDocument();
     });
+});
+
+describe("TRChatPanel dropped connection", () => {
+    beforeEach(() => {
+        clearToasts();
+        vi.clearAllMocks();
+        vi.stubGlobal(
+            "ResizeObserver",
+            class {
+                observe() {}
+                disconnect() {}
+            },
+        );
+        HTMLElement.prototype.scrollTo = vi.fn();
+        vi.mocked(getTabularChats).mockResolvedValue([]);
+        vi.mocked(getTabularChatMessages).mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        clearToasts();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it("re-reads a turn the server owns instead of re-sending the question", async () => {
+        // The server named the turn, streamed part of it, then the connection
+        // broke and the resume attempts failed too. The run is server-owned:
+        // it finishes and stores the answer on its own. Re-POSTing would store
+        // the question a second time (and be refused with 409 after that
+        // insert while the run is alive), so Retry must re-read instead.
+        let pulls = 0;
+        const dropped = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                if (pulls++ > 0) {
+                    controller.error(new TypeError("network error"));
+                    return;
+                }
+                const encoder = new TextEncoder();
+                controller.enqueue(
+                    encoder.encode(
+                        'id: 1\ndata: {"type":"chat_id","chatId":"chat-9","turnId":"turn-1"}\n\n' +
+                            'id: 2\ndata: {"type":"content_delta","text":"Clause 4 says"}\n\n',
+                    ),
+                );
+            },
+        });
+        vi.mocked(streamTabularChat).mockResolvedValue(
+            new Response(dropped, {
+                status: 200,
+                headers: { "Content-Type": "text/event-stream" },
+            }),
+        );
+        vi.mocked(streamTabularChatTurn).mockRejectedValue(
+            new TypeError("network error"),
+        );
+        const user = userEvent.setup();
+        render(
+            <>
+                <TRChatPanel reviewId="review-1" onCitationClick={vi.fn()} />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(await screen.findByRole("button", { name: "Ask" }));
+        const alert = await screen.findByRole("alert", {}, { timeout: 5000 });
+        // The partial answer says it is unfinished, not just the toast.
+        expect(
+            await screen.findByText("The answer stopped before it finished."),
+        ).toBeVisible();
+
+        // By the time the user clicks, the run has finished (the replay
+        // window answers 404) and the stored transcript holds the answer.
+        vi.mocked(streamTabularChatTurn).mockResolvedValue(
+            new Response(JSON.stringify({ code: "turn_not_found" }), {
+                status: 404,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        vi.mocked(getTabularChatMessages).mockResolvedValue([
+            {
+                id: "u1",
+                chat_id: "chat-9",
+                role: "user",
+                content: "What does clause 4 say?",
+                created_at: "2026-10-03T00:00:00Z",
+            },
+            {
+                id: "a1",
+                chat_id: "chat-9",
+                role: "assistant",
+                content: [
+                    { type: "content", text: "Clause 4 says the tenant pays." },
+                ],
+                created_at: "2026-10-03T00:00:01Z",
+            },
+        ]);
+        await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+        expect(
+            await screen.findByText(/Clause 4 says the tenant pays\./),
+        ).toBeVisible();
+        expect(getTabularChatMessages).toHaveBeenCalledWith("review-1", "chat-9");
+        expect(streamTabularChatTurn).toHaveBeenLastCalledWith(
+            expect.objectContaining({ chatId: "chat-9", turnId: "turn-1", from: 1 }),
+        );
+        // The question was sent once and is shown once.
+        expect(streamTabularChat).toHaveBeenCalledTimes(1);
+        expect(screen.getAllByText("What does clause 4 say?")).toHaveLength(1);
+        expect(
+            screen.queryByText("The answer stopped before it finished."),
+        ).not.toBeInTheDocument();
+    }, 10_000);
 });
