@@ -12,27 +12,13 @@ import path from "path";
 /** The one-page PDF every upload flow attaches. */
 export const PDF_FIXTURE = path.join(__dirname, "fixtures/test.pdf");
 
-/**
- * The model `selectClaudeModel` picks — the cheapest Anthropic entry in
- * ModelToggle.MODELS.
- */
+/** Anthropic model available through the CI provider fixture or a local live key. */
 export const CLAUDE_MODEL_LABEL = "Claude Sonnet 4.6";
 
 /**
- * Select a Claude model in the chat input's ModelToggle.
- *
- * The specs that call this run only when ANTHROPIC_API_KEY is set in the
- * Playwright environment (test.skip(!hasLlmKey, ...) — e2e/llm.ts). The CI stack
- * exports the same secret to the backend, whose key resolution (modules/user/user.apiKeyStore.ts
- * envApiKey()) falls back to the ANTHROPIC_API_KEY env var, so the "claude"
- * provider reports as configured and ModelToggle shows the Anthropic models as
- * available. The default model, however, is "gemini-3-flash-preview"
- * (ModelToggle.DEFAULT_MODEL_ID), for which no key is configured in CI;
- * ChatInput.handleSubmit then refuses to send. So every LLM spec has to switch
- * the model first.
- *
- * ModelToggle exposes a stable "Choose model" accessible name. Its tooltip
- * includes the selection even in compact, icon-only project composers.
+ * Select a Claude model in the chat input's ModelToggle. ModelToggle exposes a
+ * stable "Choose model" accessible name; its tooltip includes the selection even
+ * in compact, icon-only project composers.
  */
 export async function selectClaudeModel(page: Page) {
     const trigger = page.getByRole("button", { name: "Choose model", exact: true });

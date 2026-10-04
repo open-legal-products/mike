@@ -243,10 +243,15 @@ test("delete chat: sidebar delete action removes the chat from history", async (
     await firstRow.hover();
     await firstRow.locator("button").last().click();
     await page.getByRole("menuitem", { name: "Rename" }).click();
-    const renameInput = firstRow.locator("input[type='text']");
+    // "Rename" opens the shared RenameModal, as in the rename test above.
+    const renameInput = page.getByLabel("Chat title");
     await expect(renameInput).toBeVisible({ timeout: 5_000 });
     await renameInput.fill(uniqueTitle);
-    await renameInput.press("Enter");
+    // Click Save rather than pressing Enter: under the development renderer
+    // the row's actions menu can still be closing when the modal opens, and
+    // a CI run showed the Enter key lost with the title typed in the field.
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(renameInput).toBeHidden({ timeout: 10_000 });
 
     // The renamed chat's title button now uniquely identifies its row.
     // exact: true — the row's menu trigger is labelled "Actions for <title>",
