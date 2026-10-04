@@ -48,8 +48,24 @@ export interface NotifyErrorOptions extends DescribeErrorOptions {
     dedupeKey?: string;
 }
 
+/**
+ * Codes the server side already reported and phrased for users (mikeApi.ts:
+ * schema_out_of_date, upstream_unavailable) keep that one sentence in a toast
+ * too, so the error copy for them has a single source. A call site's own
+ * `codeMessages` entry still wins.
+ */
+function withReportedUpstreamMessage(error: unknown, options: NotifyErrorOptions): NotifyErrorOptions {
+    // Duck-typed like describeError: the code is read off any error shape,
+    // and mikeApi's table is consulted only when there is a code to look up.
+    const raw = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
+    const code = typeof raw === "string" ? raw : null;
+    const upstream = code ? reportedUpstreamMessage(code) : null;
+    if (!code || !upstream) return options;
+    return { ...options, codeMessages: { [code]: upstream, ...options.codeMessages } };
+}
+
 export function notifyError(error: unknown, options: NotifyErrorOptions = {}): UserFacingError | null {
-    const described = describeError(error, options);
+    const described = describeError(error, withReportedUpstreamMessage(error, options));
     if (described.kind === "aborted") return null;
     if (!isReported(error) && (described.kind === "unknown" || described.kind === "server")) {
         reportError(error, { tags: { component: "notify", action: options.action } });
