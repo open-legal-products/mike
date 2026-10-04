@@ -385,4 +385,16 @@ describe("TRChatPanel dropped connection", () => {
         expect(streamTabularChat).toHaveBeenCalledTimes(1);
         expect(screen.getAllByText("What does clause 4 say?")).toHaveLength(1);
     }, 10_000);
+    it("does not resend an uncertain first delivery before metadata", async () => {
+        vi.mocked(streamTabularChat).mockRejectedValue(new TypeError("Failed to fetch"));
+        const user = userEvent.setup();
+        render(<><TRChatPanel reviewId="review-1" onCitationClick={vi.fn()} /><ToastViewportUI /></>);
+        await user.click(await screen.findByRole("button", {name: "Ask"}));
+        const alert = await screen.findByRole("alert");
+        expect(within(alert).queryByRole("button", {name: "Retry"})).not.toBeInTheDocument();
+        expect(alert).toHaveTextContent("may still be running");
+        await user.click(within(alert).getByRole("button", {name: "Check chat history"}));
+        expect(streamTabularChat).toHaveBeenCalledTimes(1);
+    });
+
 });

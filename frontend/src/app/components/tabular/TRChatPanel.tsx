@@ -40,7 +40,7 @@ import {
 import { readSseFrames } from "@/app/lib/sse";
 import { chatRequestError } from "@/app/lib/assistantTurnStream";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
-import { UserVisibleError, notifyError, notifyInfo } from "@/app/lib/userFacingError";
+import { UserVisibleError, describeError, notifyError, notifyInfo } from "@/app/lib/userFacingError";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { ChatPanelHeader } from "../shared/ChatPanelHeader";
 import { HeaderActionsMenu } from "../shared/HeaderActionsMenu";
@@ -2068,7 +2068,7 @@ export function TRChatPanel({
             // else's now.
             if (streamGenerationRef.current !== gen) return;
 
-            const isAbort = err instanceof Error && err.name === "AbortError";
+            const isAbort = controller.signal.aborted || (err instanceof Error && err.name === "AbortError");
             stopDrip();
             clearStreamingPlaceholders();
             setMessages((prev) => {
@@ -2132,15 +2132,35 @@ export function TRChatPanel({
                           await resumeTurn(serverChatId, serverTurnId);
                       }
                     : args.settings.retry;
-            // The failure used to be written into the answer as if the model
-            // had said it, which left no way to tell a real answer from a
-            // transport error and offered nothing to do about it.
-            notifyError(err, {
+            const status = describeError(err).status;
+            const uncertain = !serverTurnId && (status === null || status >= 500);
+            notifyError(uncertain && !isAbort ? new UserVisibleError(
+                "The answer may still be running. Check chat history before sending the question again.",
+                { cause: err },
+            ) : err, {
                 action: "finish this answer",
-                fallback:
-                    "The answer stopped before it finished. Anything already shown is kept.",
+                fallback: "The answer stopped before it finished. Anything already shown is kept.",
                 dedupeKey: `tr-chat-stream:${reviewId}`,
-                onRetry: isAbort ? undefined : retry,
+                onRetry: isAbort || uncertain ? undefined : retry,
+                actions: !isAbort && uncertain ? [{
+                    label: "Check chat history",
+                    onClick: async () => {
+                        try {
+                        if (streamGenerationRef.current !== gen || abortRef.current) return;
+                        const loaded = await getTabularChats(reviewId);
+                        if (streamGenerationRef.current !== gen || abortRef.current) return;
+                        setChats(sortChatsByActivity(loaded));
+                        const id = serverChatId ?? currentChatIdRef.current;
+                        if (!id) return;
+                        const stored = await loadHistory(id);
+                        if (!stored || streamGenerationRef.current !== gen || currentChatIdRef.current !== id) return;
+                        const active = loaded.find(chat => chat.id === id)?.active_turn;
+                        if (active) await resumeTurn(id, active.id);
+                        } catch (error) {
+                            notifyError(error, { action: "load your chat history" });
+                        }
+                    },
+                }] : undefined,
             });
         } finally {
             if (streamGenerationRef.current === gen) setIsLoading(false);
