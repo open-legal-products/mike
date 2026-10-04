@@ -12,10 +12,12 @@ function fakeAdapter(overrides: Partial<StorageAdapter> = {}): StorageAdapter {
     uploadFileFromPath: vi.fn(async () => undefined),
     getSignedUploadUrl: vi.fn(async () => "https://signed.example.test/put"),
     downloadFile: vi.fn(async () => new ArrayBuffer(4)),
-    openReadStream: vi.fn(async () => [
-      new Uint8Array([1, 2]),
-      new Uint8Array([3]),
-    ]),
+    openReadStream: vi.fn(async () =>
+      (async function* () {
+        yield new Uint8Array([1, 2]);
+        yield new Uint8Array([3]);
+      })(),
+    ),
     headFile: vi.fn(async () => ({
       size: 12,
       etag: '"abc"',
@@ -39,7 +41,7 @@ async function collect(stream: NodeJS.ReadableStream): Promise<Buffer> {
 // test instead of restoring the default S3 adapter by hand.
 beforeEach(async () => {
   vi.resetModules();
-  storage = await import("../storage");
+  storage = await import("../storage.js");
 });
 
 afterEach(() => {

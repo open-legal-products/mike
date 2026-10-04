@@ -108,7 +108,11 @@ function inMemoryAdapter(objects: Map<string, Uint8Array>) {
     }),
     openReadStream: vi.fn(async (key) => {
       const bytes = objects.get(key);
-      return bytes ? [bytes] : null;
+      return bytes
+        ? (async function* () {
+            yield bytes;
+          })()
+        : null;
     }),
     headFile: vi.fn(async (key) => {
       const bytes = objects.get(key);
@@ -158,7 +162,7 @@ describe("documents file route on a registered StorageAdapter", () => {
     // Guards the premise of every test below: without the registered adapter
     // there is no configured backend for the route to fall back to.
     vi.resetModules();
-    return import("../../lib/storage").then((fresh) => {
+    return import("../../lib/storage.js").then((fresh) => {
       expect(fresh.storageEnabled).toBe(false);
     });
   });
