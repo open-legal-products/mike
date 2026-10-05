@@ -402,7 +402,8 @@ export async function getSignedUrl(
 ): Promise<string | null> {
   if (!storageEnabled) return null;
   try {
-    const client = getClient();
+    // The browser follows this URL, so sign it for the public endpoint.
+    const client = getUploadSigningClient();
     // Override the response Content-Disposition so the browser uses this
     // filename on download, instead of the last path segment of the R2 key
     // (which includes the document UUID). The `download` attribute on <a>
