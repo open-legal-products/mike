@@ -34,8 +34,8 @@ on:
       - "frontend/**"
       - "e2e/fixtures/**"
       - ".github/workflows/desktop.yml"
+  # Include stacked PRs whose base is another feature branch (see #579).
   pull_request:
-    branches: [main, upstream-main]
     paths:
       - "desktop/**"
       - "backend/**"
