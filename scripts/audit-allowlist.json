@@ -5,6 +5,10 @@
     },
     {
         "ghsa": "GHSA-ph9p-34f9-6g65",
-        "reason": "tmp 0.0.33 path traversal via prefix/postfix, reachable in word-addin only through @inquirer/editor -> external-editor, i.e. the interactive prompts of @microsoft/teamsapp-cli under office-addin-debugging — a devDependency, and the prefixes are literals inside that CLI rather than anything this repo or a document supplies. Same downgrade-only 'fix' as adm-zip above. REMOVE WHEN: external-editor resolves tmp >0.2.5 (or the teamsapp-cli chain drops external-editor) inside office-addin-debugging's declared range."
+        "reason": "tmp 0.0.33 path traversal via prefix/postfix, reachable in word-addin only through @inquirer/editor -> external-editor, i.e. the interactive prompts of @microsoft/teamsapp-cli under office-addin-debugging \u2014 a devDependency, and the prefixes are literals inside that CLI rather than anything this repo or a document supplies. Same downgrade-only 'fix' as adm-zip above. REMOVE WHEN: external-editor resolves tmp >0.2.5 (or the teamsapp-cli chain drops external-editor) inside office-addin-debugging's declared range."
+    },
+    {
+        "ghsa": "GHSA-vfj7-8cjw-p6xm",
+        "reason": "braces <=3.0.3 recursive AST stack exhaustion; no patched npm release is available as of 2026-10-06 (https://github.com/advisories/GHSA-vfj7-8cjw-p6xm). Locked only as a devDependency: frontend eslint-config-next -> @next/eslint-plugin-next -> fast-glob and @ladle/react -> globby -> fast-glob; word-addin webpack-dev-server -> http-proxy-middleware -> micromatch. These tools consume developer-controlled lint/story/proxy glob configuration, not document text or application request-supplied patterns; frontend/src and word-addin/src have no braces/micromatch/fast-glob/globby imports. The frontend image retains devDependencies on disk, so this is a caller-reachability exception, not a claim that the package is absent; the Word production image excludes development dependencies. REMOVE WHEN: braces publishes a patched release or these chains drop it; reassess immediately if an application or development-server caller accepts untrusted glob patterns."
     }
 ]

@@ -31,9 +31,7 @@ on:
       - "packages/**"
       - ".github/workflows/word-addin.yml"
   pull_request:
-    # `main` is the destination upstream; `upstream-main` is the fork's mirror
-    # of it (same pairing as e2e.yml / stack-tests.yml).
-    branches: [main, upstream-main]
+    # Validate stacked PRs targeting feature branches as well as main.
     paths:
       - "word-addin/**"
       - "frontend/src/shared/**"
