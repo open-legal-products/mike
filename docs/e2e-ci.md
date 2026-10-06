@@ -69,7 +69,7 @@ dropped), each on two workers. On every PR they report as **Assistant streaming
 keeps that job short. See [frontend-testing.md](frontend-testing.md#assistant-streaming-regressions)
 for a standalone local command.
 
-CI runs every browser flow using a local Anthropic-protocol fixture. No paid
+The full-stack chat flows use a local Anthropic-protocol fixture in CI. No paid
 model key or repository secret is required, including on fork PRs. A missing
 fixture key fails test discovery instead of silently skipping chat coverage.
 
@@ -111,7 +111,7 @@ The production suite retries failed specs up to twice on CI and records a
 **trace** on the first retry. Development stress uses **zero retries** and
 retains traces on failure, so an intermittent loop cannot pass on a retry.
 On pass, fail, or timeout, each full-stack job uploads `playwright-report/`,
-`test-results/` and the web-server log as **`playwright-report-production`** or
+`test-results/`, the web-server log and the model-fixture log as **`playwright-report-production`** or
 **`playwright-report-development`** (14-day retention). The focused development
 job uploads **`assistant-streaming-development`** with the same failure evidence.
 From the failed run's page in the Actions tab, download its artifact, then
@@ -126,9 +126,44 @@ Anthropic SDK supports this endpoint override. Browser requests still traverse
 the real web gateway, authentication, backend, database, document storage, and
 assistant streaming code; only the external model response is a fixture.
 
-The fixture supports streamed answers and non-streaming title generation. Its
-protocol checks use the backend's installed SDK before the workflow starts the
-server. This verifies application flows, not live model quality or availability.
+Two browser flows cover the real application with only the external provider
+replaced:
+
+- **Chat lifecycle:** send a unique phrase through the provider, wait for the
+  completed answer, reload it, rename the chat and reload, then delete it and
+  verify a fresh history request returns 404. Optimistic UI changes alone do
+  not pass.
+- **Project document:** create a project, upload the PDF, open the empty composer
+  and send a question. The provider fixture selects the advertised document,
+  requests `read_document`, and echoes the actual tool result. The browser
+  requires text found only inside the PDF and verifies the saved answer after
+  reload. Missing context, broken tool dispatch or failed extraction cannot
+  produce the expected answer.
+
+These replace the overlapping rename, delete, missing-chat “cold load” and
+submit-only project checks; they do not add more browser scenarios. The fixture
+also supplies a short non-streaming title. Three small checks exercise its JSON,
+text stream and tool round trip through the installed backend SDK before startup.
+Unknown streamed prompts and missing document/tool context fail explicitly.
+
+### Choosing the test boundary
+
+Start with a concrete failure the test must catch. Keep the code responsible
+for that behavior real, and use the lowest layer that observes the outcome.
+For these flows, auth, database persistence, storage, extraction, tool dispatch
+and browser rendering stay real. Only the external model is scripted. The
+existing synthetic browser tests deliberately isolate rendering and timing;
+they do not establish backend correctness.
+
+A fixture cannot establish that Anthropic accepts the real request, that a real
+model chooses the right tool, or that its answer is accurate. Those questions
+need live-provider smoke checks and representative document evaluations with
+expected facts and citations. A real-key local run is available below; this
+workflow does not provide an automated live-model quality gate. The SDK checks
+prove fixture compatibility with the installed client, not provider fidelity.
+When reviewing a test, identify a plausible broken implementation that would
+fail it. Prefer strengthening or replacing an existing test over adding another
+scenario that observes the same behavior.
 
 The shared `selectClaudeModel` helper selects a supported Anthropic model before
 each chat submission. Keep its model label synchronized with the model catalog.

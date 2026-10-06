@@ -411,5 +411,6 @@ jobs:
             playwright-report/
             test-results/
             /tmp/e2e-next.log
+            /tmp/e2e-model.log
           retention-days: 14
           if-no-files-found: ignore

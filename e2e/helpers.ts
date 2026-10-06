@@ -30,6 +30,19 @@ export async function selectClaudeModel(page: Page) {
     });
 }
 
+/** Check the completed answer, then fetch it again through a fresh page load. */
+export async function expectSavedAnswer(page: Page, expectedText: string) {
+    const answer = page.locator("div.prose.font-serif.text-gray-900").first();
+    await expect(answer).toContainText(expectedText, { timeout: 60_000 });
+    // Completion occurs after the backend saves the turn and settles its title.
+    await expect(page.getByRole("button", { name: "Stop response", exact: true })).toBeHidden({
+        timeout: 60_000,
+    });
+    const completedText = await answer.innerText();
+    await page.reload();
+    await expect(answer).toHaveText(completedText, { timeout: 20_000 });
+}
+
 /**
  * Creates a new project via the "New project" modal and waits until
  * NewProjectModal's onCreated handler redirects to /projects/<id>.
