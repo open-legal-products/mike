@@ -829,7 +829,7 @@ if (!app.requestSingleInstanceLock()) {
     } catch {
       return;
     }
-    if (!supervisor.localStackRunning()) return;
+    if (!supervisor.localStackActive()) return; // running OR still booting
     event.preventDefault();
     stackStopped = true;
     void supervisor.stopLocalStack().finally(() => app.quit());

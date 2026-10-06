@@ -65,29 +65,47 @@ function mintSecrets() {
   };
 }
 
+// Write-then-rename so a crash or power loss mid-write can never leave a
+// truncated secrets file behind.
+function writeAtomic(file, data) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
 function loadOrCreateSecrets(secretsFile) {
+  let raw = null;
   try {
-    const parsed = JSON.parse(fs.readFileSync(secretsFile, "utf8"));
-    if (parsed?.version === 1 && parsed.jwtSecret) {
-      // Installs minted before guest mode existed lack the guest fields —
-      // top the file up in place. No version bump: nothing changed shape,
-      // a field was added, and old readers ignore unknown fields.
-      if (!parsed.guestEmail || !parsed.guestPassword) {
-        Object.assign(parsed, mintGuestCredentials());
-        fs.writeFileSync(secretsFile, JSON.stringify(parsed, null, 2), {
-          mode: 0o600,
-        });
-      }
-      return parsed;
+    raw = fs.readFileSync(secretsFile, "utf8");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  if (raw !== null) {
+    // Never silently replace an existing file: pgdata was initialised with
+    // its dbPassword and stored API keys are encrypted with its secret, so
+    // fresh secrets would lock the user out of their own workspace. Fail
+    // loudly instead and leave the old values recoverable.
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`Local secrets file ${secretsFile} is not valid JSON`);
     }
-  } catch {
-    // fall through to mint
+    if (parsed?.version !== 1 || !parsed.jwtSecret) {
+      throw new Error(`Local secrets file ${secretsFile} is invalid`);
+    }
+    // Installs minted before guest mode existed lack the guest fields —
+    // top the file up. No version bump: nothing changed shape, a field was
+    // added, and old readers ignore unknown fields.
+    if (!parsed.guestEmail || !parsed.guestPassword) {
+      Object.assign(parsed, mintGuestCredentials());
+      writeAtomic(secretsFile, parsed);
+    }
+    return parsed;
   }
   const secrets = mintSecrets();
   fs.mkdirSync(path.dirname(secretsFile), { recursive: true });
-  fs.writeFileSync(secretsFile, JSON.stringify(secrets, null, 2), {
-    mode: 0o600,
-  });
+  writeAtomic(secretsFile, secrets);
   return secrets;
 }
 

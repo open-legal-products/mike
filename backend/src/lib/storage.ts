@@ -20,6 +20,7 @@ import {
 import * as S3Commands from "@aws-sdk/client-s3";
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { bestEffort } from "./observability/sentry";
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs, { stat } from "node:fs/promises";
 import path from "node:path";
@@ -654,7 +655,12 @@ export async function writeBlobFromStream(
   }
   const target = fsPathFor(key);
   await fs.mkdir(path.dirname(target), { recursive: true });
-  const handle = await fs.open(target, "w");
+  // Stream into a sibling temp file and rename on success, so an aborted or
+  // oversized upload never truncates a blob already stored at this key and
+  // never leaves a partial file behind for any caller.
+  const temp = `${target}.${randomUUID()}.part`;
+  const handle = await fs.open(temp, "wx");
+  let committed = false;
   let written = 0;
   const bounded = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -680,6 +686,8 @@ export async function writeBlobFromStream(
     const completed = pipeline(bounded, sink);
     body.pipe(bounded);
     await completed;
+    await fs.rename(temp, target);
+    committed = true;
   } finally {
     body.unpipe(bounded);
     body.off("error", abort);
@@ -689,6 +697,7 @@ export async function writeBlobFromStream(
     // stream out of pipeline lets Express send the expected 400 response.
     if (!body.readableEnded && !body.destroyed) body.resume();
     await handle.close().catch(() => {});
+    if (!committed) await fs.rm(temp, { force: true }).catch(() => {});
   }
   return written;
 }

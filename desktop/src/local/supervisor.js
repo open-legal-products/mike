@@ -33,6 +33,15 @@ const { installBundledWorkflows } = require("./workflows");
 const children = []; // [{name, proc}] in boot order
 let gatewayServer = null;
 let running = false;
+// A boot in flight, and whether a stop has asked it to give up. Quitting
+// during the first-run boot (about a minute) must still stop every child,
+// and must stop the boot from spawning more after the stop has run.
+let booting = false;
+let aborted = false;
+
+function throwIfAborted() {
+  if (aborted) throw new Error("local stack stopped during boot");
+}
 
 function log(dirs, name) {
   const file = fs.openSync(path.join(dirs.logs, `${name}.log`), "a");
@@ -51,6 +60,7 @@ function hasExited(proc) {
 }
 
 function spawnService(name, bin, args, { env, cwd, dirs }) {
+  throwIfAborted();
   const out = log(dirs, name);
   const proc = spawn(bin, args, {
     env: localEnvironment(env),
@@ -67,6 +77,7 @@ async function waitFor(name, probe, { timeoutMs = 60_000, intervalMs = 400 } = {
   const deadline = Date.now() + timeoutMs;
   let lastErr;
   while (Date.now() < deadline) {
+    throwIfAborted();
     try {
       if (await probe()) return;
     } catch (err) {
@@ -187,6 +198,7 @@ function findSoffice() {
 
 async function startLocalStack(app, status = () => {}) {
   if (running) return { frontendUrl: FRONTEND_URL };
+  if (booting) throw new Error("local stack is already starting");
   const paths = stackPaths(app);
   const dirs = dataPaths(app);
   for (const d of [dirs.root, dirs.storage, dirs.logs]) {
@@ -194,6 +206,8 @@ async function startLocalStack(app, status = () => {}) {
   }
   const secrets = loadOrCreateSecrets(dirs.secretsFile);
 
+  booting = true;
+  aborted = false;
   try {
     // 1. Postgres
     hydratePgSymlinks(paths);
@@ -217,6 +231,7 @@ async function startLocalStack(app, status = () => {}) {
       { dirs });
     await waitFor("postgres", () => pgReachable(secrets));
     await schema.bootstrapRoles((fn) => withPg(secrets, fn), secrets.dbPassword);
+    throwIfAborted();
 
     // 2. GoTrue — applies its own migrations (creates auth.users) at boot.
     status("Starting auth…");
@@ -270,6 +285,7 @@ async function startLocalStack(app, status = () => {}) {
       backendDir: paths.backendDir,
       storageRoot: dirs.storage,
     }));
+    throwIfAborted();
 
     // 4. PostgREST
     status("Starting data API…");
@@ -289,6 +305,7 @@ async function startLocalStack(app, status = () => {}) {
 
     // 5. Gateway proxy (in-process)
     gatewayServer = await startGateway({ anonKey: secrets.anonKey, serviceRoleKey: secrets.serviceRoleKey });
+    throwIfAborted();
 
     // 6. Backend — Electron's own binary in Node mode, so no separate
     // runtime ships with the app.
@@ -350,17 +367,21 @@ async function startLocalStack(app, status = () => {}) {
     });
     await waitFor("frontend", () => httpOk(`${FRONTEND_URL}/login`, [200, 307, 308]));
 
+    throwIfAborted();
     running = true;
     status("Ready");
     return { frontendUrl: FRONTEND_URL };
   } catch (err) {
     await stopLocalStack(paths);
     throw err;
+  } finally {
+    booting = false;
   }
 }
 
 async function stopLocalStack(paths) {
   running = false;
+  if (booting) aborted = true;
   if (gatewayServer) {
     try { gatewayServer.close(); } catch { /* already closed */ }
     gatewayServer = null;
@@ -390,4 +411,17 @@ function localStackRunning() {
   return running;
 }
 
-module.exports = { startLocalStack, stopLocalStack, localStackRunning, hasExited };
+// True while anything needs stopping: a ready stack, a boot in flight, or
+// children still alive. Quit handling uses this, not localStackRunning, so a
+// quit during boot does not orphan postgres/gotrue on the fixed ports.
+function localStackActive() {
+  return running || booting || children.length > 0 || gatewayServer !== null;
+}
+
+module.exports = {
+  startLocalStack,
+  stopLocalStack,
+  localStackRunning,
+  localStackActive,
+  hasExited,
+};

@@ -213,7 +213,8 @@ describe("filesystem storage driver", () => {
     // A client need not finish its request for the bound to take effect.
     // Checking only the final byte count would hang here and write all bytes.
     await expect(writing).rejects.toBeInstanceOf(storage.BlobUploadSizeError);
-    expect((await fs.stat(path.join(root, "uploads/s1/bounded.pdf"))).size).toBeLessThanOrEqual(4);
+    // Nothing lands at the key, and the temp file is cleaned up.
+    expect(await fs.readdir(path.join(root, "uploads/s1"))).toEqual([]);
     expect(body.destroyed).toBe(false);
     body.end();
   });
@@ -226,6 +227,25 @@ describe("filesystem storage driver", () => {
     await expect(
       storage.writeBlobFromStream("uploads/s1/aborted.pdf", body, 5),
     ).rejects.toThrow("Upload aborted");
+  });
+
+  it("keeps an existing blob intact when a replacement upload fails", async () => {
+    const storage = await loadFsStorage(root);
+    const { Readable, PassThrough } = await import("node:stream");
+    await storage.writeBlobFromStream(
+      "uploads/s1/kept.pdf",
+      Readable.from([Buffer.from("abc")]),
+      3,
+    );
+    const body = new PassThrough();
+    const writing = storage.writeBlobFromStream("uploads/s1/kept.pdf", body, 2);
+    body.write(Buffer.from("xyz"));
+    await expect(writing).rejects.toBeInstanceOf(storage.BlobUploadSizeError);
+    body.end();
+
+    const back = await storage.downloadFile("uploads/s1/kept.pdf");
+    expect(Buffer.from(back!).toString()).toBe("abc");
+    expect(await fs.readdir(path.join(root, "uploads/s1"))).toEqual(["kept.pdf"]);
   });
 
   it("rejects keys that escape the storage root", async () => {

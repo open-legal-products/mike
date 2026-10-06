@@ -81,7 +81,8 @@ export async function storeBlobUpload(args: {
             return failure("validation", "Upload size does not match the link");
         }
     } catch (error) {
-        await discardBlob(info.path);
+        // writeBlobFromStream commits only on success, so a failed upload
+        // leaves no partial file and any existing blob at the key intact.
         if (error instanceof BlobUploadSizeError) {
             return failure("validation", "Upload size does not match the link");
         }
