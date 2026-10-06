@@ -124,6 +124,7 @@ export async function queryTabularAllColumns(
     onResult: (columnIndex: number, result: CellResult) => Promise<void>,
     apiKeys?: UserApiKeys,
     abortSignal?: AbortSignal,
+    onActivity?: () => void,
 ): Promise<void> {
     const columnsDesc = columns
         .map((col) => {
@@ -193,6 +194,7 @@ Rules:
             apiKeys,
             abortSignal,
             callbacks: {
+                onActivity,
                 onContentDelta: (delta) => {
                     contentBuffer += delta;
                     let newlineIdx: number;

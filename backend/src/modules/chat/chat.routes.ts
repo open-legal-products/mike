@@ -1,3 +1,4 @@
+import { abortable } from "../../lib/abortable";
 import {
     attachAssistantTurnSse,
     getActiveAssistantTurn,
@@ -24,7 +25,7 @@ import {
     AssistantStreamError,
     assistantStreamErrorPayload,
     ASSISTANT_ERROR_MESSAGE,
-    buildCancelledAssistantMessage,
+    buildStoppedAssistantMessage,
     extractCitations,
     isAbortError,
     isMeaningfulTextlessAssistantOutput,
@@ -700,11 +701,13 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 : "";
             titlePromise = shouldGenerateTitle
                 ? generateAssistantChatTitle({
+                      abortSignal: stream.signal,
                       model: titleModelForChat(selectedModel, titleModel),
                       message: titleMessage,
                       apiKeys,
                   })
                       .then(async (title) => {
+                          if (stream.signal.aborted) return;
                           const saved = await updateChatTitle(db, {
                               chatId,
                               title,
@@ -720,11 +723,12 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                       .catch((error) => {
                           // Decided once the reply has settled: see the
                           // logChatTitleFailure calls below.
-                          titleOutcome.failure = { error };
+                          if (!stream.signal.aborted) titleOutcome.failure = { error };
                       })
                 : Promise.resolve();
 
             const { fullText, events, citations } = await runLLMStream({
+                onActivity: run?.touch,
                 apiMessages,
                 docStore,
                 docIndex,
@@ -811,7 +815,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 }
             }
 
-            await titlePromise;
+            await abortable(titlePromise, stream.signal).catch(() => {});
             if (titleOutcome.failure) {
                 logChatTitleFailure(
                     "[chat/stream] failed to generate chat title",
@@ -890,7 +894,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         } catch (err) {
             // The title ran in parallel with the reply; only now is it known
             // whether its failure is the reply's failure seen twice.
-            await titlePromise;
+            await abortable(titlePromise, stream.signal).catch(() => {});
             if (titleOutcome.failure) {
                 logChatTitleFailure(
                     "[chat/stream] failed to generate chat title",
@@ -909,12 +913,13 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         projectId: resolvedProjectId,
                         title: chatTitle,
                         model: selectedModel,
-                        status: "cancelled",
+                        status: run?.stopReason && run.stopReason !== "user" ? "failed" : "cancelled",
                     },
                     null,
                 );
                 if (err instanceof AssistantStreamError) {
-                    const partial = buildCancelledAssistantMessage({
+                    const partial = buildStoppedAssistantMessage({
+                        stopReason: run?.stopReason,
                         fullText: err.fullText,
                         events: err.events,
                         buildCitations: (fullText) =>
@@ -947,7 +952,7 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 }
                 // Readers still attached (Stop came from another tab, or
                 // this one is watching) learn the outcome the same way a
-                // reload would: the stored row ends "Cancelled by user."
+                // reload would: persistence uses the same stop reason.
                 write(stopOutcomeFrame(run));
                 write("data: [DONE]\n\n");
                 return;

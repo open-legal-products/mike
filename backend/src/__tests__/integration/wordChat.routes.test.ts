@@ -779,57 +779,78 @@ describe("server-owned Word turns", () => {
     expect((await detail()).body.active_turn).toBeNull();
   });
 
-  it("stops a turn through the endpoint: readers see cancelled then [DONE], the partial answer is stored", async () => {
-    const { AssistantStreamAbortError } = await import(
-      "../../modules/chat/engine/index.js"
-    );
-    const started = new Promise<StreamParams>((resolve) => {
-      runLLMStream.mockImplementation(async (raw: unknown) => {
-        const params = raw as StreamParams;
-        resolve(params);
-        emitFrom(params)({ type: "content_delta", text: "Partial" });
-        await new Promise<void>((done) =>
-          params.signal?.addEventListener("abort", () => done(), {
-            once: true,
-          }),
-        );
-        throw new AssistantStreamAbortError("Partial", [
-          { type: "content", text: "Partial" },
-        ]);
+  it.each(["user", "idle", "max_lifetime"] as const)(
+    "persists and replays the %s stop reason",
+    async (reason) => {
+      const { AssistantStreamAbortError } =
+        await import("../../modules/chat/engine/index.js");
+      const started = new Promise<StreamParams>((resolve) => {
+        runLLMStream.mockImplementation(async (raw: unknown) => {
+          const params = raw as StreamParams;
+          resolve(params);
+          emitFrom(params)({ type: "content_delta", text: "Partial" });
+          await new Promise<void>((done) =>
+            params.signal?.addEventListener("abort", () => done(), {
+              once: true,
+            }),
+          );
+          throw new AssistantStreamAbortError("Partial", [
+            { type: "content", text: "Partial" },
+          ]);
+        });
       });
-    });
-    const first = send();
-    const firstDone = first.then((res) => res);
-    const params = await started;
-    const turnId = (await detail()).body.active_turn.id as string;
+      const first = send();
+      const firstDone = first.then((res) => res);
+      const params = await started;
+      const turnId = (await detail()).body.active_turn.id as string;
 
-    const stopped = await request(app)
-      .post(
-        `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`,
-      )
-      .set(...AUTH);
-    expect(stopped.status).toBe(200);
-    expect(stopped.body).toEqual({ stopped: true, finished: false });
-    expect(params.signal?.aborted).toBe(true);
+      if (reason === "user") {
+        const stopped = await request(app)
+          .post(
+            `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`,
+          )
+          .set(...AUTH);
+        expect(stopped.status).toBe(200);
+        expect(stopped.body).toEqual({ stopped: true, finished: false });
+      } else {
+        const { getAssistantTurnRun } =
+          await import("../../lib/assistantTurnRuns.js");
+        getAssistantTurnRun(turnId, "word")!.stop(reason);
+      }
+      expect(params.signal?.aborted).toBe(true);
 
-    const text = (await firstDone).text;
-    expect(text).toContain(`"turnId":"${turnId}"`);
-    expect(text).toContain('"type":"cancelled"');
-    expect(text).toContain("data: [DONE]");
-    expect(assistantUpdate()).toMatchObject({
-      content: [
-        { type: "content", text: "Partial" },
-        { type: "content", text: "Cancelled by user." },
-      ],
-    });
+      const text = (await firstDone).text;
+      expect(text).toContain(`"turnId":"${turnId}"`);
+      expect(text).toContain(
+        reason === "user" ? '"type":"cancelled"' : '"type":"error"',
+      );
+      expect(text).toContain("data: [DONE]");
+      expect(assistantUpdate()).toMatchObject({
+        content: [
+          { type: "content", text: "Partial" },
+          reason === "user"
+            ? { type: "content", text: "Cancelled by user." }
+            : {
+                type: "error",
+                message: expect.any(String),
+                safe_to_display: true,
+              },
+        ],
+      });
 
-    const again = await request(app)
-      .post(
-        `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`,
-      )
-      .set(...AUTH);
-    expect(again.body).toEqual({ stopped: false, finished: true });
-  });
+      const replay = await request(app).get(`/word-chat/${CHAT_ID}/turn/${turnId}/stream?document_id=${DOCUMENT_ID}`).set(...AUTH);
+      expect(replay.status).toBe(200);
+      expect(replay.text).toContain(reason === "user" ? '\"type\":\"cancelled\"' : '\"type\":\"error\"');
+      expect(replay.text).toContain("data: [DONE]");
+
+      const again = await request(app)
+        .post(
+          `/word-chat/${CHAT_ID}/turn/${turnId}/stop?document_id=${DOCUMENT_ID}`,
+        )
+        .set(...AUTH);
+      expect(again.body).toEqual({ stopped: false, finished: true });
+    },
+  );
 
   it("refuses a second turn while one is generating into the chat", async () => {
     const held = heldGeneration();

@@ -156,6 +156,7 @@ export function TRView({ reviewId, projectId }: Props) {
     const [uploadingDroppedFilenames, setUploadingDroppedFilenames] = useState<
         string[]
     >([]);
+    const [generationError, setGenerationError] = useState<string | null>(null);
     const [dropUploadWarning, setDropUploadWarning] = useState<string | null>(
         null,
     );
@@ -613,16 +614,23 @@ export function TRView({ reviewId, projectId }: Props) {
                                 : c,
                         ),
                     );
-                } else if (
-                    data.type === "error" &&
-                    data.code === "invalid_api_key"
-                ) {
-                    setApiKeyWarning({
-                        kind: "rejected",
-                        provider: tabularModel
-                            ? getModelProvider(tabularModel)
-                            : null,
-                    });
+                } else if (data.type === "error") {
+                    if (data.code === "invalid_api_key") {
+                        setApiKeyWarning({
+                            kind: "rejected",
+                            provider: tabularModel
+                                ? getModelProvider(tabularModel)
+                                : null,
+                        });
+                    } else {
+                        setGenerationError(
+                            data.safe_to_display === true &&
+                            typeof data.message === "string" &&
+                            data.message.trim()
+                                ? data.message.trim()
+                                : "The review could not be completed. Please try again.",
+                        );
+                    }
                 }
             } catch (err) {
                 console.warn(
@@ -726,6 +734,7 @@ export function TRView({ reviewId, projectId }: Props) {
             return;
         }
 
+        setGenerationError(null);
         const generationAbort = new AbortController();
         generationAbortRef.current = generationAbort;
         // A new run numbers its frames from 1, so a reconnect must not ask to
@@ -1975,6 +1984,12 @@ export function TRView({ reviewId, projectId }: Props) {
                 onClose={() => setOwnerOnlyAction(null)}
             />
 
+            <WarningPopup
+                open={generationError !== null}
+                onClose={() => setGenerationError(null)}
+                title="Review stopped"
+                message={generationError}
+            />
             <WarningPopup
                 open={dropUploadWarning !== null}
                 onClose={() => setDropUploadWarning(null)}

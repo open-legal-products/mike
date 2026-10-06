@@ -1,3 +1,4 @@
+import { abortable } from "../../lib/abortable";
 import { completeText, type UserApiKeys } from "../../lib/llm";
 import { providerFailureStatus } from "../../lib/llm/providerErrors";
 import { reportError } from "../../lib/observability/sentry";
@@ -91,12 +92,36 @@ export async function generateAssistantChatTitle(args: {
     model: string;
     message: string;
     apiKeys?: UserApiKeys;
+    abortSignal?: AbortSignal;
 }): Promise<string> {
-    const titleText = await completeText({
-        model: args.model,
-        user: `Generate a concise title (3–6 words) for a chat in an AI Legal Platform that starts with this message. The title should describe the topic or document — do NOT include words like "Legal Assistant", "AI", "Chat", or any similar prefix. If there is not enough information to generate a title, return exactly "${TITLE_FALLBACK}". Return only the title, no quotes or punctuation.\n\nMessage: ${args.message.slice(0, 500)}`,
-        maxTokens: 64,
-        apiKeys: args.apiKeys,
-    });
-    return normalizeGeneratedTitle(titleText);
+    const controller = new AbortController();
+    const abort = () => controller.abort(args.abortSignal?.reason);
+    if (args.abortSignal?.aborted) abort();
+    else args.abortSignal?.addEventListener("abort", abort, { once: true });
+    // A title is auxiliary: it must not hold turn persistence indefinitely.
+    const timer = setTimeout(
+        () =>
+            controller.abort(
+                new DOMException("Chat title timed out", "TimeoutError"),
+            ),
+        15_000,
+    );
+    timer.unref?.();
+    try {
+        controller.signal.throwIfAborted();
+        const titleText = await abortable(
+            completeText({
+                model: args.model,
+                user: `Generate a concise title (3–6 words) for a chat in an AI Legal Platform that starts with this message. The title should describe the topic or document — do NOT include words like "Legal Assistant", "AI", "Chat", or any similar prefix. If there is not enough information to generate a title, return exactly "${TITLE_FALLBACK}". Return only the title, no quotes or punctuation.\n\nMessage: ${args.message.slice(0, 500)}`,
+                maxTokens: 64,
+                apiKeys: args.apiKeys,
+                abortSignal: controller.signal,
+            }),
+            controller.signal,
+        );
+        return normalizeGeneratedTitle(titleText);
+    } finally {
+        clearTimeout(timer);
+        args.abortSignal?.removeEventListener("abort", abort);
+    }
 }

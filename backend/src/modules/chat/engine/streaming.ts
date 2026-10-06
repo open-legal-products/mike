@@ -203,6 +203,7 @@ export async function runLLMStream(params: {
   userId: string;
   db: Db;
   write: (s: string) => void;
+  onActivity?: () => void;
   extraTools?: unknown[];
   includeResearchTools?: boolean;
   /** Expose ask_inputs only to clients that can render and answer it. */
@@ -518,6 +519,7 @@ export async function runLLMStream(params: {
       abortSignal: signal,
       conversationId,
       callbacks: {
+        onActivity: params.onActivity,
         onContentDelta: (delta) => {
           iterText += delta;
           streamVisibleContent(delta);
