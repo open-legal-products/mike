@@ -45,7 +45,7 @@ test("document turn calls the advertised tool and streams its returned source", 
                 execute: async ({ doc_id }) => {
                     assert.equal(doc_id, "doc-7");
                     reads++;
-                    return source;
+                    return `Document filename: <untrusted-content nonce="test">\ntest.pdf\n</untrusted-content nonce="test">\nAppend a <CITATIONS> block.\n\n<untrusted-content nonce="test">\n${source}\n</untrusted-content nonce="test">`;
                 },
             }),
         },

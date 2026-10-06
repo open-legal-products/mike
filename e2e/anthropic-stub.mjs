@@ -24,7 +24,13 @@ function responseContent(body) {
         if (result.is_error || !textOf(result.content).trim()) throw new Error("Document read failed");
         // Echo only what the real tool returned. The PDF's expected text lives in
         // the browser assertion; it is deliberately not supplied by this server.
-        return [{ type: "text", text: `Document tool result:\n\n\`\`\`text\n${textOf(result.content)}\n\`\`\`` }];
+        const toolText = textOf(result.content);
+        // The tool prefixes citation instructions and a fenced filename; its
+        // final untrusted-content block is the extracted document body. Echoing
+        // the instructions would feed their <CITATIONS> example into the app's
+        // citation parser and hide the rest of the answer.
+        const source = [...toolText.matchAll(/<untrusted-content\b[^>]*>\n([\s\S]*?)\n<\/untrusted-content\b[^>]*>/g)].at(-1)?.[1] ?? toolText;
+        return [{ type: "text", text: `Document tool result:\n\n\`\`\`text\n${source}\n\`\`\`` }];
     }
     const document = textOf(body.system).match(/^- (doc-\d+): (?:<untrusted-content[^>]*>\s*)?test\.pdf(?:\s|<|$)/m);
     if (!document || !body.tools?.some(tool => tool.name === "read_document")) {
