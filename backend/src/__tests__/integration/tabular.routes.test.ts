@@ -1,6 +1,10 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
+// This route suite exceeds the production chat request budget. Rate limits
+// have separate tests; avoid turning lifecycle assertions into HTTP 429s.
+vi.hoisted(() => { process.env.RATE_LIMIT_CHAT_MAX = "1000"; });
+
 // ---------------------------------------------------------------------------
 // Hoisted mock fns reconfigured per-test. Access helpers + model settings are
 // mocked so the tests drive review-access decisions, document-access filtering
@@ -2561,75 +2565,90 @@ describe("tabular.routes", () => {
             expect(runLLMStream).toHaveBeenCalledTimes(1);
         });
 
-        it("stops a turn: cancelled + [DONE] and the partial row", async () => {
-            const { AssistantStreamAbortError } = await import(
-                "../../modules/chat/engine/index.js"
-            );
-            const started = new Promise<StreamParams>((resolve) => {
-                runLLMStream.mockImplementation(async (raw: unknown) => {
-                    const params = raw as StreamParams;
-                    resolve(params);
-                    emitFrom(params)({
-                        type: "content_delta",
-                        text: "Partial",
+        it.each(["user", "idle", "max_lifetime"] as const)(
+            "persists and replays the %s stop reason",
+            async (reason) => {
+                const { AssistantStreamAbortError } =
+                    await import("../../modules/chat/engine/index.js");
+                const started = new Promise<StreamParams>((resolve) => {
+                    runLLMStream.mockImplementation(async (raw: unknown) => {
+                        const params = raw as StreamParams;
+                        resolve(params);
+                        emitFrom(params)({
+                            type: "content_delta",
+                            text: "Partial",
+                        });
+                        await new Promise<void>((done) =>
+                            params.signal?.addEventListener("abort", () => done(), {
+                                once: true,
+                            }),
+                        );
+                        throw new AssistantStreamAbortError("Partial", [
+                            { type: "content", text: "Partial" },
+                        ]);
                     });
-                    await new Promise<void>((done) =>
-                        params.signal?.addEventListener(
-                            "abort",
-                            () => done(),
-                            { once: true },
-                        ),
-                    );
-                    throw new AssistantStreamAbortError("Partial", [
-                        { type: "content", text: "Partial" },
-                    ]);
                 });
-            });
-            const first = send();
-            const firstDone = first.then((res) => res);
-            const params = await started;
+                const first = send();
+                const firstDone = first.then((res) => res);
+                const params = await started;
 
-            // The run id is the assistant row id the route reserved; a
-            // client learns it from the chat_id frame's `turnId`.
-            const turnId = await activeTurnId();
+                // The run id is the assistant row id the route reserved; a
+                // client learns it from the chat_id frame's `turnId`.
+                const turnId = await activeTurnId();
 
-            const unknown = await request(app)
-                .post(
-                    "/tabular-review/r1/chats/review-chat-1/turn/not-a-turn/stop",
-                )
-                .set(...AUTH);
-            expect(unknown.status).toBe(404);
-            expect(unknown.body.code).toBe("turn_not_found");
+                const unknown = await request(app)
+                    .post("/tabular-review/r1/chats/review-chat-1/turn/not-a-turn/stop")
+                    .set(...AUTH);
+                expect(unknown.status).toBe(404);
+                expect(unknown.body.code).toBe("turn_not_found");
 
-            const stopped = await request(app)
-                .post(
-                    `/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stop`,
-                )
-                .set(...AUTH);
-            expect(stopped.status).toBe(200);
-            expect(stopped.body).toEqual({ stopped: true, finished: false });
-            expect(params.signal?.aborted).toBe(true);
+                if (reason === "user") {
+                    const stopped = await request(app)
+                        .post(
+                            `/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stop`,
+                        )
+                        .set(...AUTH);
+                    expect(stopped.status).toBe(200);
+                    expect(stopped.body).toEqual({ stopped: true, finished: false });
+                } else {
+                    const { getAssistantTurnRun } =
+                        await import("../../lib/assistantTurnRuns.js");
+                    getAssistantTurnRun(turnId, "tabular")!.stop(reason);
+                }
+                expect(params.signal?.aborted).toBe(true);
 
-            const text = (await firstDone).text;
-            expect(text).toContain(`"turnId":"${turnId}"`);
-            expect(text).toContain('"type":"cancelled"');
-            expect(text).toContain("data: [DONE]");
-            expect(assistantInsert()).toMatchObject({
-                content: [
-                    { type: "content", text: "Partial" },
-                    { type: "content", text: "Cancelled by user." },
-                ],
-            });
+                const text = (await firstDone).text;
+                expect(text).toContain(`"turnId":"${turnId}"`);
+                expect(text).toContain(
+                    reason === "user" ? '"type":"cancelled"' : '"type":"error"',
+                );
+                expect(text).toContain("data: [DONE]");
+                expect(assistantInsert()).toMatchObject({
+                    content: [
+                        { type: "content", text: "Partial" },
+                        reason === "user"
+                            ? { type: "content", text: "Cancelled by user." }
+                            : {
+                                  type: "error",
+                                  message: expect.any(String),
+                                  safe_to_display: true,
+                              },
+                    ],
+                });
 
-            // Stopping again says so rather than pretending; the run is kept
-            // briefly so a late reader still gets the terminal frames.
-            const again = await request(app)
-                .post(
-                    `/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stop`,
-                )
-                .set(...AUTH);
-            expect(again.body).toEqual({ stopped: false, finished: true });
-        });
+                // Stopping again says so rather than pretending; the run is kept
+                // briefly so a late reader still gets the terminal frames.
+                const replay = await request(app).get(`/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stream`).set(...AUTH);
+                expect(replay.status).toBe(200);
+                expect(replay.text).toContain(reason === "user" ? '\"type\":\"cancelled\"' : '\"type\":\"error\"');
+                expect(replay.text).toContain("data: [DONE]");
+
+                const again = await request(app)
+                    .post(`/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stop`)
+                    .set(...AUTH);
+                expect(again.body).toEqual({ stopped: false, finished: true });
+            },
+        );
 
         it("answers 404 for a turn that belongs to another chat or is unknown", async () => {
             const held = heldGeneration();

@@ -19,7 +19,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, upstream-main]
+    # Validate stacked PRs targeting feature branches as well as main.
   workflow_dispatch:
 
 # Booting a Supabase stack is the slowest job in the repo, so cancel runs

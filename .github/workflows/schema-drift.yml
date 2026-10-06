@@ -36,7 +36,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, upstream-main]
+    # Validate stacked PRs targeting feature branches as well as main.
   workflow_dispatch:
 
 concurrency:

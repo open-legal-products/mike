@@ -12,7 +12,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Validate stacked PRs targeting feature branches as well as main.
   schedule:
     # Mondays 04:30 UTC.
     - cron: "30 4 * * 1"

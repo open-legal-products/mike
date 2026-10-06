@@ -43,6 +43,7 @@ type CompleteProviderParams = {
   systemPrompt?: string;
   user: string;
   maxTokens?: number;
+  abortSignal?: AbortSignal;
   apiKeys?: UserApiKeys;
 };
 

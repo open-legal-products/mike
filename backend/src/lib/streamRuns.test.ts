@@ -344,14 +344,15 @@ describe("stream runs", () => {
             expect(run.stopReason).toBeNull();
         });
 
-        it("counts keep-alive comments as activity", () => {
+        it("does not let transport keep-alives mask a stalled run", () => {
             vi.useFakeTimers();
             const run = start("run-wait", "review:wait");
             for (let i = 0; i < 4; i++) {
                 vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS - 1000);
                 run.write(": tool-wait\n\n");
             }
-            expect(run.signal.aborted).toBe(false);
+            expect(run.signal.aborted).toBe(true);
+            expect(run.stopReason).toBe("idle");
         });
 
         it("stops a run that outlives the lifetime cap even while it keeps emitting", () => {
@@ -396,6 +397,21 @@ describe("stream runs", () => {
             expect(vi.getTimerCount()).toBe(1); // only the retention timer
             vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS * 2);
             expect(run.signal.aborted).toBe(false);
+        });
+
+        it("clears every timer when the registry resets an active run", () => {
+            vi.useFakeTimers();
+            start("run-reset", "review:reset");
+            resetStreamRunsForTests();
+            expect(vi.getTimerCount()).toBe(0);
+        });
+
+        it("does not arm a grace timer after a synchronous abort handler finishes", () => {
+            vi.useFakeTimers();
+            const run = start("run-sync", "review:sync");
+            run.signal.addEventListener("abort", () => run.finish(), { once: true });
+            run.stop();
+            expect(vi.getTimerCount()).toBe(1); // retention only
         });
 
         it("a deadline outcome frame is an error, not cancelled", () => {
