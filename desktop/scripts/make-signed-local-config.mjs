@@ -18,7 +18,6 @@
 // dylib version-name SYMLINKS are excluded — codesign follows them to the
 // real file, and signing a link twice fails the build.
 
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, lstatSync, writeFileSync, openSync, readSync, closeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
