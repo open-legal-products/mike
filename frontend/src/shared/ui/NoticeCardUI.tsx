@@ -29,17 +29,17 @@ export type NoticeTone = ToastTone;
 
 const toneIcon: Record<NoticeTone, ReactNode> = {
     error: (
-        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-600" aria-hidden />
+        <AlertCircle className="h-3 w-3 shrink-0 text-red-600" aria-hidden />
     ),
     // `text-emerald-700` (not -600) because it is the shade globals.css
     // remaps for dark mode; an unmapped one stays dark on dark glass.
     success: (
         <CheckCircle2
-            className="h-3.5 w-3.5 shrink-0 text-emerald-700"
+            className="h-3 w-3 shrink-0 text-emerald-700"
             aria-hidden
         />
     ),
-    info: <Info className="h-3.5 w-3.5 shrink-0 text-blue-600" aria-hidden />,
+    info: <Info className="h-3 w-3 shrink-0 text-blue-600" aria-hidden />,
 };
 
 const toneTitleClass: Record<NoticeTone, string> = {
@@ -88,6 +88,9 @@ export function NoticeCardUI({
 }: NoticeCardUIProps) {
     const toneIconNode = icon ?? toneIcon[tone];
 
+    // This markup reproduces main's WarningPopup card class for class, so
+    // existing popups render pixel-identically. Change it only on purpose:
+    // every popup and toast in the app moves with it.
     return (
         <div
             ref={ref}
@@ -95,33 +98,29 @@ export function NoticeCardUI({
             {...rest}
             className={twMerge(
                 clsx(
-                    "pointer-events-auto relative flex rounded-2xl px-3 py-3 text-xs backdrop-blur-2xl",
+                    "pointer-events-auto relative flex rounded-2xl px-3 py-3 text-xs",
                     LIQUID_GLASS_FLOAT_CLASS,
+                    "backdrop-blur-2xl",
+                    // Only visible when a toast is focused with the keyboard.
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
                 ),
                 className,
             )}
         >
-            {/* pr-6 keeps text clear of the absolutely placed close button. */}
-            <div className="min-w-0 flex-1 pr-6">
+            <div className={clsx("min-w-0 flex-1", toneTitleClass[tone])}>
                 {title ? (
-                    <div
-                        className={clsx(
-                            "mb-1 flex items-start gap-1.5 text-sm font-medium",
-                            toneTitleClass[tone],
-                        )}
-                    >
+                    <div className="mb-1 flex items-center gap-1.5 text-sm font-medium">
                         {toneIconNode}
-                        <span className="min-w-0 [overflow-wrap:anywhere]">
-                            {title}
-                        </span>
+                        {title}
                     </div>
                 ) : null}
                 {message ? (
                     <div
                         className={clsx(
-                            "text-gray-900",
-                            title ? "pl-5" : "flex items-start gap-1.5",
+                            "text-black",
+                            // 18px = the 12px icon plus the 6px gap, so the
+                            // message lines up under the title text.
+                            title ? "pl-[18px]" : "flex items-start gap-1.5",
                         )}
                     >
                         {!title && toneIconNode}
@@ -131,11 +130,7 @@ export function NoticeCardUI({
                         </span>
                     </div>
                 ) : null}
-                {children ? (
-                    // Under a title, extra content lines up with the message
-                    // text, so callers never hard-code the icon's width.
-                    <div className={clsx(title && "pl-5")}>{children}</div>
-                ) : null}
+                {children}
                 {actions ? (
                     <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
                         {actions}

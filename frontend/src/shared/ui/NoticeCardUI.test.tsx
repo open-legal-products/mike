@@ -19,13 +19,14 @@ describe("NoticeCardUI", () => {
         const card = screen.getByRole("alert");
         expect(card).toHaveClass("liquid-glass-float", "backdrop-blur-2xl");
         expect(card).toHaveAttribute("data-tone", "error");
+        // The tone colours the title; the message overrides it to black.
         expect(screen.getByText("Couldn't save").parentElement).toHaveClass(
             "text-red-600",
         );
-        // Lines up under the title text, past the 14px icon and 6px gap.
+        // Lines up under the title text, past the 12px icon and 6px gap.
         expect(
             screen.getByText("Check your connection.").parentElement,
-        ).toHaveClass("pl-5");
+        ).toHaveClass("pl-[18px]", "text-black");
 
         fireEvent.click(screen.getByRole("button", { name: "Dismiss warning" }));
         expect(onDismiss).toHaveBeenCalledOnce();
@@ -44,21 +45,15 @@ describe("NoticeCardUI", () => {
         );
     });
 
-    it("lines extra content up with the message only under a title", () => {
-        const { rerender } = render(
+    it("renders extra content as given, after the message", () => {
+        render(
             <NoticeCardUI title="T" message="M" onDismiss={() => {}}>
                 <p>extra</p>
             </NoticeCardUI>,
         );
-        expect(screen.getByText("extra").parentElement).toHaveClass("pl-5");
-
-        rerender(
-            <NoticeCardUI message="M" onDismiss={() => {}}>
-                <p>extra</p>
-            </NoticeCardUI>,
-        );
-        expect(screen.getByText("extra").parentElement).not.toHaveClass(
-            "pl-5",
+        // Callers own their content's indent, exactly as WarningPopup did.
+        expect(screen.getByText("extra").parentElement).toBe(
+            screen.getByText("M").parentElement?.parentElement,
         );
     });
 
@@ -71,8 +66,7 @@ describe("NoticeCardUI", () => {
             />,
         );
         expect(screen.getByTestId("custom-icon")).toBeInTheDocument();
-        expect(screen.getByText("Locked").parentElement?.querySelector("svg"))
-            .toBeNull();
+        expect(screen.getByText("Locked").querySelector("svg")).toBeNull();
     });
 
     it("renders the action row and forwards the ref and DOM props", () => {
