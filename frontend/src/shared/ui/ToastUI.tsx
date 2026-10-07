@@ -18,14 +18,10 @@ import {
     useEffect,
     useRef,
     useSyncExternalStore,
-    type ReactNode,
 } from "react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
-import { LIQUID_GLASS_FLOAT_CLASS } from "./LiquidGlassUI";
-import { pillButtonUIClassName } from "./PillButtonUI.styles";
-import { GlassIconButtonUI } from "./GlassIconButtonUI";
+import { NoticeCardUI, noticeActionClassName } from "./NoticeCardUI";
 
 import {
     dismissToast,
@@ -34,7 +30,6 @@ import {
     getServerSnapshot,
     type ToastAction,
     type ToastRecord,
-    type ToastTone,
 } from "../lib/toastStore";
 export {
     showToast,
@@ -65,25 +60,6 @@ export function focusToast(id: string): boolean {
 export function useToasts(): readonly ToastRecord[] {
     return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
-
-const toneIcon: Record<ToastTone, ReactNode> = {
-    error: <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-600" aria-hidden />,
-    // `text-emerald-700` (not -600) because it is the shade globals.css
-    // remaps for dark mode; an unmapped one stays dark on dark glass.
-    success: (
-        <CheckCircle2
-            className="h-3.5 w-3.5 shrink-0 text-emerald-700"
-            aria-hidden
-        />
-    ),
-    info: <Info className="h-3.5 w-3.5 shrink-0 text-blue-600" aria-hidden />,
-};
-
-const toneTitleClass: Record<ToastTone, string> = {
-    error: "text-red-600",
-    success: "text-emerald-700",
-    info: "text-gray-900",
-};
 
 function ToastItemUI({ toast }: { toast: ToastRecord }) {
     const pausedRef = useRef(false);
@@ -137,9 +113,18 @@ function ToastItemUI({ toast }: { toast: ToastRecord }) {
     };
 
     const isError = toast.tone === "error";
+    const hasActions = Boolean(toast.actions?.length || toast.supportHref);
 
+    // The card's look lives in NoticeCardUI, shared with WarningPopup. This
+    // wrapper adds only toast behaviour: the timer, hover/focus pause, and
+    // the node registry `focusToast` uses.
     return (
-        <div
+        <NoticeCardUI
+            tone={toast.tone}
+            title={toast.title}
+            message={toast.message}
+            onDismiss={() => dismissToast(toast.id)}
+            dismissLabel="Dismiss notification"
             // The item owns the live semantics: `alert` is implicitly
             // assertive, `status` polite. The viewport around it is a plain
             // region, because a live region nested in a live region is
@@ -152,7 +137,6 @@ function ToastItemUI({ toast }: { toast: ToastRecord }) {
                 if (node) toastNodes.set(toast.id, node);
                 else toastNodes.delete(toast.id);
             }}
-            data-tone={toast.tone}
             data-testid="toast"
             onMouseEnter={() => { hoveredRef.current = true; pause(); }}
             onMouseLeave={() => { hoveredRef.current = false; resume(); }}
@@ -162,39 +146,13 @@ function ToastItemUI({ toast }: { toast: ToastRecord }) {
                 focusedRef.current = false;
                 resume();
             }}
-            className={twMerge(
-                clsx(
-                    "pointer-events-auto relative flex rounded-2xl px-3 py-3 text-xs",
-                    LIQUID_GLASS_FLOAT_CLASS,
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
-                ),
-            )}
-        >
-            <div className="min-w-0 flex-1 pr-6">
-                <div
-                    className={clsx(
-                        "flex items-start gap-1.5",
-                        toast.title ? "mb-1 text-sm font-medium" : "",
-                        toast.title ? toneTitleClass[toast.tone] : "text-gray-900",
-                    )}
-                >
-                    {toneIcon[toast.tone]}
-                    <span className="min-w-0 break-words">
-                        {toast.title ?? toast.message}
-                    </span>
-                </div>
-                {toast.title && (
-                    <div className="break-words pl-5 text-gray-900">{toast.message}</div>
-                )}
-                {(toast.actions?.length || toast.supportHref) && (
-                    <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5 pl-5">
+            actions={
+                hasActions ? (
+                    <>
                         {toast.supportHref && (
                             <a
                                 href={toast.supportHref}
-                                className={pillButtonUIClassName({
-                                    tone: "white",
-                                    size: "xs",
-                                })}
+                                className={noticeActionClassName("white")}
                             >
                                 {toast.supportLabel ?? "Contact support"}
                             </a>
@@ -204,25 +162,15 @@ function ToastItemUI({ toast }: { toast: ToastRecord }) {
                                 key={action.label}
                                 type="button"
                                 onClick={() => void runAction(action)}
-                                className={pillButtonUIClassName({
-                                    tone: "black",
-                                    size: "xs",
-                                })}
+                                className={noticeActionClassName("black")}
                             >
                                 {action.label}
                             </button>
                         ))}
-                    </div>
-                )}
-            </div>
-            <GlassIconButtonUI
-                onClick={() => dismissToast(toast.id)}
-                className="absolute right-1.5 top-1.5 h-5 w-5"
-                aria-label="Dismiss notification"
-            >
-                <X className="h-3 w-3" />
-            </GlassIconButtonUI>
-        </div>
+                    </>
+                ) : undefined
+            }
+        />
     );
 }
 

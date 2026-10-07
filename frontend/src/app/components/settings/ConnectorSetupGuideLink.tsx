@@ -1,6 +1,6 @@
 export function ConnectorSetupGuideLink({ href }: { href: string }) {
   return (
-    <div className="mt-2 pl-[18px]">
+    <div className="mt-2">
       <a
         href={href}
         target="_blank"
