@@ -14,6 +14,7 @@ import {
     listProjects,
     streamWordChat,
 } from "../../../word-addin/src/taskpane/api/client";
+import { describeError } from "@/shared/lib/userError";
 
 const fetchMock = vi.fn<typeof fetch>();
 const payload = {
@@ -90,5 +91,24 @@ describe("Word API transport cancellation", () => {
             method: "GET",
             url: "https://api.example.test/projects?view=summary",
         });
+    });
+});
+
+describe("Word API error bodies", () => {
+    it("never carries a non-JSON 4xx body into the user-facing message", async () => {
+        // A proxy or load balancer in front of a self-hosted API answers
+        // with its own HTML or text, which is not written for users.
+        fetchMock.mockResolvedValueOnce(
+            new Response("<html><body>413 Request Entity Too Large (nginx/1.25.3)</body></html>", {
+                status: 413,
+                headers: { "Content-Type": "text/html" },
+            }),
+        );
+
+        const error = await listProjects().catch((e: unknown) => e);
+        const described = describeError(error);
+
+        expect(described.kind).toBe("payload_too_large");
+        expect(described.message).not.toMatch(/nginx|<html>/);
     });
 });
