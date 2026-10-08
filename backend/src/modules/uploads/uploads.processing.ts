@@ -14,12 +14,15 @@ import {
 
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
+
+import JSZip from "jszip";
+import { XMLParser } from "fast-xml-parser";
 
 import { resolveContentOrgId } from "../../lib/access";
 import { recordAudit } from "../../lib/audit";
@@ -102,6 +105,7 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
   "content_type_mismatch",
+  "invalid_docx_package",
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
@@ -133,6 +137,15 @@ class ChangedDocumentError extends Error {
   constructor(readonly orphanedKeys: string[] = []) {
     super("document_changed");
     this.name = "ChangedDocumentError";
+  }
+}
+
+class InvalidUploadedFileError extends Error {
+  readonly code = "invalid_docx_package" as const;
+
+  constructor() {
+    super("invalid_docx_package");
+    this.name = "InvalidUploadedFileError";
   }
 }
 
@@ -305,6 +318,75 @@ async function requireSealedFile(
       throw new Error("sealed_upload_not_found", { cause: error });
     }
     throw error;
+  }
+}
+
+const DOCX_MAIN_DOCUMENT_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+const DOCX_CONTENT_TYPES_MAX_BYTES = 256 * 1024;
+const contentTypesParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "@_",
+});
+
+type DocxContentTypeOverride = {
+  "@_PartName"?: string;
+  "@_ContentType"?: string;
+};
+
+function zipEntryUncompressedSize(entry: JSZip.JSZipObject): number | null {
+  const data = (entry as JSZip.JSZipObject & {
+    _data?: { uncompressedSize?: unknown };
+  })._data;
+  const size = data?.uncompressedSize;
+  return typeof size === "number" && Number.isFinite(size) ? size : null;
+}
+
+function hasDocxMainDocumentOverride(contentTypes: string): boolean {
+  const parsed = contentTypesParser.parse(contentTypes) as {
+    Types?: {
+      Override?: DocxContentTypeOverride | DocxContentTypeOverride[];
+    };
+  };
+  const overrides = parsed.Types?.Override;
+  return (Array.isArray(overrides) ? overrides : overrides ? [overrides] : []).some(
+    (override) =>
+      override["@_PartName"] === "/word/document.xml" &&
+      override["@_ContentType"] === DOCX_MAIN_DOCUMENT_CONTENT_TYPE,
+  );
+}
+
+async function validateUploadedFilePackage(
+  file: UploadFileRow,
+  artifact: SealedFileArtifact,
+): Promise<void> {
+  if (file.file_type !== "docx") return;
+
+  try {
+    const zip = await JSZip.loadAsync(await readFile(artifact.filePath));
+    const contentTypesPart = zip.file("[Content_Types].xml");
+    const relationshipsPart = zip.file("_rels/.rels");
+    const documentPart = zip.file("word/document.xml");
+
+    if (!contentTypesPart || !relationshipsPart || !documentPart) {
+      throw new InvalidUploadedFileError();
+    }
+
+    const contentTypesSize = zipEntryUncompressedSize(contentTypesPart);
+    if (
+      contentTypesSize === null ||
+      contentTypesSize > DOCX_CONTENT_TYPES_MAX_BYTES
+    ) {
+      throw new InvalidUploadedFileError();
+    }
+
+    const contentTypes = await contentTypesPart.async("string");
+    if (!hasDocxMainDocumentOverride(contentTypes)) {
+      throw new InvalidUploadedFileError();
+    }
+  } catch (error) {
+    if (error instanceof InvalidUploadedFileError) throw error;
+    throw new InvalidUploadedFileError();
   }
 }
 
@@ -661,6 +743,7 @@ export async function processUploadFile(
 ) {
   const artifact = await requireSealedFile(file);
   try {
+    await validateUploadedFilePackage(file, artifact);
     switch (session.purpose) {
       case "document_create":
         return await processCreatedDocument(db, session, file, artifact);
@@ -858,8 +941,11 @@ export async function processUploadJob(
         await heartbeatJob(db, jobId, workerId);
         failed = true;
         // These failures cannot be fixed by retrying the same upload.
-        terminalProcessingFailure = error instanceof DeletedDocumentError || error instanceof ChangedDocumentError;
-        if (!(error instanceof ChangedDocumentError)) {
+        terminalProcessingFailure =
+          error instanceof DeletedDocumentError ||
+          error instanceof ChangedDocumentError ||
+          error instanceof InvalidUploadedFileError;
+        if (!(error instanceof ChangedDocumentError || error instanceof InvalidUploadedFileError)) {
           reportError(error, {
             tags: {
               component: "upload-worker",
@@ -886,8 +972,11 @@ export async function processUploadJob(
             status: "error",
             error_code: error instanceof ChangedDocumentError
               ? "document_changed"
-              : error instanceof DeletedDocumentError ? "document_deleted"
-              : "processing_failed",
+              : error instanceof DeletedDocumentError
+                ? "document_deleted"
+                : error instanceof InvalidUploadedFileError
+                  ? error.code
+                  : "processing_failed",
             updated_at: new Date().toISOString(),
           })
           .eq("id", file.id)
