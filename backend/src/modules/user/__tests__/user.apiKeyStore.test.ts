@@ -20,6 +20,10 @@ describe("normalizeApiKeyProvider", () => {
         expect(normalizeApiKeyProvider("gemini")).toBe("gemini");
     });
 
+    it("accepts the direct Mistral provider", () => {
+        expect(normalizeApiKeyProvider("mistral")).toBe("mistral");
+    });
+
     it("returns the supported router providers", () => {
         expect(normalizeApiKeyProvider("openrouter")).toBe("openrouter");
         expect(normalizeApiKeyProvider("vercel")).toBe("vercel");
@@ -39,6 +43,7 @@ describe("hasEnvApiKey", () => {
         "ANTHROPIC_API_KEY",
         "CLAUDE_API_KEY",
         "OPENAI_API_KEY",
+        "MISTRAL_API_KEY",
         "GEMINI_API_KEY",
         "OPENROUTER_API_KEY",
         "AI_GATEWAY_API_KEY",
@@ -105,16 +110,20 @@ describe("hasEnvApiKey", () => {
 });
 
 describe("user API key precedence", () => {
-    it("uses a saved user key before an environment key", async () => {
-        process.env.OPENAI_API_KEY = "environment-key";
+    it.each(["openai", "mistral"] as const)("uses a saved %s key before an environment key", async (provider) => {
+        const environmentVariable = provider === "mistral" ? "MISTRAL_API_KEY" : "OPENAI_API_KEY";
+        process.env[environmentVariable] = "environment-key";
         process.env.USER_API_KEYS_ENCRYPTION_SECRET = "test-secret";
         let savedRow: Record<string, unknown> | null = null;
         const db = {
             from: () => ({
                 upsert: async (row: Record<string, unknown>) => {
-                    savedRow = { ...row, provider: "openai" };
+                    savedRow = { ...row, provider };
                     return { error: null };
                 },
+                delete: () => ({
+                    eq: () => ({ eq: async () => { savedRow = null; return { error: null }; } }),
+                }),
                 select: () => ({
                     eq: async () => ({
                         data: savedRow ? [savedRow] : [],
@@ -124,19 +133,26 @@ describe("user API key precedence", () => {
             }),
         };
 
-        await saveUserApiKey("user-1", "openai", "personal-key", db as never);
+        await expect(getUserApiKeyStatus("user-1", db as never)).resolves.toMatchObject({
+            [provider]: true, sources: { [provider]: "env" },
+        });
+        await saveUserApiKey("user-1", provider, "personal-key", db as never);
+        expect(savedRow).not.toHaveProperty("encrypted_key", "personal-key");
 
         await expect(getUserApiKeys("user-1", db as never)).resolves.toMatchObject({
-            openai: "personal-key",
+            [provider]: "personal-key",
         });
         await expect(
             getUserApiKeyStatus("user-1", db as never),
         ).resolves.toMatchObject({
-            openai: true,
-            sources: { openai: "user" },
+            [provider]: true,
+            sources: { [provider]: "user" },
         });
 
-        delete process.env.OPENAI_API_KEY;
+        await saveUserApiKey("user-1", provider, null, db as never);
+        await expect(getUserApiKeys("user-1", db as never)).resolves.toMatchObject({ [provider]: "environment-key" });
+        await expect(getUserApiKeyStatus("user-1", db as never)).resolves.toMatchObject({ [provider]: true, sources: { [provider]: "env" } });
+        delete process.env[environmentVariable];
         delete process.env.USER_API_KEYS_ENCRYPTION_SECRET;
     });
 });

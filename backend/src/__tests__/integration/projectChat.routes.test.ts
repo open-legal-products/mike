@@ -191,7 +191,7 @@ import { createServerSupabase } from "../../lib/supabase";
 
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
-    model: "gemini-3-flash-preview",
+    model: "gemini-3.8-flash",
 };
 
 describe("POST /projects/:projectId/chat", () => {
@@ -313,7 +313,7 @@ describe("POST /projects/:projectId/chat", () => {
             memory_curator_model: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
-            last_selected_chat_model: "gpt-5.6-luna",
+            last_selected_chat_model: "gpt-6-luna",
             api_keys: { openai: "test-key" },
         });
 
@@ -324,7 +324,7 @@ describe("POST /projects/:projectId/chat", () => {
 
         expect(res.status).toBe(200);
         expect(runLLMStream).toHaveBeenCalledWith(
-            expect.objectContaining({ model: "gpt-5.6-luna" }),
+            expect.objectContaining({ model: "gpt-6-luna" }),
         );
     });
 
@@ -387,7 +387,7 @@ describe("POST /projects/:projectId/chat", () => {
         expect(messages[0].content).toContain("displayed-document");
         expect(systemPromptExtra).toContain("attached.pdf");
         expect(runLLMStream.mock.calls[0][0]).toMatchObject({
-            model: "gemini-3-flash-preview",
+            model: "gemini-3.8-flash",
         });
     });
 

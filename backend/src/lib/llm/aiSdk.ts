@@ -1,3 +1,4 @@
+import { normalizeReasoningLevelForModel } from "./models";
 import type { LanguageModel, ToolSet } from "ai" with {
   "resolution-mode": "import",
 };
@@ -599,7 +600,12 @@ export async function completeAiSdkText(
     system: params.systemPrompt,
     prompt: params.user,
     maxOutputTokens: params.maxTokens ?? 512,
-    reasoning: config.supportsReasoning === false ? undefined : "none",
+    reasoning:
+      config.supportsReasoning === false
+        ? undefined
+        : (normalizeReasoningLevelForModel(config.modelId, "none") as
+            | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
+            | undefined),
   });
   return result.text;
 }

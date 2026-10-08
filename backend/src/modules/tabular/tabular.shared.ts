@@ -107,6 +107,7 @@ export function isReviewGenerationRunning(
 function providerLabel(provider: Provider): string {
     if (provider === "claude") return "Anthropic";
     if (provider === "openai") return "OpenAI";
+    if (provider === "mistral") return "Mistral AI";
     if (provider === "openrouter") return "OpenRouter";
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";

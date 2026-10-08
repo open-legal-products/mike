@@ -61,7 +61,7 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
             <div
                 data-slot="search-bar"
                 className={cn(
-                    `flex items-center text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl transition-colors focus-within:ring-2 focus-within:ring-blue-500/40`,
+                    `flex items-center text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} transition-colors focus-within:ring-2 focus-within:ring-blue-500/40`,
                     classes.wrapper,
                     className,
                     wrapperClassName,

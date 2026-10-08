@@ -16,7 +16,7 @@ import {
   type RouterCatalogModel,
 } from "@/app/lib/mikeApi";
 import type { RouterSlug } from "@/app/components/assistant/ModelToggle";
-import { SettingsCard } from "./SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "./SettingsHeading";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";
@@ -141,7 +141,7 @@ export function RouterSettingsSection() {
         Choose models from each router&apos;s catalog or enter a model ID. Saved
         models appear in model selectors.
       </SettingsDescription>
-      <SettingsCard>
+      <GlassCardUI>
         {openRouterConfigured && (
           <RouterModelsSetting
             provider="openrouter"
@@ -169,7 +169,7 @@ export function RouterSettingsSection() {
             onSave={updateOpenCodeGoModels}
           />
         )}
-      </SettingsCard>
+      </GlassCardUI>
     </section>
   );
 }

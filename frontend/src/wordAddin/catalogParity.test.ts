@@ -31,8 +31,29 @@ import type { ApiKeyStatus } from "../../../word-addin/src/taskpane/types";
 import { isModelAvailable as webIsModelAvailable } from "../app/lib/modelAvailability";
 import { isAllowedModelId as webIsAllowedModelId } from "../app/hooks/useSelectedModel";
 import type { ApiKeyState } from "../app/lib/mikeApi";
+import {
+    CLAUDE_MAIN_MODELS,
+    GEMINI_MAIN_MODELS,
+    OPENAI_MAIN_MODELS,
+    MISTRAL_MAIN_MODELS,
+    LEGACY_MODEL_IDS as BACKEND_LEGACY_MODEL_IDS,
+    reasoningLevelsForModel as backendReasoningLevels,
+} from "../../../backend/src/lib/llm/models";
+import { reasoningLevelsForModel } from "../shared/ui/ModelToggleUI";
 
 describe("word add-in catalog parity", () => {
+    it("keeps both clients aligned with backend model IDs and reasoning capabilities", () => {
+        expect(MODELS.map((model) => model.id)).toEqual([
+            ...CLAUDE_MAIN_MODELS,
+            ...GEMINI_MAIN_MODELS,
+            ...OPENAI_MAIN_MODELS,
+            ...MISTRAL_MAIN_MODELS,
+        ]);
+        expect(LEGACY_MODEL_IDS).toEqual(BACKEND_LEGACY_MODEL_IDS);
+        for (const { id } of MODELS) {
+            expect(reasoningLevelsForModel(id)).toEqual(backendReasoningLevels(id));
+        }
+    });
     it("offers exactly the web app's static models (id, label, group)", () => {
         const webModels = MODELS.map(({ id, label, group }) => ({
             id,
@@ -147,6 +168,7 @@ describe("word add-in catalog parity", () => {
             "claude",
             "gemini",
             "openai",
+            "mistral",
             "openrouter",
             "vercel",
             "opencode-go",
@@ -162,6 +184,7 @@ describe("word add-in catalog parity", () => {
                 claude: false,
                 gemini: false,
                 openai: false,
+                mistral: false,
                 openrouter: false,
                 vercel: false,
                 "opencode-go": false,

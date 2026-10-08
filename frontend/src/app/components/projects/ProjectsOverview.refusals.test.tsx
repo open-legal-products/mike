@@ -75,7 +75,7 @@ async function bulkDelete() {
         screen.getByText("Actions"),
         new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
     );
-    fireEvent.click(screen.getByText("Delete"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Delete/ }));
 }
 
 describe("ProjectsOverview bulk delete", () => {
@@ -134,7 +134,7 @@ describe("ProjectsOverview bulk delete", () => {
                     admin_contacts: [DANA],
                 }),
             ],
-            ["theirs"],
+            ["theirs", "unknown-row"],
         );
         render(<ProjectsOverview />);
 

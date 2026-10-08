@@ -6,7 +6,7 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
@@ -59,7 +59,7 @@ export default function FeaturesPage() {
     <div className="space-y-8">
       <section className="space-y-3">
         <SettingsHeading>Assistant</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow>
             <div className="min-w-0 space-y-1">
               <SettingsLabel>Quick actions</SettingsLabel>
@@ -82,12 +82,12 @@ export default function FeaturesPage() {
               }}
             />
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
 
       <section className="space-y-3">
         <SettingsHeading>Legal Research</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow>
             <div className="min-w-0 space-y-1">
               <SettingsLabel>Enable CourtListener</SettingsLabel>
@@ -121,7 +121,7 @@ export default function FeaturesPage() {
               onRemove={() => updateApiKey("courtlistener", null)}
             />
           )}
-        </SettingsCard>
+        </GlassCardUI>
       </section>
     </div>
   );

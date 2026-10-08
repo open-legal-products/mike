@@ -1,6 +1,5 @@
 "use client";
 
-import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { deleteChat, renameChat } from "@/app/lib/mikeApi";
@@ -21,30 +20,6 @@ interface Props {
     params: Promise<{ id: string }>;
 }
 
-function SelectedChatActions({
-    selectedCount,
-    open,
-    onOpenChange,
-    onDelete,
-}: {
-    selectedCount: number;
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    onDelete: () => void;
-}) {
-    if (selectedCount === 0) return null;
-
-    return (
-        <SelectionActionsMenu
-            open={open}
-            onOpenChange={onOpenChange}
-            actions={[
-                { label: "Delete", destructive: true, onSelect: onDelete },
-            ]}
-        />
-    );
-}
-
 export default function ProjectAssistantPage({ params }: Props) {
     use(params);
     const workspace = useProjectWorkspace();
@@ -63,7 +38,6 @@ export default function ProjectAssistantPage({ params }: Props) {
     const [selectedChatIds, setSelectedChatIds] = useState<string[]>([]);
     const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
     const [renameChatValue, setRenameChatValue] = useState("");
-    const [actionsOpen, setActionsOpen] = useState(false);
     const [confirmDeleteSelectedOpen, setConfirmDeleteSelectedOpen] =
         useState(false);
     // One place for "the server refused, or the request failed" — the
@@ -145,14 +119,12 @@ export default function ProjectAssistantPage({ params }: Props) {
      */
     function requestDeleteSelectedChats() {
         if (selectedChatIds.length === 0) return;
-        setActionsOpen(false);
         setConfirmDeleteSelectedOpen(true);
     }
 
     const handleDeleteSelectedChats = useCallback(async () => {
         const ids = [...selectedChatIds];
         setConfirmDeleteSelectedOpen(false);
-        setActionsOpen(false);
         setActionNotice(null);
         const roleById = new Map(
             chats.map((chat) => [chat.id, roleFrom(chat)] as const),
@@ -194,17 +166,8 @@ export default function ProjectAssistantPage({ params }: Props) {
 
     return (
         <>
-            <ProjectSectionToolbar
-                actions={selectedChatIds.length > 0 ? (
-                    <SelectedChatActions
-                        selectedCount={selectedChatIds.length}
-                        open={actionsOpen}
-                        onOpenChange={setActionsOpen}
-                        onDelete={requestDeleteSelectedChats}
-                    />
-                ) : undefined}
-            />
             <ProjectAssistantTable
+                renderToolbar={(actions) => <ProjectSectionToolbar actions={actions} />}
                 chats={visibleChats}
                 filteredChats={filteredChats}
                 selectedChatIds={selectedChatIds}

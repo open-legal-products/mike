@@ -150,8 +150,8 @@ export function SidebarChatItem({
                       : `pr-3 ${LIQUID_GLASS_HOVER_CLASS} hover:pr-1`,
             )}
         >
-                {/* 16px icon slot + ml-2/pl-3 match the top nav rows'
-                    px-2 / w-4 icon / gap-3, so icons and titles line up. */}
+                {/* 16px icon slot + ml-2/pl-2 match the top nav rows'
+                    px-2 / w-4 icon / gap-2, so icons and titles line up. */}
                 <span className="ml-2 flex h-4 w-4 shrink-0 items-center justify-center">
                     {responseStatus === "loading" ? (
                         <Loader2
@@ -187,7 +187,7 @@ export function SidebarChatItem({
                     // The row owns the hover fill, so it draws the ring.
                     data-focus-fill
                     className={cn(
-                        "min-w-0 flex-1 overflow-hidden whitespace-nowrap py-1 pl-3 text-left text-xs outline-none",
+                        "min-w-0 flex-1 overflow-hidden whitespace-nowrap py-1 pl-2 text-left text-xs outline-none",
                         isActive
                             ? "pr-3 text-gray-900"
                             : menuOpen

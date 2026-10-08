@@ -16,7 +16,11 @@ import {
   storageKey,
 } from "../../lib/storage";
 import { convertedPdfKey } from "../../lib/convert";
-import { checkProjectAccess, resolveContentOrgId } from "../../lib/access";
+import {
+  checkProjectAccess,
+  ensureDocAccess,
+  resolveContentOrgId,
+} from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import { contentTypeForDocumentType } from "../../lib/documentTypes";
 import {
@@ -162,6 +166,23 @@ export async function assignOrCopyDocument(
     .eq("user_id", userId)
     .single();
   if (!doc) return { ok: false, kind: "doc_not_found" };
+  // Authorship is provenance, not access. A document created inside an
+  // organization matter stays the firm's: once its author leaves the org, is
+  // denied the project, or loses their grant, `user_id = me` alone would
+  // still let them copy the bytes into a personal project. Require the
+  // caller's CURRENT access to wherever the document lives now.
+  const sourceAccess = await ensureDocAccess(
+    doc as {
+      user_id: string | null;
+      project_id: string | null;
+      org_id?: string | null;
+      workflow_id?: string | null;
+    },
+    userId,
+    userEmail,
+    db,
+  );
+  if (!sourceAccess.ok) return { ok: false, kind: "doc_not_found" };
   await attachActiveVersionPaths(
     db,
     [doc as { id: string; current_version_id?: string | null }],

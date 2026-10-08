@@ -293,7 +293,8 @@ excluded because they size and style their own scrollbars.
 | `TextSlabUI` | `shared/ui` | Inset slab holding quoted or proposed text inside a card — citation quotes, tracked-change diffs, and their loading/empty states. Owns shape, padding, and fill; the caller owns typography. |
 | `ToggleSwitchUI` | `shared/ui` | `role="switch"` toggle with an optional text label. |
 | `CitationPillUI` | `shared/ui` | Canonical numbered citation control for web, tabular review, and Word. Uses neutral gray by default, red for verification errors, and blue for the selected state. |
-| `input`, `form-field` | `components/ui` | shadcn input; `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
+| `InputUI` | `shared/ui` | Canonical shadcn input for the web app and Word add-in. |
+| `form-field` | `components/ui` | `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
 | `search-bar` | `components/ui` | Search input with clear button. Pass `label` for a meaningful accessible name. |
 | `dropdown` | `shared/ui` | The one dropdown for the web app and the Word add-in: Radix menu behaviour with the liquid-glass look. See "Dropdowns" below. |
 | `liquid-surface` | `components/ui` | Web-only shared surface class constants. |

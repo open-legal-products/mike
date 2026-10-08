@@ -54,13 +54,7 @@ import {
     disconnectGoogleDrive,
     downloadDocumentsZip,
     downloadUserExport,
-    exportAccountData,
-    exportAuditHistory,
-    exportChatData,
-    exportTabularReviewsData,
-    generateChatTitle,
     generateTabularColumnPrompt,
-    getApiKeyStatus,
     getChatAccess,
     getChat,
     getChatPeople,
@@ -134,7 +128,6 @@ import {
     listProjectSummaries,
     listProjects,
     listProjectsPage,
-    listStandaloneDocuments,
     listSystemWorkflows,
     listTabularReviewIds,
     listTabularReviews,
@@ -628,7 +621,7 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
     });
 });
 
-describe("blob requests (exportAccountData)", () => {
+describe("blob requests (downloadUserExport)", () => {
     it("returns the blob and the filename from content-disposition", async () => {
         fetchMock.mockResolvedValue(
             new Response("zip-bytes", {
@@ -639,7 +632,7 @@ describe("blob requests (exportAccountData)", () => {
             }),
         );
 
-        const { blob, filename } = await exportAccountData();
+        const { blob, filename } = await downloadUserExport("e1");
 
         expect(filename).toBe("export.zip");
         expect(await blob.text()).toBe("zip-bytes");
@@ -654,10 +647,10 @@ describe("blob requests (exportAccountData)", () => {
                 },
             }),
         );
-        expect((await exportAccountData()).filename).toBe("data.zip");
+        expect((await downloadUserExport("e1")).filename).toBe("data.zip");
 
         fetchMock.mockResolvedValue(new Response("x", { status: 200 }));
-        expect((await exportAccountData()).filename).toBeNull();
+        expect((await downloadUserExport("e1")).filename).toBeNull();
     });
 
     it("throws a MikeApiError on failure", async () => {
@@ -665,7 +658,7 @@ describe("blob requests (exportAccountData)", () => {
             jsonResponse({ detail: "not allowed" }, { status: 403 }),
         );
 
-        await expect(exportAccountData()).rejects.toMatchObject({
+        await expect(downloadUserExport("e1")).rejects.toMatchObject({
             status: 403,
             message: "not allowed",
         });
@@ -701,34 +694,6 @@ describe("audit history", () => {
         expect(init.signal).toBe(controller.signal);
     });
 
-    it("exports with the same active filters and server-side sort", async () => {
-        fetchMock.mockResolvedValue(
-            new Response("history", {
-                status: 200,
-                headers: {
-                    "content-disposition": 'attachment; filename="history.csv"',
-                },
-            }),
-        );
-
-        const result = await exportAuditHistory({
-            q: "agreement",
-            action: "document.edited",
-            status: "failed",
-            surface: "assistant",
-            from: "2026-07-01",
-            to: "2026-07-31",
-            sortBy: "created_at",
-            sortDirection: "desc",
-        });
-
-        expect(lastFetchCall().url).toBe(
-            "/api/audit/export?q=agreement&action=document.edited&status=failed&surface=assistant&from=2026-07-01&to=2026-07-31&sort_by=created_at&sort_dir=desc",
-        );
-        expect(result.filename).toBe("history.csv");
-        expect(await result.blob.text()).toBe("history");
-    });
-
     it("omits every optional audit parameter when no filters are active", async () => {
         fetchMock.mockResolvedValueOnce(
             jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }),
@@ -736,13 +701,6 @@ describe("audit history", () => {
 
         await getAuditHistory({});
         expect(lastFetchCall().url).toBe("/api/audit?");
-
-        fetchMock.mockResolvedValueOnce(
-            new Response("history", { status: 200 }),
-        );
-
-        await exportAuditHistory({});
-        expect(lastFetchCall().url).toBe("/api/audit/export?");
     });
 });
 
@@ -2429,11 +2387,6 @@ describe("thin endpoint wrappers", () => {
             body: { enabled: true },
         },
         {
-            name: "getApiKeyStatus",
-            call: () => getApiKeyStatus(),
-            url: "/user/api-keys",
-        },
-        {
             name: "saveApiKey",
             call: () => saveApiKey("claude", "sk-ant-1"),
             url: "/user/api-keys/claude",
@@ -2710,11 +2663,6 @@ describe("thin endpoint wrappers", () => {
         },
         // Standalone documents & versions
         {
-            name: "listStandaloneDocuments",
-            call: () => listStandaloneDocuments(),
-            url: "/single-documents",
-        },
-        {
             name: "getDocument",
             call: () => getDocument("d1"),
             url: "/single-documents/d1",
@@ -2799,14 +2747,6 @@ describe("thin endpoint wrappers", () => {
             call: () => deleteChat("c1"),
             url: "/chat/c1",
             method: "DELETE",
-        },
-        {
-            name: "generateChatTitle",
-            call: () =>
-                generateChatTitle("c1", "first message", "gpt-5.6-terra"),
-            url: "/chat/c1/generate-title",
-            method: "POST",
-            body: { message: "first message", model: "gpt-5.6-terra" },
         },
         {
             name: "getChatPeople",
@@ -3300,27 +3240,6 @@ describe("unwrapping and blob wrappers", () => {
             title: "Recovered",
         });
         expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it("exportChatData and exportTabularReviewsData hit their export routes", async () => {
-        fetchMock.mockImplementation(() =>
-            Promise.resolve(
-                new Response("bytes", {
-                    status: 200,
-                    headers: {
-                        "content-disposition": 'attachment; filename="x.zip"',
-                    },
-                }),
-            ),
-        );
-
-        const chats = await exportChatData();
-        expect(lastFetchCall().url).toBe("/api/user/chats/export");
-        expect(chats.filename).toBe("x.zip");
-        expect(await chats.blob.text()).toBe("bytes");
-
-        await exportTabularReviewsData();
-        expect(lastFetchCall().url).toBe("/api/user/tabular-reviews/export");
     });
 
     it("downloadUserExport streams the finished artifact by encoded id", async () => {

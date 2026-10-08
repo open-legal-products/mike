@@ -2,16 +2,19 @@
 
 ## A local account says “Email not confirmed”
 
-Docker autoconfirms newly created accounts by default. Accounts created before
-autoconfirm was enabled remain unconfirmed. Confirm the existing message in
-[Mailpit](http://localhost:8025), or create a new local account.
+Docker requires new accounts to confirm their email address. Confirm the
+message in [Mailpit](http://localhost:8025), or create a new local account and
+confirm that one.
 
-To test confirmation deliberately, set `GOTRUE_MAILER_AUTOCONFIRM=false` in the
-root `.env` and recreate the Auth service:
+For a throwaway single-user stack you may set `GOTRUE_MAILER_AUTOCONFIRM=true`
+in the root `.env` and recreate the Auth service:
 
 ```bash
 docker compose up -d --force-recreate auth
 ```
+
+Never do this on an instance other people can reach: shares and invitations are
+matched by email.
 
 ## Production authentication email does not arrive
 

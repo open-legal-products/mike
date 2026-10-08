@@ -1,6 +1,6 @@
 "use client";
 
-import React, {
+import {
     createContext,
     useContext,
     useEffect,
@@ -126,6 +126,7 @@ const API_KEY_PROVIDERS: ApiKeyProvider[] = [
     "claude",
     "gemini",
     "openai",
+    "mistral",
     "openrouter",
     "vercel",
     "opencode-go",
@@ -137,6 +138,7 @@ function emptyApiKeys(): ApiKeyState {
         claude: { configured: false, source: null },
         gemini: { configured: false, source: null },
         openai: { configured: false, source: null },
+        mistral: { configured: false, source: null },
         openrouter: { configured: false, source: null },
         vercel: { configured: false, source: null },
         "opencode-go": { configured: false, source: null },

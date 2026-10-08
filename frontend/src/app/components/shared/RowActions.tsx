@@ -5,10 +5,12 @@ import {
     Download,
     Eye,
     EyeOff,
+    Eraser,
     FolderMinus,
     Hash,
     History,
     Pencil,
+    Plus,
     Trash2,
     Upload,
     X,
@@ -31,10 +33,15 @@ export { CLOSE_ROW_ACTIONS_EVENT, closeRowActionMenus };
 interface Props {
     onDeselect?: () => void;
     onView?: () => void;
+    /** Copies the row into the caller's own collection; `addLabel` names it. */
+    onAdd?: () => void;
+    addLabel?: string;
     onDelete?: () => void | Promise<void>;
     onHide?: () => void;
     onUnhide?: () => void;
     onDownload?: () => void;
+    onClearResults?: () => void;
+    clearResultsDisabled?: boolean;
     onRemoveFromFolder?: () => void;
     onShowAllVersions?: () => void;
     onUploadNewVersion?: () => void;
@@ -70,10 +77,14 @@ type RowActionMenuItemsProps = Props & {
 export function RowActionMenuItems({
     onDeselect,
     onView,
+    onAdd,
+    addLabel = "Add",
     onDelete,
     onHide,
     onUnhide,
     onDownload,
+    onClearResults,
+    clearResultsDisabled,
     onRemoveFromFolder,
     onShowAllVersions,
     onUploadNewVersion,
@@ -109,6 +120,12 @@ export function RowActionMenuItems({
                 <DropdownItem onSelect={run(onView)}>
                     <Eye className="h-3.5 w-3.5" />
                     {viewLabel}
+                </DropdownItem>
+            )}
+            {onAdd && (
+                <DropdownItem onSelect={run(onAdd)}>
+                    <Plus className="h-3.5 w-3.5" />
+                    {addLabel}
                 </DropdownItem>
             )}
             {onNewSubfolder && (
@@ -162,6 +179,12 @@ export function RowActionMenuItems({
                 <DropdownItem onSelect={run(onRemoveFromFolder)}>
                     <FolderMinus className="h-3.5 w-3.5" />
                     Remove from subfolder
+                </DropdownItem>
+            )}
+            {onClearResults && (
+                <DropdownItem disabled={clearResultsDisabled} onSelect={run(onClearResults)}>
+                    <Eraser className="h-3.5 w-3.5" />
+                    Clear results
                 </DropdownItem>
             )}
             {onUnhide && (

@@ -6,6 +6,7 @@ export type Provider =
     | "claude"
     | "gemini"
     | "openai"
+    | "mistral"
     | "openai-compatible"
     | "openrouter"
     | "vercel"
@@ -59,6 +60,7 @@ export type UserApiKeys = {
     claude?: string | null;
     gemini?: string | null;
     openai?: string | null;
+    mistral?: string | null;
     openrouter?: string | null;
     vercel?: string | null;
     "opencode-go"?: string | null;

@@ -6,11 +6,11 @@ import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { SiteLogo } from "@/app/components/site-logo";
 import {
-    authGlassCardClassName,
-    authInputClassName,
-} from "@/app/components/auth/authStyles";
+    authGlassCardUIClassName,
+    authInputUIClassName,
+} from "@/shared/ui/AuthStylesUI";
 import { FieldLabel } from "@/app/components/ui/form-field";
-import { Input } from "@/app/components/ui/input";
+import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { startSso } from "@/app/lib/authApi";
@@ -67,7 +67,7 @@ export default function SsoLoginPage() {
                 <SiteLogo size="lg" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className={authGlassCardClassName}>
+                <div className={authGlassCardUIClassName}>
                     <div className="mb-6">
                         <h1 className="font-serif text-2xl font-medium text-gray-950">
                             SSO Login
@@ -79,7 +79,7 @@ export default function SsoLoginPage() {
                             <FieldLabel htmlFor="sso-email">
                                 Email
                             </FieldLabel>
-                            <Input
+                            <InputUI
                                 id="sso-email"
                                 type="email"
                                 autoComplete="email"
@@ -92,7 +92,7 @@ export default function SsoLoginPage() {
                                 }
                                 required
                                 disabled={loading}
-                                className={authInputClassName}
+                                className={authInputUIClassName}
                             />
                         </div>
 

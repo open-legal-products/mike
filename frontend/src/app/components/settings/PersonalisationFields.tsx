@@ -2,8 +2,8 @@
 
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, X } from "lucide-react";
-import { authInputClassName } from "@/app/components/auth/authStyles";
-import { Input } from "@/app/components/ui/input";
+import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
+import { InputUI } from "@/shared/ui/InputUI";
 import { OptionPill } from "@/app/components/ui/option-pill";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {
@@ -272,7 +272,7 @@ export function PersonalisationFields({
               htmlFor="other-jurisdiction"
               status={statusFor?.("otherJurisdiction")}
             />
-            <Input
+            <InputUI
               id="other-jurisdiction"
               value={form.otherJurisdiction}
               onChange={(event) =>
@@ -280,7 +280,7 @@ export function PersonalisationFields({
               }
               maxLength={100}
               placeholder="Enter your jurisdiction"
-              className={`w-full ${authInputClassName}`}
+              className={`w-full ${authInputUIClassName}`}
             />
           </div>
         )}
@@ -299,7 +299,7 @@ export function PersonalisationFields({
               aria-label={practiceAreasAriaLabel}
               className={cn(
                 "flex h-9 w-full items-center justify-between text-left text-sm outline-none",
-                authInputClassName,
+                authInputUIClassName,
                 form.practiceAreas.length === 0 && "text-gray-400",
               )}
             >
@@ -369,13 +369,13 @@ export function PersonalisationFields({
               htmlFor="other-practice-area"
               status={statusFor?.("otherPracticeArea")}
             />
-            <Input
+            <InputUI
               id="other-practice-area"
               value={form.otherArea}
               onChange={(event) => form.setOtherArea(event.target.value)}
               maxLength={100}
               placeholder="Enter your practice area"
-              className={`w-full ${authInputClassName}`}
+              className={`w-full ${authInputUIClassName}`}
             />
           </div>
         )}
@@ -428,7 +428,7 @@ function ProfileDropdown({
             aria-label={label}
             className={cn(
               "flex h-9 w-full items-center justify-between text-left text-sm outline-none",
-              authInputClassName,
+              authInputUIClassName,
               !value && "text-gray-400",
             )}
           >

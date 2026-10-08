@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { OnboardingShell } from "@/app/components/auth/OnboardingShell";
-import { authInputClassName } from "@/app/components/auth/authStyles";
-import { Input } from "@/app/components/ui/input";
+import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
+import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -83,13 +83,13 @@ function ProfileDetailsForm({
                     <FieldLabel htmlFor="name">
                         Name
                     </FieldLabel>
-                    <Input
+                    <InputUI
                         id="name"
                         value={name}
                         onChange={(event) => setName(event.target.value)}
                         maxLength={200}
                         autoComplete="name"
-                        className={`w-full ${authInputClassName}`}
+                        className={`w-full ${authInputUIClassName}`}
                     />
                 </div>
 
@@ -97,7 +97,7 @@ function ProfileDetailsForm({
                     <FieldLabel htmlFor="organisation">
                         Organisation
                     </FieldLabel>
-                    <Input
+                    <InputUI
                         id="organisation"
                         value={organisation}
                         onChange={(event) =>
@@ -105,7 +105,7 @@ function ProfileDetailsForm({
                         }
                         maxLength={200}
                         autoComplete="organization"
-                        className={`w-full ${authInputClassName}`}
+                        className={`w-full ${authInputUIClassName}`}
                     />
                 </div>
 

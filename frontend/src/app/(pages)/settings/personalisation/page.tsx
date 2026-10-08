@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CustomInstructionsSection } from "@/app/components/settings/CustomInstructionsSection";
 import { ResponseStyleSection } from "@/app/components/settings/ResponseStyleSection";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import {
@@ -150,7 +150,7 @@ function PersonalisationForm({
           Tell Mike about your role and practice so responses can be tailored to
           your professional context.
         </SettingsDescription>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsPersonalisationFields
             form={form}
             practiceAreasAriaLabel="Practice areas"
@@ -189,7 +189,7 @@ function PersonalisationForm({
               </div>
             </SettingsRow>
           )}
-        </SettingsCard>
+        </GlassCardUI>
       </section>
 
       <ResponseStyleSection />

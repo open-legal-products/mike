@@ -60,7 +60,7 @@ describe("ModelToggle responsive trigger", () => {
         const onReasoningChange = vi.fn();
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
                 reasoningLevel="high"
@@ -139,7 +139,7 @@ describe("ModelToggle responsive trigger", () => {
         const onReasoningChange = vi.fn();
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
                 reasoningLevel="high"
@@ -162,7 +162,7 @@ describe("ModelToggle responsive trigger", () => {
     it("uses the Settings2 icon in a compact chat input", () => {
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 compact
             />,
@@ -178,20 +178,20 @@ describe("ModelToggle responsive trigger", () => {
     it("allows a wider model label in the regular trigger", () => {
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
             />,
         );
 
-        expect(screen.getByText("Gemini 3 Flash")).toHaveClass("max-w-[200px]");
+        expect(screen.getByText("Gemini 3.8 Flash")).toHaveClass("max-w-[200px]");
     });
 
     it("does not add an inset shadow to the selected model row", async () => {
         const user = userEvent.setup();
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
             />,
@@ -200,7 +200,7 @@ describe("ModelToggle responsive trigger", () => {
         await user.click(screen.getByRole("button", { name: "Choose model" }));
 
         const selectedRow = screen
-            .getAllByText("Gemini 3 Flash")
+            .getAllByText("Gemini 3.8 Flash")
             .find((element) => element.closest('[role="menuitem"]'))
             ?.closest('[role="menuitem"]');
         expect(selectedRow).toHaveClass("theme-dropdown-item", "text-gray-900");
@@ -213,7 +213,7 @@ describe("ModelToggle responsive trigger", () => {
     it("shows a dot on model rows but not provider rows", async () => {
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
             />,
@@ -224,7 +224,7 @@ describe("ModelToggle responsive trigger", () => {
         );
 
         const modelRow = screen
-            .getAllByText("Gemini 3 Flash")
+            .getAllByText("Gemini 3.8 Flash")
             .find((element) => element.closest('[role="menuitem"]'))
             ?.closest('[role="menuitem"]');
         const providerRow = screen
@@ -267,7 +267,7 @@ describe("ModelToggle availability states", () => {
     it("renders a neutral disabled trigger while keys are loading", () => {
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeysLoading
             />,
@@ -277,18 +277,18 @@ describe("ModelToggle availability states", () => {
         expect(trigger).toBeDisabled();
         // The load-time flash: never claim "No API Key" before we know.
         expect(trigger).not.toHaveTextContent("No API Key");
-        expect(trigger).toHaveTextContent("Gemini 3 Flash");
+        expect(trigger).toHaveTextContent("Gemini 3.8 Flash");
     });
 
     it("fails open when key state is unknown after a failed load", () => {
         render(
-            <ModelToggle value="gemini-3-flash-preview" onChange={vi.fn()} />,
+            <ModelToggle value="gemini-3.8-flash" onChange={vi.fn()} />,
         );
 
         const trigger = screen.getByRole("button", { name: "Choose model" });
         expect(trigger).toBeEnabled();
         expect(trigger).not.toHaveTextContent("No API Key");
-        expect(trigger).toHaveTextContent("Gemini 3 Flash");
+        expect(trigger).toHaveTextContent("Gemini 3.8 Flash");
     });
 
     it("shows No Models and invokes the API-key warning when no providers are configured", async () => {
@@ -296,7 +296,7 @@ describe("ModelToggle availability states", () => {
         const onNoModelsClick = vi.fn();
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({})}
                 onNoModelsClick={onNoModelsClick}
@@ -335,7 +335,7 @@ describe("ModelToggle availability states", () => {
     it("filters to configured providers when keys are loaded", () => {
         render(
             <ModelToggle
-                value="claude-fable-5"
+                value="claude-fable-5-1"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
             />,
@@ -352,7 +352,7 @@ describe("ModelToggle availability states", () => {
 describe("ModelToggle provider grouping", () => {
     it("maps router catalog IDs to their underlying model providers", () => {
         expect(
-            underlyingProviderGroup("anthropic/claude-fable-5", "openrouter"),
+            underlyingProviderGroup("anthropic/claude-fable-5-1", "openrouter"),
         ).toBe("Anthropic");
         expect(underlyingProviderGroup("kimi-k3", "opencode-go")).toBe(
             "Moonshot AI",
@@ -363,7 +363,7 @@ describe("ModelToggle provider grouping", () => {
         const user = userEvent.setup();
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true, "opencode-go": true })}
                 openCodeGoModels={["glm-5"]}
@@ -381,7 +381,7 @@ describe("ModelToggle provider grouping", () => {
         const user = userEvent.setup();
         render(
             <ModelToggle
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
                 openCodeGoModels={["glm-5"]}
@@ -397,10 +397,10 @@ describe("ModelToggle provider grouping", () => {
         const user = userEvent.setup();
         render(
             <ModelToggle
-                value="claude-fable-5"
+                value="claude-fable-5-1"
                 onChange={vi.fn()}
                 apiKeys={keys({ claude: true, openrouter: true })}
-                openRouterModels={["anthropic/claude-fable-5"]}
+                openRouterModels={["anthropic/claude-fable-5-1"]}
             />,
         );
 
@@ -416,7 +416,7 @@ describe("ModelToggle tone", () => {
         render(
             <ModelToggle
                 tone="default"
-                value="gemini-3-flash-preview"
+                value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
             />,

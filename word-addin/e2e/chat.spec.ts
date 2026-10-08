@@ -1485,23 +1485,53 @@ test("selects a workflow from the plus menu and attaches it to chat", async ({
   });
 });
 
-test("model toggle sends the selected frontend model", async ({
-  addin,
-  page,
-}) => {
-  await addin.mockChatStream(["Using the selected model."]);
-  await addin.gotoTaskpane({ documentText: "Current Word document" });
-  await addin.expectAuthedShell();
+for (const model of [
+  {
+    provider: "openai",
+    group: "OpenAI",
+    label: "GPT-6.1 Sol",
+    id: "gpt-6.1-sol",
+  },
+  {
+    provider: "mistral",
+    group: "Mistral AI",
+    label: "Mistral Medium 3.5",
+    id: "mistral-medium-3-5",
+  },
+]) {
+  test(`model toggle sends the selected frontend model (${model.label})`, async ({
+    addin,
+    page,
+  }) => {
+    // Only the chosen provider has a key, including the Mistral-only case.
+    await addin.mockApiJson("GET", "**/user/api-keys", {
+      claude: false,
+      gemini: false,
+      openai: model.provider === "openai",
+      mistral: model.provider === "mistral",
+      openrouter: false,
+      vercel: false,
+      "opencode-go": false,
+      courtlistener: false,
+    });
+    await addin.mockChatStream(["Using the selected model."]);
+    await addin.gotoTaskpane({ documentText: "Current Word document" });
+    await addin.expectAuthedShell();
 
-  await page.getByRole("button", { name: "Choose model" }).click();
-  await page.getByRole("menuitem", { name: "OpenAI", exact: true }).click();
-  await page.getByRole("menuitem", { name: "GPT-5.4", exact: true }).click();
-  await page.getByPlaceholder("How can I help?").fill("Hello");
-  const requestPromise = page.waitForRequest("**/word-chat");
-  await page.getByRole("button", { name: "Send" }).click();
-  const body = (await requestPromise).postDataJSON();
-  expect(body.model).toBe("gpt-5.4");
-});
+    await page.getByRole("button", { name: "Choose model" }).click();
+    const group = page.getByRole("menuitem", { name: model.group, exact: true });
+    if ((await group.getAttribute("aria-expanded")) !== "true") {
+      await group.click();
+    }
+    await page.getByRole("menuitem", { name: model.label, exact: true }).click();
+    await page.getByPlaceholder("How can I help?").fill("Hello");
+    const requestPromise = page.waitForRequest("**/word-chat");
+    await page.getByRole("button", { name: "Send" }).click();
+    const body = (await requestPromise).postDataJSON();
+    expect(body.model).toBe(model.id);
+    await expect(page.getByText("Using the selected model.")).toBeVisible();
+  });
+}
 
 test("composer controls fit a narrow Word task pane", async ({
   addin,

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ResponseStatus, type StatusState } from "./ResponseStatus";
 
-vi.mock("@/app/components/chat/mike-icon", () => ({
+vi.mock("@/shared/ui/MikeIconUI", () => ({
     MikeIcon: ({
         spin,
         done,

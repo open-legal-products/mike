@@ -63,9 +63,11 @@ services:
       # GOTRUE_SAML_ENABLED: "true"
       # GOTRUE_SAML_PRIVATE_KEY: ${GOTRUE_SAML_PRIVATE_KEY:-}
       # GOTRUE_SAML_EXTERNAL_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:54321}/auth/v1
-      # Keep local signup frictionless by default. Set this to false to exercise
-      # the confirmation-email flow; the message will be caught by Mailpit.
-      GOTRUE_MAILER_AUTOCONFIRM: ${GOTRUE_MAILER_AUTOCONFIRM:-true}
+      # Off by default: shares and organization invitations are addressed by
+      # email, so an unconfirmed signup must not be able to claim an address
+      # it does not own. Confirmation mail is caught by Mailpit locally. Set
+      # this to true only for a throwaway local stack.
+      GOTRUE_MAILER_AUTOCONFIRM: ${GOTRUE_MAILER_AUTOCONFIRM:-false}
       GOTRUE_SMTP_HOST: mailpit
       GOTRUE_SMTP_PORT: "1025"
       # No SMTP_USER/PASS: Mailpit needs no auth, and GoTrue refuses to send
@@ -166,7 +168,9 @@ services:
       - ./backend/migrations/20261002_05_mcp_oauth_grants.sql:/mcp-oauth-grants-migration.sql:ro
       - ./backend/migrations/20261002_06_user_custom_instructions.sql:/user-custom-instructions-migration.sql:ro
       - ./backend/migrations/20261006_01_user_response_style.sql:/user-response-style-migration.sql:ro
-      - ./backend/migrations/20261007_01_document_version_textless_pages.sql:/textless-pages-migration.sql:ro
+      - ./backend/migrations/20261007_01_add_mistral_user_api_key_provider.sql:/mistral-api-key-migration.sql:ro
+      - ./backend/migrations/20261008_01_email_change_moves_grants.sql:/email-change-moves-grants-migration.sql:ro
+      - ./backend/migrations/20261008_02_document_version_textless_pages.sql:/textless-pages-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -217,6 +221,8 @@ services:
         psql "$$DB" -v ON_ERROR_STOP=1 -f /mcp-oauth-grants-migration.sql || exit 1;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /user-custom-instructions-migration.sql || exit 1;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /user-response-style-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /mistral-api-key-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /email-change-moves-grants-migration.sql || exit 1;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /textless-pages-migration.sql || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;

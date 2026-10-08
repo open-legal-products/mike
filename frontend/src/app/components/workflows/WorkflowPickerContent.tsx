@@ -242,7 +242,7 @@ function WorkflowPreview({
             className={`${className} min-h-0 min-w-0 flex-1 flex-col overflow-visible`}
         >
             <div
-                className={`flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl p-1 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`}
+                className={`flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl p-1 ${LIQUID_GLASS_SUBTLE_CLASS}`}
             >
                 <div className="flex h-9 shrink-0 items-center justify-between px-3">
                     <p className="min-w-0 flex-1 truncate text-xs font-medium text-gray-700">

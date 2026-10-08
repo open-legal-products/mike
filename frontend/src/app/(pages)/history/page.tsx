@@ -20,7 +20,7 @@ import {
   TableCell,
   TableEmptyState,
   TableFilters,
-  type TableFilterOption,
+  TableSortFilter,
   TableHeaderCell,
   TableHeaderRow,
   TableRow,
@@ -66,7 +66,7 @@ const STATUS_TEXT_STYLES: Record<string, string> = {
 };
 
 const GLASS_DOT =
-  "h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-[0_1px_2px_rgba(15,23,42,0.08),inset_0_1px_1px_rgba(255,255,255,0.55)] backdrop-blur-xl";
+  "h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-[0_1px_2px_rgba(15,23,42,0.08),inset_0_1px_1px_rgba(255,255,255,0.55)]";
 
 const SURFACE_LABELS: Record<string, string> = {
   assistant: "Assistant",
@@ -76,11 +76,6 @@ const SURFACE_LABELS: Record<string, string> = {
   workflows: "Workflows",
   account: "Account",
 };
-
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
-];
 
 const STATUS_OPTIONS = [
   { value: "completed", label: "Completed" },
@@ -313,13 +308,10 @@ export default function HistoryPage() {
             <TableHeaderCell className="ml-auto w-52">
               <span className="mr-1">Email</span>
               {!initialLoading && (
-                <TableFilters
+                <TableSortFilter
                   label="Sort by email"
                   value={sortValue("user_email")}
-                  allLabel="Default Order"
-                  widthClassName="w-40"
                   align="right"
-                  options={SORT_OPTIONS}
                   onChange={(direction) =>
                     setSortDirection("user_email", direction)
                   }
@@ -329,26 +321,24 @@ export default function HistoryPage() {
             <TableHeaderCell className="w-40">
               <span className="mr-1">Created</span>
               {!initialLoading && (
-                <TableFilters
+                <TableSortFilter
                   label="Sort by created date"
                   value={sortValue("created_at")}
-                  allLabel="Default Order"
-                  options={SORT_OPTIONS}
                   onChange={(direction) =>
                     setSortDirection("created_at", direction)
                   }
+                  widthClassName="w-52"
                 />
               )}
             </TableHeaderCell>
             <TableHeaderCell className="w-72">
               <span className="mr-1">Title</span>
               {!initialLoading && (
-                <TableFilters
+                <TableSortFilter
                   label="Sort by title"
                   value={sortValue("title")}
-                  allLabel="Default Order"
-                  options={SORT_OPTIONS}
                   onChange={(direction) => setSortDirection("title", direction)}
+                  widthClassName="w-52"
                 />
               )}
             </TableHeaderCell>
@@ -391,12 +381,11 @@ export default function HistoryPage() {
             <TableHeaderCell className="w-28">
               <span className="mr-1">Model</span>
               {!initialLoading && (
-                <TableFilters
+                <TableSortFilter
                   label="Sort by model"
                   value={sortValue("model")}
-                  allLabel="Default Order"
-                  options={SORT_OPTIONS}
                   onChange={(direction) => setSortDirection("model", direction)}
+                  widthClassName="w-52"
                 />
               )}
             </TableHeaderCell>

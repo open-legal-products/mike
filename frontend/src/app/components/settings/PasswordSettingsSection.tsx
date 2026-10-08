@@ -1,18 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { authInputClassName } from "@/app/components/auth/authStyles";
+import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
 import {
   MIN_PASSWORD_LENGTH,
   minimumPasswordMessage,
 } from "@/app/components/auth/passwordPolicy";
 import { Modal } from "@/app/components/modals/Modal";
-import { Input } from "@/app/components/ui/input";
+import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { requestPasswordReset } from "@/app/lib/authApi";
-import { SettingsCard } from "./SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "./SettingsHeading";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";
@@ -92,7 +92,7 @@ export function PasswordSettingsSection() {
   return (
     <section className="space-y-3">
       <SettingsHeading>Password</SettingsHeading>
-      <SettingsCard>
+      <GlassCardUI>
         <SettingsRow>
           <div className="min-w-0 space-y-1">
             <SettingsLabel>
@@ -125,7 +125,7 @@ export function PasswordSettingsSection() {
                 : "Send reset email"}
           </PillButtonUI>
         </SettingsRow>
-      </SettingsCard>
+      </GlassCardUI>
 
       <Modal
         open={setPasswordOpen}
@@ -150,26 +150,26 @@ export function PasswordSettingsSection() {
           </p>
           <div>
             <FieldLabel htmlFor="new-account-password">Password</FieldLabel>
-            <Input
+            <InputUI
               id="new-account-password"
               type="password"
               autoComplete="new-password"
               value={password}
               onChange={(event) => setPasswordValue(event.target.value)}
-              className={`w-full ${authInputClassName}`}
+              className={`w-full ${authInputUIClassName}`}
             />
           </div>
           <div>
             <FieldLabel htmlFor="confirm-account-password">
               Confirm password
             </FieldLabel>
-            <Input
+            <InputUI
               id="confirm-account-password"
               type="password"
               autoComplete="new-password"
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
-              className={`w-full ${authInputClassName}`}
+              className={`w-full ${authInputUIClassName}`}
             />
           </div>
           {passwordSetError && (

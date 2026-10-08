@@ -57,7 +57,7 @@ export function WarningPopup({
                 aria-live="assertive"
                 aria-atomic="true"
                 className={cn(
-                    `pointer-events-auto relative flex rounded-2xl px-3 py-3 text-xs ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`,
+                    `pointer-events-auto relative flex rounded-2xl px-3 py-3 text-xs ${LIQUID_GLASS_FLOAT_CLASS}`,
                     className,
                 )}
             >

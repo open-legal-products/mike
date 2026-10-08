@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Loader2,
   Plus,
 } from "lucide-react";
 import {
@@ -31,6 +32,7 @@ import { RowActionMenuItems, RowActions } from "../shared/RowActions";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { EmptyState } from "@/app/components/ui/empty-state";
+import { LIQUID_GLASS_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import {
@@ -55,6 +57,7 @@ import {
   TableCell,
   TableEmptyState,
   TableFilters,
+  TableSortFilter,
   type TableFilterOption,
   TableHeaderCell,
   TableHeaderRow,
@@ -76,10 +79,6 @@ const WORKFLOW_TABS: { id: WorkflowListTab; label: string }[] = [
 ];
 const WORKFLOW_TAB_IDS = WORKFLOW_TABS.map((tab) => tab.id);
 
-const WORKFLOW_SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
-];
 type AccessFilter = "private" | "shared";
 const ACCESS_FILTER_OPTIONS: TableFilterOption<AccessFilter>[] = [
   { value: "private", label: "Private" },
@@ -326,11 +325,14 @@ export function WorkflowList({
     }
   }
 
-  async function importSelectedAddons() {
-    const selectedAddons = addons.filter((addon) =>
-      selectedAddonIds.includes(addon.id),
+  function importSelectedAddons() {
+    return importAddons(
+      addons.filter((addon) => selectedAddonIds.includes(addon.id)),
     );
-    if (selectedAddons.length === 0) return;
+  }
+
+  async function importAddons(selectedAddons: WorkflowAddon[]) {
+    if (bulkImportingAddons || selectedAddons.length === 0) return;
     setBulkImportingAddons(true);
     try {
       const results = await Promise.allSettled(
@@ -398,31 +400,58 @@ export function WorkflowList({
     }, 500);
   }
 
+  function renderWorkflowActions(
+    workflow: Workflow | undefined,
+    close?: () => void,
+  ) {
+    const actionIds = workflow
+      ? rowActionSelectionIds(workflow.id, selectedWorkflowIds)
+      : selectedWorkflowIds;
+    const appliesToSelection = actionIds.length > 1;
+    const canManage = workflow?.is_owner !== false;
+    return (
+      <RowActionMenuItems
+        onClose={close}
+        onView={
+          !appliesToSelection && workflow
+            ? () => setSelected(workflow)
+            : undefined
+        }
+        onEditDetails={
+          !appliesToSelection && workflow && canManage
+            ? () => router.push(workflowDetailPath(workflow))
+            : undefined
+        }
+        editDetailsLabel="Edit"
+        onDelete={
+          appliesToSelection || !workflow
+            ? () =>
+                requestWorkflowDeletion(
+                  workflows.filter((item) => actionIds.includes(item.id)),
+                  actionIds,
+                )
+            : canManage
+              ? () => requestWorkflowDeletion([workflow])
+              : undefined
+        }
+        deleteLabel={
+          appliesToSelection ? `Delete ${actionIds.length} workflows` : undefined
+        }
+      />
+    );
+  }
+
   const workflowToolbarActions =
     activeTab !== "addons" && selectedWorkflowIds.length > 0 ? (
       <SelectionActionsMenu
         open={workflowActionsOpen}
         onOpenChange={setWorkflowActionsOpen}
-        actions={[
-          {
-            label: "Delete",
-            destructive: true,
-            onSelect: () =>
-              requestWorkflowDeletion(
-                workflows.filter((workflow) =>
-                  selectedWorkflowIds.includes(workflow.id),
-                ),
-                selectedWorkflowIds,
-              ),
-          },
-        ]}
+        renderItems={(close) => renderWorkflowActions(workflows.find((workflow) => workflow.id === selectedWorkflowIds[0]), close)}
       />
     ) : undefined;
   const addonToolbarActions =
     activeTab === "addons" && selectedAddonIds.length > 0 ? (
-      <PillButtonUI
-        tone="black"
-        size="sm"
+      <TabPillButtonUI
         disabled={bulkImportingAddons}
         onClick={() => void importSelectedAddons()}
       >
@@ -430,7 +459,7 @@ export function WorkflowList({
         {bulkImportingAddons
           ? "Importing…"
           : `Import${selectedAddonIds.length > 1 ? ` (${selectedAddonIds.length})` : ""}`}
-      </PillButtonUI>
+      </TabPillButtonUI>
     ) : undefined;
   const pendingDefaultDeleteCount = pendingDeleteWorkflows.filter(
     (workflow) => workflow.is_default,
@@ -534,6 +563,7 @@ export function WorkflowList({
           onOpenPack={openAddonPack}
           onOpen={openAddon}
           onImport={importAddon}
+          onImportMany={(selected) => void importAddons(selected)}
         />
       ) : (
         <WorkflowTable
@@ -544,12 +574,7 @@ export function WorkflowList({
           onOpen={setSelected}
           onEdit={(workflow) => router.push(workflowDetailPath(workflow))}
           onDelete={(workflow) => requestWorkflowDeletion([workflow])}
-          onDeleteSelected={(ids) =>
-            requestWorkflowDeletion(
-              workflows.filter((workflow) => ids.includes(workflow.id)),
-              ids,
-            )
-          }
+          renderActions={renderWorkflowActions}
           onCreate={() => setNewModalOpen(true)}
           selectedIds={selectedWorkflowIds}
           onSelectedIdsChange={setSelectedWorkflowIds}
@@ -640,7 +665,7 @@ function WorkflowTable({
   onOpen,
   onEdit,
   onDelete,
-  onDeleteSelected,
+  renderActions,
   onCreate,
   selectedIds,
   onSelectedIdsChange,
@@ -670,7 +695,7 @@ function WorkflowTable({
   onOpen: (workflow: Workflow) => void;
   onEdit: (workflow: Workflow) => void;
   onDelete: (workflow: Workflow) => void;
-  onDeleteSelected: (ids: string[]) => void;
+  renderActions: (workflow: Workflow, close?: () => void) => React.ReactNode;
   onCreate: () => void;
   selectedIds: string[];
   onSelectedIdsChange: (ids: string[]) => void;
@@ -786,13 +811,10 @@ function WorkflowTable({
             )}
             <span className="mr-1">Name</span>
             {!loading && (
-              <TableFilters
+              <TableSortFilter
                 label="Sort by workflow name"
                 value={nameSortDirection}
-                allLabel="Default Order"
-                widthClassName="w-40"
                 align="right"
-                options={WORKFLOW_SORT_OPTIONS}
                 onChange={handleNameSortChange}
               />
             )}
@@ -939,8 +961,6 @@ function WorkflowTable({
               const canManage = workflow.is_owner !== false;
               const canDelete = canManage;
               const isSelected = selectedIds.includes(workflow.id);
-              const actionIds = rowActionSelectionIds(workflow.id, selectedIds);
-              const appliesToSelection = actionIds.length > 1;
               return (
                 <TableRow
                   key={workflow.id}
@@ -974,32 +994,7 @@ function WorkflowTable({
                     }
                     onOpen(workflow);
                   }}
-                  rightClickDropdown={(close) => (
-                    <RowActionMenuItems
-                      onClose={close}
-                      onView={
-                        appliesToSelection ? undefined : () => onOpen(workflow)
-                      }
-                      onEditDetails={
-                        appliesToSelection || !canManage
-                          ? undefined
-                          : () => onEdit(workflow)
-                      }
-                      editDetailsLabel="Edit"
-                      onDelete={
-                        appliesToSelection
-                          ? () => onDeleteSelected(actionIds)
-                          : canManage
-                            ? () => onDelete(workflow)
-                            : undefined
-                      }
-                      deleteLabel={
-                        appliesToSelection
-                          ? `Delete ${actionIds.length} workflows`
-                          : undefined
-                      }
-                    />
-                  )}
+                  rightClickDropdown={(close) => renderActions(workflow, close)}
                 >
                   <TablePrimaryCell
                     label={workflow.metadata.title}
@@ -1094,6 +1089,7 @@ function AddonTable({
   onOpenPack,
   onOpen,
   onImport,
+  onImportMany,
 }: {
   addons: WorkflowAddon[];
   loading: boolean;
@@ -1107,6 +1103,7 @@ function AddonTable({
   onOpenPack: (packKey: string) => void;
   onOpen: (addon: WorkflowAddon) => void;
   onImport: (addon: WorkflowAddon) => Promise<void>;
+  onImportMany: (addons: WorkflowAddon[]) => void;
 }) {
   const [expandedPackKeys, setExpandedPackKeys] = useState<Set<string>>(
     () => new Set(),
@@ -1185,6 +1182,41 @@ function AddonTable({
     });
   }
 
+  // Right-click menu for a row standing for `rowAddons`: one add-on, or every
+  // add-on in a pack. A selected row acts on the whole selection.
+  function renderRowMenu(
+    rowAddons: WorkflowAddon[],
+    onView: () => void,
+    viewLabel: string,
+    close: () => void,
+  ) {
+    const rowSelected =
+      rowAddons.length > 0 &&
+      rowAddons.every((addon) => selectedIds.includes(addon.id));
+    const targets = (
+      rowSelected
+        ? addons.filter((addon) => selectedIds.includes(addon.id))
+        : rowAddons
+    ).filter((addon) => !importedAddonIds.includes(addon.id));
+    const importDisabled = bulkImporting || importingAddonId !== null;
+    return (
+      <RowActionMenuItems
+        onClose={close}
+        onDeselect={rowSelected ? () => onSelectedIdsChange([]) : undefined}
+        onView={rowSelected && selectedIds.length > 1 ? undefined : onView}
+        viewLabel={viewLabel}
+        onAdd={
+          targets.length === 0 || importDisabled
+            ? undefined
+            : targets.length === 1
+              ? () => void onImport(targets[0])
+              : () => onImportMany(targets)
+        }
+        addLabel={targets.length > 1 ? `Import ${targets.length}` : "Import"}
+      />
+    );
+  }
+
   function renderAddonRow(addon: WorkflowAddon, nested = false) {
     const Icon =
       addon.type === "tabular" ? TabularReviewSkeuoIcon : ChatSkeuoIcon;
@@ -1219,6 +1251,9 @@ function AddonTable({
           }
           onOpen(addon);
         }}
+        rightClickDropdown={(close) =>
+          renderRowMenu([addon], () => onOpen(addon), "View", close)
+        }
       >
         <TablePrimaryCell
           style={nested ? tableTreeCellStyle(1) : undefined}
@@ -1241,22 +1276,31 @@ function AddonTable({
         <TableCell className="w-28 text-xs text-gray-600">
           {addon.language || "—"}
         </TableCell>
-        <TableCell className="w-20">
+        <TableCell className="flex w-8 justify-end">
           <button
             type="button"
             disabled={bulkImporting || importing || imported}
+            aria-label={
+              imported ? "Imported" : importing ? "Importing…" : "Import"
+            }
+            title={imported ? "Imported" : importing ? "Importing…" : "Import"}
             onClick={(event) => {
               event.stopPropagation();
               void onImport(addon);
             }}
-            className={`inline-flex items-center gap-1 text-xs font-medium transition-colors disabled:cursor-not-allowed ${
+            className={`flex h-6 w-6 items-center justify-center rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-not-allowed ${
               imported
                 ? "text-green-600"
-                : "text-gray-600 hover:text-gray-950 disabled:text-gray-400"
+                : `text-gray-600 hover:text-gray-950 disabled:text-gray-400 ${LIQUID_GLASS_HOVER_CLASS}`
             }`}
           >
-            {imported ? <Check className="h-3.5 w-3.5" /> : null}
-            {imported ? "Imported" : importing ? "Importing…" : "Import"}
+            {imported ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : importing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
           </button>
         </TableCell>
       </TableRow>
@@ -1289,7 +1333,7 @@ function AddonTable({
           <TableHeaderCell className="w-52">Practice</TableHeaderCell>
           <TableHeaderCell className="w-40">Jurisdiction</TableHeaderCell>
           <TableHeaderCell className="w-28">Language</TableHeaderCell>
-          <TableHeaderCell className="w-20" />
+          <TableHeaderCell className="w-8" />
         </TableHeaderRow>
       }
     >
@@ -1314,8 +1358,8 @@ function AddonTable({
               <TableCell className="w-28">
                 <SkeletonLine className="w-16" />
               </TableCell>
-              <TableCell className="w-20">
-                <SkeletonLine className="w-14" />
+              <TableCell className="flex w-8 justify-end">
+                <SkeletonLine className="w-4" />
               </TableCell>
             </TableRow>
           ))}
@@ -1382,6 +1426,14 @@ function AddonTable({
                       }
                       onOpenPack(pack.key);
                     }}
+                    rightClickDropdown={(close) =>
+                      renderRowMenu(
+                        pack.addons,
+                        () => onOpenPack(pack.key),
+                        "Open",
+                        close,
+                      )
+                    }
                   >
                     <TablePrimaryCell
                       selected={packSelected}
@@ -1447,7 +1499,7 @@ function AddonTable({
                     <TableCell className="w-28 text-xs text-gray-600">
                       —
                     </TableCell>
-                    <TableCell className="w-20" />
+                    <TableCell className="w-8" />
                   </TableRow>,
                   ...(expanded
                     ? pack.addons.map((addon) => renderAddonRow(addon, true))

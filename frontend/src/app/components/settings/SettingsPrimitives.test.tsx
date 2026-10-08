@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { SettingsCard } from "./SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "./SettingsHeading";
 import { SettingsRow } from "./SettingsRow";
 
@@ -23,12 +23,12 @@ describe("settings primitives", () => {
 
   it("composes card rows with shared spacing and dividers", () => {
     render(
-      <SettingsCard>
+      <GlassCardUI>
         <SettingsRow>
           <span>Setting</span>
           <button type="button">Action</button>
         </SettingsRow>
-      </SettingsCard>,
+      </GlassCardUI>,
     );
 
     expect(screen.getByText("Setting").parentElement).toHaveClass(

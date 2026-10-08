@@ -37,7 +37,6 @@ describe("GlassIconButtonUI", () => {
             "rounded-full",
             "liquid-glass-subtle",
             "liquid-glass-hover",
-            "backdrop-blur-xl",
         );
     });
 

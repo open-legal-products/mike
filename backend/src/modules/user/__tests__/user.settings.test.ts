@@ -56,7 +56,7 @@ describe("getUserModelSettings router-model allowlist", () => {
             "user-1",
             profileDb({
                 title_model: "claude-haiku-4-5",
-                tabular_model: "claude-sonnet-5",
+                tabular_model: "claude-sonnet-5-5",
                 legal_research_us: true,
                 display_name: "Ada",
                 organisation: "Acme LLP",
@@ -123,15 +123,15 @@ describe("getUserModelSettings router-model allowlist", () => {
             "user-1",
             profileDb({
                 title_model: "claude-haiku-4-5",
-                tabular_model: "claude-sonnet-5",
-                memory_curator_model: "gpt-5.4-mini",
+                tabular_model: "claude-sonnet-5-5",
+                memory_curator_model: "gpt-6-luna",
                 legal_research_us: true,
             }),
         );
 
         expect(settings.title_model).toBe("claude-haiku-4-5");
-        expect(settings.tabular_model).toBe("claude-sonnet-5");
-        expect(settings.memory_curator_model).toBe("gpt-5.4-mini");
+        expect(settings.tabular_model).toBe("claude-sonnet-5-5");
+        expect(settings.memory_curator_model).toBe("gpt-6-luna");
     });
 });
 
@@ -168,8 +168,8 @@ describe("getUserModelSettings on an un-migrated database", () => {
                 {
                     data: {
                         title_model: "claude-haiku-4-5",
-                        tabular_model: "claude-sonnet-5",
-                        last_selected_chat_model: "claude-sonnet-5",
+                        tabular_model: "claude-sonnet-5-5",
+                        last_selected_chat_model: "claude-sonnet-5-5",
                         last_selected_reasoning_level: "high",
                         legal_research_us: true,
                     },
@@ -180,7 +180,7 @@ describe("getUserModelSettings on an un-migrated database", () => {
 
         expect(settings.memory_curator_model).toBeNull();
         expect(settings.last_selected_reasoning_level).toBe("high");
-        expect(settings.last_selected_chat_model).toBe("claude-sonnet-5");
+        expect(settings.last_selected_chat_model).toBe("claude-sonnet-5-5");
     });
 
     it("retries without the onboarding columns and keeps saved settings", async () => {
@@ -198,7 +198,7 @@ describe("getUserModelSettings on an un-migrated database", () => {
                 {
                     data: {
                         title_model: "claude-haiku-4-5",
-                        tabular_model: "claude-sonnet-5",
+                        tabular_model: "claude-sonnet-5-5",
                         legal_research_us: false,
                     },
                     error: null,
@@ -207,7 +207,7 @@ describe("getUserModelSettings on an un-migrated database", () => {
         );
 
         expect(settings.title_model).toBe("claude-haiku-4-5");
-        expect(settings.tabular_model).toBe("claude-sonnet-5");
+        expect(settings.tabular_model).toBe("claude-sonnet-5-5");
         expect(settings.legal_research_us).toBe(false);
         expect(settings.personalisation).toMatchObject({
             displayName: null,

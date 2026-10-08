@@ -54,22 +54,25 @@ localhost but must be regenerated before exposing an instance anywhere.
 
 ## Local registration and email
 
-By default, a local email-and-password registration is automatically confirmed
-and the new user is signed in. Supabase Auth sends authentication email; the
-Mike backend does not send it directly.
+A new email-and-password registration must confirm its address before it can
+sign in. Supabase Auth sends authentication email; the Mike backend does not
+send it directly. Open [Mailpit](http://localhost:8025) to read the
+confirmation message. Mailpit also captures local email-change and
+password-reset messages, and no email leaves your machine. These links pass
+through `/auth/callback` and return to the relevant app screen.
 
-To exercise the confirmation-email flow, set
-`GOTRUE_MAILER_AUTOCONFIRM=false` in the root `.env`, then recreate Auth:
+Confirmation is on by default because project, chat, review, and workflow
+shares and organization invitations are addressed by email: with autoconfirm
+on, anyone who registers an address first inherits whatever was shared with
+it. The backend also ignores an unconfirmed address when it matches grants and
+invitations. For a throwaway single-user stack you may set
+`GOTRUE_MAILER_AUTOCONFIRM=true` in the root `.env`, then recreate Auth:
 
 ```bash
 docker compose up -d --force-recreate auth
 ```
 
-Open [Mailpit](http://localhost:8025) to read the confirmation message. Mailpit
-also captures local email-change and password-reset messages, and no email
-leaves your machine. These links pass through `/auth/callback` and return to the
-relevant app screen. Local signup autoconfirm remains enabled by default; turn
-it off only when you specifically want to test the confirmation flow.
+Never enable autoconfirm on an instance other people can reach.
 
 ## Local Google authentication
 

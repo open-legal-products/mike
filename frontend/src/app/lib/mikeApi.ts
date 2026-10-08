@@ -644,31 +644,10 @@ export async function setProjectMemoryEnabled(
     );
 }
 
-export async function exportAccountData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/export");
-}
-
-export async function exportChatData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/chats/export");
-}
-
-export async function exportTabularReviewsData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/tabular-reviews/export");
-}
-
 // --- Async (durable) exports -----------------------------------------------
 // POST schedules a backend job that builds the export off the request thread;
 // the status endpoint is polled until "done"; the download endpoint streams
-// the artifact. Unlike the legacy GET exports above, a large export can
+// the artifact. Unlike a synchronous GET export, a large export can
 // neither time out the request nor die with a closed tab, and a re-click
 // while one is building dedupes onto the running job.
 
@@ -825,28 +804,6 @@ export async function getAuditHistory(
     if (params.sortDirection) qs.set("sort_dir", params.sortDirection);
     if (params.page) qs.set("page", String(params.page));
     return apiRequest(`/audit?${qs.toString()}`, { signal });
-}
-
-export async function exportAuditHistory(params: {
-    q?: string;
-    action?: string;
-    status?: string;
-    surface?: string;
-    from?: string;
-    to?: string;
-    sortBy?: "created_at" | "user_email" | "title" | "model";
-    sortDirection?: "asc" | "desc";
-}): Promise<{ blob: Blob; filename: string | null }> {
-    const qs = new URLSearchParams();
-    if (params.q) qs.set("q", params.q);
-    if (params.action) qs.set("action", params.action);
-    if (params.status) qs.set("status", params.status);
-    if (params.surface) qs.set("surface", params.surface);
-    if (params.from) qs.set("from", params.from);
-    if (params.to) qs.set("to", params.to);
-    if (params.sortBy) qs.set("sort_by", params.sortBy);
-    if (params.sortDirection) qs.set("sort_dir", params.sortDirection);
-    return apiBlobRequest(`/audit/export?${qs.toString()}`);
 }
 
 export async function getUserProfile(): Promise<UserProfile> {
@@ -1007,6 +964,7 @@ export type ApiKeyProvider =
     | "claude"
     | "gemini"
     | "openai"
+    | "mistral"
     | "openrouter"
     | "vercel"
     | "opencode-go"
@@ -1023,10 +981,6 @@ export type ApiKeyState = Record<
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
     sources?: Partial<Record<ApiKeyProvider, ApiKeySource>>;
 };
-
-export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
-    return apiRequest<ApiKeyStatus>("/user/api-keys");
-}
 
 export interface OllamaModelOption {
     id: string;
@@ -2203,10 +2157,6 @@ export async function uploadStandaloneDocuments(
     });
 }
 
-export async function listStandaloneDocuments(): Promise<Document[]> {
-    return apiRequest<Document[]>("/single-documents");
-}
-
 export async function getDocument(documentId: string): Promise<Document> {
     return apiRequest<Document>(`/single-documents/${documentId}`);
 }
@@ -2478,18 +2428,6 @@ export async function updateLastSelectedChatSettings(payload: {
 
 export async function deleteChat(chatId: string): Promise<void> {
     await apiRequest(`/chat/${chatId}`, { method: "DELETE" });
-}
-
-export async function generateChatTitle(
-    chatId: string,
-    message: string,
-    model: string,
-): Promise<{ title: string }> {
-    return apiRequest<{ title: string }>(`/chat/${chatId}/generate-title`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, model }),
-    });
 }
 
 const panelDocumentRequests = new Map<string, Promise<PanelDocument>>();
@@ -3344,16 +3282,6 @@ export async function copyDocumentsToWorkflowAssets(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ document_ids: documentIds }),
         },
-    );
-}
-
-export async function uploadWorkflowAsset(
-    workflowId: string,
-    file: File,
-    options?: UploadRequestOptions<Document>,
-): Promise<Document> {
-    return firstUploadResult(
-        await uploadWorkflowAssets(workflowId, [{ file }], options),
     );
 }
 

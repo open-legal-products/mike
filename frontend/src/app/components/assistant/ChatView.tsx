@@ -214,7 +214,7 @@ export function ChatView({
     );
     // Per-edit in-flight set — disables Accept/Reject on only the one
     // edit currently being resolved, so sibling edits in the same message
-    // (and their twins in DocPanel) stay clickable.
+    // (and their twins in DocumentContent) stay clickable.
     const [reloadingEditIds, setReloadingEditIds] = useState<Set<string>>(
         () => new Set(),
     );
@@ -577,7 +577,7 @@ export function ChatView({
                 return next;
             });
             // Propagate the new status onto any open edit-tab for this
-            // edit so DocPanel's Accept/Reject buttons flip and disable
+            // edit so DocumentContent's Accept/Reject buttons flip and disable
             // (their sync effect keys off edit.status). Without this, a
             // resolve triggered from the inline EditCard or BulkEditActions
             // leaves the panel buttons looking live.
@@ -993,7 +993,7 @@ export function ChatView({
     ];
 
     const renderChatHeaderActions = () => (
-        <HeaderButtonsUI className="pointer-events-auto">
+        <HeaderButtonsUI className="pointer-events-auto backdrop-blur-2xl">
             {!isNewChat && (
                 <HeaderButtonUI
                     iconOnly

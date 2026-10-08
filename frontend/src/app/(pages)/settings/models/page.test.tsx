@@ -1,16 +1,18 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelOption } from "@/app/components/assistant/ModelToggle";
 
-const { updateModelPreference } = vi.hoisted(() => ({
+const { updateModelPreference, configuredModels } = vi.hoisted(() => ({
     updateModelPreference: vi.fn(async () => true),
+    configuredModels: [] as ModelOption[],
 }));
 
 vi.mock("@/app/hooks/useOllamaModels", () => ({
     useOllamaModels: () => [],
 }));
 vi.mock("@/app/hooks/useConfiguredModels", () => ({
-    useConfiguredModels: () => [],
+    useConfiguredModels: () => configuredModels,
 }));
 
 vi.mock("@/app/contexts/UserProfileContext", () => ({
@@ -42,6 +44,7 @@ import ModelPreferencesPage from "./page";
 describe("model preferences page legacy ids", () => {
     beforeEach(() => {
         updateModelPreference.mockClear();
+        configuredModels.length = 0;
     });
 
     it("shows the renamed model for a stored legacy preference", () => {
@@ -51,7 +54,7 @@ describe("model preferences page legacy ids", () => {
         // matches no option and the dropdown falls back to "Select a model".
         expect(screen.getByText("Gemini 3.5 Flash-Lite")).toBeInTheDocument();
         expect(screen.getByText("Memory curation model")).toBeInTheDocument();
-        expect(screen.getByText("GPT-5.4 Mini")).toBeInTheDocument();
+        expect(screen.getByText("GPT-6 Luna")).toBeInTheDocument();
         expect(screen.queryByText("Select a model")).not.toBeInTheDocument();
     });
 
@@ -59,12 +62,27 @@ describe("model preferences page legacy ids", () => {
         const user = userEvent.setup();
         render(<ModelPreferencesPage />);
 
-        await user.click(screen.getByRole("button", { name: "GPT-5.4 Mini" }));
-        await user.click(screen.getByText("GPT-5.6 Luna"));
+        await user.click(screen.getByRole("button", { name: "GPT-6 Luna" }));
+        await user.click(screen.getByText("GPT-6.1 Sol"));
 
         expect(updateModelPreference).toHaveBeenCalledWith(
             "memoryCuratorModel",
-            "gpt-5.6-luna",
+            "gpt-6.1-sol",
         );
+    });
+
+    it("preserves a configured endpoint that reuses a retired direct model id", () => {
+        configuredModels.push({
+            id: "gpt-5.4-mini",
+            label: "Private endpoint",
+            group: "OpenAI",
+            source: "Configured",
+        });
+        render(<ModelPreferencesPage />);
+
+        expect(
+            screen.getByRole("button", { name: "Private endpoint" }),
+        ).toBeInTheDocument();
+        expect(screen.queryByText("GPT-6 Luna")).not.toBeInTheDocument();
     });
 });

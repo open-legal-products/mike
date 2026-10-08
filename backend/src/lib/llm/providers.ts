@@ -321,6 +321,15 @@ async function createProviderAdapter(
     };
   }
 
+  if (provider === "mistral") {
+    const { createMistral } = await import("@ai-sdk/mistral");
+    const mistral = createMistral({
+      apiKey: requiredKey("Mistral", "MISTRAL_API_KEY", apiKeys?.mistral),
+      fetch: aiSdkFetch,
+    });
+    return { provider, label: "Mistral", model: mistral(model), modelId: model };
+  }
+
   if (provider === "openrouter" || provider === "vercel") {
     return createRouterAdapter(provider, model, apiKeys);
   }
@@ -364,7 +373,10 @@ export async function streamWithProvider(
 ): Promise<StreamChatResult> {
   const normalizedParams = {
     ...params,
-    reasoning: normalizeReasoningLevelForModel(params.model, params.reasoning),
+    reasoning: normalizeReasoningLevelForModel(
+      params.model,
+      params.reasoning ?? "none",
+    ),
   };
   try {
     return await streamAiSdk(

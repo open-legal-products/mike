@@ -693,7 +693,7 @@ function ChatInputForChatImpl(
                     {(selectedWorkflow || attachedDocs.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
                             {selectedWorkflow && (
-                                <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow backdrop-blur-sm">
+                                <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow">
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -903,7 +903,7 @@ function ChatInputForChatImpl(
                                     isLoading ? "Stop response" : "Send message"
                                 }
                                 className={cn(
-                                    "relative flex h-7.5 w-7.5 cursor-pointer items-center justify-center rounded-full border-0 bg-gradient-to-b from-neutral-700 to-black text-white backdrop-blur-xl transition-all duration-150 active:enabled:scale-95 disabled:from-neutral-600 disabled:to-black",
+                                    "relative flex h-7.5 w-7.5 cursor-pointer items-center justify-center rounded-full border-0 bg-gradient-to-b from-neutral-700 to-black text-white transition-all duration-150 active:enabled:scale-95 disabled:from-neutral-600 disabled:to-black",
                                     "shadow-[0_3px_9px_rgba(15,23,42,0.10),inset_1px_1px_0_rgba(255,255,255,0.22),inset_-1px_-1px_0_rgba(255,255,255,0.10),inset_-4px_-4px_9px_rgba(15,23,42,0.2)]",
                                 )}
                                 onClick={handleActionClick}

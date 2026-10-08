@@ -7,7 +7,7 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
@@ -40,7 +40,7 @@ export default function AppearancePage() {
   return (
     <section className="space-y-3">
       <SettingsHeading>Appearance</SettingsHeading>
-      <SettingsCard>
+      <GlassCardUI>
         <SettingsRow>
           <div className="min-w-0 space-y-1">
             <SettingsLabel>Dark mode</SettingsLabel>
@@ -61,7 +61,7 @@ export default function AppearancePage() {
             onCheckedChange={(checked) => void handleDarkModeToggle(checked)}
           />
         </SettingsRow>
-      </SettingsCard>
+      </GlassCardUI>
     </section>
   );
 }

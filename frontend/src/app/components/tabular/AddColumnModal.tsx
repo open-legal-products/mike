@@ -319,7 +319,7 @@ export function AddColumnModal({
                                             />
                                         </button>
                                         {presetsOpenIndex === index && (
-                                            <div className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-xl ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}>
+                                            <div className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-xl ${LIQUID_GLASS_FLOAT_CLASS}`}>
                                                 <button
                                                     type="button"
                                                     onClick={() => {
@@ -395,7 +395,7 @@ export function AddColumnModal({
                                             Tags
                                         </FieldLabel>
                                         <div
-                                            className={`mt-1 flex flex-wrap gap-1.5 rounded-xl px-2 py-1.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`}
+                                            className={`mt-1 flex flex-wrap gap-1.5 rounded-xl px-2 py-1.5 ${LIQUID_GLASS_SUBTLE_CLASS}`}
                                         >
                                             {column.tags.map((tag, tagIdx) => (
                                                 <span

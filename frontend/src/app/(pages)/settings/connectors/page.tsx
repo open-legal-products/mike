@@ -53,7 +53,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
@@ -1325,13 +1325,13 @@ export default function ConnectorsPage() {
             connectors.length === 0 &&
             installedGoogle.length === 0 && (
               <div className="@min-[32rem]:col-span-2">
-                <SettingsCard>
+                <GlassCardUI>
                   <div className="p-4">
                     <SettingsDescription>
                       No connectors yet.
                     </SettingsDescription>
                   </div>
-                </SettingsCard>
+                </GlassCardUI>
               </div>
             )}
         </div>

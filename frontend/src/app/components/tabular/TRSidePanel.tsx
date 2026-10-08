@@ -83,10 +83,10 @@ type TRPanelCitation = {
 };
 
 const FLAG_BADGE: Record<string, string> = {
-    green: "bg-emerald-600 backdrop-blur-md border border-emerald-300/20 text-white shadow-md",
-    grey: "bg-slate-500 backdrop-blur-md border border-slate-300/20 text-white shadow-md",
-    yellow: "bg-amber-500 backdrop-blur-md border border-amber-300/20 text-white shadow-md",
-    red: "bg-red-600 backdrop-blur-md border border-red-300/20 text-white shadow-md",
+    green: "bg-emerald-600 border border-emerald-300/20 text-white shadow-md",
+    grey: "bg-slate-500 border border-slate-300/20 text-white shadow-md",
+    yellow: "bg-amber-500 border border-amber-300/20 text-white shadow-md",
+    red: "bg-red-600 border border-red-300/20 text-white shadow-md",
 };
 
 const MIN_DOCUMENT_PANE_WIDTH = 420;

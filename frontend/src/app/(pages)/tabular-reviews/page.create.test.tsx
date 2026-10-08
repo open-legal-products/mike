@@ -44,7 +44,7 @@ vi.mock("@/app/contexts/AuthContext", () => ({
 vi.mock("@/app/contexts/UserProfileContext", () => ({
     useUserProfile: () => ({
         profile: {
-            tabularModel: "gemini-3-flash-preview",
+            tabularModel: "gemini-3.8-flash",
             apiKeys: {
                 claude: { configured: false, source: null },
                 gemini: { configured: true, source: "user" },

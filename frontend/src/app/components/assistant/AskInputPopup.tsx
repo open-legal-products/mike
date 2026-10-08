@@ -965,7 +965,7 @@ function DocumentInput({
                                                 onClick={(e) =>
                                                     e.stopPropagation()
                                                 }
-                                                className={`inline-flex items-center gap-1 rounded-[10px] py-0.5 pl-2 pr-1 text-xs text-gray-800 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`}
+                                                className={`inline-flex items-center gap-1 rounded-[10px] py-0.5 pl-2 pr-1 text-xs text-gray-800 ${LIQUID_GLASS_SUBTLE_CLASS}`}
                                             >
                                                 <FileTypeIcon
                                                     fileType={doc.file_type}

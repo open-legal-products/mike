@@ -208,6 +208,7 @@ export interface ApiKeyStatus {
   claude: boolean;
   gemini: boolean;
   openai: boolean;
+  mistral: boolean;
   openrouter: boolean;
   vercel: boolean;
   "opencode-go": boolean;
@@ -217,6 +218,7 @@ export interface ApiKeyStatus {
       | "claude"
       | "gemini"
       | "openai"
+      | "mistral"
       | "openrouter"
       | "vercel"
       | "opencode-go"

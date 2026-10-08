@@ -10,6 +10,7 @@ import {
     Eye,
     Loader2,
     Pencil,
+    Plus,
     Trash2,
     Upload,
 } from "lucide-react";
@@ -79,6 +80,9 @@ interface DocumentSidePanelProps {
     canDelete?: boolean;
     onOwnerOnlyAction?: (action: string) => void;
     onDelete: (doc: Document) => Promise<void> | void;
+    /** Read-only panels only: copies the document into the caller's collection. */
+    onAdd?: (doc: Document) => void;
+    addLabel?: string;
 }
 
 export function DocumentSidePanel({
@@ -101,6 +105,8 @@ export function DocumentSidePanel({
     canDelete = true,
     onOwnerOnlyAction,
     onDelete,
+    onAdd,
+    addLabel = "Add",
 }: DocumentSidePanelProps) {
     const [mounted, setMounted] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -951,18 +957,35 @@ export function DocumentSidePanel({
                         className={cn(
                             "flex shrink-0 items-center justify-between py-3",
                             "bg-white/25",
+                            // No versions list fills the column, so the
+                            // actions are pinned to the bottom themselves.
+                            readOnly && "mt-auto",
                         )}
                     >
                         {readOnly ? (
-                            <PillButtonUI
-                                tone="white"
-                                size="normal"
-                                onClick={() => void onDownloadDocument(doc.id)}
-                                className="ml-auto"
-                            >
-                                <Download className="h-3.5 w-3.5 shrink-0" />
-                                Download
-                            </PillButtonUI>
+                            <>
+                                <PillButtonUI
+                                    tone="white"
+                                    size="normal"
+                                    onClick={() =>
+                                        void onDownloadDocument(doc.id)
+                                    }
+                                    className={onAdd ? undefined : "ml-auto"}
+                                >
+                                    <Download className="h-3.5 w-3.5 shrink-0" />
+                                    Download
+                                </PillButtonUI>
+                                {onAdd && (
+                                    <PillButtonUI
+                                        tone="blue"
+                                        size="normal"
+                                        onClick={() => onAdd(doc)}
+                                    >
+                                        <Plus className="h-3.5 w-3.5 shrink-0" />
+                                        {addLabel}
+                                    </PillButtonUI>
+                                )}
+                            </>
                         ) : (
                             <>
                                 <input

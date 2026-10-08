@@ -90,7 +90,7 @@ import {
     providerLabel,
 } from "@/app/lib/modelAvailability";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { MikeIcon } from "@/shared/ui/MikeIconUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useSidebar } from "@/app/contexts/SidebarContext";

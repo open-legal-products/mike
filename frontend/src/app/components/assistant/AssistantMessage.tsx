@@ -1070,7 +1070,7 @@ export function AssistantMessage({
 
                 {/* Download cards for created docs — generated docs now
                     persist as first-class documents, so clicking opens
-                    them in the DocPanel (like edited docs). */}
+                    them in the DocumentContent (like edited docs). */}
                 {events &&
                     !isStreaming &&
                     events.some(

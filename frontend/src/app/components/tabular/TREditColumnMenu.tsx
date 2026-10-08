@@ -25,7 +25,7 @@ import {
 // Liquid-glass field styling shared by the menu's inputs/controls, matching the
 // modal's glass treatment (translucent white over the light-gray panel).
 const GLASS_FIELD =
-    `${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`;
+    LIQUID_GLASS_SUBTLE_CLASS;
 
 export interface TREditColumnMenuProps {
     column: ColumnConfig;
@@ -240,7 +240,7 @@ export function TREditColumnMenu({
                 createPortal(
                     <div
                         ref={panelRef}
-                        className={`fixed z-[40] rounded-3xl p-3 ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-3xl`}
+                        className={`fixed z-[40] rounded-3xl p-3 ${LIQUID_GLASS_FLOAT_CLASS}`}
                         style={{
                             top: menuPos.top,
                             left: menuPos.left,

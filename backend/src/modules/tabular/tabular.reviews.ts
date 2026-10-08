@@ -35,6 +35,7 @@ import {
 } from "./tabular.overview";
 import {
     fetchSourceDocuments,
+    filterReadableReviewRows,
     loadReviewRows,
     type ReviewRow,
     type SourceDocument,
@@ -556,11 +557,25 @@ export async function getTabularReviewDetail(
         .select("*")
         .eq("review_id", reviewId);
     if (cellsError) return internalFailure(cellsError);
-    const rows = await loadReviewRows(db, reviewId);
-    const rowDocIds = rows.flatMap((row) => row.source_document_ids ?? []);
-    const docIds = Array.isArray(review.document_ids)
+    const allRows = await loadReviewRows(db, reviewId);
+    const allRowDocIds = allRows.flatMap(
+        (row) => row.source_document_ids ?? [],
+    );
+    const allDocIds = Array.isArray(review.document_ids)
         ? (review.document_ids as string[])
-        : rowDocIds;
+        : allRowDocIds;
+    // Review access says who may open the grid, not whose documents they may
+    // read. Rows, cells, and document metadata are narrowed to the caller's
+    // own document access (see filterReadableReviewRows).
+    const { rows, readableDocumentIds } = await filterReadableReviewRows(
+        db,
+        allRows,
+        allDocIds,
+        userId,
+        userEmail,
+    );
+    const visibleRowIds = new Set(rows.map((row) => row.id));
+    const docIds = allDocIds.filter((id) => readableDocumentIds.has(id));
     const docsResult =
         docIds.length > 0
             ? await db.from("documents").select("*").in("id", docIds)
@@ -583,10 +598,12 @@ export async function getTabularReviewDetail(
                 access_role: access.projectRole,
                 is_running: isReviewGenerationRunning(review),
             },
-            cells: (cells ?? []).map((cell) => ({
-                ...cell,
-                content: parseCellContent(cell.content),
-            })),
+            cells: (cells ?? [])
+                .filter((cell) => visibleRowIds.has(cell.row_id as string))
+                .map((cell) => ({
+                    ...cell,
+                    content: parseCellContent(cell.content),
+                })),
             rows,
             documents: docs as unknown as Record<string, unknown>[],
         },
@@ -898,6 +915,16 @@ export async function updateTabularReview(
                 "Only the review's creator can move a review",
             );
         }
+        // Authorship is not standing. A creator whose role on the review's
+        // current project was reduced to Viewer must not be able to pull the
+        // review (cells, document list) out of that matter into personal
+        // scope, so moving needs write access where the review lives now…
+        if (!can(access.projectRole, "content.edit")) {
+            return failure(
+                "forbidden",
+                "You do not have permission to move this review.",
+            );
+        }
         if (projectIdUpdate) {
             const projectAccess = await checkProjectAccess(
                 projectIdUpdate,
@@ -907,6 +934,15 @@ export async function updateTabularReview(
             );
             if (!projectAccess.ok) {
                 return failure("not_found", "Target project not found");
+            }
+            // …and where it is going: a move contributes the review to the
+            // destination's members exactly as creating it there would, so it
+            // takes the same content.edit gate as the create path.
+            if (!can(projectAccess.projectRole, "content.edit")) {
+                return failure(
+                    "forbidden",
+                    "You do not have permission to write in this project.",
+                );
             }
         }
         updates.project_id = projectIdUpdate;

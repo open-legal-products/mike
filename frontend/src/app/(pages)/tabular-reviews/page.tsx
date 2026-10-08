@@ -1,16 +1,9 @@
 "use client";
 
-import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Loader2 } from "lucide-react";
-import {
-    RowActionMenuItems,
-    RowActions,
-} from "@/app/components/shared/RowActions";
-import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
 import {
     deleteTabularReview,
     createTabularReview,
@@ -22,6 +15,7 @@ import {
 import type { TabularReview, Project } from "@/app/components/shared/types";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { NewTRModal } from "@/app/components/tabular/NewTRModal";
+import { ReviewsListTable } from "@/app/components/tabular/ReviewsListTable";
 import { TabularReviewDetailsModal } from "@/app/components/tabular/TabularReviewDetailsModal";
 import {
     PermissionDeniedPopup,
@@ -33,35 +27,16 @@ import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
-import {
-    TABLE_CHECKBOX_CLASS,
-    SkeletonCheckbox,
-    SkeletonLine,
-    TableBody,
-    TableCell,
-    TableEmptyState,
-    TableFilters,
-    type TableFilterOption,
-    TableHeaderCell,
-    TableHeaderRow,
-    TablePrimaryCell,
-    TableRow,
-    TableScrollArea,
-    rowActionSelectionIds,
-    type TableSortDirection,
-    TableStickyCell,
-} from "@/app/components/shared/TablePrimitive";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TabularReviewSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
+import type { TableSortDirection } from "@/app/components/shared/TablePrimitive";
 import {
     type TabularReviewScope,
+    type TabularReviewSortKey,
     usePaginatedTabularReviews,
 } from "@/app/hooks/usePaginatedTabularReviews";
 import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 
 type ReviewScope = TabularReviewScope;
-type ReviewSortKey = "name" | "columns" | "documents" | "created";
 
 const REVIEW_SCOPES: { id: ReviewScope; label: string }[] = [
     { id: "all", label: "All" },
@@ -69,17 +44,6 @@ const REVIEW_SCOPES: { id: ReviewScope; label: string }[] = [
     { id: "standalone", label: "Standalone" },
 ];
 const REVIEW_SCOPE_IDS = REVIEW_SCOPES.map((scope) => scope.id);
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-    { value: "asc", label: "Ascending" },
-    { value: "desc", label: "Descending" },
-];
-function formatDate(iso: string) {
-    return new Date(iso).toLocaleDateString(undefined, {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-    });
-}
 
 export default function TabularReviewsPage() {
     const router = useRouter();
@@ -100,7 +64,7 @@ export default function TabularReviewsPage() {
     );
     const [projectFilter, setProjectFilter] = useState<string | null>(null);
     const [sort, setSort] = useState<{
-        key: ReviewSortKey;
+        key: TabularReviewSortKey;
         direction: TableSortDirection;
     } | null>(null);
     const [search, setSearch] = useState("");
@@ -127,7 +91,6 @@ export default function TabularReviewsPage() {
         scope: activeScope,
         sort,
     });
-    const [actionsOpen, setActionsOpen] = useState(false);
     /**
      * A refusal plus the person who can lift it. Unlike the projects overview,
      * the reviews overview RPC returns no contact columns at all — only
@@ -176,30 +139,10 @@ export default function TabularReviewsPage() {
         };
     }, []);
 
-    function handleLoadMore() {
-        void loadMore();
-    }
-
-    function handleScroll(event: React.UIEvent<HTMLDivElement>) {
-        if (loading || loadingMore || !hasMore) return;
-        const el = event.currentTarget;
-        const distanceToBottom =
-            el.scrollHeight - el.scrollTop - el.clientHeight;
-        if (distanceToBottom < 200) void loadMore();
-    }
-
-
-    const projectNameById = useMemo(
-        () => new Map(projects.map((project) => [project.id, project.name])),
-        [projects],
-    );
-    const filtered = visibleReviews;
 
     const allSelected =
-        filtered.length > 0 &&
-        filtered.every((r) => selectedIds.includes(r.id));
-    const someSelected =
-        !allSelected && filtered.some((r) => selectedIds.includes(r.id));
+        visibleReviews.length > 0 &&
+        visibleReviews.every((r) => selectedIds.includes(r.id));
 
     function toggleAll() {
         if (allSelected) {
@@ -211,17 +154,10 @@ export default function TabularReviewsPage() {
         }
     }
 
-    function toggleOne(id: string) {
-        setSelectedIds((prev) =>
-            prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-        );
-    }
-
     function clearSelection() {
         setSelectedIds([]);
         setSelectionCameFromSelectAll(false);
         setConfirmDeleteAllOpen(false);
-        setActionsOpen(false);
     }
 
     function handleProjectFilterChange(value: string | null) {
@@ -230,7 +166,7 @@ export default function TabularReviewsPage() {
     }
 
     function handleSortChange(
-        key: ReviewSortKey,
+        key: TabularReviewSortKey,
         direction: TableSortDirection | null,
     ) {
         setSort(direction ? { key, direction } : null);
@@ -337,18 +273,6 @@ export default function TabularReviewsPage() {
             });
     }
 
-    function requestReviewDetails(review: TabularReview) {
-        // The overview RPC now returns each row's merged access_role. Details
-        // editing is member-tier — the server's PATCH asks for content.edit —
-        // so the refusal must say "member", not "admin" (the review page and
-        // this list previously disagreed about the same action).
-        if (!can(roleFrom(review), "content.edit")) {
-            refuse(review.id, "edit tabular review details", "editor");
-            return;
-        }
-        setDetailsReview(review);
-    }
-
     async function handleDetailsSave(values: {
         title: string;
         projectId?: string | null;
@@ -373,7 +297,6 @@ export default function TabularReviewsPage() {
     }
 
     function requestDeleteSelected() {
-        setActionsOpen(false);
         if (selectionCameFromSelectAll) {
             setConfirmDeleteAllOpen(true);
             return;
@@ -383,7 +306,6 @@ export default function TabularReviewsPage() {
 
     async function handleDeleteSelected() {
         const ids = [...selectedIds];
-        setActionsOpen(false);
         setConfirmDeleteAllOpen(false);
         setSelectionCameFromSelectAll(false);
         setBulkDeleteNotice(null);
@@ -458,82 +380,6 @@ export default function TabularReviewsPage() {
         }
     }
 
-    const projectFilterButton = (
-        <TableFilters
-            label="Filter by project"
-            value={projectFilter}
-            allLabel="All Projects"
-            options={projects.map((project) => ({
-                value: project.id,
-                label: project.name,
-            }))}
-            onChange={handleProjectFilterChange}
-        />
-    );
-    const nameSortDirection = sort?.key === "name" ? sort.direction : null;
-    const columnsSortDirection =
-        sort?.key === "columns" ? sort.direction : null;
-    const documentsSortDirection =
-        sort?.key === "documents" ? sort.direction : null;
-    const createdSortDirection =
-        sort?.key === "created" ? sort.direction : null;
-    const nameFilterButton = (
-        <TableFilters
-            label="Sort by review name"
-            value={nameSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            align="right"
-            options={SORT_OPTIONS}
-            onChange={(direction) => handleSortChange("name", direction)}
-        />
-    );
-    const columnsFilterButton = (
-        <TableFilters
-            label="Sort by columns"
-            value={columnsSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
-            onChange={(direction) => handleSortChange("columns", direction)}
-        />
-    );
-    const documentsFilterButton = (
-        <TableFilters
-            label="Sort by documents"
-            value={documentsSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
-            onChange={(direction) => handleSortChange("documents", direction)}
-        />
-    );
-    const createdFilterButton = (
-        <TableFilters
-            label="Sort by created date"
-            value={createdSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
-            onChange={(direction) => handleSortChange("created", direction)}
-        />
-    );
-
-    const toolbarActions =
-        selectedIds.length > 0 ? (
-            <SelectionActionsMenu
-                open={actionsOpen}
-                onOpenChange={setActionsOpen}
-                actions={[
-                    {
-                        label: "Delete",
-                        destructive: true,
-                        onSelect: requestDeleteSelected,
-                    },
-                ]}
-            />
-        ) : undefined;
-
     return (
         <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
             {/* Page header */}
@@ -559,301 +405,58 @@ export default function TabularReviewsPage() {
                 </h1>
             </PageHeader>
 
-            <TableToolbar
-                items={REVIEW_SCOPES}
-                active={activeScope}
-                onChange={(scope) => {
-                    setActiveScope(scope);
-                    clearSelection();
-                }}
-                actions={toolbarActions}
-            />
-
-            {/* Table */}
-            <TableScrollArea
-                onScroll={handleScroll}
-                header={
-                    <TableHeaderRow>
-                        <TableStickyCell header>
-                            {effectiveLoading ? (
-                                <SkeletonCheckbox />
-                            ) : (
-                                <input
-                                    type="checkbox"
-                                    checked={allSelected}
-                                    disabled={
-                                        selectingAll ||
-                                        deletingReviewIds.size > 0
-                                    }
-                                    ref={(el) => {
-                                        if (el) el.indeterminate = someSelected;
-                                    }}
-                                    onChange={toggleAll}
-                                    className={TABLE_CHECKBOX_CLASS}
-                                    aria-label="Select all reviews"
-                                />
-                            )}
-                            <span className="mr-1">Name</span>
-                            {!loading && nameFilterButton}
-                        </TableStickyCell>
-                        <TableHeaderCell className="ml-auto w-24">
-                            <div className="flex items-center gap-1">
-                                <span>Columns</span>
-                                {!loading && columnsFilterButton}
-                            </div>
-                        </TableHeaderCell>
-                        <TableHeaderCell className="w-24">
-                            <div className="flex items-center gap-1">
-                                <span>Documents</span>
-                                {!loading && documentsFilterButton}
-                            </div>
-                        </TableHeaderCell>
-                        <TableHeaderCell className="w-52">
-                            <div className="flex items-center gap-1">
-                                <span>Project</span>
-                                {!loading && projectFilterButton}
-                            </div>
-                        </TableHeaderCell>
-                        <TableHeaderCell className="w-32">
-                            <div className="flex items-center gap-1">
-                                <span>Created</span>
-                                {!loading && createdFilterButton}
-                            </div>
-                        </TableHeaderCell>
-                        <TableHeaderCell className="w-8" />
-                    </TableHeaderRow>
-                }
-            >
-                {effectiveLoading ? (
-                    <TableBody>
-                        {[1, 2, 3].map((i) => (
-                            <TableRow key={i} interactive={false}>
-                                <TableStickyCell
-                                    hover={false}
-                                    bgClassName="bg-transparent"
-                                >
-                                    <SkeletonCheckbox />
-                                    <SkeletonLine className="h-3.5 w-48" />
-                                </TableStickyCell>
-                                <TableCell className="ml-auto w-24">
-                                    <SkeletonLine className="w-8" />
-                                </TableCell>
-                                <TableCell className="w-24">
-                                    <SkeletonLine className="w-8" />
-                                </TableCell>
-                                <TableCell className="w-52">
-                                    <SkeletonLine className="w-24" />
-                                </TableCell>
-                                <TableCell className="w-32">
-                                    <SkeletonLine className="w-20" />
-                                </TableCell>
-                                <TableCell className="w-8" />
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                ) : loadError ? (
-                    <TableEmptyState>
-                        <p className="text-lg font-medium font-serif text-gray-900">
-                            Unable to load reviews
-                        </p>
-                        <p className="mt-1 text-xs text-gray-400">
-                            Check your connection and try again.
-                        </p>
-                        <PillButtonUI
-                            tone="black"
-                            size="sm"
-                            onClick={retry}
-                            className="mt-4"
-                        >
-                            Try again
-                        </PillButtonUI>
-                    </TableEmptyState>
-                ) : filtered.length === 0 ? (
-                    <TableEmptyState>
-                        {activeScope === "all" &&
-                        !projectFilter &&
-                        !debouncedSearch ? (
-                            <>
-                                <TabularReviewSkeuoIcon className="mb-4 h-8 w-8" />
-                                <p className="text-2xl font-medium font-serif text-gray-900">
-                                    Tabular Reviews
-                                </p>
-                                <p className="mt-1 text-xs text-gray-400 max-w-xs text-left">
-                                    Extract data from documents into tables
-                                    using AI.
-                                </p>
-                                <PillButtonUI
-                                    tone="black"
-                                    size="sm"
-                                    onClick={() => setNewTROpen(true)}
-                                    disabled={creating}
-                                    className="mt-4"
-                                >
-                                    Create
-                                </PillButtonUI>
-                            </>
-                        ) : (
-                            <p className="text-sm text-gray-400">
-                                No reviews found
-                            </p>
-                        )}
-                    </TableEmptyState>
-                ) : (
-                    <TableBody>
-                        {filtered.map((review) => {
-                            const projectName = review.project_id
-                                ? projectNameById.get(review.project_id)
-                                : null;
-                            const deleting = deletingReviewIds.has(review.id);
-                            const actionIds = rowActionSelectionIds(
-                                review.id,
-                                selectedIds,
-                            );
-                            const appliesToSelection = actionIds.length > 1;
-                            return (
-                                <TableRow
-                                    key={review.id}
-                                    interactive={!deleting}
-                                    selected={
-                                        !deleting &&
-                                        selectedIds.includes(review.id)
-                                    }
-                                    rightClickDropdown={
-                                        deleting
-                                            ? undefined
-                                            : (close) => (
-                                                  <RowActionMenuItems
-                                                      onClose={close}
-                                                      onView={
-                                                          appliesToSelection
-                                                              ? undefined
-                                                              : () =>
-                                                                    router.push(
-                                                                        review.project_id
-                                                                            ? `/projects/${review.project_id}/tabular-reviews/${review.id}`
-                                                                            : `/tabular-reviews/${review.id}`,
-                                                                    )
-                                                      }
-                                                      viewLabel="Open"
-                                                      onEditDetails={
-                                                          appliesToSelection
-                                                              ? undefined
-                                                              : () => {
-                                                                    requestReviewDetails(
-                                                                        review,
-                                                                    );
-                                                                }
-                                                      }
-                                                      onDelete={() =>
-                                                          appliesToSelection
-                                                              ? requestDeleteSelected()
-                                                              : handleDeleteReviewRow(
-                                                                    review,
-                                                                )
-                                                      }
-                                                      deleteLabel={
-                                                          appliesToSelection
-                                                              ? `Delete ${actionIds.length} reviews`
-                                                              : undefined
-                                                      }
-                                                  />
-                                              )
-                                    }
-                                    onClick={
-                                        deleting
-                                            ? undefined
-                                            : () => {
-                                                  router.push(
-                                                      review.project_id
-                                                          ? `/projects/${review.project_id}/tabular-reviews/${review.id}`
-                                                          : `/tabular-reviews/${review.id}`,
-                                                  );
-                                              }
-                                    }
-                                    className={
-                                        deleting
-                                            ? "pointer-events-none opacity-50"
-                                            : undefined
-                                    }
-                                >
-                                    <TablePrimaryCell
-                                                selected={
-                                                    !deleting &&
-                                                    selectedIds.includes(
-                                                        review.id,
-                                                    )
-                                                }
-                                        selectionIndicator={
-                                            deleting ? (
-                                                <Loader2 className="mr-4 h-3 w-3 shrink-0 animate-spin text-gray-400" />
-                                            ) : undefined
-                                        }
-                                        onSelectionChange={() =>
-                                            toggleOne(review.id)
-                                        }
-                                        label={
-                                            review.title ?? "Untitled Review"
-                                        }
-                                    />
-                                    <TableCell className="ml-auto w-24">
-                                        {review.columns_config?.length ?? 0}
-                                    </TableCell>
-                                    <TableCell className="w-24">
-                                        {review.document_count ?? 0}
-                                    </TableCell>
-                                    <TableCell className="w-52 pr-2">
-                                        {projectName ? (
-                                            projectName
-                                        ) : (
-                                            <span className="text-gray-300">
-                                                —
-                                            </span>
-                                        )}
-                                    </TableCell>
-                                    <TableCell className="w-32">
-                                        {review.created_at ? (
-                                            formatDate(review.created_at)
-                                        ) : (
-                                            <span className="text-gray-300">
-                                                —
-                                            </span>
-                                        )}
-                                    </TableCell>
-                                    <div
-                                        className="w-8 shrink-0 flex justify-end"
-                                        onClick={(e) => e.stopPropagation()}
-                                    >
-                                        <RowActions
-                                            onView={() =>
-                                                router.push(
-                                                    review.project_id
-                                                        ? `/projects/${review.project_id}/tabular-reviews/${review.id}`
-                                                        : `/tabular-reviews/${review.id}`,
-                                                )
-                                            }
-                                            viewLabel="Open"
-                                            onEditDetails={() => {
-                                                requestReviewDetails(review);
-                                            }}
-                                            onDelete={() =>
-                                                handleDeleteReviewRow(review)
-                                            }
-                                        />
-                                    </div>
-                                </TableRow>
-                            );
-                        })}
-                    </TableBody>
+            <ReviewsListTable
+                renderToolbar={(actions) => (
+                    <TableToolbar
+                        items={REVIEW_SCOPES}
+                        active={activeScope}
+                        onChange={(scope) => {
+                            setActiveScope(scope);
+                            clearSelection();
+                        }}
+                        actions={actions}
+                    />
                 )}
-                <TableLoadMoreRow
-                    loading={effectiveLoading}
-                    hasMore={hasMore}
-                    itemCount={filtered.length}
-                    loadingMore={loadingMore}
-                    hasError={!!loadMoreError}
-                    onLoadMore={handleLoadMore}
-                />
-            </TableScrollArea>
+                projectColumn={{
+                    projects,
+                    filter: projectFilter,
+                    onFilterChange: handleProjectFilterChange,
+                }}
+                reviews={visibleReviews}
+                selectedReviewIds={selectedIds}
+                setSelectedReviewIds={setSelectedIds}
+                createDisabled={creating}
+                emptyDescription="Extract data from documents into tables using AI."
+                onCreateReview={() => setNewTROpen(true)}
+                onOpenReview={(review) =>
+                    router.push(
+                        review.project_id
+                            ? `/projects/${review.project_id}/tabular-reviews/${review.id}`
+                            : `/tabular-reviews/${review.id}`,
+                    )
+                }
+                onOpenDetails={setDetailsReview}
+                onDeleteReview={handleDeleteReviewRow}
+                onDeleteSelectedReviews={requestDeleteSelected}
+                onOwnerOnlyAction={(gate, review) =>
+                    refuse(review.id, gate.action, gate.requiredRole)
+                }
+                onToggleAll={toggleAll}
+                selectingAll={selectingAll}
+                deletingReviewIds={deletingReviewIds}
+                hasActiveFilters={
+                    activeScope !== "all" || !!projectFilter || !!debouncedSearch
+                }
+                sort={sort}
+                onSortChange={handleSortChange}
+                hasMore={hasMore}
+                loadingMore={loadingMore}
+                error={loadError}
+                loadMoreError={loadMoreError}
+                onLoadMore={() => void loadMore()}
+                onRetry={retry}
+                loading={effectiveLoading}
+            />
 
             <NewTRModal
                 open={newTROpen}

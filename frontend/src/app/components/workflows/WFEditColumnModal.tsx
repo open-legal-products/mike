@@ -173,7 +173,7 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
                                     <ChevronDown className={`h-4 w-4 transition-transform ${presetsOpen ? "rotate-180" : ""}`} />
                                 </button>
                                 {presetsOpen && (
-                                    <div className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-xl ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}>
+                                    <div className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-xl ${LIQUID_GLASS_FLOAT_CLASS}`}>
                                         <button
                                             type="button"
                                             onClick={() => { update({ name: "", prompt: "", format: "text", tags: [], tagInput: "" }); setPresetsOpen(false); }}

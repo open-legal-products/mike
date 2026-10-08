@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { SettingsCard } from "./SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsLabel } from "./SettingsText";
 
 /**
@@ -51,7 +51,7 @@ export function ConnectorCard({
   );
   return (
     <section aria-label={`${name} connector`} className="min-w-0">
-      <SettingsCard>
+      <GlassCardUI>
         {onOpen ? (
           <div
             className="cursor-pointer rounded-xl px-4 py-3 transition-colors hover:bg-white/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
@@ -72,7 +72,7 @@ export function ConnectorCard({
         ) : (
           <div className="px-4 py-3">{body}</div>
         )}
-      </SettingsCard>
+      </GlassCardUI>
     </section>
   );
 }

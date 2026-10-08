@@ -1,5 +1,6 @@
 import {
     SETTINGS_MODELS,
+    canonicalModelId,
     type ModelOption,
 } from "../components/assistant/ModelToggle";
 import type { ApiKeyState } from "@/app/lib/mikeApi";
@@ -8,6 +9,7 @@ export type ModelProvider =
     | "claude"
     | "gemini"
     | "openai"
+    | "mistral"
     | "openrouter"
     | "vercel"
     | "opencode-go"
@@ -18,7 +20,7 @@ export function getModelProvider(modelId: string): ModelProvider | null {
     if (modelId.startsWith("openrouter/")) return "openrouter";
     if (modelId.startsWith("vercel/")) return "vercel";
     if (modelId.startsWith("opencode-go/")) return "opencode-go";
-    const model = SETTINGS_MODELS.find((m) => m.id === modelId);
+    const model = SETTINGS_MODELS.find((m) => m.id === canonicalModelId(modelId));
     if (!model) return null;
     return modelGroupToProvider(model.group);
 }
@@ -45,6 +47,7 @@ export function isProviderAvailable(
 export function providerLabel(provider: ModelProvider): string {
     if (provider === "claude") return "Anthropic (Claude)";
     if (provider === "openai") return "OpenAI";
+    if (provider === "mistral") return "Mistral AI";
     if (provider === "openrouter") return "OpenRouter";
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
@@ -57,6 +60,7 @@ export function modelGroupToProvider(
 ): ModelProvider {
     if (group === "Anthropic") return "claude";
     if (group === "OpenAI") return "openai";
+    if (group === "Mistral AI") return "mistral";
     if (group === "OpenRouter") return "openrouter";
     if (group === "Vercel AI Gateway") return "vercel";
     if (group === "OpenCode Go") return "opencode-go";

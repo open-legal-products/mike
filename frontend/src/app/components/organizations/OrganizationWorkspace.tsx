@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import { Check, ChevronDown, Loader2, Pencil, Trash2 } from "lucide-react";
@@ -14,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
+import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import {
   SkeletonCheckbox,
@@ -23,6 +25,7 @@ import {
   TableCell,
   TableEmptyState,
   TableFilters,
+  TableSortFilter,
   TableHeaderCell,
   TableHeaderRow,
   TablePrimaryCell,
@@ -40,7 +43,6 @@ import { ClosedProjectSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { EmptyState } from "@/app/components/ui/empty-state";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import {
   Dropdown,
   DropdownContent,
@@ -76,11 +78,6 @@ const TABS: { id: OrganizationTab; label: string }[] = [
 ];
 
 const EMPTY_RESOURCES: OrgResources = { projects: [], workflows: [] };
-
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
-];
 
 const ROLE_FILTER_OPTIONS: TableFilterOption<OrgRole>[] = [
   { value: "admin", label: ORG_ROLE_LABELS.admin, className: "text-blue-700" },
@@ -351,25 +348,42 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
     setRemovingSelected(false);
   }
 
+  function renderMemberActions(
+    member: OrgMember | undefined,
+    close?: () => void,
+  ) {
+    const appliesToSelection =
+      member &&
+      selectedMemberIds.includes(member.id) &&
+      selectedMemberIds.length > 1 &&
+      isAdmin;
+    if (
+      !appliesToSelection &&
+      (!member || (!isAdmin && member.user_id !== user?.id))
+    )
+      return null;
+    return (
+      <DropdownItem
+        variant="destructive"
+        onSelect={() => {
+          close?.();
+          if (appliesToSelection) requestRemoveSelected();
+          else if (member) setRemoveMember(member);
+        }}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        {appliesToSelection
+          ? "Remove all selected"
+          : member?.user_id === user?.id
+            ? "Leave organization"
+            : "Remove member"}
+      </DropdownItem>
+    );
+  }
+
   const peopleToolbarActions =
     activeTab === "people" && isAdmin && selectedMemberIds.length > 0 ? (
-      <Dropdown>
-        <DropdownTrigger asChild>
-          <TabPillButtonUI>
-            Actions
-            <ChevronDown className="h-3.5 w-3.5" />
-          </TabPillButtonUI>
-        </DropdownTrigger>
-        <DropdownContent align="end" className="w-44">
-          <DropdownItem
-            onSelect={requestRemoveSelected}
-            className="text-red-600 focus:text-red-700"
-          >
-            <Trash2 className="h-3.5 w-3.5 text-red-600" />
-            Remove all selected
-          </DropdownItem>
-        </DropdownContent>
-      </Dropdown>
+      <SelectionActionsMenu renderItems={(close) => renderMemberActions(members.find((member) => member.id === selectedMemberIds[0]), close)} />
     ) : undefined;
 
   return (
@@ -445,6 +459,7 @@ export function OrganizationWorkspace({ orgId }: { orgId: string }) {
           onRetry={load}
           onRoleChange={requestRoleChange}
           onRemove={setRemoveMember}
+          renderActions={renderMemberActions}
         />
       ) : activeTab === "projects" ? (
         <ResourceTable
@@ -584,6 +599,7 @@ function PeopleTable({
   onRetry,
   onRoleChange,
   onRemove,
+  renderActions,
 }: {
   loading: boolean;
   error: string | null;
@@ -596,6 +612,7 @@ function PeopleTable({
   onRetry: () => Promise<void>;
   onRoleChange: (member: OrgMember, role: OrgRole) => void;
   onRemove: (member: OrgMember) => void;
+  renderActions: (member: OrgMember, close?: () => void) => ReactNode;
 }) {
   const [roleFilter, setRoleFilter] = useState<OrgRole | null>(null);
   const [sort, setSort] = useState<{
@@ -680,13 +697,11 @@ function PeopleTable({
             )}
             <span className="mr-1">Username</span>
             {!loading ? (
-              <TableFilters
+              <TableSortFilter
                 label="Sort by username"
                 value={sort?.key === "name" ? sort.direction : null}
                 allLabel="Default order"
-                options={SORT_OPTIONS}
                 align="right"
-                widthClassName="w-40"
                 onChange={(direction) => setSortFor("name", direction)}
               />
             ) : null}
@@ -694,12 +709,10 @@ function PeopleTable({
           <TableHeaderCell className="ml-auto w-64">
             <span className="mr-1">Email</span>
             {!loading ? (
-              <TableFilters
+              <TableSortFilter
                 label="Sort by email"
                 value={sort?.key === "email" ? sort.direction : null}
                 allLabel="Default order"
-                options={SORT_OPTIONS}
-                widthClassName="w-40"
                 onChange={(direction) => setSortFor("email", direction)}
               />
             ) : null}
@@ -723,12 +736,10 @@ function PeopleTable({
           <TableHeaderCell className="w-36">
             <span className="mr-1">Added</span>
             {!loading ? (
-              <TableFilters
+              <TableSortFilter
                 label="Sort by date added"
                 value={sort?.key === "added" ? sort.direction : null}
                 allLabel="Default order"
-                options={SORT_OPTIONS}
-                widthClassName="w-40"
                 onChange={(direction) => setSortFor("added", direction)}
               />
             ) : null}
@@ -764,6 +775,7 @@ function PeopleTable({
                 key={member.id}
                 interactive={false}
                 selected={isSelected}
+                rightClickDropdown={(close) => renderActions(member, close)}
                 className={!isSelected ? LIQUID_GLASS_HOVER_CLASS : undefined}
               >
                 <TablePrimaryCell
@@ -998,13 +1010,11 @@ function ResourceTable({
             )}
             <span className="mr-1">Name</span>
             {!loading ? (
-              <TableFilters
+              <TableSortFilter
                 label={`Sort ${kind} by name`}
                 value={sort?.key === "name" ? sort.direction : null}
                 allLabel="Default order"
-                options={SORT_OPTIONS}
                 align="right"
-                widthClassName="w-40"
                 onChange={(direction) => setSortFor("name", direction)}
               />
             ) : null}
@@ -1028,12 +1038,10 @@ function ResourceTable({
           <TableHeaderCell className="w-36">
             <span className="mr-1">Created</span>
             {!loading ? (
-              <TableFilters
+              <TableSortFilter
                 label={`Sort ${kind} by creation date`}
                 value={sort?.key === "created" ? sort.direction : null}
                 allLabel="Default order"
-                options={SORT_OPTIONS}
-                widthClassName="w-40"
                 onChange={(direction) => setSortFor("created", direction)}
               />
             ) : null}

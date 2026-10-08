@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { authInputClassName } from "@/app/components/auth/authStyles";
+import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
 import {
   Dropdown,
   DropdownContent,
@@ -10,7 +10,7 @@ import {
   DropdownRadioItem,
   DropdownTrigger,
 } from "@/shared/ui/dropdown";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import {
@@ -212,7 +212,7 @@ export function ResponseStyleSection() {
       <SettingsDescription>
         Choose how Mike shapes its answers in chats.
       </SettingsDescription>
-      <SettingsCard>
+      <GlassCardUI>
         {loadError ? (
           <SettingsRow>
             <p className="text-sm text-red-600" role="alert">
@@ -249,7 +249,7 @@ export function ResponseStyleSection() {
             />
           ))
         )}
-      </SettingsCard>
+      </GlassCardUI>
     </section>
   );
 }
@@ -298,7 +298,7 @@ function StyleSettingRow({
             aria-busy={!selected}
             className={cn(
               "flex h-9 w-full shrink-0 items-center justify-between gap-2 text-left text-sm outline-none disabled:cursor-default disabled:opacity-60 sm:w-56",
-              authInputClassName,
+              authInputUIClassName,
             )}
           >
             <span className="truncate">{selected?.label ?? "Loading..."}</span>

@@ -19,7 +19,7 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { MikeIcon } from "@/shared/ui/MikeIconUI";
 import { SidebarChatItem } from "@/app/components/shared/SidebarChatItem";
 import {
     Dropdown,
@@ -120,6 +120,10 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         if (isOpen) setShouldAnimate(true);
     }
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+    // The toggle slides out from under the pointer as the sidebar resizes, so
+    // its hover background is held off after a click until the pointer next
+    // enters or leaves it.
+    const [toggleHoverSuppressed, setToggleHoverSuppressed] = useState(false);
     const [projectsCollapsed, setProjectsCollapsed] = useState(false);
     const [historyCollapsed, setHistoryCollapsed] = useState(false);
     const activeProjectId = pathname.match(/^\/projects\/([^/]+)/)?.[1] ?? null;
@@ -284,11 +288,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         return profile.displayName || user?.email?.split("@")[0] || "";
     };
 
-    const getUserTier = () => {
-        if (!profile) return "";
-        return profile.tier || "Free";
-    };
-
     const anyRecentProjectExpanded =
         displayedRecentProjects?.some((project) =>
             expandedProjectIds.has(project.id),
@@ -313,7 +312,11 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     isOpen
                         ? "w-64 h-[calc(100dvh-1rem)] md:h-[calc(100dvh-1.5rem)]"
                         : "max-md:hidden w-[46px] md:h-[calc(100dvh-1.5rem)] h-auto pointer-events-none md:pointer-events-auto",
-                    "my-2 ml-2 mr-0 md:my-3 md:ml-3 md:mr-0 rounded-2xl backdrop-blur-2xl overflow-visible",
+                    // Collapsed, the ends are full semicircles. The radii are
+                    // lengths, not rounded-full, so the change animates with
+                    // the width.
+                    isOpen ? "rounded-2xl" : "rounded-[23px]",
+                    "my-2 ml-2 mr-0 md:my-3 md:ml-3 md:mr-0 overflow-visible",
                     LIQUID_GLASS_FLOAT_CLASS,
                     "absolute z-[99] flex shrink-0 flex-col transition-all duration-300 md:relative",
                 )}
@@ -330,9 +333,11 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 href="/assistant"
                                 className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
                             >
-                                <MikeIcon size={20} />
+                                <span className="flex shrink-0 px-px">
+                                    <MikeIcon size={18} />
+                                </span>
                                 <span
-                                    className={`text-[22px] font-light font-serif ${
+                                    className={`text-xl font-light font-serif ${
                                         shouldAnimate ? "sidebar-fade-in" : ""
                                     }`}
                                 >
@@ -343,16 +348,30 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     )}
                     <button
                         type="button"
-                        onClick={handleToggle}
+                        onClick={() => {
+                            setToggleHoverSuppressed(true);
+                            handleToggle();
+                        }}
+                        onPointerEnter={() => setToggleHoverSuppressed(false)}
+                        onPointerLeave={() => setToggleHoverSuppressed(false)}
                         aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
                         className={cn(
-                            "flex h-8 w-8 shrink-0 items-center p-2 transition-colors",
-                            "rounded-md",
-                            LIQUID_GLASS_HOVER_CLASS,
+                            "group flex h-8 w-8 shrink-0 items-center justify-center transition-[border-radius] duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                            isOpen ? "rounded-md" : "rounded-[16px]",
+                            !toggleHoverSuppressed && LIQUID_GLASS_HOVER_CLASS,
                         )}
                         title={isOpen ? "Close sidebar" : "Open sidebar"}
                     >
-                        <PanelLeft className="h-4 w-4 shrink-0" />
+                        {isOpen ? (
+                            <PanelLeft aria-hidden="true" className="h-4 w-4 shrink-0" />
+                        ) : (
+                            <span aria-hidden="true" className="relative flex h-[18px] w-[18px] items-center justify-center">
+                                <span className="absolute inset-0 flex items-center justify-center group-hover:invisible group-focus-visible:invisible">
+                                    <MikeIcon size={18} />
+                                </span>
+                                <PanelLeft className="invisible h-4 w-4 shrink-0 group-hover:visible group-focus-visible:visible" />
+                            </span>
+                        )}
                     </button>
                 </div>
 
@@ -372,7 +391,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     onClick={() => router.push(href)}
                                     title={!isOpen ? label : ""}
                                     className={cn(
-                                        "w-full h-8 flex items-center gap-3 px-2 py-2 rounded-md transition-colors text-left",
+                                        "w-full h-8 flex items-center gap-2 px-2 py-2 rounded-md transition-colors text-left",
                                         isActive
                                             ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
                                             : `text-gray-700 ${LIQUID_GLASS_HOVER_CLASS}`,
@@ -435,7 +454,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             {[50, 65, 45].map((w, i) => (
                                                 <div
                                                     key={i}
-                                                    className="flex h-8 items-center gap-3 rounded-md px-2"
+                                                    className="flex h-8 items-center gap-2 rounded-md px-2"
                                                 >
                                                     <div className="flex h-4 w-4 shrink-0 items-center justify-center">
                                                         <div className="h-3.5 w-3.5 rounded bg-gray-200 animate-pulse" />
@@ -535,7 +554,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         {[40, 60, 50, 70, 45].map((w, i) => (
                                             <div
                                                 key={i}
-                                                className="flex h-8 items-center gap-3 rounded-md px-2"
+                                                className="flex h-8 items-center gap-2 rounded-md px-2"
                                             >
                                                 <div className="flex h-4 w-4 shrink-0 items-center justify-center">
                                                     <div className="h-3.5 w-3.5 rounded bg-gray-200 animate-pulse" />
@@ -622,7 +641,8 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 type="button"
                                 aria-label="Account menu"
                                 className={cn(
-                                    "flex h-12 w-full shrink-0 items-center rounded-xl px-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                                    "flex h-9 w-full shrink-0 items-center px-1.5 outline-none [transition:border-radius_300ms_cubic-bezier(0.4,0,0.2,1),background-color_150ms,color_150ms] focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                                    isOpen ? "rounded-xl" : "rounded-[18px]",
                                     !isOpen ? "hidden md:flex" : "",
                                     pathname.startsWith("/settings") ||
                                         pathname === "/history" ||
@@ -637,20 +657,15 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 </div>
                                 {isOpen && (
                                     <div
-                                        className={`text-left flex-1 min-w-0 pl-3 flex items-center justify-between gap-2 ${
+                                        className={`text-left flex-1 min-w-0 pl-2 flex items-center justify-between gap-2 ${
                                             shouldAnimate
                                                 ? "sidebar-fade-in-2"
                                                 : ""
                                         }`}
                                     >
-                                        <div className="flex flex-col gap-0.5 min-w-0">
-                                            <div className="text-xs font-medium text-gray-900 leading-none">
-                                                {getDisplayName()}
-                                            </div>
-                                            <div className="text-[11px] text-gray-500 leading-none">
-                                                {getUserTier()}
-                                            </div>
-                                        </div>
+                                        <span className="min-w-0 break-words text-sm font-medium text-gray-900 leading-tight">
+                                            {getDisplayName()}
+                                        </span>
                                         <ChevronsUpDown className="h-4 w-4 flex-shrink-0 text-gray-400" />
                                     </div>
                                 )}

@@ -195,6 +195,7 @@ module.exports = async (_env, options) => {
         "@mike/document-event-blocks-ui": frontendSharedUi(
           "DocumentEventBlocksUI.tsx",
         ),
+        "@mike/input-ui": frontendSharedUi("InputUI.tsx"),
         "@mike/glass-card-ui": frontendSharedUi("GlassCardUI.tsx"),
         "@mike/modal-ui": frontendSharedUi("ModalUI.tsx"),
         "@mike/header-buttons-ui": frontendSharedUi(

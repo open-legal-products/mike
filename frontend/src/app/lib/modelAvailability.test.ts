@@ -13,6 +13,7 @@ const keys = (configured: {
     claude?: boolean;
     gemini?: boolean;
     openai?: boolean;
+    mistral?: boolean;
     openrouter?: boolean;
     vercel?: boolean;
     opencodego?: boolean;
@@ -21,6 +22,7 @@ const keys = (configured: {
         claude: { configured: !!configured.claude, source: null },
         gemini: { configured: !!configured.gemini, source: null },
         openai: { configured: !!configured.openai, source: null },
+        mistral: { configured: !!configured.mistral, source: null },
         openrouter: { configured: !!configured.openrouter, source: null },
         vercel: { configured: !!configured.vercel, source: null },
         "opencode-go": {
@@ -32,9 +34,9 @@ const keys = (configured: {
 
 describe("getModelProvider", () => {
     it("maps each settings model to a provider via its group", () => {
-        expect(getModelProvider("claude-opus-5")).toBe("claude");
-        expect(getModelProvider("gemini-3.7-flash")).toBe("gemini");
-        expect(getModelProvider("gpt-5.6-sol")).toBe("openai");
+        expect(getModelProvider("claude-opus-5-5")).toBe("claude");
+        expect(getModelProvider("gemini-3.8-flash")).toBe("gemini");
+        expect(getModelProvider("gpt-6-astra")).toBe("openai");
         expect(getModelProvider("openrouter/openai/gpt-5.4")).toBe(
             "openrouter",
         );
@@ -62,10 +64,10 @@ describe("getModelProvider", () => {
 
 describe("isModelAvailable", () => {
     it("is true only when the model's provider has a configured key", () => {
-        expect(isModelAvailable("claude-fable-5", keys({ claude: true }))).toBe(
+        expect(isModelAvailable("claude-fable-5-1", keys({ claude: true }))).toBe(
             true,
         );
-        expect(isModelAvailable("claude-fable-5", keys({ gemini: true }))).toBe(
+        expect(isModelAvailable("claude-fable-5-1", keys({ gemini: true }))).toBe(
             false,
         );
         expect(
@@ -153,4 +155,11 @@ describe("modelGroupToProvider", () => {
         expect(modelGroupToProvider("Local")).toBe("ollama");
         expect(modelGroupToProvider("Google")).toBe("gemini");
     });
+});
+
+
+it("makes direct Mistral available only with a Mistral key", () => {
+    expect(isModelAvailable("mistral-large-4", keys({ mistral: true }))).toBe(true);
+    expect(isModelAvailable("mistral-large-4", keys({ openai: true, openrouter: true }))).toBe(false);
+    expect(providerLabel("mistral")).toBe("Mistral AI");
 });

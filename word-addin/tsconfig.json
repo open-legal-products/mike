@@ -43,6 +43,9 @@
       "@mike/document-event-blocks-ui": [
         "../frontend/src/shared/ui/DocumentEventBlocksUI.tsx"
       ],
+      "@mike/input-ui": [
+        "../frontend/src/shared/ui/InputUI.tsx"
+      ],
       "@mike/glass-card-ui": [
         "../frontend/src/shared/ui/GlassCardUI.tsx"
       ],

@@ -28,7 +28,7 @@ const DROPDOWN_Z_INDEX_CLASS = "z-[250]";
 const DROPDOWN_INSET_RINGS_CLASS =
     "[&_:is(button,a,input,textarea,[role^='menuitem'],[role='option'])]:focus-visible:ring-inset [&_:is(button,a,input,textarea,[role^='menuitem'],[role='option'])]:focus-visible:ring-offset-0";
 
-const DROPDOWN_CHROME_CLASS = `theme-dropdown-surface rounded-2xl ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl ${DROPDOWN_INSET_RINGS_CLASS}`;
+const DROPDOWN_CHROME_CLASS = `theme-dropdown-surface rounded-2xl ${LIQUID_GLASS_FLOAT_CLASS} ${DROPDOWN_INSET_RINGS_CLASS}`;
 
 // Rows sit 4px apart. Anything that wraps rows inside a menu (a radio group,
 // a scrolling list) uses this too, so spacing is the same at every level and

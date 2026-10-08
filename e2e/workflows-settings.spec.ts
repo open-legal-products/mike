@@ -7,7 +7,7 @@
  *  - WorkflowList.tsx: h1 "Workflows"; Plus icon button (no aria-label) opens NewWorkflowModal
  *  - NewWorkflowModal.tsx: placeholder "Workflow name"; submit button text "Create workflow"
  *  - New accounts receive editable default workflows, including "Proofread"
- *  - WorkflowPromptEditor.tsx: editorProps class = "workflow-editor-content" on the ProseMirror div
+ *  - markdown-editor.tsx: editorProps class = "markdown-editor-content" on the ProseMirror div
  *  - WorkflowDetailPage save status: text "Saving…" → "Saved" rendered in a plain <span>
  *  - settings/page.tsx: h2 "Profile"; display name autosaves on blur
  *  - settings/layout.tsx: h1 "Settings" in layout header
@@ -160,7 +160,7 @@ test.describe("Workflows", () => {
            quiet says nothing about whether it has mounted. The expect() below
            waits on the editor itself, which is what this test types into. */
 
-        /* Step 2: type into the WorkflowPromptEditor */
+        /* Step 2: type into the workflow prompt editor */
         // The editor is dynamically imported; wait until it is ready.
         // When readOnly=false (custom workflow), contenteditable="true".
         const editorDiv = page.locator(".ProseMirror");

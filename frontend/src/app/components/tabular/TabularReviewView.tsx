@@ -1,5 +1,7 @@
 "use client";
 
+import { RowActionMenuItems } from "@/app/components/shared/RowActions";
+import { rowActionSelectionIds } from "@/app/components/shared/TablePrimitive";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -741,7 +743,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 }
                 const provider =
                     payload &&
-                    ["claude", "gemini", "openai"].includes(payload.provider)
+                    ["claude", "gemini", "openai", "mistral"].includes(payload.provider)
                         ? (payload.provider as ModelProvider)
                         : getModelProvider(tabularModel);
                 if (payload?.code === "missing_api_key" && provider) {
@@ -1017,11 +1019,11 @@ export function TRView({ reviewId, projectId }: Props) {
         setExpandedDocumentId(document.id);
     }
 
-    async function handleDeleteDocuments() {
+    async function handleDeleteDocuments(targetIds: string[] = selectedRowIds) {
         // Removing documents deletes their cells — member tier, like every
         // other reshaping of the review.
         if (!requireStructure("remove documents from this review")) return;
-        const rowIdsToDelete = [...selectedRowIds];
+        const rowIdsToDelete = [...targetIds];
         if (rowIdsToDelete.length === 0) return;
         const documentIdsToDelete = new Set(
             rows
@@ -1095,9 +1097,20 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    async function handleClearResults() {
+    async function handleClearResults(targetIds: string[] = selectedRowIds) {
         if (!requireStructure("clear results")) return;
-        await clearResultsForRows([...selectedRowIds]);
+        await clearResultsForRows([...targetIds]);
+    }
+
+    function renderReviewRowActions(ids: string[], close?: () => void) {
+        return (
+            <RowActionMenuItems
+                onClose={close}
+                onClearResults={() => void handleClearResults(ids)}
+                clearResultsDisabled={cellMutationsBlocked}
+                onDelete={() => void handleDeleteDocuments(ids)}
+            />
+        );
     }
 
     async function handleClearAllResults() {
@@ -1579,43 +1592,11 @@ export function TRView({ reviewId, projectId }: Props) {
                                         <div className="h-3 w-24 rounded bg-gray-100 animate-pulse" />
                                     ) : null}
                                     {!loading && selectedRowIds.length > 0 && (
-                                        <>
-                                            {/* Desktop: compact Actions menu */}
-                                            <SelectionActionsMenu
-                                                className="max-md:hidden"
-                                                open={actionsOpen}
-                                                onOpenChange={setActionsOpen}
-                                                actions={[
-                                                    {
-                                                        label: "Clear results",
-                                                        disabled:
-                                                            cellMutationsBlocked,
-                                                        onSelect:
-                                                            handleClearResults,
-                                                    },
-                                                    {
-                                                        label: "Delete",
-                                                        destructive: true,
-                                                        onSelect:
-                                                            handleDeleteDocuments,
-                                                    },
-                                                ]}
-                                            />
-                                            {/* Mobile (toolbar dropdown): flattened entries */}
-                                            <TabPillButtonUI
-                                                onClick={handleClearResults}
-                                                disabled={cellMutationsBlocked}
-                                                className="md:hidden"
-                                            >
-                                                Clear results
-                                            </TabPillButtonUI>
-                                            <TabPillButtonUI
-                                                onClick={handleDeleteDocuments}
-                                                className="md:hidden text-red-600"
-                                            >
-                                                Delete
-                                            </TabPillButtonUI>
-                                        </>
+                                        <SelectionActionsMenu
+                                            open={actionsOpen}
+                                            onOpenChange={setActionsOpen}
+                                            renderItems={(close) => renderReviewRowActions(selectedRowIds, close)}
+                                        />
                                     )}
                                     {!loading && (
                                         <TabPillButtonUI
@@ -1676,6 +1657,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 uploadingFilenames={uploadingDroppedFilenames}
                                 dragOverFiles={dragOverReviewFiles}
                                 onSelectionChange={setSelectedRowIds}
+                                rightClickDropdown={(row, close) => renderReviewRowActions(rowActionSelectionIds(row.id, selectedRowIds), close)}
                                 onDocumentOpen={handleDocumentOpen}
                                 onExpand={(cell) => {
                                     setExpandedCell(cell);

@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { SiteLogo } from "@/app/components/site-logo";
 import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
-import { authGlassCardClassName } from "@/app/components/auth/authStyles";
+import { authGlassCardUIClassName } from "@/shared/ui/AuthStylesUI";
 import { authErrorDescription, safeAuthNext } from "@/app/lib/authRedirects";
 import { exchangeAuthCode, getAuthSession } from "@/app/lib/authApi";
 import { useAuth } from "@/app/contexts/AuthContext";
@@ -80,7 +80,7 @@ function AuthCallbackContent() {
                 <SiteLogo size="lg" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className={authGlassCardClassName}>
+                <div className={authGlassCardUIClassName}>
                     {displayedError ? (
                         <>
                             <h1 className="text-2xl font-medium font-serif text-gray-950">

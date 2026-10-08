@@ -3,6 +3,8 @@ import {
     CLAUDE_MAIN_MODELS,
     GEMINI_MAIN_MODELS,
     OPENAI_MAIN_MODELS,
+    MISTRAL_MAIN_MODELS,
+    LEGACY_MODEL_IDS,
     CLAUDE_MID_MODELS,
     GEMINI_MID_MODELS,
     OPENAI_MID_MODELS,
@@ -94,14 +96,14 @@ describe("providerForModel", () => {
 
 describe("resolveModel", () => {
     it("returns a known model id unchanged", () => {
-        expect(resolveModel("claude-opus-5", DEFAULT_MAIN_MODEL)).toBe(
-            "claude-opus-5",
+        expect(resolveModel("claude-opus-5-5", DEFAULT_MAIN_MODEL)).toBe(
+            "claude-opus-5-5",
         );
-        expect(resolveModel("gemini-3.7-flash", DEFAULT_MAIN_MODEL)).toBe(
-            "gemini-3.7-flash",
+        expect(resolveModel("gemini-3.8-flash", DEFAULT_MAIN_MODEL)).toBe(
+            "gemini-3.8-flash",
         );
-        expect(resolveModel("gpt-5.6-sol", DEFAULT_MAIN_MODEL)).toBe(
-            "gpt-5.6-sol",
+        expect(resolveModel("gpt-6-astra", DEFAULT_MAIN_MODEL)).toBe(
+            "gpt-6-astra",
         );
     });
 
@@ -143,7 +145,7 @@ describe("resolveModel", () => {
             resolveModel("gemini-3.1-flash-lite-preview", DEFAULT_MAIN_MODEL),
         ).toBe("gemini-3.5-flash-lite");
         expect(resolveModel("gpt-5.4-lite", DEFAULT_MAIN_MODEL)).toBe(
-            "gpt-5.4-mini",
+            "gpt-6-luna",
         );
     });
 
@@ -293,5 +295,33 @@ describe("reasoningLevelsForModel", () => {
         expect(normalizeReasoningLevelForModel("gemini-3.7-flash", "max")).toBe(
             "xhigh",
         );
+    });
+});
+
+
+describe("catalog refresh", () => {
+    it("migrates every removed id to a current model without crossing providers", () => {
+        for (const [old, current] of Object.entries(LEGACY_MODEL_IDS)) {
+            expect(resolveModel(old, "missing")).toBe(current);
+            expect(resolveModel(current, "missing")).toBe(current);
+            expect(providerForModel(old)).toBe(providerForModel(current));
+        }
+    });
+    it("resolves every Mistral model as a direct provider", () => {
+        for (const model of MISTRAL_MAIN_MODELS) {
+            expect(resolveModel(model, "missing")).toBe(model);
+            expect(providerForModel(model)).toBe("mistral");
+        }
+        expect(providerForModel("openrouter/mistralai/mistral-large-4")).toBe("openrouter");
+    });
+    it.each(["gpt-6-astra", "gpt-6.1-sol", "claude-fable-5-1", "claude-opus-5-5"])("never disables required reasoning for %s", (model) => {
+        expect(reasoningLevelsForModel(model)).not.toContain("none");
+        expect(normalizeReasoningLevelForModel(model, "none")).toBe("low");
+    });
+    it("offers Mistral's two supported reasoning levels", () => {
+        expect(reasoningLevelsForModel("mistral-small-2603")).toEqual(["none", "high"]);
+        expect(normalizeReasoningLevelForModel("mistral-small-2603", "xhigh")).toBe("high");
+        expect(reasoningLevelsForModel("gpt-6-luna")).toContain("none");
+        expect(reasoningLevelsForModel("gpt-6.1-sol")).toContain("max");
     });
 });

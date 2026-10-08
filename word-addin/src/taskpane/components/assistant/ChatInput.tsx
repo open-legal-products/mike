@@ -541,7 +541,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 selectedWorkflow || attachedDocuments.length > 0 ? (
                   <>
                     {selectedWorkflow && (
-                      <div className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-blue-600 py-0.5 pl-2.5 pr-1 text-xs text-white shadow backdrop-blur-sm">
+                      <div className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-blue-600 py-0.5 pl-2.5 pr-1 text-xs text-white shadow">
                         <Library className="h-2.5 w-2.5 shrink-0" />
                         <span className="max-w-[140px] truncate">
                           {selectedWorkflow.title}
@@ -559,7 +559,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                     {attachedDocuments.map((document) => (
                       <div
                         key={document.id}
-                        className="inline-flex items-center gap-1 rounded-[10px] border border-white/70 bg-white py-0.5 pl-2 pr-1 text-xs text-gray-800 shadow-sm backdrop-blur-xl"
+                        className="inline-flex items-center gap-1 rounded-[10px] border border-white/70 bg-white py-0.5 pl-2 pr-1 text-xs text-gray-800 shadow-sm"
                       >
                         <FileTypeIcon
                           fileType={document.file_type ?? document.filename}

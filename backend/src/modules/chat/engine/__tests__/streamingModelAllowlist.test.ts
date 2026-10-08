@@ -82,7 +82,7 @@ describe("runLLMStream router-model allowlist", () => {
         });
         const mapped = toProviderStreamError(original, { label: "Gemini", modelId: "gemini-2.5-pro" });
         streamChatWithTools.mockRejectedValueOnce(mapped);
-        const error = await runStreamWithModel(routerModelsDb([]), "claude-fable-5").catch((err: unknown) => err);
+        const error = await runStreamWithModel(routerModelsDb([]), "claude-fable-5-1").catch((err: unknown) => err);
         expect(error).toBeInstanceOf(AssistantStreamError);
         if (!(error instanceof AssistantStreamError)) throw error;
         expect(error.cause).toBe(mapped);
@@ -181,10 +181,10 @@ describe("runLLMStream router-model allowlist", () => {
 
     it("does not consult the router selection for first-party models", async () => {
         const db = routerModelsDb([]);
-        await runStreamWithModel(db, "claude-fable-5");
+        await runStreamWithModel(db, "claude-fable-5-1");
 
         expect(streamChatWithTools).toHaveBeenCalledWith(
-            expect.objectContaining({ model: "claude-fable-5" }),
+            expect.objectContaining({ model: "claude-fable-5-1" }),
         );
         expect(tablesQueried(db)).not.toContain("user_router_models");
     });

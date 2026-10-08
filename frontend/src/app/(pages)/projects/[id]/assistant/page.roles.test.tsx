@@ -64,12 +64,17 @@ vi.mock("@/app/components/projects/ProjectAssistantTable", () => ({
         chats: rows,
         onDeleteChat,
         setSelectedChatIds,
+        onDeleteSelectedChats,
+        renderToolbar,
     }: {
         chats: Chat[];
         onDeleteChat: (chat: Chat) => void;
         setSelectedChatIds: (ids: string[]) => void;
+        onDeleteSelectedChats: () => void;
+        renderToolbar: (actions: ReactNode) => ReactNode;
     }) => (
         <div>
+            {renderToolbar(<button onClick={onDeleteSelectedChats}>Delete selected chats</button>)}
             {rows.map((chat) => (
                 <button key={chat.id} onClick={() => onDeleteChat(chat)}>
                     {`delete ${chat.id}`}
@@ -180,12 +185,7 @@ describe("project assistant chat deletion gating", () => {
         ]);
 
         fireEvent.click(screen.getByText("select all"));
-        // Radix opens on pointerdown, not click.
-        fireEvent.pointerDown(
-            await screen.findByText("Actions"),
-            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
-        );
-        fireEvent.click(await screen.findByText("Delete"));
+        fireEvent.click(screen.getByRole("button", { name: "Delete selected chats" }));
 
         // The bulk path asks first — nothing is sent until it is confirmed.
         expect(await screen.findByText("Delete 3 chats?")).toBeInTheDocument();

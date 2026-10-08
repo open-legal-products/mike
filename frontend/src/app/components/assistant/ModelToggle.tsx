@@ -17,23 +17,17 @@ export type ModelOption = ModelToggleOption;
 export type { ReasoningLevel };
 
 export const MODELS: ModelOption[] = [
-  { id: "claude-fable-5", label: "Claude Fable 5", group: "Anthropic" },
-  { id: "claude-opus-5", label: "Claude Opus 5", group: "Anthropic" },
-  { id: "claude-sonnet-5", label: "Claude Sonnet 5", group: "Anthropic" },
-  { id: "claude-opus-4-8", label: "Claude Opus 4.8", group: "Anthropic" },
-  { id: "claude-opus-4-7", label: "Claude Opus 4.7", group: "Anthropic" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", group: "Anthropic" },
-  { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", group: "Google" },
-  { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash", group: "Google" },
-  { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash", group: "Google" },
-  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", group: "Google" },
-  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash", group: "Google" },
-  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", group: "OpenAI" },
-  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", group: "OpenAI" },
-  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", group: "OpenAI" },
-  { id: "gpt-5.5", label: "GPT-5.5", group: "OpenAI" },
-  { id: "gpt-5.4", label: "GPT-5.4", group: "OpenAI" },
-  // Local (Ollama) models are appended dynamically — see useOllamaModels.
+  { id: "claude-fable-5-1", label: "Claude Fable 5.1", group: "Anthropic" },
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5", group: "Anthropic" },
+  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", group: "Anthropic" },
+  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", group: "Google" },
+  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro (Preview)", group: "Google" },
+  { id: "gpt-6-astra", label: "GPT-6 Astra", group: "OpenAI" },
+  { id: "gpt-6.1-sol", label: "GPT-6.1 Sol", group: "OpenAI" },
+  { id: "gpt-6-luna", label: "GPT-6 Luna", group: "OpenAI" },
+  { id: "mistral-large-4", label: "Mistral Large 4 (Preview)", group: "Mistral AI" },
+  { id: "mistral-medium-3-5", label: "Mistral Medium 3.5", group: "Mistral AI" },
+  { id: "mistral-small-2603", label: "Mistral Small 4", group: "Mistral AI" },
 ];
 
 export const SETTINGS_MODELS: ModelOption[] = [
@@ -44,12 +38,6 @@ export const SETTINGS_MODELS: ModelOption[] = [
     label: "Gemini 3.5 Flash-Lite",
     group: "Google",
   },
-  {
-    id: "gemini-3.1-flash-lite",
-    label: "Gemini 3.1 Flash-Lite",
-    group: "Google",
-  },
-  { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", group: "OpenAI" },
 ];
 
 for (const model of MODELS) model.source = "Direct";
@@ -64,8 +52,25 @@ export const ALLOWED_MODEL_IDS = new Set(MODELS.map((m) => m.id));
 // them on read keeps an old saved value working instead of orphaning it.
 // Kept in sync with backend/src/lib/llm/models.ts LEGACY_MODEL_IDS.
 export const LEGACY_MODEL_IDS: Record<string, string> = {
+  "claude-fable-5": "claude-fable-5-1",
+  "claude-opus-5": "claude-opus-5-5",
+  "claude-opus-4-8": "claude-opus-5-5",
+  "claude-opus-4-7": "claude-opus-5-5",
+  "claude-sonnet-5": "claude-sonnet-5-5",
+  "claude-sonnet-4-6": "claude-sonnet-5-5",
+  "gemini-3.7-flash": "gemini-3.8-flash",
+  "gemini-3.6-flash": "gemini-3.8-flash",
+  "gemini-3.5-flash": "gemini-3.8-flash",
+  "gemini-3-flash-preview": "gemini-3.8-flash",
+  "gemini-3.1-flash-lite": "gemini-3.5-flash-lite",
   "gemini-3.1-flash-lite-preview": "gemini-3.5-flash-lite",
-  "gpt-5.4-lite": "gpt-5.4-mini",
+  "gpt-5.6-sol": "gpt-6-astra",
+  "gpt-5.6-terra": "gpt-6.1-sol",
+  "gpt-5.6-luna": "gpt-6-luna",
+  "gpt-5.5": "gpt-6.1-sol",
+  "gpt-5.4": "gpt-6.1-sol",
+  "gpt-5.4-mini": "gpt-6-luna",
+  "gpt-5.4-lite": "gpt-6-luna",
 };
 
 export function canonicalModelId(id: string): string {

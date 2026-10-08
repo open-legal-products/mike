@@ -3,8 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 
-// Extracted from the "Load more" button block that was duplicated verbatim
-// between the Tabular Reviews page and ProjectReviewsTable. Renders nothing
+// The "Load more" row at the foot of a paginated table. Renders nothing
 // while loading, once there's nothing more to load, or once the list is
 // empty (an empty list shows its own empty state instead).
 export function TableLoadMoreRow({

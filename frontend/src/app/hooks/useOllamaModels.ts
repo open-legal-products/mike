@@ -1,17 +1,13 @@
 import { useEffect, useState } from "react";
 import { getOllamaModels, type OllamaModelOption } from "@/app/lib/mikeApi";
 
-// Module-level store so every picker shares one fetch and a refresh propagates
-// to all of them. Empty list if Ollama is unreachable — the app works without it.
+// Module-level store so every picker shares one fetch. Empty list if Ollama
+// is unreachable — the app works without it.
 let cache: OllamaModelOption[] | null = null;
 let inflight: Promise<OllamaModelOption[]> | null = null;
 const listeners = new Set<() => void>();
 
-function load(force = false): Promise<OllamaModelOption[]> {
-    if (force) {
-        cache = null;
-        inflight = null;
-    }
+function load(): Promise<OllamaModelOption[]> {
     if (cache) return Promise.resolve(cache);
     if (!inflight) {
         inflight = getOllamaModels()
@@ -26,11 +22,6 @@ function load(force = false): Promise<OllamaModelOption[]> {
             });
     }
     return inflight;
-}
-
-// Clear the cache and refetch; mounted pickers update automatically.
-export function refreshOllamaModels(): Promise<OllamaModelOption[]> {
-    return load(true);
 }
 
 export function useOllamaModels(): OllamaModelOption[] {

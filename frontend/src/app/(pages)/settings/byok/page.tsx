@@ -2,7 +2,7 @@
 
 import { ApiKeyField } from "@/app/components/settings/ApiKeyField";
 import { RouterSettingsSection } from "@/app/components/settings/RouterSettingsSection";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
@@ -22,6 +22,11 @@ const MODEL_API_KEY_FIELDS = [
     provider: "openai",
     label: "OpenAI API Key",
     placeholder: "sk-...",
+  },
+  {
+    provider: "mistral",
+    label: "Mistral AI API Key",
+    placeholder: "Enter your Mistral API key",
   },
   {
     provider: "openrouter",
@@ -52,7 +57,7 @@ export default function ByokPage() {
           relevant provider will automatically be routed through your API key
           and charged to your own API platform account.
         </SettingsDescription>
-        <SettingsCard>
+        <GlassCardUI>
           {MODEL_API_KEY_FIELDS.map((field) => (
             <div key={field.provider}>
               <ApiKeyField
@@ -66,7 +71,7 @@ export default function ByokPage() {
               />
             </div>
           ))}
-        </SettingsCard>
+        </GlassCardUI>
       </section>
 
       <RouterSettingsSection />

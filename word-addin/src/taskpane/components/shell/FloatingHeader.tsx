@@ -191,7 +191,7 @@ export function FloatingHeader({
       </div>
 
       {section === "chat" ? (
-        <HeaderButtonsUI className="pointer-events-auto relative z-10">
+        <HeaderButtonsUI className="pointer-events-auto relative z-10 backdrop-blur-2xl">
           {hasActiveChat && (
             <HeaderButtonUI
               iconOnly
@@ -210,7 +210,7 @@ export function FloatingHeader({
           />
         </HeaderButtonsUI>
       ) : workflowDetailOpen ? (
-        <HeaderButtonsUI className="pointer-events-auto relative z-10">
+        <HeaderButtonsUI className="pointer-events-auto relative z-10 backdrop-blur-2xl">
           <Dropdown
             open={workflowActionsOpen}
             onOpenChange={setWorkflowActionsOpen}
@@ -245,7 +245,7 @@ export function FloatingHeader({
           </LiquidTextButton>
         </HeaderButtonsUI>
       ) : section === "history" ? (
-        <HeaderButtonsUI className="pointer-events-auto relative z-10">
+        <HeaderButtonsUI className="pointer-events-auto relative z-10 backdrop-blur-2xl">
           <HeaderButtonUI
             iconOnly
             onClick={onNewChat}
@@ -256,7 +256,7 @@ export function FloatingHeader({
           </HeaderButtonUI>
         </HeaderButtonsUI>
       ) : section === "workflows" ? (
-        <HeaderButtonsUI className="pointer-events-auto relative z-10">
+        <HeaderButtonsUI className="pointer-events-auto relative z-10 backdrop-blur-2xl">
           <HeaderButtonUI
             iconOnly
             onClick={onNewWorkflow}
@@ -267,7 +267,7 @@ export function FloatingHeader({
           </HeaderButtonUI>
         </HeaderButtonsUI>
       ) : section === "actions" ? (
-        <HeaderButtonsUI className="pointer-events-auto relative z-10">
+        <HeaderButtonsUI className="pointer-events-auto relative z-10 backdrop-blur-2xl">
           <HeaderButtonUI
             iconOnly
             onClick={onNewQuickAction}

@@ -290,26 +290,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 <SelectionActionsMenu
                     open={actionsOpen}
                     onOpenChange={setActionsOpen}
-                    actions={[
-                        {
-                            label: "Download",
-                            onSelect: () => void selectionActions.onDownload(),
-                        },
-                        ...(selectionActions.hasDocumentsInFolders
-                            ? [
-                                  {
-                                      label: "Remove from subfolder",
-                                      onSelect: () =>
-                                          void selectionActions.onRemoveFromFolder(),
-                                  },
-                              ]
-                            : []),
-                        {
-                            label: "Delete",
-                            destructive: true,
-                            onSelect: () => void selectionActions.onDelete(),
-                        },
-                    ]}
+                    renderItems={selectionActions.renderMenuItems}
                 />
             )}
             {(!roleKnown || canDo("docs.organize")) && (

@@ -9,7 +9,7 @@ export function LiquidActionRow({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center gap-2 rounded-full border border-white/70 bg-app-surface px-1 py-1 shadow-[0_8px_24px_rgba(15,23,42,0.06)] backdrop-blur-2xl",
+        "flex shrink-0 items-center gap-2 rounded-full border border-white/70 bg-app-surface px-1 py-1 shadow-[0_8px_24px_rgba(15,23,42,0.06)]",
         className
       )}
       {...props}

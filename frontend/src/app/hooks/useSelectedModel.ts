@@ -48,7 +48,9 @@ function usableStoredModel(
     sources: SelectedModelSources,
 ): string | null {
     if (!value) return null;
-    const canonical = canonicalModelId(value);
+    const canonical = sources.configuredModelIds?.includes(value)
+        ? value
+        : canonicalModelId(value);
     if (!isAllowedModelId(canonical, sources.configuredModelIds)) return null;
 
     if (sources.configuredModelIds?.includes(canonical)) return canonical;
@@ -141,7 +143,9 @@ export function useSelectedModel(
 
     const setModel = useCallback(
         (id: string) => {
-            const canonical = canonicalModelId(id);
+            const canonical = configuredModelIds?.includes(id)
+                ? id
+                : canonicalModelId(id);
             const next = isAllowedModelId(canonical, configuredModelIds)
                 ? canonical
                 : "";

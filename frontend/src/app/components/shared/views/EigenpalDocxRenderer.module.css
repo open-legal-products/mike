@@ -131,7 +131,6 @@
     border: 1px solid var(--liquid-glass-border-float);
     border-radius: 1rem;
     box-shadow: var(--liquid-glass-shadow-float);
-    backdrop-filter: blur(40px);
 }
 
 /* Match Mike's dropdown rows, preserving font/style previews and swatch colors. */

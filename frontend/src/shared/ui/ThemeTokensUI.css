@@ -4,7 +4,6 @@
     --document-canvas-background: var(--color-gray-100, #f3f4f6);
     --document-tab-active-background: var(--app-surface, #fdfdfe);
     --document-tab-inactive-background: #f3f4f6;
-    --document-tab-strip-background: rgba(229, 231, 235, 0.8);
     --document-tab-active-text: #1f2937;
     --document-tab-inactive-text: #4b5563;
 
@@ -53,7 +52,6 @@
     --document-canvas-background: var(--app-surface-hover, #19212c);
     --document-tab-active-background: var(--app-surface, #131922);
     --document-tab-inactive-background: var(--app-surface-hover, #19212c);
-    --document-tab-strip-background: rgba(34, 44, 56, 0.84);
     --document-tab-active-text: #f3f4f6;
     --document-tab-inactive-text: #9ca3af;
 
@@ -88,10 +86,6 @@
     --spreadsheet-header-selected: rgba(71, 85, 105, 0.58);
     --spreadsheet-highlight-background: rgba(96, 165, 250, 0.24);
     --spreadsheet-highlight-outline: #60a5fa;
-}
-
-.document-tab-strip {
-    background-color: var(--document-tab-strip-background);
 }
 
 .document-tab-bar {
@@ -267,21 +261,6 @@
         to bottom,
         transparent,
         color-mix(in srgb, var(--app-background) 85%, transparent)
-    );
-}
-
-.assistant-chat-message-fade {
-    mask-image: linear-gradient(
-        to bottom,
-        black 0,
-        black calc(100% - 7rem),
-        transparent 100%
-    );
-    -webkit-mask-image: linear-gradient(
-        to bottom,
-        black 0,
-        black calc(100% - 7rem),
-        transparent 100%
     );
 }
 

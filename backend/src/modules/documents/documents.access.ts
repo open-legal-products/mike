@@ -60,6 +60,25 @@ export async function ensureDocumentAccess(
     };
 }
 
+/**
+ * May the caller replace or delete this document (or one of its versions)?
+ *
+ * Two conditions, both required. The operation is authorship-scoped
+ * (creatorScopedAllowed: the creator, or the container's Owners once the
+ * creator's account is gone; workflow documents are managed at the workflow
+ * share's edit tier instead). AND the caller must still hold content.edit
+ * where the document lives now: being the author is provenance, not standing,
+ * so a creator whose project role was reduced to Viewer has lost the right to
+ * destroy content in that project like every other Viewer.
+ */
+export function canManageDocument(
+    access: { isCreator: boolean; projectRole: ProjectRole },
+    doc: { user_id: string | null; workflow_id?: string | null },
+): boolean {
+    if (!can(access.projectRole, "content.edit")) return false;
+    return creatorScopedAllowed(access, doc.user_id) || !!doc.workflow_id;
+}
+
 // ---------------------------------------------------------------------------
 // List
 // ---------------------------------------------------------------------------
@@ -115,11 +134,10 @@ export async function getDocument(
     }[];
     await attachLatestVersionNumbers(db, docs);
     await attachActiveVersionPaths(db, docs);
-    const canReplace = creatorScopedAllowed(access, access.doc.user_id)
-        || (!!access.doc.workflow_id && can(access.projectRole, "content.edit"));
+    const canReplace = canManageDocument(access, access.doc);
     return { ok: true, doc: {
         ...docs[0],
-        can_edit: can(access.projectRole, "content.edit") && canReplace,
+        can_edit: canReplace,
         can_delete: canReplace,
     } };
 
@@ -152,10 +170,7 @@ export async function deleteDocument(
     if (!doc) return { ok: false };
     const access = await ensureDocAccess(doc as DocRow, userId, userEmail, db);
     if (!access.ok) return { ok: false };
-    if (
-        !creatorScopedAllowed(access, (doc as DocRow).user_id) &&
-        !((doc as DocRow).workflow_id && can(access.projectRole, "content.edit"))
-    )
+    if (!canManageDocument(access, doc as DocRow))
         return {
             ok: false,
             kind: "forbidden",

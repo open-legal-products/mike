@@ -1,4 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
+import { useState } from "react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkflowList } from "./WorkflowList";
@@ -37,6 +38,7 @@ vi.mock("@/app/hooks/useQueryParamTab", () => ({
 vi.mock("@/app/hooks/usePaginatedWorkflows", () => ({
   usePaginatedWorkflows: (options: unknown) => {
     usePaginatedWorkflowsSpy(options);
+    const [selectedWorkflowIds, setSelectedWorkflowIds] = useState<string[]>([]);
     return {
       dbWorkflows: workflowRows.current,
       setDbWorkflows: vi.fn(),
@@ -47,8 +49,8 @@ vi.mock("@/app/hooks/usePaginatedWorkflows", () => ({
       loadMoreError: null,
       loadMore: vi.fn(),
       retry: retryWorkflows,
-      selectedWorkflowIds: [],
-      setSelectedWorkflowIds: vi.fn(),
+      selectedWorkflowIds,
+      setSelectedWorkflowIds,
       selectAllMatching: vi.fn(),
       selectingAll: false,
     };
@@ -114,6 +116,25 @@ describe("WorkflowList pack toolbar", () => {
     );
   });
 
+  it.each([1, 2])("matches toolbar and right-click actions for %i selected workflows", async (count) => {
+    const user = userEvent.setup();
+    activeTab.current = "all";
+    workflowRows.current = [1, 2].map((index) => ({
+      id: `workflow-${index}`, user_id: "user-1", is_owner: true,
+      metadata: { title: `Workflow ${index}`, type: "assistant" },
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    }));
+    render(<WorkflowList />);
+    await user.click(screen.getByRole("checkbox", { name: "Select Workflow 1" }));
+    if (count === 2) await user.click(screen.getByRole("checkbox", { name: "Select Workflow 2" }));
+    await user.click(screen.getByRole("button", { name: "Actions" }));
+    const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    expect(items).toEqual(count === 1 ? ["View", "Edit", "Delete"] : ["Delete 2 workflows"]);
+    await user.keyboard("{Escape}");
+    fireEvent.contextMenu(screen.getByText("Workflow 1"), { clientX: 40, clientY: 40 });
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(items);
+  });
+
   it("replaces workflow tabs with Back on the left inside a pack", async () => {
     const user = userEvent.setup();
     render(<WorkflowList initialTab="addons" packKey="legal-starter" />);
@@ -143,7 +164,7 @@ describe("WorkflowList pack toolbar", () => {
     expect(setActiveTab).toHaveBeenCalledWith("addons", "/workflows/addons");
   });
 
-  it("uses a plain row import action and keeps the bulk import pill", async () => {
+  it("uses an icon row import action and keeps the bulk import pill", async () => {
     const user = userEvent.setup();
     listWorkflowAddons.mockResolvedValue([
       {
@@ -172,18 +193,78 @@ describe("WorkflowList pack toolbar", () => {
 
     const rowImport = await screen.findByRole("button", { name: "Import" });
     expect(rowImport).not.toHaveClass("bg-gray-950/88");
-    expect(rowImport.querySelector("svg")).toBeNull();
+    expect(rowImport).toHaveTextContent("");
+    expect(rowImport.querySelector("svg")).not.toBeNull();
 
     const checkboxes = screen.getAllByRole("checkbox");
     await user.click(checkboxes.at(-1)!);
 
     const importButtons = screen.getAllByRole("button", { name: "Import" });
     expect(importButtons).toHaveLength(2);
+    // The bulk action is the toolbar's standard pill, not a black one.
+    expect(
+      importButtons.filter(
+        (button) => button.dataset.slot === "tab-pill-button",
+      ),
+    ).toHaveLength(1);
     expect(
       importButtons.filter((button) =>
         button.classList.contains("bg-gray-950/88"),
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
+  });
+
+  it("offers View and Import from an add-on row's right-click menu", async () => {
+    const user = userEvent.setup();
+    listWorkflowAddons.mockResolvedValue([
+      {
+        id: "addon-1",
+        addon_key: "draft-from-precedent",
+        pack_key: null,
+        pack_title: null,
+        pack_description: null,
+        pack_version: null,
+        version: "1.0.0",
+        title: "Draft from precedent",
+        description: "Draft using a precedent.",
+        type: "assistant",
+        prompt_md: "Draft from the precedent.",
+        contributors: [],
+        language: "English",
+        practice: "General Transactions",
+        jurisdictions: ["General"],
+        active: true,
+        updated_at: "2026-08-28T00:00:00.000Z",
+        assets: [],
+      },
+    ]);
+    importWorkflowAddon.mockResolvedValue({
+      id: "workflow-1",
+      user_id: "user-1",
+      metadata: {
+        title: "Draft from precedent",
+        type: "assistant",
+        contributors: [],
+        language: "English",
+      },
+      is_system: false,
+    });
+
+    render(<WorkflowList initialTab="addons" />);
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: await screen.findByText("Draft from precedent"),
+    });
+
+    expect(
+      await screen.findByRole("menuitem", { name: "View" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Import" }));
+
+    expect(importWorkflowAddon).toHaveBeenCalledWith("addon-1");
+    expect(
+      await screen.findByRole("button", { name: "Imported" }),
+    ).toBeInTheDocument();
   });
 
   it("shows Imported with a green tick and stays on Add-ons", async () => {

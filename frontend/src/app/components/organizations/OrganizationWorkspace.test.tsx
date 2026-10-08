@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { OrganizationWorkspace } from "./OrganizationWorkspace";
@@ -188,6 +188,19 @@ describe("OrganizationWorkspace", () => {
     ).toBeInTheDocument();
   });
 
+  it.each([["Jane Lee"], ["William Chen"], ["Jane Lee", "William Chen"]])("matches the toolbar and right-click people menu for %j", async (...names) => {
+    const user = userEvent.setup();
+    render(<OrganizationWorkspace orgId="org-1" />);
+    await screen.findByText("Jane Lee");
+    for (const name of names) await user.click(screen.getByRole("checkbox", { name: `Select ${name}` }));
+    await user.click(screen.getByRole("button", { name: "Actions" }));
+    const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    expect(items).toEqual([names.length > 1 ? "Remove all selected" : names[0] === "William Chen" ? "Leave organization" : "Remove member"]);
+    await user.keyboard("{Escape}");
+    fireEvent.contextMenu(screen.getByText(names[0]), { clientX: 40, clientY: 40 });
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(items);
+  });
+
   it("reveals a toolbar action and removes selected people", async () => {
     const user = userEvent.setup();
     mocks.removeOrgMember.mockResolvedValue(undefined);
@@ -200,12 +213,12 @@ describe("OrganizationWorkspace", () => {
     await user.click(screen.getByRole("checkbox", { name: "Select Jane Lee" }));
     await user.click(screen.getByRole("button", { name: "Actions" }));
     const removeAction = screen.getByRole("menuitem", {
-      name: "Remove all selected",
+      name: "Remove member",
     });
-    expect(removeAction.querySelector("svg")).toHaveClass("text-red-600");
+    expect(removeAction).toHaveClass("text-red-600");
     await user.click(removeAction);
 
-    expect(screen.getByText("Remove selected people?")).toBeInTheDocument();
+    expect(screen.getByText("Remove member?")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() =>
       expect(mocks.removeOrgMember).toHaveBeenCalledWith("org-1", "u2"),
@@ -221,6 +234,7 @@ describe("OrganizationWorkspace", () => {
     await user.click(
       screen.getByRole("checkbox", { name: "Select William Chen" }),
     );
+    await user.click(screen.getByRole("checkbox", { name: "Select Jane Lee" }));
     await user.click(screen.getByRole("button", { name: "Actions" }));
     await user.click(
       screen.getByRole("menuitem", { name: "Remove all selected" }),

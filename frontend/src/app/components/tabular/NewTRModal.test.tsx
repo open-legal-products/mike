@@ -34,7 +34,7 @@ vi.mock("@/app/lib/mikeApi", async () => {
 vi.mock("@/app/contexts/UserProfileContext", () => ({
     useUserProfile: () => ({
         profile: {
-            tabularModel: "gemini-3-flash-preview",
+            tabularModel: "gemini-3.8-flash",
             apiKeys: {
                 claude: { configured: false, source: null },
                 gemini: { configured: true, source: "user" },
@@ -144,7 +144,7 @@ describe("NewTRModal", () => {
             undefined,
             undefined,
             "folder",
-            "gemini-3-flash-preview",
+            "gemini-3.8-flash",
             [],
         );
     });

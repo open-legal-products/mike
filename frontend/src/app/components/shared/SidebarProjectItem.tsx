@@ -240,7 +240,7 @@ export function SidebarProjectItem({
 
     const listId = `sidebar-project-items-${project.id}`;
     // Sub-rows are not indented: they share the project row's pl-2, 16px
-    // icon box and gap-3. A curved arrow fills the box under the folder
+    // icon box and gap-2. A curved arrow fills the box under the folder
     // icon, so each item's own icon starts where the project name does.
     const subRowArrow = (
         <span className="flex h-4 w-4 shrink-0 items-center justify-center">
@@ -267,7 +267,7 @@ export function SidebarProjectItem({
                     title={project.name}
                     // The row owns the hover fill, so it draws the ring.
                     data-focus-fill
-                    className="flex h-full min-w-0 flex-1 items-center gap-3 rounded-md py-1 pl-2 text-left outline-none"
+                    className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md py-1 pl-2 text-left outline-none"
                 >
                     <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                         <ProjectSvgIcon
@@ -308,7 +308,7 @@ export function SidebarProjectItem({
                             <li
                                 key={width}
                                 aria-hidden="true"
-                                className="flex h-7 items-center gap-3 pl-2 pr-2"
+                                className="flex h-7 items-center gap-2 pl-2 pr-2"
                             >
                                 {subRowArrow}
                                 <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -355,7 +355,7 @@ export function SidebarProjectItem({
                                                 itemActive ? "page" : undefined
                                             }
                                             className={cn(
-                                                "flex h-7 w-full items-center gap-3 rounded-md pl-2 pr-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                                                "flex h-7 w-full items-center gap-2 rounded-md pl-2 pr-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
                                                 itemActive
                                                     ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
                                                     : `text-gray-600 ${LIQUID_GLASS_HOVER_CLASS}`,

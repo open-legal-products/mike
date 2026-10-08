@@ -26,7 +26,7 @@ import {
     shouldConvertToPdf,
 } from "../../lib/documentTypes";
 import { deleteDocumentAndVersionFiles, type Db } from "./documents.shared";
-import { ensureDocumentAccess } from "./documents.access";
+import { canManageDocument, ensureDocumentAccess } from "./documents.access";
 
 // ---------------------------------------------------------------------------
 // Versions list
@@ -400,8 +400,11 @@ export async function deleteVersion(
         },
     );
     // Deleting a version is creator-scoped (with the admin heir once the
-    // creator's account is gone). Workflow documents are the exception: an
-    // editor on the workflow share manages its versions too.
+    // creator's account is gone) AND needs current content.edit, so a creator
+    // downgraded to Viewer cannot prune history (canManageDocument). Workflow
+    // documents are the exception: an editor on the workflow share manages
+    // its versions too. Versions carry no author column, so the scope is the
+    // document's creator, who manages that document's history.
     //
     // Same split as the whole-document DELETE: a caller with no verdict is
     // told the row does not exist, and a caller who can open the document but
@@ -413,10 +416,7 @@ export async function deleteVersion(
             kind: "doc_not_found",
             detail: "Document not found",
         };
-    if (
-        !creatorScopedAllowed(access, access.doc.user_id) &&
-        !(access.doc.workflow_id && can(access.projectRole, "content.edit"))
-    )
+    if (!canManageDocument(access, access.doc))
         return {
             ok: false,
             kind: "version_forbidden",
