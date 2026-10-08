@@ -27,7 +27,7 @@ import { Readable } from "node:stream";
 const GetObjectCommand = (S3Commands as any).GetObjectCommand;
 
 let cachedClient: S3Client | undefined;
-let cachedUploadSigningClient:
+let cachedBrowserSigningClient:
   | { endpoint: string; client: S3Client }
   | undefined;
 
@@ -57,11 +57,11 @@ function getClient(): S3Client {
   return cachedClient;
 }
 
-function getUploadSigningClient(): S3Client {
+function getBrowserSigningClient(): S3Client {
   const endpoint =
     process.env.R2_PUBLIC_ENDPOINT_URL || process.env.R2_ENDPOINT_URL!;
-  if (cachedUploadSigningClient?.endpoint === endpoint) {
-    return cachedUploadSigningClient.client;
+  if (cachedBrowserSigningClient?.endpoint === endpoint) {
+    return cachedBrowserSigningClient.client;
   }
   const client = new S3Client({
     region: "auto",
@@ -73,7 +73,7 @@ function getUploadSigningClient(): S3Client {
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
     },
   });
-  cachedUploadSigningClient = { endpoint, client };
+  cachedBrowserSigningClient = { endpoint, client };
   return client;
 }
 
@@ -161,7 +161,7 @@ export async function getSignedUploadUrl(
 ): Promise<string | null> {
   if (!storageEnabled) return null;
   try {
-    const client = getUploadSigningClient();
+    const client = getBrowserSigningClient();
     return await awsGetSignedUrl(
       client,
       new PutObjectCommand({
@@ -403,7 +403,7 @@ export async function getSignedUrl(
   if (!storageEnabled) return null;
   try {
     // The browser follows this URL, so sign it for the public endpoint.
-    const client = getUploadSigningClient();
+    const client = getBrowserSigningClient();
     // Override the response Content-Disposition so the browser uses this
     // filename on download, instead of the last path segment of the R2 key
     // (which includes the document UUID). The `download` attribute on <a>
