@@ -41,9 +41,12 @@ backend/scripts/migrate.sh up
 ```
 
 `up` stops at the first migration that fails; that file and everything after
-it stay pending, so fix the cause and run `up` again. Some migrations are not
-wrapped in a transaction, so a failure can leave part of one applied: restore
-the backup, or finish that file by hand and record it with `mark` (below).
+it stay pending, so fix the cause and run `up` again. Each file runs in a
+transaction with its ledger row, so a failed one leaves nothing behind. The
+exceptions are files that manage their own transaction or use `create index
+concurrently` (`up` prints "(no transaction)" for them): a failure there can
+leave part of the file applied, so restore the backup, or finish that file by
+hand and record it with `mark` (below).
 
 The runner holds a PostgreSQL advisory lock while it writes, so a second run
 against the same database (Compose's `db-init` and an operator, or two deploy

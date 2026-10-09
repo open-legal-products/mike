@@ -10,7 +10,9 @@
 #   status          List pending migrations. Exits 0 when the database is up
 #                   to date and 2 when files are pending.
 #   up              Apply every pending migration in filename order, stopping
-#                   at the first failure.
+#                   at the first failure. Each file runs in one transaction
+#                   with its ledger row, unless it cannot (see
+#                   runs_in_transaction below).
 #   baseline FILE   Record FILE and every migration that sorts before it as
 #                   applied, without running them. Run once to adopt the
 #                   ledger on a deployment upgraded by hand: FILE is the last
@@ -42,7 +44,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-$script_dir/../migrations}"
 
 usage() {
-  sed -n '6,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '6,26p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -179,6 +181,21 @@ record_unrun_sql() {
   values $values on conflict (filename) do nothing;"
 }
 
+# Whether migration file $1 runs inside one transaction with its ledger row,
+# so a failure leaves nothing half applied. Files opt out when they cannot:
+# with a line reading exactly `-- migrate:no-transaction`, by managing their
+# own transaction (a begin/commit/rollback/start transaction statement on a
+# line of its own), or by using CONCURRENTLY, which PostgreSQL refuses inside
+# a transaction block. The last two are detected so that shipped migrations,
+# which must not be edited, need no marker.
+runs_in_transaction() {
+  ! grep -Eiq \
+    -e '^-- migrate:no-transaction[[:space:]]*$' \
+    -e '^[[:space:]]*(begin|commit|rollback|start[[:space:]]+transaction)([[:space:]]+(transaction|work))?[[:space:]]*;' \
+    -e 'concurrently' \
+    "$1"
+}
+
 cmd_status() {
   require_ledger
   load_state
@@ -199,7 +216,7 @@ cmd_up() {
 
   # Only rows this script applied (they carry a checksum) count: a baseline
   # or mark legitimately records files ahead of ones still pending.
-  local newest_applied name path
+  local newest_applied name path begin commit note
   newest_applied="$(awk -F'|' '$2 != "" { name = $1 } END { print name }' "$tmp/ledger")"
   if [ -n "$newest_applied" ]; then
     LC_ALL=C awk -v newest="$newest_applied" '$0 < newest' "$tmp/pending" |
@@ -211,21 +228,27 @@ cmd_up() {
   # The pending list was read before taking the lock, so each file is checked
   # against the ledger again under it: a run that waited skips whatever the
   # run it waited for applied. ON_ERROR_STOP ends the session at the first
-  # failure, releasing the lock. Files are not wrapped in a transaction,
-  # because some manage their own or use CREATE INDEX CONCURRENTLY; the
-  # ledger row is still written only if every statement succeeded. RESET ALL
-  # gives each file the session settings a fresh connection would have.
+  # failure, rolling back that file's transaction (if it has one) and
+  # releasing the lock. RESET ALL gives each file the session settings a
+  # fresh connection would have.
   while read -r name; do
     path="$MIGRATIONS_DIR/$name"
+    if runs_in_transaction "$path"; then
+      begin="begin;" commit="commit;" note=""
+    else
+      begin="" commit="" note=" (no transaction)"
+    fi
     cat <<SQL
 select exists (select 1 from public.schema_migrations where filename = '$name') as migrate_done \gset
 \if :migrate_done
 \echo 'Skipping $name: another run applied it'
 \else
-\echo 'Applying $name'
+\echo 'Applying $name$note'
+$begin
 \i $name
 insert into public.schema_migrations (filename, checksum)
   values ('$name', '$(sha256 "$path")');
+$commit
 reset all;
 \endif
 SQL
