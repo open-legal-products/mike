@@ -88,7 +88,7 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<UserFacingError | null>(null);
     const [retryingSession, setRetryingSession] = useState(false);
-    const [loginMode, setLoginMode] = useState<"account" | "guest">("account");
+    const [loginMode, setLoginMode] = useState<"account" | "guest" | "session" | null>(null);
     const [guest, setGuest] = useState<GuestCredentials | null>(null);
 
     useEffect(() => {
@@ -133,6 +133,7 @@ export default function LoginPage() {
     };
 
     const handleRetrySession = async () => {
+        setLoginMode("session");
         setRetryingSession(true);
         setError(null);
         try {
@@ -295,7 +296,10 @@ export default function LoginPage() {
                                 <>
                                     <AuthDividerUI />
                                     <GoogleAuthButton
-                                        onError={setError}
+                                        onError={(nextError) => {
+                                            setLoginMode(null);
+                                            setError(nextError);
+                                        }}
                                         disabled={loading}
                                         onLoadingChange={setLoading}
                                     />
@@ -304,48 +308,51 @@ export default function LoginPage() {
                             )}
                         </form>
                     </details>
-                        {(error || authError) && (
-                            <div
-                                role="alert"
-                                className="text-red-600 text-sm bg-red-50 p-3 rounded"
-                            >
-                                {error ? error.message : authError}
-                                {!error && authError && (
-                                    <button
-                                        type="button"
-                                        onClick={() => void handleRetrySession()}
-                                        disabled={retryingSession}
-                                        className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
-                                    >
-                                        {retryingSession
-                                            ? "Retrying..."
-                                            : "Retry"}
-                                    </button>
-                                )}
-                                {error?.retryable && (
-                                    <button
-                                        type="button"
-                                        onClick={() => void (loginMode === "guest" ? handleGuestLogin() : submitLogin())}
-                                        disabled={loading}
-                                        className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
-                                    >
-                                        Retry
-                                    </button>
-                                )}
-                                {error?.supportable && (
-                                    <a
-                                        href={supportMailtoFor(
-                                            error,
-                                            "Failed to log in.",
-                                        )}
-                                        className="ml-2 underline underline-offset-2"
-                                    >
-                                        Contact support
-                                    </a>
-                                )}
-                            </div>
-                        )}
-
+                    {(error || authError) && (
+                        <div
+                            role="alert"
+                            className="text-red-600 text-sm bg-red-50 p-3 rounded"
+                        >
+                            {error ? error.message : authError}
+                            {!error && authError && (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleRetrySession()}
+                                    disabled={retryingSession}
+                                    className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                                >
+                                    {retryingSession
+                                        ? "Retrying..."
+                                        : "Retry"}
+                                </button>
+                            )}
+                            {error?.retryable && loginMode && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (loginMode === "session") void handleRetrySession();
+                                        else if (loginMode === "guest") void handleGuestLogin();
+                                        else void submitLogin();
+                                    }}
+                                    disabled={loading || retryingSession}
+                                    className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                                >
+                                    Retry
+                                </button>
+                            )}
+                            {error?.supportable && (
+                                <a
+                                    href={supportMailtoFor(
+                                        error,
+                                        "Failed to log in.",
+                                    )}
+                                    className="ml-2 underline underline-offset-2"
+                                >
+                                    Contact support
+                                </a>
+                            )}
+                        </div>
+                    )}
                 </div>
                 <div className="text-center text-sm text-gray-500">
                     Don&apos;t have an account?{" "}

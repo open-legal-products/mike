@@ -9,6 +9,8 @@ const {
     signup,
     startGoogleOAuth,
     refreshSession,
+    retrySession,
+    authState,
     replace,
     push,
     getUserProfile,
@@ -18,6 +20,8 @@ const {
     signup: vi.fn(),
     startGoogleOAuth: vi.fn(),
     refreshSession: vi.fn(),
+    retrySession: vi.fn(),
+    authState: { error: null as string | null },
     replace: vi.fn(),
     push: vi.fn(),
     getUserProfile: vi.fn(),
@@ -45,6 +49,8 @@ vi.mock("@/app/contexts/AuthContext", () => ({
         isAuthenticated: false,
         authLoading: false,
         refreshSession,
+        retrySession,
+        authError: authState.error,
     }),
 }));
 
@@ -54,6 +60,8 @@ vi.mock("@/app/components/site-logo", () => ({
 
 describe("LoginPage", () => {
     beforeEach(() => {
+        authState.error = null;
+        retrySession.mockReset();
         login.mockReset();
         signup.mockReset();
         startGoogleOAuth.mockReset();
@@ -250,7 +258,24 @@ describe("LoginPage", () => {
         expect(signup).not.toHaveBeenCalled();
         expect(push).not.toHaveBeenCalled();
         expect(screen.getByRole("alert")).toHaveTextContent(
-            "Unable to continue as guest",
+            "Mike couldn't reach the server",
         );
+        login.mockResolvedValueOnce({ user: { id: "guest-1" } });
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(login).toHaveBeenLastCalledWith("guest@mike.local", "secret");
+        expect(signup).not.toHaveBeenCalled();
+        expect(push).toHaveBeenCalledWith("/assistant");
     });
+});
+
+
+it("retries a failed session refresh without submitting the empty login form", async () => {
+    authState.error = "Unable to check your session.";
+    retrySession.mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce(null);
+    render(<LoginPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Mike couldn't reach the server");
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retrySession).toHaveBeenCalledTimes(2);
+    expect(login).not.toHaveBeenCalled();
 });
