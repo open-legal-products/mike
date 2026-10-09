@@ -75,7 +75,11 @@ import {
     renameLibraryDocument,
     deleteDocument,
 } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    notifyError,
+    userFacingApiError,
+    UserVisibleError,
+} from "@/app/lib/userFacingError";
 
 interface Props {
     chatId?: string | null;
@@ -386,13 +390,12 @@ export function ChatView({
                 });
                 return;
             }
-            setActionError({
-                title: "Document unavailable",
-                message:
-                    status === "denied"
-                        ? "This document is no longer available."
-                        : "This document could not be opened. Please try again.",
-            });
+            notifyError(new UserVisibleError(
+                status === "denied"
+                    ? "This document is no longer available."
+                    : "This document could not be opened. Please try again.",
+                { kind: status === "denied" ? "forbidden" : "unknown", retryable: false },
+            ), { action: "open this document" });
         },
         [activeChat?.project_id, activeChatRole],
     );
@@ -940,12 +943,9 @@ export function ChatView({
             setRenameOpen(false);
         } catch (error) {
             setRenameOpen(false);
-            setActionError({
-                title: "Chat not renamed",
-                message: userFacingApiError(
-                    error,
-                    "The chat could not be renamed. Please try again.",
-                ),
+            notifyError(error, {
+                action: "rename this chat",
+                fallback: "The chat could not be renamed. Try again.",
             });
         } finally {
             setRenaming(false);
@@ -965,12 +965,10 @@ export function ChatView({
             await deleteChat(activeChat.id);
             router.push("/assistant");
         } catch (error) {
-            setActionError({
-                title: "Chat not deleted",
-                message: userFacingApiError(
-                    error,
-                    "The chat could not be deleted. Please try again.",
-                ),
+            notifyError(error, {
+                action: "delete this chat",
+                fallback: "The chat could not be deleted. Try again.",
+                onRetry: () => void handleDeleteChat(),
             });
         }
     };
