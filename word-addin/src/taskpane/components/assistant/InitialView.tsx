@@ -29,6 +29,8 @@ export function InitialView({
         if (!cancelled) setName(displayName || "there");
       })
       .catch(() => {
+        // Only the greeting's name is at stake; "Hi there" is a complete
+        // greeting, so a failed profile read needs no interruption.
         if (!cancelled) setName("there");
       });
     return () => {

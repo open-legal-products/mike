@@ -7,22 +7,8 @@ import {
   uploadWorkflowAssets,
   uploadWorkflowAssetVersion,
 } from "../../api/mikeApi";
-
-/**
- * Open a URL in the system browser. Office's openBrowserWindow is the
- * sanctioned way out of the task-pane webview — window.open is blocked in
- * some hosts (notably desktop Word), where it silently does nothing. Fall
- * back to window.open when the API isn't available (hermetic e2e bundle,
- * older hosts).
- */
-function openExternalUrl(url: string): void {
-  const ui = typeof Office !== "undefined" ? Office.context?.ui : undefined;
-  if (ui && typeof ui.openBrowserWindow === "function") {
-    ui.openBrowserWindow(url);
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-}
+import { userMessage } from "../../lib/notify";
+import { openExternalUrl } from "../../lib/openExternalUrl";
 
 export function WorkflowAssets({
   workflowId,
@@ -57,7 +43,9 @@ export function WorkflowAssets({
         if (!cancelled) {
           setFiles([]);
           setError(
-            reason instanceof Error ? reason.message : "Could not load assets",
+            userMessage(reason, {
+              fallback: "Mike couldn't load this workflow's files. Try again.",
+            }),
           );
         }
       });
@@ -77,7 +65,11 @@ export function WorkflowAssets({
           : null,
       );
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Upload failed");
+      setError(
+        userMessage(reason, {
+          fallback: "Mike couldn't upload that file. Try again.",
+        }),
+      );
     } finally {
       setBusy(false);
     }
@@ -92,7 +84,9 @@ export function WorkflowAssets({
       setError(null);
     } catch (reason) {
       setError(
-        reason instanceof Error ? reason.message : "Version upload failed",
+        userMessage(reason, {
+          fallback: "Mike couldn't upload the new version. Try again.",
+        }),
       );
     } finally {
       versionUploadTarget.current = null;
@@ -160,9 +154,9 @@ export function WorkflowAssets({
                     .then(({ url }) => openExternalUrl(url))
                     .catch((reason: unknown) =>
                       setError(
-                        reason instanceof Error
-                          ? reason.message
-                          : "Download failed",
+                        userMessage(reason, {
+                          fallback: "Mike couldn't open that file. Try again.",
+                        }),
                       ),
                     )
                 }
@@ -189,9 +183,10 @@ export function WorkflowAssets({
                         .then(reload)
                         .catch((reason: unknown) =>
                           setError(
-                            reason instanceof Error
-                              ? reason.message
-                              : "Delete failed",
+                            userMessage(reason, {
+                              fallback:
+                                "Mike couldn't delete that file. Try again.",
+                            }),
                           ),
                         )
                     }

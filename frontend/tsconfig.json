@@ -40,5 +40,12 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    // Imports the add-in's chat hook, whose dependencies use Office.js
+    // globals typed by word-addin's @types/office-js, which this package
+    // doesn't install. Vitest still runs it (Vitest doesn't typecheck), and
+    // the hook itself is typechecked by `npm run typecheck --prefix word-addin`.
+    "src/wordAddin/useWordAssistantChat.retry.test.ts"
+  ]
 }

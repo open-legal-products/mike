@@ -427,8 +427,15 @@ test("surfaces an error when the workflow list fails to load", async ({
   await page.getByRole("button", { name: "Open menu" }).click();
   await page.getByRole("menuitem", { name: "Workflows" }).click();
 
-  // listWorkflows() throws a MikeApiError ("API error: 500"), shown verbatim.
-  await expect(page.getByText(/API error: 500/)).toBeVisible();
+  // listWorkflows() throws a MikeApiError; the 500 body ("boom") is never
+  // shown, only the classified sentence, and a toast carries the Retry.
+  await expect(
+    page.getByText("Something went wrong on our side. Try again.").first(),
+  ).toBeVisible();
+  await expect(page.getByText(/boom/)).toHaveCount(0);
+  await expect(page.getByTestId("toast")).toContainText(
+    "Couldn't load your workflows",
+  );
   await expect(
     page.getByRole("button", { name: "Run workflow on document" }),
   ).toHaveCount(0);

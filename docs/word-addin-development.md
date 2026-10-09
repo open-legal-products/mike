@@ -187,6 +187,22 @@ settings. That identifier travels with copied files, although server access is
 still scoped to the signed-in Mike account. A same-account **Save As** copy can
 therefore initially share the source document's chat history.
 
+## Errors and support
+
+The task pane never renders a raw `error.message`. `describeError` (shared
+with the web app, `frontend/src/shared/lib/userError.ts`) classifies a thrown
+value once, and `word-addin/src/taskpane/lib/notify.ts` shows the result as a
+toast with an honest "Retry". Transport failures go through
+`word-addin/src/taskpane/lib/networkError.ts`, which calls the shared
+`networkMessage(origin)` so both clients say the same sentence; the add-in
+passes the API origin, because a self-hoster whose own container is down is
+not helped by "check your connection". Failures a user cannot fix offer a
+support hand-off carrying the request id, code, status, page and time —
+enough for support to find the request in the logs without the user quoting
+anything from a document. `frontend/src/wordAddin/errorReporting.test.tsx`
+exercises these add-in modules through the same `@mike/*` aliases webpack
+resolves, so a change on either side of the contract fails that suite.
+
 ## Automated tests
 
 The Playwright suite uses a mocked Office.js host and stubbed backend, so it

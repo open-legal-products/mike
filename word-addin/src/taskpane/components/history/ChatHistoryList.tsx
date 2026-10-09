@@ -10,6 +10,7 @@ import {
 } from "../../hooks/usePaginatedChats";
 import { cn } from "../../../shared/lib/utils";
 import type { WordChatOpenHandler } from "../../lib/wordChatTypes";
+import { userMessage } from "../../lib/notify";
 
 interface ChatHistoryListProps {
   pageSize: number;
@@ -170,7 +171,9 @@ export function ChatHistoryListView({
     } catch (reason) {
       if (!requestIsCurrent()) return;
       setOpenError(
-        reason instanceof Error ? reason.message : "Failed to open this chat.",
+        userMessage(reason, {
+          fallback: "Failed to open this chat.",
+        }),
       );
     } finally {
       if (requestIsCurrent()) setLoadingChatId(null);
