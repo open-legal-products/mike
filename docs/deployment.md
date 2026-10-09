@@ -45,6 +45,11 @@ it stay pending, so fix the cause and run `up` again. Some migrations are not
 wrapped in a transaction, so a failure can leave part of one applied: restore
 the backup, or finish that file by hand and record it with `mark` (below).
 
+The runner holds a PostgreSQL advisory lock while it writes, so a second run
+against the same database (Compose's `db-init` and an operator, or two deploy
+jobs) waits for the first, then skips what it applied. The lock needs a
+session connection, which is why the transaction pooler will not do.
+
 `status` and `up` also warn about two kinds of mismatch. A file that "has
 changed since it was applied" was edited after you ran it. A file "recorded as
 applied but not in backend/migrations" was usually renamed after you ran it,

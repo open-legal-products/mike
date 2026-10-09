@@ -24,13 +24,19 @@
 #   MIGRATIONS_DIR  Defaults to backend/migrations beside this script.
 #
 # Fresh installs do not need this script: schema.sql creates the ledger with
-# every migration it already contains recorded. Do not run two copies of the
-# script against one database at the same time. Needs bash 3.2+ and psql.
+# every migration it already contains recorded. Runs against one database
+# queue on an advisory lock, so a second `up` waits for the first and then
+# skips what it applied. Needs bash 3.2+ and psql 10+.
 set -euo pipefail
 
 # The migration that creates the ledger. `baseline` applies it (idempotent)
 # when the table does not exist yet.
 LEDGER_MIGRATION="20261009_03_schema_migrations.sql"
+
+# Session-level advisory lock taken by every command that writes the ledger.
+# It is released when psql disconnects, including when a migration fails or
+# the script is killed. Needs a session (not a transaction-pooler) connection.
+LOCK_KEY="hashtextextended('mike/backend/scripts/migrate.sh', 0)"
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-$script_dir/../migrations}"
@@ -130,13 +136,47 @@ check_file_arg() {
   list_files | grep -Fqx "$1" || die "no migration named $1 in $MIGRATIONS_DIR"
 }
 
-# Inserts the filenames listed in $1 (one per line) without a checksum.
-record_unrun() {
+# Prints psql commands that take the migration lock, or, when another run
+# holds it, create $tmp/busy and quit. Waiting is done by retrying from bash
+# instead of in pg_advisory_lock(): a session blocked there holds a snapshot,
+# and CREATE INDEX CONCURRENTLY in the run holding the lock waits for every
+# snapshot in the database to finish, so the two would deadlock.
+lock_sql() {
+  cat <<SQL
+select pg_try_advisory_lock($LOCK_KEY) as migrate_locked \gset
+\if :migrate_locked
+\else
+\! touch '$tmp/busy'
+\q
+\endif
+SQL
+}
+
+# Runs psql commands from stdin in one session that holds the lock, from the
+# migrations directory so \i takes a bare (character-checked) filename.
+run_locked() {
+  { lock_sql; cat; } > "$tmp/script.sql"
+  local said_waiting=false
+  while :; do
+    rm -f "$tmp/busy"
+    (cd "$MIGRATIONS_DIR" && psql_db -f "$tmp/script.sql") || return 1
+    [ -e "$tmp/busy" ] || return 0
+    if ! $said_waiting; then
+      echo "migrate: another migrate.sh run holds the lock on this database; waiting for it"
+      said_waiting=true
+    fi
+    sleep 2
+  done
+}
+
+# Prints an insert recording the filenames listed in $1 (one per line)
+# without a checksum.
+record_unrun_sql() {
   local values
   values="$(sed "s/.*/('&')/" "$1" | paste -sd, -)"
   [ -n "$values" ] || return 0
-  psql_db -c "insert into public.schema_migrations (filename)
-    values $values on conflict (filename) do nothing"
+  echo "insert into public.schema_migrations (filename)
+  values $values on conflict (filename) do nothing;"
 }
 
 cmd_status() {
@@ -168,35 +208,50 @@ cmd_up() {
       done
   fi
 
+  # The pending list was read before taking the lock, so each file is checked
+  # against the ledger again under it: a run that waited skips whatever the
+  # run it waited for applied. ON_ERROR_STOP ends the session at the first
+  # failure, releasing the lock. Files are not wrapped in a transaction,
+  # because some manage their own or use CREATE INDEX CONCURRENTLY; the
+  # ledger row is still written only if every statement succeeded. RESET ALL
+  # gives each file the session settings a fresh connection would have.
   while read -r name; do
     path="$MIGRATIONS_DIR/$name"
-    echo "Applying $name"
-    # One session: the ledger row is written only if every statement in the
-    # file succeeded (ON_ERROR_STOP aborts the script before the insert). Not
-    # one transaction, because some migrations manage their own or use
-    # CREATE INDEX CONCURRENTLY. psql runs from the migrations directory so
-    # \i takes the bare (character-checked) filename and needs no quoting.
-    if ! (cd "$MIGRATIONS_DIR" && psql_db -v name="$name" -v checksum="$(sha256 "$path")") <<'SQL'
-\i :name
+    cat <<SQL
+select exists (select 1 from public.schema_migrations where filename = '$name') as migrate_done \gset
+\if :migrate_done
+\echo 'Skipping $name: another run applied it'
+\else
+\echo 'Applying $name'
+\i $name
 insert into public.schema_migrations (filename, checksum)
-  values (:'name', :'checksum')
-  on conflict (filename) do nothing;
+  values ('$name', '$(sha256 "$path")');
+reset all;
+\endif
 SQL
-    then
-      die "$name failed; it and every later migration are still pending"
-    fi
-  done < "$tmp/pending"
-  echo "Applied $(wc -l < "$tmp/pending" | tr -d ' ') migration(s)."
+  done < "$tmp/pending" > "$tmp/up.sql"
+
+  if ! run_locked < "$tmp/up.sql"; then
+    list_files > "$tmp/files"
+    query -c "select filename from public.schema_migrations" > "$tmp/applied" ||
+      die "the database connection failed; run status to see what is still pending"
+    name="$(grep -Fvx -f "$tmp/applied" "$tmp/files" | head -n 1 || true)"
+    die "${name:-a migration} failed; it and every later migration are still pending"
+  fi
+  echo "Up to date."
 }
 
 cmd_baseline() {
   check_file_arg "${1:-}"
-  if ! ledger_exists; then
-    echo "Creating public.schema_migrations"
-    psql_db -f "$MIGRATIONS_DIR/$LEDGER_MIGRATION"
-  fi
   list_files | LC_ALL=C awk -v last="$1" '$0 <= last' > "$tmp/baseline"
-  record_unrun "$tmp/baseline"
+  {
+    echo "select to_regclass('public.schema_migrations') is null as migrate_no_ledger \gset"
+    echo "\if :migrate_no_ledger"
+    echo "\echo 'Creating public.schema_migrations'"
+    echo "\i $LEDGER_MIGRATION"
+    echo "\endif"
+    record_unrun_sql "$tmp/baseline"
+  } | run_locked
   echo "Recorded $(wc -l < "$tmp/baseline" | tr -d ' ') migration(s) up to $1 as applied (not run)."
 }
 
@@ -204,22 +259,29 @@ cmd_mark() {
   check_file_arg "${1:-}"
   require_ledger
   echo "$1" > "$tmp/mark"
-  record_unrun "$tmp/mark"
+  record_unrun_sql "$tmp/mark" | run_locked
   echo "Recorded $1 as applied (not run)."
 }
 
-case "${1:-}" in
-  -h | --help | help) usage; exit 0 ;;
-  status | up | baseline | mark) ;;
-  "") usage >&2; exit 1 ;;
-  *) die "unknown command: $1 (see --help)" ;;
-esac
+main() {
+  case "${1:-}" in
+    -h | --help | help) usage; exit 0 ;;
+    status | up | baseline | mark) ;;
+    "") usage >&2; exit 1 ;;
+    *) die "unknown command: $1 (see --help)" ;;
+  esac
 
-[ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is not set"
-[ -d "$MIGRATIONS_DIR" ] || die "no migrations directory at $MIGRATIONS_DIR"
-MIGRATIONS_DIR="$(cd "$MIGRATIONS_DIR" && pwd)"
-command -v psql >/dev/null 2>&1 || die "psql is not installed"
+  [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is not set"
+  [ -d "$MIGRATIONS_DIR" ] || die "no migrations directory at $MIGRATIONS_DIR"
+  MIGRATIONS_DIR="$(cd "$MIGRATIONS_DIR" && pwd)"
+  command -v psql >/dev/null 2>&1 || die "psql is not installed"
 
-command="$1"
-shift
-"cmd_$command" "$@"
+  local command="$1"
+  shift
+  "cmd_$command" "$@"
+}
+
+# Sourcing the script (as its tests do) defines the functions without running.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
