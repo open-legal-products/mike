@@ -67,6 +67,13 @@ export type StreamCallbacks = {
 export type UserApiKeys = {
     /** Explicitly disabled providers must never fall back to deployment keys. */
     disabledProviders?: readonly string[];
+    /**
+     * Providers where the user saved a key whose setting (region, endpoint,
+     * location, base URL) no longer validates. The user's key is unusable,
+     * and — like a disabled provider — it must never fall back to the
+     * deployment's key either: the user chose their own account.
+     */
+    unusableProviders?: readonly string[];
     claude?: string | null;
     gemini?: string | null;
     openai?: string | null;

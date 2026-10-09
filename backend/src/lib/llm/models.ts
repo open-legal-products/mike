@@ -205,6 +205,107 @@ export const LEGACY_MODEL_IDS: Record<string, string> = {
     "gpt-5.4-lite": "gpt-6-luna",
 };
 
+// ---------------------------------------------------------------------------
+// Account-specific model ids
+// ---------------------------------------------------------------------------
+/**
+ * Providers whose model ids are account-specific (no published catalog), so
+ * Mike accepts whatever id the user typed — subject to the grammar below.
+ */
+export const ACCOUNT_MODEL_PREFIXES = [
+    "bedrock",
+    "azure",
+    "azure-foundry",
+    "vertex",
+    "xai",
+    "custom",
+] as const;
+export type AccountModelPrefix = (typeof ACCOUNT_MODEL_PREFIXES)[number];
+
+/** Each account-specific provider as the settings UI names it. */
+export const ACCOUNT_MODEL_LABELS: Record<AccountModelPrefix, string> = {
+    bedrock: "Amazon Bedrock",
+    azure: "Azure OpenAI",
+    "azure-foundry": "Azure AI Foundry",
+    vertex: "Google Vertex AI",
+    xai: "xAI",
+    custom: "OpenAI-compatible endpoint",
+};
+
+const MAX_ACCOUNT_MODEL_ID_LENGTH = 200;
+// One "/"-separated segment of an account-specific id. Letters, digits and
+// the punctuation real ids use: "." (us.anthropic.claude-…), ":" (ARNs,
+// "llama3.1:8b"), "@" (Vertex version pins), "_", "-" and "+". Everything
+// that changes how a URL is parsed — "?", "#", "%", backslash, whitespace and
+// control characters — is outside the set.
+const ACCOUNT_MODEL_ID_SEGMENT_RE = /^[A-Za-z0-9._:@+-]+$/;
+
+/**
+ * True when `id` (without the app-level prefix) is a well-formed model id for
+ * an account-specific provider. Some SDKs interpolate the id into the request
+ * URL unencoded (@ai-sdk/google-vertex builds
+ * `…/publishers/anthropic/models/${id}:rawPredict`), so an id is a path: it
+ * must not contain empty, "." or ".." segments or URL metacharacters.
+ *
+ * Vertex is stricter still: Claude and Gemini ids are a single path segment,
+ * and partner models are exactly "publisher/model".
+ */
+export function isSafeAccountModelId(
+    prefix: AccountModelPrefix,
+    id: string,
+): boolean {
+    if (!id || id.length > MAX_ACCOUNT_MODEL_ID_LENGTH) return false;
+    // Protocol prefixes are removed before the id reaches the provider.
+    // Validate that resulting path too, so "anthropic:.." cannot hide dots.
+    const explicitProtocol =
+        prefix === "vertex" || prefix === "azure-foundry"
+            ? /^(anthropic|openai|gemini):/.exec(id)
+            : null;
+    const providerId = explicitProtocol
+        ? id.slice(explicitProtocol[0].length)
+        : id;
+    const segments = providerId.split("/");
+    if (
+        segments.some(
+            (segment) =>
+                !ACCOUNT_MODEL_ID_SEGMENT_RE.test(segment) ||
+                /^\.+$/.test(segment),
+        )
+    ) {
+        return false;
+    }
+    if (prefix === "vertex") {
+        if (segments.length > 2) return false;
+        if (
+            segments.length === 2 &&
+            (explicitProtocol
+                ? explicitProtocol[1] !== "openai"
+                : providerId.startsWith("claude"))
+        ) return false;
+    }
+    return true;
+}
+
+/** The account-specific prefix of an app-level model id, if it has one. */
+export function accountModelPrefix(model: string): AccountModelPrefix | null {
+    // "azure-foundry/" does not start with "azure/": the trailing slash keeps
+    // the prefixes from shadowing each other.
+    return (
+        ACCOUNT_MODEL_PREFIXES.find((prefix) =>
+            model.startsWith(`${prefix}/`),
+        ) ?? null
+    );
+}
+
+/** isSafeAccountModelId for an app-level id ("vertex/claude-opus-5-5"). */
+export function isSafeAccountModel(model: string): boolean {
+    const prefix = accountModelPrefix(model);
+    return (
+        prefix !== null &&
+        isSafeAccountModelId(prefix, model.slice(prefix.length + 1))
+    );
+}
+
 export function resolveModel(
     id: string | null | undefined,
     fallback: string,
@@ -222,13 +323,13 @@ export function resolveModel(
             canonical.startsWith("ollama/") ||
             /^(?:openrouter|vercel)\/[^\s/]+\/[^\s]+$/.test(canonical) ||
             // OpenCode Go's catalog ids are single-segment ("glm-5"), not the
-            // vendor/model pairs OpenRouter and Vercel publish. Bedrock and
-            // Vertex model ids, Azure deployment names and the models behind
-            // a custom endpoint are account-specific, and xAI's catalog is
-            // read live, so those are accepted by shape too.
-            /^(?:opencode-go|bedrock|azure|azure-foundry|vertex|xai|custom)\/[^\s]+$/.test(
-                canonical,
-            ))
+            // vendor/model pairs OpenRouter and Vercel publish.
+            /^opencode-go\/[^\s]+$/.test(canonical) ||
+            // Bedrock and Vertex model ids, Azure deployment names and the
+            // models behind a custom endpoint are account-specific, and xAI's
+            // catalog is read live, so those are accepted by shape too — but
+            // only by a strict shape, because some of them end up in a URL.
+            isSafeAccountModel(canonical))
     )
         return canonical;
     return fallback;

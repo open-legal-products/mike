@@ -13,15 +13,15 @@ import {
 } from "@/shared/ui/dropdown";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { type ApiKeyState } from "@/app/lib/mikeApi";
-import { routerModelsFromProfile } from "@/app/lib/routerModels";
+import { mergeConfiguredModelOptions } from "@/app/components/assistant/ModelToggle";
 import {
   MODELS,
   SETTINGS_MODELS,
+  allRouterModelOptions,
   canonicalModelId,
-  mergeConfiguredModelOptions,
-  routerModelOptions,
+  routerSelections,
   type ModelOption,
-} from "@/app/components/assistant/ModelToggle";
+} from "@/shared/lib/modelCatalog";
 import { orderedModelGroups } from "@/shared/ui/ModelToggleUI";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
@@ -56,8 +56,8 @@ export default function ModelPreferencesPage() {
     Partial<Record<ModelPreferenceField, string>>
   >({});
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const selectedRouterOptions = routerModelOptions(
-    routerModelsFromProfile(profile),
+  const selectedRouterOptions = allRouterModelOptions(
+    profile ? routerSelections(profile) : {},
   );
 
   useEffect(() => {

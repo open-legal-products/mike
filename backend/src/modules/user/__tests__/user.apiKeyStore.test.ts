@@ -6,6 +6,10 @@ import {
     getUserApiKeyStatus,
     saveUserApiKey,
 } from "../user.apiKeyStore";
+import {
+    azureCredentials,
+    bedrockCredentials,
+} from "../../../lib/llm/cloudProviders";
 
 describe("normalizeApiKeyProvider", () => {
     it('returns "claude" for "claude"', () => {
@@ -188,8 +192,11 @@ describe("cloud-platform keys", () => {
             rows,
             db: {
                 from: () => ({
+                    // ON CONFLICT DO UPDATE only sets the columns sent, so
+                    // unsent ones (like `enabled`) keep their stored value.
                     upsert: async (row: Record<string, unknown>) => {
-                        rows.set(String(row.provider), row);
+                        const key = String(row.provider);
+                        rows.set(key, { ...rows.get(key), ...row });
                         return { error: null };
                     },
                     delete: () => ({
@@ -378,12 +385,29 @@ describe("cloud-platform keys", () => {
             disabledProviders: ["bedrock"],
             providerSettings: { bedrock: null },
         });
-        expect(rows.get("bedrock")).toMatchObject(stored);
+        expect(rows.get("bedrock")).toMatchObject({ ...stored, enabled: false });
 
         rows.set("bedrock", { ...stored, enabled: true });
         await expect(getUserApiKeys("user-1", db)).resolves.toMatchObject({
             bedrock: "personal-key",
             providerSettings: { bedrock: { region: "eu-west-2" } },
+        });
+    });
+
+    it("re-enables a turned-off provider when the user saves a new key for it", async () => {
+        const { db, rows } = memoryDb();
+        await saveUserApiKey("user-1", "bedrock", "old-key", db, {
+            bedrock: { region: "eu-west-2" },
+        });
+        rows.set("bedrock", { ...rows.get("bedrock"), enabled: false });
+
+        await saveUserApiKey("user-1", "bedrock", "new-key", db, {
+            bedrock: { region: "eu-west-2" },
+        });
+
+        expect(rows.get("bedrock")).toMatchObject({ enabled: true });
+        await expect(getUserApiKeys("user-1", db)).resolves.toMatchObject({
+            bedrock: "new-key",
         });
     });
 
@@ -404,6 +428,41 @@ describe("cloud-platform keys", () => {
         await expect(getUserApiKeyStatus("user-1", db)).resolves.toMatchObject({
             azure: false,
             sources: { azure: null },
+        });
+    });
+    // PR #608 regression: a saved key whose setting no longer validates was
+    // skipped with `continue`, which left the DEPLOYMENT's key and region in
+    // place — so the user's requests silently ran on the operator's account.
+    it("does not fall back to the deployment's pair when a saved setting is invalid", async () => {
+        process.env.AWS_BEARER_TOKEN_BEDROCK = "env-bedrock";
+        process.env.BEDROCK_AWS_REGION = "us-east-1";
+        process.env.AZURE_API_KEY = "env-azure";
+        process.env.AZURE_OPENAI_ENDPOINT = "operator-openai";
+        const { db, rows } = memoryDb();
+        await saveUserApiKey("user-1", "bedrock", "user-bedrock", db, {
+            bedrock: { region: "eu-west-2" },
+        });
+        await saveUserApiKey("user-1", "azure", "user-azure", db, {
+            azure: { endpoint: "contoso-openai" },
+        });
+        rows.set("bedrock", { ...rows.get("bedrock"), settings: { region: "mars-1" } });
+        rows.set("azure", {
+            ...rows.get("azure"),
+            settings: { endpoint: "https://attacker.example" },
+        });
+
+        const keys = await getUserApiKeys("user-1", db);
+        expect(keys).toMatchObject({
+            bedrock: null,
+            azure: null,
+            providerSettings: { bedrock: null, azure: null },
+        });
+        expect(bedrockCredentials(keys)).toBeNull();
+        expect(azureCredentials(keys)).toBeNull();
+        await expect(getUserApiKeyStatus("user-1", db)).resolves.toMatchObject({
+            bedrock: false,
+            azure: false,
+            sources: { bedrock: null, azure: null },
         });
     });
 });

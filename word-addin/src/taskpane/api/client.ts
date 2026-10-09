@@ -11,6 +11,7 @@ import type {
 // parity tests) never pull this module, and its runtime imports, into
 // the web app's type-check graph.
 export type { ApiKeyStatus } from "../types";
+import type { RouterProfileLists } from "@mike/model-catalog";
 import { describeNetworkFailure } from "../lib/networkError";
 import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
@@ -273,7 +274,8 @@ export async function listProjects(pagination?: {
   return apiRequest<Project[]>(`/projects?${params.toString()}`);
 }
 
-interface UserProfile {
+/** GET /user/profile; each router's Model Selections may be absent on an older API. */
+interface UserProfile extends Partial<RouterProfileLists> {
   displayName: string | null;
   organisation: string | null;
   messageCreditsUsed: number;
@@ -286,16 +288,6 @@ interface UserProfile {
   lastSelectedReasoningLevel: ReasoningLevel;
   mfaOnLogin: boolean;
   legalResearchUs: boolean;
-  openRouterModels: string[];
-  vercelModels: string[];
-  openCodeGoModels: string[];
-  // Absent from a backend that predates these providers.
-  bedrockModels?: string[];
-  azureModels?: string[];
-  azureFoundryModels?: string[];
-  vertexModels?: string[];
-  xaiModels?: string[];
-  customModels?: string[];
   apiKeyStatus: ApiKeyStatus;
 }
 

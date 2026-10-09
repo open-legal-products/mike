@@ -295,8 +295,14 @@ export async function getUserApiKeyStatus(
         if (isSettingsApiKeyProvider(provider)) {
             // A saved key without a valid setting cannot be used; report it
             // as not configured rather than as a key that will fail later.
+            // Not as the environment's key either: getUserApiKeys does not
+            // fall back to it for this user (see unusableProviders).
             const settings = normalizeProviderSettings(provider, row.settings);
-            if (!settings) continue;
+            if (!settings) {
+                status[provider] = false;
+                status.sources[provider] = null;
+                continue;
+            }
             Object.assign(status.settings, settings);
         }
         status[provider] = row.enabled !== false;
@@ -362,7 +368,19 @@ export async function getUserApiKeys(
             // The user's key replaces the environment's key AND setting, so
             // it never runs against the operator's region or resource.
             const settings = normalizeProviderSettings(provider, row.settings);
-            if (!settings) continue;
+            if (!settings) {
+                // The saved key is unusable without its setting, and the
+                // environment's pair must not quietly take its place: drop
+                // both and mark the provider so cloudProviders.ts does not
+                // fall back to the deployment's credentials either.
+                apiKeys[provider] = null;
+                providerSettings[provider] = null;
+                apiKeys.unusableProviders = [
+                    ...(apiKeys.unusableProviders ?? []),
+                    provider,
+                ];
+                continue;
+            }
             Object.assign(providerSettings, settings);
         }
         apiKeys[provider] = userKey;
@@ -397,6 +415,9 @@ export async function saveUserApiKey(
             settings: isSettingsApiKeyProvider(provider)
                 ? (settings[provider] ?? null)
                 : null,
+            // A new key is a request to use it: without this, ON CONFLICT
+            // keeps a previous enabled=false and the provider stays off.
+            enabled: true,
             updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id,provider" },
@@ -410,6 +431,25 @@ export async function saveUserApiKey(
  * re-entering the key. Returns false when the user has no saved key for the
  * provider.
  */
+/**
+ * The raw settings column saved with a user's key, wrapped so "no key saved"
+ * (null) is distinguishable from "a key saved without valid settings".
+ */
+export async function getSavedApiKeySettings(
+    userId: string,
+    provider: SettingsApiKeyProvider,
+    db: Db = createServerSupabase(),
+): Promise<{ settings: unknown } | null> {
+    const { data, error } = await db
+        .from("user_api_keys")
+        .select("settings")
+        .eq("user_id", userId)
+        .eq("provider", provider)
+        .maybeSingle();
+    if (error) throw error;
+    return data ? { settings: (data as { settings?: unknown }).settings } : null;
+}
+
 export async function updateUserApiKeySettings(
     userId: string,
     provider: SettingsApiKeyProvider,

@@ -38,10 +38,14 @@ import type {
   WordChatSubmitOptions,
 } from "../../lib/wordChatTypes";
 import {
-  ROUTER_SLUGS,
+  NO_MODELS_MESSAGES,
+  routerSelections as routerSelectionsFromProfile,
+  type RouterSelections,
+} from "@mike/model-catalog";
+import {
   isModelAvailable,
-  missingModelProvider,
-  routerModelsFromProfile,
+  noModelsReason,
+  unavailableModelMessage,
 } from "../../lib/modelCatalog";
 import { loadWithRetry } from "../../lib/composerPreflight";
 import {
@@ -117,9 +121,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     >(null);
     const [keyStatus, setKeyStatus] = useState<ApiKeyStatus | null>(null);
     const [keyStatusLoading, setKeyStatusLoading] = useState(true);
-    const [routerModels, setRouterModels] = useState(() =>
-      routerModelsFromProfile(null),
-    );
+    // Null until the profile loads: stored router selections cannot be
+    // checked against saved Model Selections before then.
+    const [routerSelections, setRouterSelections] =
+      useState<RouterSelections | null>(null);
     const [profileLastSelectedModel, setProfileLastSelectedModel] = useState<
       string | null
     >(null);
@@ -128,7 +133,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       sessionKey,
       chatModel,
       lastSelectedModel: lastSelectedModel ?? profileLastSelectedModel,
-      routerSelections: profileLoaded ? routerModels : null,
+      routerSelections: profileLoaded ? routerSelections : null,
       apiKeyStatus: keyStatus,
     });
     const [modelError, setModelError] = useState<string | null>(null);
@@ -244,7 +249,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         if (cancelled) return;
         setKeyStatus(status);
         if (profile) {
-          setRouterModels(routerModelsFromProfile(profile));
+          setRouterSelections(routerSelectionsFromProfile(profile));
           setProfileLastSelectedModel(profile.lastSelectedChatModel ?? null);
           setProfileLastSelectedReasoningLevel(
             profile.lastSelectedReasoningLevel ?? "high",
@@ -408,9 +413,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         return;
       }
       if (!isModelAvailable(model, keyStatus)) {
-        setModelError(
-          `Add a ${missingModelProvider(model)} API key before using this model.`,
-        );
+        setModelError(unavailableModelMessage(model, keyStatus));
         return;
       }
       setModelError(null);
@@ -616,7 +619,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                     }}
                     keyStatus={keyStatus}
                     keyStatusLoading={keyStatusLoading}
-                    routerModels={routerModels}
+                    routerSelections={routerSelections}
                     compact={compactControls}
                     reasoningLevel={resolvedReasoningLevel}
                     onReasoningChange={(next) => {
@@ -628,14 +631,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                           .then(() => onReasoningSelected(next));
                     }}
                     onNoModelsClick={() => {
-                      const routerHasNoModels = ROUTER_SLUGS.some(
-                        (slug) =>
-                          keyStatus?.[slug] && routerModels[slug].length === 0,
-                      );
                       setModelError(
-                        routerHasNoModels
-                          ? "Your router is connected, but it has no saved models. Open your provider in Bring Your Own Keys and add a model under Model Selections."
-                          : "Add an API key in Bring Your Own Keys before selecting a model.",
+                        NO_MODELS_MESSAGES[
+                          noModelsReason(keyStatus, routerSelections ?? {})
+                        ],
                       );
                     }}
                   />

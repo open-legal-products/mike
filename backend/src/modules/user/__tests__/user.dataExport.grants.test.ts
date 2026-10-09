@@ -205,3 +205,38 @@ describe("memory exports", () => {
         expect(manifest.digest.value).toMatch(/^[0-9a-f]{64}$/);
     });
 });
+
+// PR #608 regression: the export listed which providers had keys but not the
+// non-secret region/endpoint/location/base URL saved with them, nor whether
+// the provider was switched off — both are the user's data.
+describe("account export: API keys", () => {
+    it("includes each key's non-secret settings and enabled flag, never the key", async () => {
+        const { db } = makeDb({
+            user_api_keys: [
+                {
+                    user_id: "u1",
+                    provider: "bedrock",
+                    encrypted_key: "ciphertext",
+                    iv: "iv",
+                    auth_tag: "tag",
+                    settings: { region: "eu-west-2" },
+                    enabled: false,
+                    created_at: "1",
+                    updated_at: "2",
+                },
+            ],
+        });
+        const exported = (await buildUserAccountExport(db, "u1")) as any;
+        expect(exported.api_keys).toEqual([
+            {
+                provider: "bedrock",
+                has_key: true,
+                enabled: false,
+                settings: { region: "eu-west-2" },
+                created_at: "1",
+                updated_at: "2",
+            },
+        ]);
+        expect(JSON.stringify(exported.api_keys)).not.toMatch(/ciphertext|auth_tag|"iv"/);
+    });
+});

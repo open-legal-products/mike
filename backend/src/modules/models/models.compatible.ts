@@ -2,7 +2,10 @@
 // own OpenAI-compatible endpoint. No keys leave the backend.
 
 import type { Db } from "../../lib/supabase";
-import { customEndpointCredentials } from "../../lib/llm/cloudProviders";
+import {
+    CUSTOM_ENDPOINT_URL_LABEL,
+    customEndpointCredentials,
+} from "../../lib/llm/cloudProviders";
 import { guardedFetch } from "../../lib/mcp/client";
 import { getUserApiKeys } from "../user/user.service";
 import type { CatalogModel, CatalogResult } from "./models.service";
@@ -135,7 +138,10 @@ export async function listCustomEndpointModels(
         return {
             ok: true,
             models: await readModels(
-                guardedFetch,
+                (input, init) =>
+                    guardedFetch(input, init, {
+                        label: CUSTOM_ENDPOINT_URL_LABEL,
+                    }),
                 credentials.baseUrl,
                 credentials.apiKey,
             ),

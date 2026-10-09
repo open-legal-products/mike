@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   awsDnsSuffix,
+  bedrockServiceUrl,
   azureClientTarget,
   azureFoundryCredentials,
+  credentialEndpointHost,
   customEndpointCredentials,
   normalizeAwsRegion,
   normalizeAzureEndpoint,
@@ -71,9 +73,9 @@ describe("normalizeAzureEndpoint", () => {
 });
 
 describe("azureClientTarget", () => {
-  it("passes a resource name through", () => {
+  it("expands a resource name to the URL the SDK's resourceName option builds", () => {
     expect(azureClientTarget("contoso-openai")).toEqual({
-      resourceName: "contoso-openai",
+      baseURL: "https://contoso-openai.openai.azure.com/openai",
     });
   });
 
@@ -89,6 +91,31 @@ describe("azureClientTarget", () => {
     ).toEqual({
       baseURL: "https://contoso.services.ai.azure.com/api/projects/legal",
     });
+  });
+});
+
+describe("credentialEndpointHost", () => {
+  it.each([
+    ["azure", { azure: { endpoint: "contoso-openai" } }, "contoso-openai.openai.azure.com"],
+    [
+      "azure-foundry",
+      { "azure-foundry": { endpoint: "https://contoso.services.ai.azure.com" } },
+      "contoso.services.ai.azure.com",
+    ],
+    ["custom", { custom: { baseUrl: "https://llm.example.com:8443/v1" } }, "llm.example.com:8443"],
+    ["custom", {}, null],
+  ] as const)("%s %j is sent to %j", (provider, settings, host) => {
+    expect(credentialEndpointHost(provider, settings)).toBe(host);
+  });
+
+  it("puts a resource name and its full URL on the same host", () => {
+    expect(
+      credentialEndpointHost("azure", { azure: { endpoint: "contoso" } }),
+    ).toBe(
+      credentialEndpointHost("azure", {
+        azure: { endpoint: "https://contoso.openai.azure.com" },
+      }),
+    );
   });
 });
 
@@ -207,6 +234,10 @@ describe("normalizeCustomBaseUrl", () => {
     "https://[fd00::1]/v1",
     "https://[::ffff:10.0.0.5]/v1",
     "https://metadata.google.internal/computeMetadata/v1",
+    // PR #608 regression: a fully-qualified name's trailing dot ("localhost.")
+    // is the same host, but slipped past the exact-match host checks.
+    "https://localhost./v1",
+    "https://metadata.google.internal./computeMetadata/v1",
     "https://user:pass@llm.example.com/v1",
     "https://llm.example.com/v1?key=1",
     "https://llm.example.com/v1#x",
@@ -271,5 +302,6 @@ describe("awsDnsSuffix", () => {
     ["eusc-de-east-1", "amazonaws.eu"],
   ])("maps %s to %s", (region, suffix) => {
     expect(awsDnsSuffix(region)).toBe(suffix);
+    expect(bedrockServiceUrl("bedrock-runtime", region)).toBe(`https://bedrock-runtime.${region}.${suffix}`);
   });
 });

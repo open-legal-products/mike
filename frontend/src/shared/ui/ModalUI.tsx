@@ -95,7 +95,10 @@ export function ModalUI({
 
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
-                onCloseRef.current();
+                // A control inside the dialog (an open listbox or menu) that
+                // handled Escape itself marks it handled; only close for an
+                // Escape nothing else claimed.
+                if (!event.defaultPrevented) onCloseRef.current();
                 return;
             }
             if (event.key !== "Tab") return;

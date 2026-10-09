@@ -432,3 +432,30 @@ describe("catalog refresh", () => {
         expect(reasoningLevelsForModel("gpt-6.1-sol")).toContain("max");
     });
 });
+
+// PR #608 regression: account-specific ids reach provider URLs (Vertex
+// interpolates the model id into the request path unencoded), so resolveModel
+// must not accept them "by shape". Preferences saved before the save-time
+// check rely on this fallback. The full grammar is covered by
+// byokValidationCases.test.ts; this pins resolveModel's use of it.
+describe("resolveModel rejects path-unsafe account-specific ids", () => {
+    it("falls back for a traversal id under every account-specific prefix", () => {
+        const traversal =
+            "claude/../../../../v1/projects/victim/locations/us-central1/endpoints/123:rawPredict?x=";
+        for (const prefix of [
+            "bedrock",
+            "azure",
+            "azure-foundry",
+            "vertex",
+            "xai",
+            "custom",
+        ]) {
+            expect(resolveModel(`${prefix}/${traversal}`, "fallback"), prefix).toBe(
+                "fallback",
+            );
+        }
+        expect(resolveModel("vertex/meta/llama-4-maverick-maas", "fallback")).toBe(
+            "vertex/meta/llama-4-maverick-maas",
+        );
+    });
+});

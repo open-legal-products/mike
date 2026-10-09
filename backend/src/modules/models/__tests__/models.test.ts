@@ -465,6 +465,39 @@ describe("GET /models/bedrock", () => {
         expect(JSON.stringify(response.body)).not.toContain("private-key");
     });
 
+    // PR #608 regression: with no key of their own, every user lists models
+    // on the DEPLOYMENT's AWS account — including its application inference
+    // profiles, whose ids/ARNs carry the operator's account id and names.
+    it("lists only foundation models and system profiles on the deployment's key", async () => {
+        vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "operator-key");
+        vi.stubEnv("BEDROCK_AWS_REGION", "us-east-1");
+        getUserApiKeys.mockResolvedValue({ bedrock: "operator-key", providerSettings: { bedrock: { region: "us-east-1" } } });
+        const operatorArn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6";
+        fetchMock.mockResolvedValueOnce(Response.json({ modelSummaries: [
+            { modelId: "test.chat-v1", modelArn: arn, modelName: "Chat", outputModalities: ["TEXT"], inferenceTypesSupported: ["ON_DEMAND"] },
+        ] })).mockResolvedValueOnce(Response.json({ inferenceProfileSummaries: [
+            { inferenceProfileId: "us.chat", inferenceProfileName: "Cross-region Chat", type: "SYSTEM_DEFINED", status: "ACTIVE", models: [{ modelArn: arn }] },
+            { inferenceProfileId: "a1b2c3d4e5f6", inferenceProfileArn: operatorArn, inferenceProfileName: "Acme litigation team", type: "APPLICATION", status: "ACTIVE", models: [{ modelArn: arn }] },
+            { inferenceProfileId: operatorArn, inferenceProfileName: "Acme by ARN", status: "ACTIVE", models: [{ modelArn: arn }] },
+        ] }));
+        const response = await request(app).get("/models/bedrock");
+        vi.unstubAllEnvs();
+        expect(response.status).toBe(200);
+        expect(response.body.models).toEqual([{ id: "test.chat-v1", label: "Chat" }, { id: "us.chat", label: "Cross-region Chat" }]);
+        expect(JSON.stringify(response.body)).not.toMatch(/123456789012|a1b2c3d4e5f6|Acme/);
+    });
+
+    it("still lists a user's own application profiles on their own key", async () => {
+        const ownArn = "arn:aws:bedrock:us-east-1:210987654321:application-inference-profile/own";
+        fetchMock.mockResolvedValueOnce(Response.json({ modelSummaries: [
+            { modelId: "test.chat-v1", modelArn: arn, modelName: "Chat", outputModalities: ["TEXT"], inferenceTypesSupported: ["ON_DEMAND"] },
+        ] })).mockResolvedValueOnce(Response.json({ inferenceProfileSummaries: [
+            { inferenceProfileId: "own", inferenceProfileArn: ownArn, inferenceProfileName: "My profile", type: "APPLICATION", status: "ACTIVE", models: [{ modelArn: arn }] },
+        ] }));
+        const response = await request(app).get("/models/bedrock");
+        expect(response.body.models).toContainEqual({ id: "own", label: "My profile" });
+    });
+
     it("rejects repeated pagination tokens instead of hanging", async () => {
         fetchMock.mockResolvedValueOnce(Response.json({ modelSummaries: [] }))
             .mockResolvedValue(Response.json({ inferenceProfileSummaries: [], nextToken: "repeat" }));

@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ApiKeyField } from "./ApiKeyField";
 import { MikeApiError } from "@/app/lib/mikeApi";
+import { ApiKeyField } from "./ApiKeyField";
 
 vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
   MfaVerificationPopup: () => null,
@@ -93,30 +93,24 @@ describe("ApiKeyField", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the backend's reason when it rejects the key or its setting", async () => {
+  it("shows the server's reason for a rejected value instead of asking to retry", async () => {
     const user = userEvent.setup();
+    const reason =
+      "A public https base URL (for example https://llm.example.com/v1) is required with an OpenAI-compatible endpoint key.";
     renderField({
-      onSave: vi.fn().mockRejectedValue(
-        new MikeApiError({
-          status: 400,
-          message:
-            "A public https base URL (for example https://llm.example.com/v1) is required with an OpenAI-compatible endpoint key.",
-        }),
-      ),
+      onSave: vi
+        .fn()
+        .mockRejectedValue(new MikeApiError({ message: reason, status: 400 })),
     });
 
     await user.type(
       screen.getByLabelText("Anthropic (Claude) API Key"),
-      "sk-ant-test",
+      "sk-test",
     );
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(
-      await screen.findByText(/A public https base URL .* is required/),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Failed to save Anthropic/),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText(/Please try again/)).toBeNull();
   });
 
   it("shows the warning popup when removing rejects", async () => {

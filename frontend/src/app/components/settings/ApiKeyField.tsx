@@ -11,7 +11,8 @@ import { SettingsTextInput } from "@/app/components/settings/SettingsTextInput";
 import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";
-import { MikeApiError, isMfaRequiredError } from "@/app/lib/mikeApi";
+import { isMfaRequiredError } from "@/app/lib/mikeApi";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 import { settingsGlassIconButtonClassName } from "@/app/(pages)/settings/settingsStyles";
 
 // The backend never returns saved keys, so the mask is a fixed-length stand-in.
@@ -140,11 +141,12 @@ export function ApiKeyField({
     } catch (error) {
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("save");
-      } else if (error instanceof MikeApiError && error.status === 400) {
-        // The backend's validation message says what to correct.
-        setWarningMessage(error.message);
       } else {
-        setWarningMessage(`Failed to save ${label}. Please try again.`);
+        // A validation 400 carries the server's fixed explanation;
+        // anything else gets the generic retry message.
+        setWarningMessage(
+          userFacingApiError(error, `Failed to save ${label}. Please try again.`),
+        );
       }
     } finally {
       setIsSaving(false);
@@ -166,7 +168,11 @@ export function ApiKeyField({
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("remove");
       } else {
-        setWarningMessage(`Failed to remove ${label}. Please try again.`);
+        // A validation 400 carries the server's fixed explanation;
+        // anything else gets the generic retry message.
+        setWarningMessage(
+          userFacingApiError(error, `Failed to remove ${label}. Please try again.`),
+        );
       }
     } finally {
       setIsSaving(false);

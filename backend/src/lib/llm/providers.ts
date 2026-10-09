@@ -9,12 +9,17 @@ import {
   azureCredentials,
   azureFoundryCredentials,
   bedrockCredentials,
+  bedrockServiceUrl,
+  CUSTOM_ENDPOINT_URL_LABEL,
   customEndpointCredentials,
   vertexCredentials,
 } from "./cloudProviders";
 import { guardedFetch } from "../mcp/client";
+import { isBlockedDestinationError } from "../blockedDestination";
 import { localModelToleranceMiddleware } from "./localModelMiddleware";
 import {
+  ACCOUNT_MODEL_LABELS,
+  accountModelPrefix,
   azureDeploymentName,
   azureFoundryDeploymentName,
   bedrockModelId,
@@ -22,6 +27,7 @@ import {
   isAzureFoundryClaudeDeployment,
   isOpenCodeGoChatCompletionsModel,
   isOpenCodeGoMessagesModel,
+  isSafeAccountModel,
   normalizeReasoningLevelForModel,
   openCodeGoModelId,
   openRouterModelId,
@@ -252,16 +258,47 @@ async function createBedrockAdapter(
   const bedrock = createAmazonBedrock({
     apiKey: credentials.apiKey,
     region: credentials.region,
+    // Explicit, or the SDK prefers AWS_ENDPOINT_URL_BEDROCK_RUNTIME /
+    // AWS_ENDPOINT_URL from the environment and sends the key there.
+    baseURL: bedrockServiceUrl("bedrock-runtime", credentials.region),
     fetch: aiSdkFetch,
   });
   const upstreamId = bedrockModelId(model);
+  const isClaude = bedrockModelSupportsCachePoint(upstreamId);
   return {
     provider: "bedrock",
     label: "Amazon Bedrock",
     model: bedrock(upstreamId),
     modelId: model,
-    bedrockCachePoint: bedrockModelSupportsCachePoint(upstreamId),
+    bedrockCachePoint: isClaude,
+    ...(isClaude
+      ? { defaultMaxOutputTokens: await bedrockClaudeMaxOutputTokens(upstreamId) }
+      : {}),
   };
+}
+
+/**
+ * The output ceiling @ai-sdk/anthropic gives the same Claude model when it is
+ * called directly (or on Vertex or Foundry): the model's own maximum, read
+ * from the capability table both SDKs share (@ai-sdk/amazon-bedrock imports
+ * it from @ai-sdk/anthropic/internal too). Without it Bedrock applies its own
+ * small server default, which thinking also has to fit in.
+ *
+ * Budget-thinking models (older Claude, e.g. Haiku 4.5) are the exception
+ * when reasoning is on: the Bedrock SDK adds the thinking budget ON TOP of
+ * maxTokens, so sending the full cap would ask for more than the model
+ * allows. Those keep the SDK's own budget + 4,096.
+ */
+export async function bedrockClaudeMaxOutputTokens(
+  upstreamId: string,
+): Promise<NonNullable<AiSdkAdapterConfig["defaultMaxOutputTokens"]>> {
+  const { getModelCapabilities } = await import("@ai-sdk/anthropic/internal");
+  const { maxOutputTokens, supportsAdaptiveThinking } =
+    getModelCapabilities(upstreamId);
+  return (reasoning) =>
+    supportsAdaptiveThinking || !reasoning || reasoning === "none"
+      ? maxOutputTokens
+      : undefined;
 }
 
 async function createAzureAdapter(
@@ -383,8 +420,26 @@ async function customEndpointFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  return aiSdkFetch(input, init, guardedFetch);
+  try {
+    return await aiSdkFetch(input, init, (url, options) =>
+      guardedFetch(url, options, { label: CUSTOM_ENDPOINT_URL_LABEL }),
+    );
+  } catch (error) {
+    // The base URL passed the save-time checks but now resolves to a
+    // private or metadata address. That is the user's configuration to fix,
+    // so say so instead of surfacing an internal error (or retrying it as a
+    // network failure).
+    if (isBlockedDestinationError(error)) {
+      throw new UserFacingError(CUSTOM_ENDPOINT_BLOCKED_MESSAGE, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
+
+const CUSTOM_ENDPOINT_BLOCKED_MESSAGE =
+  "Your OpenAI-compatible endpoint's base URL does not resolve to a public address. Update it in Model Providers or select another model.";
 
 async function createCustomEndpointAdapter(
   model: string,
@@ -470,7 +525,7 @@ async function createConfiguredAdapter(
 
 function unsupportedOpenCodeGoModel(model: string): Error {
   return new Error(
-    `OpenCode Go model ${openCodeGoModelId(model)} requires a protocol Mike does not support yet. Select a model listed under OpenCode Go in Settings → Bring Your Own Keys.`,
+    `OpenCode Go model ${openCodeGoModelId(model)} requires a protocol Mike does not support yet. Select a model listed under Model Selections for OpenCode Go in Settings → Bring Your Own Keys.`,
   );
 }
 
@@ -497,6 +552,16 @@ async function createProviderAdapter(
   const provider = providerForModel(model);
   if (apiKeys?.disabledProviders?.includes(provider)) {
     throw new UserFacingError("This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.");
+  }
+
+  // Last line of defence behind resolveModel and the save-time check: some
+  // SDKs (Vertex) put the model id into the request URL unencoded, so a
+  // malformed id must never reach an adapter, whatever path it came from.
+  const accountPrefix = accountModelPrefix(model);
+  if (accountPrefix === provider && !isSafeAccountModel(model)) {
+    throw new UserFacingError(
+      `This is not a valid ${ACCOUNT_MODEL_LABELS[accountPrefix]} model id. Choose a model saved in Model Providers.`,
+    );
   }
 
   if (provider === "claude") {

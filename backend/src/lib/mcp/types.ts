@@ -144,3 +144,22 @@ export const BLOCKED_METADATA_HOSTS = new Set([
     "metadata.google.internal",
     "instance-data",
 ]);
+
+/**
+ * A URL's hostname as the egress host checks compare it: lower-cased and
+ * without a fully-qualified name's root dot(s). "localhost." and
+ * "metadata.google.internal." are the same hosts as without the dot, and the
+ * checks below compare names exactly.
+ */
+export function canonicalHostname(url: URL): string {
+    return url.hostname.toLowerCase().replace(/\.+$/, "");
+}
+
+/** Loopback and cloud-metadata names, which no guarded egress may reach. */
+export function isBlockedHostname(hostname: string): boolean {
+    return (
+        hostname === "localhost" ||
+        hostname.endsWith(".localhost") ||
+        BLOCKED_METADATA_HOSTS.has(hostname)
+    );
+}

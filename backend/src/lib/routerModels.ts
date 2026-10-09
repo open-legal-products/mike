@@ -1,7 +1,7 @@
 import { createServerSupabase } from "./supabase";
 import { UserFacingError } from "./userFacingError";
 import type { Db } from "./supabase";
-import { resolveModel } from "./llm/models";
+import { ACCOUNT_MODEL_LABELS, resolveModel } from "./llm/models";
 import { getConfiguredModel } from "./llm/registry";
 
 export type RouterSlug =
@@ -37,9 +37,10 @@ export type RouterModelSelections = Record<RouterSlug, string[]>;
 
 /** The router a namespaced app-level model id routes through, if any. */
 export function routerForModelId(model: string): RouterSlug | null {
-    // A deployment-declared model keeps whatever id the operator gave it,
-    // including one that starts with a router slug ("azure/gpt-4o"). It is
-    // not a router model and is not gated by anyone's saved selection.
+    // Deployment-declared models win over the prefix rules, exactly as in
+    // providerForModel: an operator's MIKE_MODEL_CONFIG_JSON model named
+    // "azure/gpt-internal" is an openai-compatible endpoint, not an Azure
+    // OpenAI deployment, and is not gated by the user's router selection.
     if (getConfiguredModel(model)) return null;
     // "azure-foundry/" does not start with "azure/", so no slug shadows
     // another; the trailing slash is what keeps that true.
@@ -65,12 +66,7 @@ const ROUTER_LABELS: Record<RouterSlug, string> = {
     openrouter: "OpenRouter",
     vercel: "Vercel AI Gateway",
     "opencode-go": "OpenCode Go",
-    bedrock: "Amazon Bedrock",
-    azure: "Azure OpenAI",
-    "azure-foundry": "Azure AI Foundry",
-    vertex: "Google Vertex AI",
-    xai: "xAI",
-    custom: "OpenAI-compatible endpoint",
+    ...ACCOUNT_MODEL_LABELS,
 };
 
 /**
@@ -105,7 +101,7 @@ export async function resolveRequestedModel(
     }
     if (onOutsideSelection === "throw") {
         throw new UserFacingError(
-            `Model ${resolved} is not in your saved ${ROUTER_LABELS[router]} models — add it under ${ROUTER_LABELS[router]} in Settings → Bring Your Own Keys.`,
+            `Model ${resolved} is not in your saved ${ROUTER_LABELS[router]} models — open ${ROUTER_LABELS[router]} in Settings → Bring Your Own Keys and add it under Model Selections.`,
         );
     }
     console.warn(

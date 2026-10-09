@@ -11,6 +11,7 @@ vi.mock("./vertexAuth", () => ({ vertexAuthClient }));
 vi.mock("../mcp/client", () => ({ guardedFetch }));
 
 import { completeWithProvider } from "./providers";
+import { UserFacingError } from "../userFacingError";
 
 const SERVICE_ACCOUNT = JSON.stringify({
   type: "service_account",
@@ -185,6 +186,26 @@ describe("Google Vertex AI adapter", () => {
     expect(body.model).toBe("meta/llama-4-maverick-maas");
   });
 
+  // PR #608 regression: @ai-sdk/google-vertex interpolates the model id into
+  // the request URL unencoded, so a traversal id would carry the service
+  // account's bearer token to an arbitrary aiplatform resource.
+  it("refuses path-traversal model ids before any request is made", async () => {
+    vi.stubEnv("GOOGLE_VERTEX_CREDENTIALS_JSON", SERVICE_ACCOUNT);
+    vi.stubEnv("GOOGLE_VERTEX_LOCATION", "us-central1");
+    const fetchMock = vi.fn().mockResolvedValue(anthropicMessageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      completeWithProvider({
+        model:
+          "vertex/claude/../../../../v1/projects/victim/locations/us-central1/endpoints/123:rawPredict?x=",
+        user: "x",
+      }),
+    ).rejects.toThrow(/not a valid Google Vertex AI model id/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(vertexAuthClient).not.toHaveBeenCalled();
+  });
+
   it("does not pair a user key with the environment's location", async () => {
     vi.stubEnv("GOOGLE_VERTEX_CREDENTIALS_JSON", SERVICE_ACCOUNT);
     vi.stubEnv("GOOGLE_VERTEX_LOCATION", "europe-west4");
@@ -303,6 +324,32 @@ describe("xAI adapter", () => {
 });
 
 describe("custom OpenAI-compatible endpoint adapter", () => {
+  // PR #608 regression: a guard rejection (the base URL resolves to a
+  // private/metadata address) reached the chat as a raw internal error
+  // mentioning "MCP server URL"; it is the user's configuration to fix.
+  it("turns a blocked destination into a user-facing configuration error", async () => {
+    const blocked = Object.assign(
+      new Error("Model endpoint URL resolves to a blocked network address."),
+      { code: "ERR_BLOCKED_DESTINATION" },
+    );
+    // undici reports a connect-time lookup failure as "fetch failed" with
+    // the guard's error as the cause.
+    guardedFetch.mockRejectedValue(new TypeError("fetch failed", { cause: blocked }));
+
+    const error = await completeWithProvider({
+      model: "custom/deepseek/deepseek-v4",
+      user: "Name this review",
+      apiKeys: {
+        custom: "sk-custom",
+        providerSettings: { custom: { baseUrl: "https://rebind.example.com/v1" } },
+      },
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(UserFacingError);
+    expect((error as Error).message).toMatch(/public address/);
+    expect((error as Error).message).not.toMatch(/MCP/);
+  });
+
   it("sends requests through the guarded fetch, never the plain one", async () => {
     guardedFetch.mockResolvedValue(chatCompletionResponse());
     const fetchMock = vi.fn();

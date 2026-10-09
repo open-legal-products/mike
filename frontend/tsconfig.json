@@ -29,7 +29,8 @@
       "@mike/sentry-event": ["./src/shared/lib/sentryEvent.ts"],
       "@mike/user-error": ["./src/shared/lib/userError.ts"],
       "@mike/toast-store": ["./src/shared/lib/toastStore.ts"],
-      "@mike/toast-ui": ["./src/shared/ui/ToastUI.tsx"]
+      "@mike/toast-ui": ["./src/shared/ui/ToastUI.tsx"],
+      "@mike/model-catalog": ["./src/shared/lib/modelCatalog.ts"]
     }
   },
   "include": [

@@ -110,7 +110,7 @@ describe("runLLMStream router-model allowlist", () => {
         await expect(
             runStreamWithModel(db, "openrouter/pricy/frontier-model"),
         ).rejects.toThrow(
-            /openrouter\/pricy\/frontier-model is not in your saved OpenRouter models .* under OpenRouter in Settings → Bring Your Own Keys/,
+            /openrouter\/pricy\/frontier-model is not in your saved OpenRouter models .* Settings → Bring Your Own Keys and add it under Model Selections/,
         );
         expect(streamChatWithTools).not.toHaveBeenCalled();
     });
@@ -143,7 +143,7 @@ describe("runLLMStream router-model allowlist", () => {
             expect.objectContaining({
                 type: "error",
                 message: expect.stringContaining(
-                    "Settings → Bring Your Own Keys",
+                    "Settings → Bring Your Own Keys and add it under Model Selections",
                 ),
             }),
         );

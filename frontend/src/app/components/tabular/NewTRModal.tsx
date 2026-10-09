@@ -18,12 +18,12 @@ import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { ModelToggle } from "../assistant/ModelToggle";
 import {
-    ModelToggle,
+    isRouterModelSelected,
+    routerSelections,
     type NoModelsReason,
-    ROUTER_SLUGS,
-} from "../assistant/ModelToggle";
-import { routerModelsFromProfile } from "@/app/lib/routerModels";
+} from "@/shared/lib/modelCatalog";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
@@ -181,15 +181,10 @@ export function NewTRModal({
     useEffect(() => {
         if (!open || !profile?.tabularModel) return;
         const defaultModel = profile.tabularModel;
-        const router = ROUTER_SLUGS.find(
-            (slug) => defaultModel.startsWith(`${slug}/`),
+        const routerSelectionValid = isRouterModelSelected(
+            defaultModel,
+            routerSelections(profile),
         );
-        const selectedByRouter = routerModelsFromProfile(profile);
-        const routerSelectionValid =
-            !router ||
-            selectedByRouter[router].includes(
-                defaultModel.slice(router.length + 1),
-            );
         const providerAvailable =
             !apiKeys ||
             isModelAvailable(defaultModel, apiKeys, configuredModelIds);
@@ -566,7 +561,9 @@ export function NewTRModal({
                                 onChange={setSelectedModel}
                                 apiKeys={apiKeys}
                                 apiKeysLoading={profileLoading && !profile}
-                                routerModels={routerModelsFromProfile(profile)}
+                                routerSelections={
+                                    profile ? routerSelections(profile) : undefined
+                                }
                                 onNoModelsClick={setNoModelsWarning}
                                 modalInput
                             />

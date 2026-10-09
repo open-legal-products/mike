@@ -21,8 +21,8 @@ import {
     type UserProfile as ApiUserProfile,
     completeUserOnboarding,
     getUserProfile,
-    MikeApiError,
     isMfaRequiredError,
+    MikeApiError,
     saveApiKey,
     setApiKeyEnabled,
     syncUserPasswordSet,
@@ -37,20 +37,19 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Message } from "@/app/components/shared/types";
 import { applyDarkMode } from "@/app/lib/theme";
-import { publishTabularChatSettingsUpdate } from "@/app/lib/tabularChatSettingsEvents";
 import {
     ROUTER_PROFILE_FIELDS,
-    ROUTER_SLUGS,
-    routerModelsFromProfile,
-    type RouterProfileField,
+    routerProfileLists,
+    type RouterProfileLists,
     type RouterSlug,
-} from "@/app/lib/routerModels";
+} from "@/shared/lib/modelCatalog";
+import { publishTabularChatSettingsUpdate } from "@/app/lib/tabularChatSettingsEvents";
 import {
     clearConfiguredModels,
     refreshConfiguredModels,
 } from "@/app/hooks/useConfiguredModels";
 
-interface UserProfile extends Record<RouterProfileField, string[]> {
+interface UserProfile extends RouterProfileLists {
     displayName: string | null;
     organisation: string | null;
     jurisdiction: string | null;
@@ -77,19 +76,6 @@ interface UserProfile extends Record<RouterProfileField, string[]> {
     apiKeys: ApiKeyState;
     /** Settings saved with the user's own keys (region, endpoint, location, base URL). */
     apiKeySettings: ApiKeySettings;
-}
-
-/** Each router's saved selection, under its profile field name. */
-function routerProfileFields(
-    profile: Parameters<typeof routerModelsFromProfile>[0],
-): Record<RouterProfileField, string[]> {
-    const selections = routerModelsFromProfile(profile);
-    return Object.fromEntries(
-        ROUTER_SLUGS.map((slug) => [
-            ROUTER_PROFILE_FIELDS[slug],
-            selections[slug],
-        ]),
-    ) as Record<RouterProfileField, string[]>;
 }
 
 interface UserProfileContextType {
@@ -127,7 +113,7 @@ interface UserProfileContextType {
     updateMfaOnLogin: (enabled: boolean) => Promise<boolean>;
     updateLegalResearchUs: (enabled: boolean) => Promise<boolean>;
     updateQuickActionsVisible: (visible: boolean) => Promise<boolean>;
-    /** Replace the saved model selection of one router. */
+    /** Save one router's Model Selections. */
     updateRouterModels: (
         router: RouterSlug,
         models: string[],
@@ -214,7 +200,7 @@ function toProfile(data: ApiUserProfile): UserProfile {
             profile.lastSelectedReasoningLevel ?? "high",
         mfaOnLogin: profile.mfaOnLogin === true,
         projectMemoryDefault: profile.projectMemoryDefault !== false,
-        ...routerProfileFields(profile),
+        ...routerProfileLists(profile),
         apiKeys,
         apiKeySettings: apiKeyStatus.settings ?? {},
     };
@@ -273,7 +259,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 mfaOnLogin: false,
                 legalResearchUs: true,
                 quickActionsVisible: true,
-                ...routerProfileFields(null),
+                ...routerProfileLists({}),
                 darkMode: false,
                 projectMemoryDefault: true,
                 apiKeys: emptyApiKeys(),
@@ -631,6 +617,12 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return true;
             } catch (error) {
                 if (isMfaRequiredError(error)) throw error;
+                // A 400 is the server rejecting the value (an unusable base
+                // URL, a malformed key file); the caller shows its reason
+                // instead of a "try again" a retry cannot fix.
+                if (error instanceof MikeApiError && error.status === 400) {
+                    throw error;
+                }
                 return false;
             }
         },
@@ -657,11 +649,6 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 return true;
             } catch (error) {
                 if (isMfaRequiredError(error)) throw error;
-                // A 400 carries the backend's own explanation of what is
-                // wrong with the key or its setting; let the field show it.
-                if (error instanceof MikeApiError && error.status === 400) {
-                    throw error;
-                }
                 return false;
             }
         },

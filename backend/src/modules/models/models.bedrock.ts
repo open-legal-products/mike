@@ -1,5 +1,9 @@
 import type { Db } from "../../lib/supabase";
-import { awsDnsSuffix, bedrockCredentials } from "../../lib/llm/cloudProviders";
+import {
+    bedrockCredentials,
+    bedrockServiceUrl,
+    envBedrockCredentials,
+} from "../../lib/llm/cloudProviders";
 import { getUserApiKeys } from "../user/user.service";
 import { catalogFailureReason } from "./models.compatible";
 import type { CatalogModel, CatalogResult } from "./models.service";
@@ -24,7 +28,10 @@ export async function listBedrockModels(db: Db, userId: string): Promise<Catalog
     };
     const { apiKey, region } = credentials;
     try {
-        const base = `https://bedrock.${region}.${awsDnsSuffix(region)}`;
+        // Operator application profiles contain private account identifiers.
+        const env = envBedrockCredentials();
+        const operatorAccount = !!env && env.apiKey === apiKey;
+        const base = bedrockServiceUrl("bedrock", region);
         const signal = AbortSignal.timeout(15_000);
         const read = async (path: string): Promise<Record<string, unknown>> => {
             const response = await fetch(`${base}${path}`, {
@@ -54,6 +61,7 @@ export async function listBedrockModels(db: Db, userId: string): Promise<Catalog
             if (!Array.isArray(profiles.inferenceProfileSummaries)) throw new Error("Invalid Bedrock inference profile list");
             for (const profile of profiles.inferenceProfileSummaries) {
                 if (!profile || !modelId(profile.inferenceProfileId) || profile.status !== "ACTIVE") continue;
+                if (operatorAccount && (profile.type !== "SYSTEM_DEFINED" || profile.inferenceProfileId.startsWith("arn:"))) continue;
                 // Foundation ARNs in cross-region profiles differ only in their region.
                 const isText = Array.isArray(profile.models) && profile.models.some((entry: { modelArn?: unknown }) =>
                     typeof entry?.modelArn === "string" && [...textArns].some(arn => arn.split(":foundation-model/")[1] === (entry.modelArn as string).split(":foundation-model/")[1]));

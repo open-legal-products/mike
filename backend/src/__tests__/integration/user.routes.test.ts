@@ -235,6 +235,10 @@ vi.mock("../../modules/user/user.apiKeyStore", async (importOriginal) => {
     return {
     isSettingsApiKeyProvider: actual.isSettingsApiKeyProvider,
     normalizeProviderSettings: actual.normalizeProviderSettings,
+    // Reads the saved row through the Supabase stub (user_api_keys table).
+    getSavedApiKeySettings: (
+        actual as unknown as Record<string, unknown>
+    ).getSavedApiKeySettings,
     updateUserApiKeySettings: (...args: unknown[]) =>
         updateUserApiKeySettings(...args),
     getUserApiKeyStatus: (...args: unknown[]) => getUserApiKeyStatus(...args),
@@ -1120,6 +1124,10 @@ describe("user.routes", () => {
         });
 
         it("changes only the Azure endpoint when no new key is sent", async () => {
+            supabaseState.tables.user_api_keys = {
+                data: { settings: { endpoint: "contoso-openai" } },
+                error: null,
+            };
             const res = await request(app)
                 .put("/user/api-keys/azure")
                 .set(...AUTH)
@@ -1133,6 +1141,73 @@ describe("user.routes", () => {
                 expect.anything(),
             );
             expect(saveUserApiKey).not.toHaveBeenCalled();
+        });
+
+        // PR #608 regression: a settings-only PUT repointed an already-saved
+        // key at a new host, so the next GET /models/custom (or chat) sent
+        // the stored secret to wherever the new URL pointed.
+        describe("endpoint changes without the key", () => {
+            const REENTER = "Re-enter the API key to change this provider's endpoint.";
+
+            it("refuses to move a saved custom-endpoint key to a new host", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { baseUrl: "https://llm.example.com/v1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/custom")
+                    .set(...AUTH)
+                    .send({ settings: { baseUrl: "https://collector.attacker.example/v1" } });
+
+                expect(res.status).toBe(400);
+                expect(res.body).toEqual({ detail: REENTER });
+                expect(updateUserApiKeySettings).not.toHaveBeenCalled();
+                expect(saveUserApiKey).not.toHaveBeenCalled();
+            });
+
+            it("refuses when the saved endpoint is no longer valid", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { baseUrl: "https://10.0.0.5/v1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/custom")
+                    .set(...AUTH)
+                    .send({ settings: { baseUrl: "https://llm.example.com/v1" } });
+                expect(res.status).toBe(400);
+                expect(res.body).toEqual({ detail: REENTER });
+            });
+
+            it("still allows a path change on the same host", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { baseUrl: "https://llm.example.com/v1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/custom")
+                    .set(...AUTH)
+                    .send({ settings: { baseUrl: "https://LLM.example.com/v2/" } });
+                expect(res.status).toBe(200);
+                expect(updateUserApiKeySettings).toHaveBeenCalledWith(
+                    "u1",
+                    "custom",
+                    { custom: { baseUrl: "https://llm.example.com/v2" } },
+                    expect.anything(),
+                );
+            });
+
+            it("still allows a Bedrock region change, which is not an endpoint host", async () => {
+                supabaseState.tables.user_api_keys = {
+                    data: { settings: { region: "us-east-1" } },
+                    error: null,
+                };
+                const res = await request(app)
+                    .put("/user/api-keys/bedrock")
+                    .set(...AUTH)
+                    .send({ settings: { region: "eu-west-2" } });
+                expect(res.status).toBe(200);
+                expect(updateUserApiKeySettings).toHaveBeenCalledOnce();
+            });
         });
 
         it("asks for a key first when changing settings with nothing saved", async () => {

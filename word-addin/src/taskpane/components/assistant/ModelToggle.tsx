@@ -7,20 +7,20 @@ import {
 } from "@mike/model-toggle-ui";
 import { getOllamaModels, type ApiKeyStatus } from "../../api/mikeApi";
 import {
-  isModelAvailable,
+  MODELS,
+  allRouterModelOptions,
   modelDisplayName,
-  routerModelOptions,
-  STATIC_MODELS,
   type ModelOption,
-  type RouterModelSelections,
-} from "../../lib/modelCatalog";
+  type RouterSelections,
+} from "@mike/model-catalog";
+import { isModelAvailable } from "../../lib/modelCatalog";
 
 export function ModelToggle({
   value,
   onChange,
   keyStatus,
   keyStatusLoading = false,
-  routerModels,
+  routerSelections,
   compact = false,
   onNoModelsClick,
   reasoningLevel,
@@ -32,8 +32,8 @@ export function ModelToggle({
   /** True while the key-status preflight is in flight: render a neutral
    *  disabled trigger instead of flashing "No Models". */
   keyStatusLoading?: boolean;
-  /** The user's saved models, per router. */
-  routerModels: RouterModelSelections;
+  /** Each router's saved Model Selections; null before the profile loads. */
+  routerSelections: RouterSelections | null;
   compact?: boolean;
   onNoModelsClick?: () => void;
   reasoningLevel?: ReasoningLevel;
@@ -54,24 +54,21 @@ export function ModelToggle({
   }, []);
 
   const models = useMemo(() => {
+    const routerOptions = allRouterModelOptions(routerSelections ?? {});
     const localOptions = ollamaModels.map((model) => ({
       ...model,
       label: modelDisplayName(model.id),
       source: "Local",
     }));
     return [
-      ...STATIC_MODELS,
-      ...routerModelOptions(routerModels),
+      ...MODELS,
+      ...routerOptions,
       ...localOptions,
     ].filter(
       (model) =>
         model.group === "Local" || isModelAvailable(model.id, keyStatus),
     );
-  }, [
-    keyStatus,
-    ollamaModels,
-    routerModels,
-  ]);
+  }, [keyStatus, ollamaModels, routerSelections]);
   const selected = models.find((model) => model.id === value);
   const supportedReasoningLevels = reasoningLevelsForModel(value);
   const normalizedReasoningLevel = reasoningLevel

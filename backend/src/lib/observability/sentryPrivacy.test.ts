@@ -296,3 +296,16 @@ it('keeps a bounded folded network-failure count and drops anything else', () =>
     expect(diagnosticEvent({ tags: { network_failure_count: bad } }).tags).toEqual({});
   }
 });
+
+// PR #608 added catalog routes (models.routes.ts) and per-provider key
+// routes (PUT/PATCH /user/api-keys/:provider) for its new providers. A
+// provider slug is fixed vocabulary, not user data; without it every
+// such failure collapses into one /:id route.
+it('keeps the BYOK provider model and api-key routes readable', () => {
+  for (const operation of ['bedrock', 'xai', 'custom']) {
+    expect(diagnosticRoute(`/api/models/${operation}?key=private`)).toBe(`/api/models/${operation}`);
+  }
+  for (const provider of ['bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom']) {
+    expect(diagnosticRoute(`/api/user/api-keys/${provider}`)).toBe(`/api/user/api-keys/${provider}`);
+  }
+});

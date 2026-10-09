@@ -27,11 +27,18 @@ import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
  * OpenCode Go keeps the previous 16,384: its Messages models (MiniMax, Qwen)
  * go through the Anthropic adapter, which does not recognise them and would
  * otherwise fall back to 4,096.
+ *
+ * `adapterDefault` is an adapter's own model-aware ceiling for SDKs that do
+ * not fill one in (Bedrock sends no maxTokens unless given one, so Bedrock's
+ * small server default would apply); see AiSdkAdapterConfig.
  */
-export function maxOutputTokensFor(provider: Provider): number | undefined {
+export function maxOutputTokensFor(
+  provider: Provider,
+  adapterDefault?: number,
+): number | undefined {
   const value = Number(process.env.LLM_MAX_OUTPUT_TOKENS);
   if (Number.isSafeInteger(value) && value > 0) return value;
-  return provider === "opencode-go" ? 16_384 : undefined;
+  return provider === "opencode-go" ? 16_384 : adapterDefault;
 }
 
 /**
@@ -211,6 +218,13 @@ export type AiSdkAdapterConfig = {
   courtlistenerCitationReminder?: boolean;
   /** Mark the prefix-cache breakpoint with a Bedrock cache point as well. */
   bedrockCachePoint?: boolean;
+  /**
+   * Output ceiling for a chat step at the given reasoning level, for SDKs
+   * that send none by default. LLM_MAX_OUTPUT_TOKENS still wins.
+   */
+  defaultMaxOutputTokens?: (
+    reasoning: StreamChatParams["reasoning"],
+  ) => number | undefined;
 };
 
 type PendingToolExecution = {
@@ -458,7 +472,10 @@ export async function streamAiSdk(
         ? { providerOptions }
         : {}),
       tools,
-      maxOutputTokens: maxOutputTokensFor(config.provider),
+      maxOutputTokens: maxOutputTokensFor(
+        config.provider,
+        config.defaultMaxOutputTokens?.(params.reasoning),
+      ),
       stopWhen: sdk.stepCountIs(maxIterations),
       abortSignal: internalAbort.signal,
       reasoning:
@@ -607,18 +624,36 @@ export async function completeAiSdkText(
   config: AiSdkAdapterConfig,
 ): Promise<string> {
   const { generateText } = await import("ai");
+  const reasoning =
+    config.supportsReasoning === false
+      ? undefined
+      : normalizeReasoningLevelForModel(config.modelId, "none");
+  const requested = params.maxTokens ?? 512;
   const result = await generateText({
     model: config.model,
     system: params.systemPrompt,
     prompt: params.user,
     abortSignal: params.abortSignal,
-    maxOutputTokens: params.maxTokens ?? 512,
-    reasoning:
-      config.supportsReasoning === false
-        ? undefined
-        : (normalizeReasoningLevelForModel(config.modelId, "none") as
-            | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
-            | undefined),
+    // Some models cannot turn thinking off ("none" is normalized to the
+    // lowest level they accept), and thinking is output too. Without
+    // headroom a short call — a 64-token title — can spend its whole
+    // allowance thinking and return no text. The cap is only a ceiling, so
+    // the headroom costs nothing unless the model actually uses it.
+    maxOutputTokens:
+      reasoning && reasoning !== "none"
+        ? requested + COMPLETION_REASONING_HEADROOM_TOKENS
+        : requested,
+    reasoning: reasoning as
+      | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
+      | undefined,
   });
   return result.text;
 }
+
+/**
+ * Extra output allowance for one-shot completions on models that always
+ * reason (Opus 5.5, Fable 5.1, GPT-6 Astra/Sol 6.1 — directly, or through
+ * Bedrock, Vertex, Foundry, Azure or a router). 4,096 matches what
+ * @ai-sdk/amazon-bedrock adds on top of a thinking budget for the answer.
+ */
+export const COMPLETION_REASONING_HEADROOM_TOKENS = 4_096;

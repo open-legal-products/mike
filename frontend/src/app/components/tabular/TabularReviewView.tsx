@@ -87,8 +87,11 @@ import { useSidebar } from "@/app/contexts/SidebarContext";
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
-import { ModelToggle, type NoModelsReason } from "../assistant/ModelToggle";
-import { routerModelsFromProfile } from "@/app/lib/routerModels";
+import { ModelToggle } from "../assistant/ModelToggle";
+import {
+    routerSelections,
+    type NoModelsReason,
+} from "@/shared/lib/modelCatalog";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
@@ -1509,7 +1512,11 @@ export function TRView({ reviewId, projectId }: Props) {
                                             apiKeysLoading={
                                                 profileLoading && !profile
                                             }
-                                            routerModels={routerModelsFromProfile(profile)}
+                                            routerSelections={
+                                                profile
+                                                    ? routerSelections(profile)
+                                                    : undefined
+                                            }
                                             onNoModelsClick={setNoModelsWarning}
                                         />
                                     ),

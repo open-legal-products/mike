@@ -3,13 +3,18 @@ import dns from "dns/promises";
 import net from "net";
 import { promisify } from "node:util";
 import { Agent, fetch as undiciFetch } from "undici";
+import {
+    BlockedDestinationError,
+    isBlockedDestinationError,
+} from "../blockedDestination";
 import { isBlockedIp } from "../privateIp";
 import { configuredApiPublicUrl } from "../runtimeConfig";
 import {
-    BLOCKED_METADATA_HOSTS,
     HEADER_NAME_RE,
     MAX_CUSTOM_HEADER_VALUE_LENGTH,
     MAX_CUSTOM_HEADERS,
+    canonicalHostname,
+    isBlockedHostname,
     type ConnectorRow,
     type Db,
     type McpConnectorAuthConfig,
@@ -292,27 +297,29 @@ export function toConnectorSummary(
 // Private/reserved IP classification lives in lib/privateIp.ts so every
 // guarded egress check reuses the exact same ranges.
 
-export async function validateRemoteMcpUrl(rawUrl: string): Promise<string> {
+/** How guard errors name the URL when the caller does not say. */
+const DEFAULT_GUARD_LABEL = "MCP server URL";
+
+export async function validateRemoteMcpUrl(
+    rawUrl: string,
+    label: string = DEFAULT_GUARD_LABEL,
+): Promise<string> {
     let url: URL;
     try {
         url = new URL(rawUrl);
     } catch {
-        throw new Error("MCP server URL must be a valid URL.");
+        throw new Error(`${label} must be a valid URL.`);
     }
     if (url.protocol !== "https:") {
-        throw new Error("MCP server URL must use HTTPS.");
+        throw new Error(`${label} must use HTTPS.`);
     }
     url.username = "";
     url.password = "";
     url.hash = "";
 
-    const hostname = url.hostname.toLowerCase();
-    if (
-        hostname === "localhost" ||
-        hostname.endsWith(".localhost") ||
-        BLOCKED_METADATA_HOSTS.has(hostname)
-    ) {
-        throw new Error("MCP server URL points to a blocked host.");
+    const hostname = canonicalHostname(url);
+    if (isBlockedHostname(hostname)) {
+        throw new BlockedDestinationError(`${label} points to a blocked host.`);
     }
 
     // URL.hostname wraps IPv6 literals in brackets ("[::1]"), which net.isIP
@@ -328,7 +335,9 @@ export async function validateRemoteMcpUrl(rawUrl: string): Promise<string> {
         ? [{ address: literalHost }]
         : await dns.lookup(hostname, { all: true, verbatim: true });
     if (!addresses.length || addresses.some(({ address }) => isBlockedIp(address))) {
-        throw new Error("MCP server URL resolves to a blocked network address.");
+        throw new BlockedDestinationError(
+            `${label} resolves to a blocked network address.`,
+        );
     }
 
     return url.toString();
@@ -409,9 +418,11 @@ const guardedAgent = new Agent({
                         !addresses.length ||
                         addresses.some(({ address }) => isBlockedIp(address))
                     ) {
+                        // Shared by every caller; guardedFetch re-labels it
+                        // with the caller's own wording.
                         callback(
-                            new Error(
-                                "MCP server URL resolves to a blocked network address.",
+                            new BlockedDestinationError(
+                                "Destination resolves to a blocked network address.",
                             ),
                             [],
                         );
@@ -446,6 +457,40 @@ const MAX_MCP_REDIRECTS = 5;
 export async function guardedFetch(
     input: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
+    options: {
+        /**
+         * What the URL is, as guard errors should call it ("Model endpoint
+         * URL"). Defaults to the MCP wording this guard was written for.
+         */
+        label?: string;
+    } = {},
+): Promise<Response> {
+    const label = options.label ?? DEFAULT_GUARD_LABEL;
+    try {
+        return await guardedFetchUnlabelled(input, init, label);
+    } catch (error) {
+        // A connect-time rejection surfaces from undici as "fetch failed"
+        // with the shared agent's caller-neutral error as its cause.
+        if (
+            isBlockedDestinationError(error) &&
+            !(
+                error instanceof BlockedDestinationError &&
+                error.message.startsWith(label)
+            )
+        ) {
+            throw new BlockedDestinationError(
+                `${label} resolves to a blocked network address.`,
+                { cause: error },
+            );
+        }
+        throw error;
+    }
+}
+
+async function guardedFetchUnlabelled(
+    input: Parameters<typeof fetch>[0],
+    init: Parameters<typeof fetch>[1] | undefined,
+    label: string,
 ): Promise<Response> {
     const isRequest = typeof input === "object" && input instanceof Request;
     let url =
@@ -454,7 +499,7 @@ export async function guardedFetch(
             : input instanceof URL
               ? input.toString()
               : input.url;
-    await validateRemoteMcpUrl(url);
+    await validateRemoteMcpUrl(url, label);
     // The request MUST go through the `undici` package's own `fetch`, not the
     // global one. Node's built-in fetch is a copy of undici frozen at the
     // version Node was built with (6.x on Node 22), while `guardedAgent` comes
@@ -510,7 +555,7 @@ export async function guardedFetch(
         }
         await response.body?.cancel().catch(() => undefined);
 
-        const validated = await validateRemoteMcpUrl(target);
+        const validated = await validateRemoteMcpUrl(target, label);
         // Header names configured for connector authentication are arbitrary,
         // so there is no complete denylist for secrets. On a cross-origin hop,
         // retain only the small set needed for GET/HEAD content negotiation.

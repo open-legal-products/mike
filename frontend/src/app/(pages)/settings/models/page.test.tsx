@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelOption } from "@/app/components/assistant/ModelToggle";
+import type { ModelOption } from "@/shared/lib/modelCatalog";
 
 const { updateModelPreference, configuredModels } = vi.hoisted(() => ({
     updateModelPreference: vi.fn(async () => true),

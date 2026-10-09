@@ -33,12 +33,7 @@ import {
     workflowSlashCommand,
 } from "./workflowSlashCommands";
 import { ApiKeyMissingPopup } from "../popups/ApiKeyMissingPopup";
-import {
-    ModelToggle,
-    type NoModelsReason,
-    type ReasoningLevel,
-} from "./ModelToggle";
-import { routerModelsFromProfile } from "@/app/lib/routerModels";
+import { ModelToggle, type ReasoningLevel } from "./ModelToggle";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { WarningPopup } from "../popups/WarningPopup";
 import {
@@ -73,6 +68,10 @@ import {
 } from "@/app/lib/documentUploadValidation";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
+import {
+    routerSelections,
+    type NoModelsReason,
+} from "@/shared/lib/modelCatalog";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
@@ -201,13 +200,17 @@ function ChatInputForChatImpl(
     // /user/profile request rewrite the saved composer selection to the
     // default — permanently. null means "not loaded", which the hook leaves
     // the stored selection alone for.
+    const savedRouterSelections = useMemo(
+        () => (profile ? routerSelections(profile) : undefined),
+        [profile],
+    );
     const [model, setModel] = useSelectedModel({
         selectionKey: chatKey,
         chatModel,
         lastSelectedModel: profile?.lastSelectedChatModel,
         routerSelections:
-            profile && !apiKeysDegraded
-                ? routerModelsFromProfile(profile)
+            savedRouterSelections && !apiKeysDegraded
+                ? savedRouterSelections
                 : null,
         apiKeys: apiKeysDegraded ? undefined : profile?.apiKeys,
         configuredModelIds,
@@ -881,7 +884,7 @@ function ChatInputForChatImpl(
                                     apiKeysLoading={
                                         profileLoading && !profile
                                     }
-                                    routerModels={routerModelsFromProfile(profile)}
+                                    routerSelections={savedRouterSelections}
                                     compact={compactControls}
                                     triggerClassName={cn(
                                         "h-7.5",

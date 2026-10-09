@@ -1,39 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ReasoningLevel } from "../components/assistant/ModelToggle";
 import {
-    ALLOWED_MODEL_IDS,
     canonicalModelId,
-    ROUTER_SLUGS,
-    type ReasoningLevel,
-} from "../components/assistant/ModelToggle";
+    isAllowedModelId,
+    isRouterModelSelected,
+    type RouterSelections,
+} from "@/shared/lib/modelCatalog";
 import { isModelAvailable } from "../lib/modelAvailability";
 import type { ApiKeyState } from "../lib/mikeApi";
-import type { RouterModelSelections } from "../lib/routerModels";
-
-/**
- * The composer's accepted-id surface. Exported so the Word add-in drift guard
- * (frontend/src/wordAddin/catalogParity.test.ts) can compare it against the
- * add-in's hand-mirrored copy instead of restating the rule.
- */
-export function isAllowedModelId(
-    id: string,
-    configuredModelIds: readonly string[] = [],
-): boolean {
-    return (
-        ALLOWED_MODEL_IDS.has(id) ||
-        configuredModelIds.includes(id) ||
-        id.startsWith("ollama/") ||
-        ROUTER_SLUGS.some((slug) => id.startsWith(`${slug}/`))
-    );
-}
 
 export interface SelectedModelSources {
     selectionKey?: string | null;
     chatModel?: string | null;
     lastSelectedModel?: string | null;
-    /** The user's saved models per router; null when they are not known. */
-    routerSelections?: RouterModelSelections | null;
+    /**
+     * Each router's saved Model Selections, or null while they are unknown
+     * (a stored router selection is then left alone). Pass a stable object
+     * (e.g. memoized on the profile): a new one re-resolves the selection.
+     */
+    routerSelections?: RouterSelections | null;
     /** Undefined means availability is unknown and must fail open. */
     apiKeys?: ApiKeyState;
     /** Authenticated deployment models returned by GET /models/configured. */
@@ -52,14 +39,11 @@ function usableStoredModel(
 
     if (sources.configuredModelIds?.includes(canonical)) return canonical;
 
-    const router = ROUTER_SLUGS.find((slug) =>
-        canonical.startsWith(`${slug}/`),
-    );
-    if (router && sources.routerSelections) {
-        const selection = sources.routerSelections[router] ?? [];
-        if (!selection.includes(canonical.slice(router.length + 1))) {
-            return null;
-        }
+    if (
+        sources.routerSelections &&
+        !isRouterModelSelected(canonical, sources.routerSelections)
+    ) {
+        return null;
     }
     if (sources.apiKeys && !isModelAvailable(canonical, sources.apiKeys)) {
         return null;
@@ -74,25 +58,13 @@ export function useSelectedModel(
     const [model, setModelState] = useState("");
     const manuallySelected = useRef(false);
     const previousSelectionKey = useRef(sources.selectionKey);
-    // Callers build the selection map inline, so compare it by content: a
-    // fresh but equal object must not look like a changed selection.
-    const routerSelectionsKey = sources.routerSelections
-        ? JSON.stringify(sources.routerSelections)
-        : null;
-    const routerSelections = useMemo<RouterModelSelections | null>(
-        () =>
-            routerSelectionsKey === null
-                ? null
-                : (JSON.parse(routerSelectionsKey) as RouterModelSelections),
-        [routerSelectionsKey],
-    );
     const configuredModelIds = sources.configuredModelIds;
     const selectionSources = useMemo<SelectedModelSources>(
         () => ({
             selectionKey: sources.selectionKey,
             chatModel: sources.chatModel,
             lastSelectedModel: sources.lastSelectedModel,
-            routerSelections,
+            routerSelections: sources.routerSelections ?? null,
             apiKeys: sources.apiKeys,
             configuredModelIds,
         }),
@@ -100,7 +72,7 @@ export function useSelectedModel(
             sources.selectionKey,
             sources.chatModel,
             sources.lastSelectedModel,
-            routerSelections,
+            sources.routerSelections,
             sources.apiKeys,
             configuredModelIds,
         ],

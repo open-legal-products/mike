@@ -1,7 +1,8 @@
 // Browser-side mirror of backend/src/lib/llm/cloudProviders.ts validation, so
 // a malformed region, endpoint, location or base URL is explained before the
 // save round trip.
-// The backend remains authoritative and re-validates every value.
+// The backend remains authoritative and re-validates every value;
+// packages/byok-validation/cases.json keeps the base URL rule in step with it.
 
 const AWS_REGION_RE = /^[a-z]{2}(?:-[a-z]+)+-\d{1,2}$/;
 const AZURE_RESOURCE_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
@@ -71,10 +72,47 @@ export function normalizeVertexLocation(value: string): string | null {
   return VERTEX_LOCATION_RE.test(location) ? location : null;
 }
 
+// The common non-public IPv6 literals: unspecified, loopback, unique-local
+// (fc00::/7), link-local (fe80::/10) and IPv4-mapped. Like the IPv4 list
+// this is only for inline feedback; the backend's checks stay authoritative.
+function isPrivateIpv6(literal: string): boolean {
+  if (!literal.includes(":")) return false;
+  return (
+    literal === "::" ||
+    literal === "::1" ||
+    /^f[cd][0-9a-f]{0,2}:/.test(literal) ||
+    /^fe[89ab][0-9a-f]?:/.test(literal) ||
+    literal.startsWith("::ffff:")
+  );
+}
+
 /**
- * A public https base URL without a trailing slash, otherwise null. The
- * backend additionally rejects private and reserved addresses, including
- * names that resolve to one.
+ * An IPv4 literal in a loopback, private, link-local (cloud metadata) or
+ * carrier-grade NAT range. The URL parser already canonicalizes forms like
+ * "10.1" to "10.0.0.1"; IPv6 literals fail the dotted-host check below.
+ */
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split(".");
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part))) {
+    return false;
+  }
+  const [a, b] = parts.map(Number) as [number, number];
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+/**
+ * A public https base URL without a trailing slash, otherwise null. Obvious
+ * private IP literals are caught here for early feedback; the backend is
+ * authoritative and also rejects other reserved addresses and names that
+ * resolve to one.
  */
 export function normalizeCustomBaseUrl(value: string): string | null {
   const trimmed = value.trim();
@@ -85,16 +123,29 @@ export function normalizeCustomBaseUrl(value: string): string | null {
   } catch {
     return null;
   }
-  const hostname = url.hostname.toLowerCase();
+  // "localhost." is localhost: drop the root-label dot(s) before the checks.
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/, "");
+  // URL keeps IPv6 literals bracketed ("[2606:4700::1]"); IPv4 is
+  // normalized to dotted decimal. A literal has no dotted name to check;
+  // the backend decides whether its address is public.
+  const literalHost =
+    hostname.startsWith("[") && hostname.endsWith("]")
+      ? hostname.slice(1, -1)
+      : hostname;
+  const isIpLiteral =
+    /^[\d.]+$/.test(literalHost) || literalHost.includes(":");
   if (
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
     url.search ||
     url.hash ||
+    !hostname ||
     hostname === "localhost" ||
     hostname.endsWith(".localhost") ||
-    !hostname.includes(".")
+    (!isIpLiteral && !hostname.includes(".")) ||
+    isPrivateIpv4(hostname) ||
+    isPrivateIpv6(literalHost)
   ) {
     return null;
   }

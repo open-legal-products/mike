@@ -204,39 +204,29 @@ export interface QuickAction {
  * must not drag the API client's runtime dependencies into the web app's
  * type-check.
  */
-export interface ApiKeyStatus {
-  claude: boolean;
-  gemini: boolean;
-  openai: boolean;
-  mistral: boolean;
-  openrouter: boolean;
-  vercel: boolean;
-  "opencode-go": boolean;
-  // Absent from a backend that predates these providers.
-  bedrock?: boolean;
-  azure?: boolean;
-  "azure-foundry"?: boolean;
-  vertex?: boolean;
-  xai?: boolean;
-  custom?: boolean;
-  courtlistener: boolean;
-  sources?: Partial<
-    Record<
-      | "claude"
-      | "gemini"
-      | "openai"
-      | "mistral"
-      | "openrouter"
-      | "vercel"
-      | "opencode-go"
-      | "bedrock"
-      | "azure"
-      | "azure-foundry"
-      | "vertex"
-      | "xai"
-      | "custom"
-      | "courtlistener",
-      "user" | "env" | null
-    >
-  >;
-}
+/** Key providers reported by GET /user/api-keys. */
+export type ApiKeyProvider =
+  | "claude"
+  | "gemini"
+  | "openai"
+  | "mistral"
+  | "openrouter"
+  | "vercel"
+  | "opencode-go"
+  | "bedrock"
+  | "azure"
+  | "azure-foundry"
+  | "vertex"
+  | "xai"
+  | "custom"
+  | "courtlistener";
+
+/**
+ * GET /user/api-keys: whether each provider has a usable key (false for a
+ * key that is saved but switched off), where it came from, and whether a
+ * saved key is switched on.
+ */
+export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
+  sources?: Partial<Record<ApiKeyProvider, "user" | "env" | null>>;
+  enabled?: Partial<Record<ApiKeyProvider, boolean>>;
+};

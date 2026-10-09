@@ -103,6 +103,9 @@
       ],
       "@mike/user-error": [
         "../frontend/src/shared/lib/userError.ts"
+      ],
+      "@mike/model-catalog": [
+        "../frontend/src/shared/lib/modelCatalog.ts"
       ]
     },
     "jsx": "react-jsx",

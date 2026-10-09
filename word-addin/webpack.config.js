@@ -231,6 +231,9 @@ module.exports = async (_env, options) => {
         "@mike/toast-store": frontendShared("lib", "toastStore.ts"),
         "@mike/toast-ui": frontendSharedUi("ToastUI.tsx"),
         "@mike/user-error": frontendShared("lib", "userError.ts"),
+        // One model catalog (routers, picker rows, key-based availability)
+        // for the web app and the add-in.
+        "@mike/model-catalog": frontendShared("lib", "modelCatalog.ts"),
       },
     },
     module: {

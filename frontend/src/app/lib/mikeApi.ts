@@ -5,6 +5,7 @@
 
 import { isPanelDocument } from "@/app/components/shared/types";
 import { authenticatedFetch } from "@/app/lib/authEvents";
+import type { RouterProfileLists } from "@/shared/lib/modelCatalog";
 import {
     markErrorHandled,
     reportApiFailure,
@@ -717,7 +718,7 @@ export interface PersonalisationDetails {
     professionalTitle?: ProfessionalTitle | null;
     practiceAreas?: string[];}
 
-export interface UserProfile {
+export interface UserProfile extends RouterProfileLists {
     displayName: string | null;
     organisation: string | null;
     jurisdiction: string | null;
@@ -741,15 +742,6 @@ export interface UserProfile {
     quickActionsVisible: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
-    openRouterModels: string[];
-    vercelModels: string[];
-    openCodeGoModels: string[];
-    bedrockModels: string[];
-    azureModels: string[];
-    azureFoundryModels: string[];
-    vertexModels: string[];
-    xaiModels: string[];
-    customModels: string[];
     apiKeyStatus: ApiKeyStatus;
 }
 
@@ -840,16 +832,7 @@ export async function updateUserProfile(payload: {
     quickActionsVisible?: boolean;
     darkMode?: boolean;
     projectMemoryDefault?: boolean;
-    openRouterModels?: string[];
-    vercelModels?: string[];
-    openCodeGoModels?: string[];
-    bedrockModels?: string[];
-    azureModels?: string[];
-    azureFoundryModels?: string[];
-    vertexModels?: string[];
-    xaiModels?: string[];
-    customModels?: string[];
-}): Promise<UserProfile> {
+} & Partial<RouterProfileLists>): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

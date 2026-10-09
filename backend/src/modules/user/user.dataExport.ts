@@ -165,11 +165,17 @@ async function loadApiKeyStatus(db: Db, userId: string) {
         query
             .eq("user_id", userId)
             .order("provider", { ascending: true }),
-        "provider, created_at, updated_at",
+        // Never the key material (encrypted_key, iv, auth_tag): only what
+        // the user can already see in Settings.
+        "provider, settings, enabled, created_at, updated_at",
     );
     return rows.map((row) => ({
         provider: row.provider,
         has_key: true,
+        // A disabled provider keeps its key; enabled defaults to true.
+        enabled: row.enabled !== false,
+        // The non-secret region/endpoint/location/base URL saved with it.
+        settings: row.settings ?? null,
         created_at: row.created_at,
         updated_at: row.updated_at,
     }));

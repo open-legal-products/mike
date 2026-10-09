@@ -42,6 +42,12 @@ export default defineConfig({
                 find: /^@mike\/upload-session-client$/,
                 replacement: resolvePath("./src/shared/api/uploadSessionClient.ts"),
             },
+            // Word add-in sources under test import the shared model catalog
+            // through the add-in's alias.
+            {
+                find: /^@mike\/model-catalog$/,
+                replacement: resolvePath("./src/shared/lib/modelCatalog.ts"),
+            },
             {
                 find: /^@\/(.*)$/,
                 replacement: resolvePath("./src/$1"),

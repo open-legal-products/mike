@@ -7,28 +7,18 @@ const {
     getBedrockModels,
     getXaiModels,
     getCustomEndpointModels,
-    updateOpenRouterModels,
-    updateOpenCodeGoModels,
-    updateBedrockModels,
-    updateXaiModels,
-    updateCustomModels,
-    updateVertexModels,
+    updateRouterModels,
     openCodeGoConfigured,
     bedrockConfigured,
     newProvidersConfigured,
 } = vi.hoisted(() => ({
     getXaiModels: vi.fn(),
     getCustomEndpointModels: vi.fn(),
-    updateXaiModels: vi.fn(),
-    updateCustomModels: vi.fn(),
-    updateVertexModels: vi.fn(),
     newProvidersConfigured: { value: false },
     getOpenRouterModels: vi.fn(),
     getOpenCodeGoModels: vi.fn(),
     getBedrockModels: vi.fn(),
-    updateOpenRouterModels: vi.fn(),
-    updateOpenCodeGoModels: vi.fn(),
-    updateBedrockModels: vi.fn(),
+    updateRouterModels: vi.fn(),
     openCodeGoConfigured: { value: false },
     bedrockConfigured: { value: false },
 }));
@@ -73,21 +63,11 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
             xaiModels: [],
             customModels: [],
         },
-        // One save callback keyed by router; each test asserts on its own.
-        updateRouterModels: (router: string, models: string[]) => {
-            const save: Record<string, (models: string[]) => unknown> = {
-                openrouter: updateOpenRouterModels,
-                "opencode-go": updateOpenCodeGoModels,
-                bedrock: updateBedrockModels,
-                vertex: updateVertexModels,
-                xai: updateXaiModels,
-                custom: updateCustomModels,
-            };
-            return save[router]?.(models) ?? Promise.resolve(true);
-        },
+        updateRouterModels,
     }),
 }));
 
+import { Modal } from "@/app/components/modals/Modal";
 import {
     RouterSettingsSection,
     normalizeTypedModelId,
@@ -125,7 +105,7 @@ describe("RouterSettingsSection", () => {
         vi.unstubAllGlobals();
     });
 
-    it("shows matching catalog entries above a full-width typeahead", async () => {
+    it("shows matching catalog entries below a full-width typeahead", async () => {
         render(<RouterSettingsSection />);
         const input = screen.getByPlaceholderText(
             "e.g. anthropic/claude-sonnet-5",
@@ -141,8 +121,16 @@ describe("RouterSettingsSection", () => {
         expect(screen.queryByText("Claude Sonnet 4.5")).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
 
+        // Below the field and in normal flow, so the provider modal's
+        // scroll container grows to show it instead of clipping it.
         const dropdown = screen.getByTestId("openrouter-model-catalog");
-        expect(dropdown).toHaveClass("bottom-full", "left-0", "w-full");
+        expect(dropdown).toHaveClass("w-full");
+        expect(dropdown).not.toHaveClass("absolute");
+        expect(dropdown).not.toHaveClass("bottom-full");
+        expect(
+            input.compareDocumentPosition(dropdown) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
     });
 
     it("opens and closes the catalog from the chevron", async () => {
@@ -163,8 +151,50 @@ describe("RouterSettingsSection", () => {
         ).not.toBeInTheDocument();
     });
 
+    it("closes only the catalog on Escape inside a provider modal", async () => {
+        const onClose = vi.fn();
+        render(
+            <Modal open onClose={onClose} breadcrumbs={["OpenRouter"]}>
+                <RouterSettingsSection />
+            </Modal>,
+        );
+        const input = screen.getByRole("combobox", {
+            name: "OpenRouter models",
+        });
+        await waitFor(() => expect(getOpenRouterModels).toHaveBeenCalled());
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(
+            screen.getByTestId("openrouter-model-catalog"),
+        ).toBeInTheDocument();
+
+        fireEvent.keyDown(input, { key: "Escape" });
+        expect(
+            screen.queryByTestId("openrouter-model-catalog"),
+        ).not.toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+
+        // Focus elsewhere in the dialog (the chevron opened the list): the
+        // document-level dismiss path must claim Escape too.
+        fireEvent.click(
+            screen.getByRole("button", { name: "Choose OpenRouter model" }),
+        );
+        expect(
+            screen.getByTestId("openrouter-model-catalog"),
+        ).toBeInTheDocument();
+        fireEvent.keyDown(document.body, { key: "Escape" });
+        expect(
+            screen.queryByTestId("openrouter-model-catalog"),
+        ).not.toBeInTheDocument();
+        expect(onClose).not.toHaveBeenCalled();
+
+        // With the catalog closed, Escape closes the modal as usual.
+        fireEvent.keyDown(input, { key: "Escape" });
+        expect(onClose).toHaveBeenCalledOnce();
+    });
+
     it("supports keyboard navigation and selection from the model field", async () => {
-        updateOpenRouterModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection />);
         const input = screen.getByRole("combobox", {
             name: "OpenRouter models",
@@ -180,7 +210,7 @@ describe("RouterSettingsSection", () => {
 
         fireEvent.keyDown(input, { key: "Enter" });
         await waitFor(() =>
-            expect(updateOpenRouterModels).toHaveBeenCalledWith([
+            expect(updateRouterModels).toHaveBeenCalledWith("openrouter", [
                 "anthropic/claude-sonnet-4.5",
                 "openai/gpt-5.4",
             ]),
@@ -191,7 +221,7 @@ describe("RouterSettingsSection", () => {
         // Typing the full valid id "qwen/qwen-2" also matches the catalog's
         // "qwen/qwen-2.5-72b-instruct". Enter must add what was typed, not
         // the highlighted lookalike.
-        updateOpenRouterModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection />);
         const input = screen.getByRole("combobox", {
             name: "OpenRouter models",
@@ -209,7 +239,7 @@ describe("RouterSettingsSection", () => {
 
         fireEvent.keyDown(input, { key: "Enter" });
         await waitFor(() =>
-            expect(updateOpenRouterModels).toHaveBeenCalledWith([
+            expect(updateRouterModels).toHaveBeenCalledWith("openrouter", [
                 "anthropic/claude-sonnet-4.5",
                 "qwen/qwen-2",
             ]),
@@ -226,7 +256,7 @@ describe("RouterSettingsSection", () => {
         fireEvent.change(input, { target: { value: "qwen" } });
         fireEvent.keyDown(input, { key: "Enter" });
 
-        expect(updateOpenRouterModels).not.toHaveBeenCalled();
+        expect(updateRouterModels).not.toHaveBeenCalled();
         // The search text stays so the user can keep narrowing the catalog…
         expect(input).toHaveValue("qwen");
         // …but silence would read as a broken key. Say what is wrong.
@@ -247,7 +277,7 @@ describe("RouterSettingsSection", () => {
         });
         fireEvent.keyDown(input, { key: "Enter" });
 
-        expect(updateOpenRouterModels).not.toHaveBeenCalled();
+        expect(updateRouterModels).not.toHaveBeenCalled();
         expect(
             screen.getByText("Model IDs are at most 200 characters."),
         ).toBeInTheDocument();
@@ -279,7 +309,7 @@ describe("RouterSettingsSection", () => {
         // OpenRouter's catalog contains "openrouter/auto". Stripping the
         // router prefix before validating leaves "auto", which is not
         // vendor/model shaped, so the add used to fail with an error.
-        updateOpenRouterModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection />);
         const input = screen.getByRole("combobox", {
             name: "OpenRouter models",
@@ -290,7 +320,7 @@ describe("RouterSettingsSection", () => {
         fireEvent.keyDown(input, { key: "Enter" });
 
         await waitFor(() =>
-            expect(updateOpenRouterModels).toHaveBeenCalledWith([
+            expect(updateRouterModels).toHaveBeenCalledWith("openrouter", [
                 "anthropic/claude-sonnet-4.5",
                 "openrouter/auto",
             ]),
@@ -338,6 +368,28 @@ describe("normalizeTypedModelId", () => {
         expect(normalizeTypedModelId("", "openrouter")).toBeNull();
     });
 
+    it("rejects account model ids the backend refuses as path-unsafe", () => {
+        // Mirrors isSafeAccountModelId (backend lib/llm/models.ts; the shared
+        // cases in byokValidationCases.test.ts cover the grammar). Refusing
+        // the id here gives an inline message instead of a generic "could
+        // not be saved".
+        const traversal =
+            "claude/../../../../v1/projects/victim/endpoints/123:rawPredict?x=";
+        for (const provider of [
+            "bedrock",
+            "azure",
+            "azure-foundry",
+            "vertex",
+            "xai",
+            "custom",
+        ] as const) {
+            expect(normalizeTypedModelId(traversal, provider)).toBeNull();
+        }
+        expect(
+            normalizeTypedModelId("meta/llama-4-maverick-maas", "vertex"),
+        ).toBe("meta/llama-4-maverick-maas");
+    });
+
     it("enforces the backend's 200-character model_id limit", () => {
         // user_router_models CHECKs char_length(model_id) between 1 and 200,
         // so anything longer is a guaranteed 400 — catch it where the user is
@@ -367,7 +419,7 @@ describe("RouterSettingsSection with OpenCode Go configured", () => {
     });
 
     it("saves a typed bare model name, which the other routers reject", async () => {
-        updateOpenCodeGoModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection />);
         const input = screen.getByPlaceholderText("e.g. glm-5");
 
@@ -376,9 +428,9 @@ describe("RouterSettingsSection with OpenCode Go configured", () => {
         fireEvent.keyDown(input, { key: "Enter" });
 
         await waitFor(() =>
-            expect(updateOpenCodeGoModels).toHaveBeenCalledWith(["kimi-k3"]),
+            expect(updateRouterModels).toHaveBeenCalledWith("opencode-go", ["kimi-k3"]),
         );
-        expect(updateOpenRouterModels).not.toHaveBeenCalled();
+        expect(updateRouterModels).toHaveBeenCalledTimes(1);
     });
 
     it("validates typed ids per router", () => {
@@ -402,7 +454,7 @@ describe("RouterSettingsSection with Amazon Bedrock configured", () => {
     });
 
     it("keeps manual IDs available alongside the catalog", async () => {
-        updateBedrockModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection />);
         const input = screen.getByPlaceholderText(
             "e.g. us.anthropic.claude-opus-5-5",
@@ -419,31 +471,31 @@ describe("RouterSettingsSection with Amazon Bedrock configured", () => {
         fireEvent.keyDown(input, { key: "Enter" });
 
         await waitFor(() =>
-            expect(updateBedrockModels).toHaveBeenCalledWith([
+            expect(updateRouterModels).toHaveBeenCalledWith("bedrock", [
                 "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5",
             ]),
         );
     });
 
     it("adds a discovered inference profile", async () => {
-        updateBedrockModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection />);
         const choose = screen.getByRole("button", { name: "Choose Amazon Bedrock model" });
         await waitFor(() => expect(choose).toBeEnabled());
         fireEvent.click(choose);
         fireEvent.click(screen.getByRole("option", { name: /Test Chat/ }));
-        await waitFor(() => expect(updateBedrockModels).toHaveBeenCalledWith(["us.test-chat"]));
+        await waitFor(() => expect(updateRouterModels).toHaveBeenCalledWith("bedrock", ["us.test-chat"]));
     });
 
     it("keeps manual entry when discovery fails", async () => {
         getBedrockModels.mockRejectedValue(new Error("provider failure"));
-        updateBedrockModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection />);
         await screen.findByText(/Amazon Bedrock's model list could not be loaded/);
         const input = screen.getByRole("combobox", { name: "Amazon Bedrock models" });
         fireEvent.change(input, { target: { value: "custom-profile" } });
         fireEvent.keyDown(input, { key: "Enter" });
-        await waitFor(() => expect(updateBedrockModels).toHaveBeenCalledWith(["custom-profile"]));
+        await waitFor(() => expect(updateRouterModels).toHaveBeenCalledWith("bedrock", ["custom-profile"]));
     });
 
     it("limits a provider modal to that provider's models and catalog", async () => {
@@ -480,19 +532,19 @@ describe("RouterSettingsSection with Vertex AI, xAI and a custom endpoint config
     });
 
     it("adds an xAI model from the live catalog", async () => {
-        updateXaiModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection provider="xai" />);
         const choose = screen.getByRole("button", { name: "Choose xAI model" });
         await waitFor(() => expect(choose).toBeEnabled());
         fireEvent.click(choose);
         fireEvent.click(screen.getByRole("option", { name: /grok-4.3/ }));
         await waitFor(() =>
-            expect(updateXaiModels).toHaveBeenCalledWith(["grok-4.3"]),
+            expect(updateRouterModels).toHaveBeenCalledWith("xai", ["grok-4.3"]),
         );
     });
 
     it("takes typed Vertex model IDs, which have no catalog", async () => {
-        updateVertexModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection provider="vertex" />);
         const input = screen.getByPlaceholderText("e.g. gemini-3.1-pro-preview");
         expect(input).not.toHaveAttribute("role", "combobox");
@@ -501,14 +553,14 @@ describe("RouterSettingsSection with Vertex AI, xAI and a custom endpoint config
         });
         fireEvent.keyDown(input, { key: "Enter" });
         await waitFor(() =>
-            expect(updateVertexModels).toHaveBeenCalledWith([
+            expect(updateRouterModels).toHaveBeenCalledWith("vertex", [
                 "meta/llama-4-maverick-maas",
             ]),
         );
     });
 
     it("still takes typed IDs when a custom endpoint has no model list", async () => {
-        updateCustomModels.mockResolvedValue(true);
+        updateRouterModels.mockResolvedValue(true);
         render(<RouterSettingsSection provider="custom" />);
         expect(
             await screen.findByText(
@@ -519,7 +571,7 @@ describe("RouterSettingsSection with Vertex AI, xAI and a custom endpoint config
         fireEvent.change(input, { target: { value: "llama-4-70b" } });
         fireEvent.keyDown(input, { key: "Enter" });
         await waitFor(() =>
-            expect(updateCustomModels).toHaveBeenCalledWith(["llama-4-70b"]),
+            expect(updateRouterModels).toHaveBeenCalledWith("custom", ["llama-4-70b"]),
         );
     });
 });

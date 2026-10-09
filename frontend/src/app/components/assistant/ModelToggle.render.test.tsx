@@ -1,11 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-    mergeConfiguredModelOptions,
-    ModelToggle,
-    underlyingProviderGroup,
-} from "./ModelToggle";
+import { mergeConfiguredModelOptions, ModelToggle } from "./ModelToggle";
+import { underlyingProviderGroup } from "@/shared/lib/modelCatalog";
 import type {
     ApiKeyState,
     ConfiguredModelOption,
@@ -323,7 +320,7 @@ describe("ModelToggle availability states", () => {
                 value=""
                 onChange={vi.fn()}
                 apiKeys={keys({ openrouter: true })}
-                routerModels={{ openrouter: [] }}
+                routerSelections={{ openrouter: [] }}
                 onNoModelsClick={onNoModelsClick}
             />,
         );
@@ -368,7 +365,7 @@ describe("ModelToggle provider grouping", () => {
                 value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true, "opencode-go": true })}
-                routerModels={{ "opencode-go": ["glm-5"] }}
+                routerSelections={{ "opencode-go": ["glm-5"] }}
             />,
         );
 
@@ -386,7 +383,7 @@ describe("ModelToggle provider grouping", () => {
                 value="gemini-3.8-flash"
                 onChange={vi.fn()}
                 apiKeys={keys({ gemini: true })}
-                routerModels={{ "opencode-go": ["glm-5"] }}
+                routerSelections={{ "opencode-go": ["glm-5"] }}
             />,
         );
 
@@ -402,7 +399,7 @@ describe("ModelToggle provider grouping", () => {
                 value="claude-fable-5-1"
                 onChange={vi.fn()}
                 apiKeys={keys({ claude: true, openrouter: true })}
-                routerModels={{ openrouter: ["anthropic/claude-fable-5-1"] }}
+                routerSelections={{ openrouter: ["anthropic/claude-fable-5-1"] }}
             />,
         );
 
@@ -424,7 +421,7 @@ describe("ModelToggle provider grouping", () => {
                 value={id}
                 onChange={onChange}
                 apiKeys={keys({ [provider]: true })}
-                routerModels={models}
+                routerSelections={models}
             />,
         );
 

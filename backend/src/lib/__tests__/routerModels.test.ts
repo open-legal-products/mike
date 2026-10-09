@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetModelRegistryCache } from "../llm/registry";
 import {
     getUserRouterModels,
@@ -163,7 +163,7 @@ describe("resolveRequestedModel outside-selection behaviour", () => {
                 "throw",
             ),
         ).rejects.toThrow(
-            "Model vercel/pricy/frontier is not in your saved Vercel AI Gateway models — add it under Vercel AI Gateway in Settings → Bring Your Own Keys.",
+            "Model vercel/pricy/frontier is not in your saved Vercel AI Gateway models — open Vercel AI Gateway in Settings → Bring Your Own Keys and add it under Model Selections.",
         );
     });
 
@@ -262,44 +262,35 @@ describe("router slugs", () => {
     });
 });
 
-describe("deployment-declared models that start with a router slug", () => {
-    const originalConfig = process.env.MIKE_MODEL_CONFIG_JSON;
+// PR #608 regression: the new prefixes (azure/, bedrock/, custom/, …) are
+// ordinary names an operator may already use in MIKE_MODEL_CONFIG_JSON.
+// providerForModel lets configured models win; router gating must agree, or
+// the operator's model is rejected as "not in your saved Azure OpenAI models".
+describe("operator-configured models that share a router prefix", () => {
+    const original = process.env.MIKE_MODEL_CONFIG_JSON;
 
-    afterEach(() => {
-        if (originalConfig === undefined) {
-            delete process.env.MIKE_MODEL_CONFIG_JSON;
-        } else {
-            process.env.MIKE_MODEL_CONFIG_JSON = originalConfig;
-        }
-        resetModelRegistryCache();
-    });
-
-    it("are not router models and are not gated by a saved selection", async () => {
+    beforeEach(() => {
         process.env.MIKE_MODEL_CONFIG_JSON = JSON.stringify({
             models: [
                 {
-                    id: "azure/gpt-4o",
+                    id: "azure/gpt-internal",
                     provider: "openai-compatible",
                     location: "cloud",
-                    baseUrl: "https://models.example.test/v1",
+                    baseUrl: "https://llm.internal.example/v1",
                 },
             ],
         });
         resetModelRegistryCache();
-        const db = { from: vi.fn(() => queryResult([])) };
+    });
 
-        expect(routerForModelId("azure/gpt-4o")).toBeNull();
-        expect(routerForModelId("azure/other-deployment")).toBe("azure");
-        await expect(
-            resolveRequestedModel(
-                "azure/gpt-4o",
-                "fallback",
-                "user-1",
-                db as never,
-                "throw",
-            ),
-        ).resolves.toBe("azure/gpt-4o");
-        // The user's selections are never even read for it.
-        expect(db.from).not.toHaveBeenCalled();
+    afterEach(() => {
+        if (original === undefined) delete process.env.MIKE_MODEL_CONFIG_JSON;
+        else process.env.MIKE_MODEL_CONFIG_JSON = original;
+        resetModelRegistryCache();
+    });
+
+    it("is not classified as a router model", () => {
+        expect(routerForModelId("azure/gpt-internal")).toBeNull();
+        expect(routerForModelId("azure/my-deployment")).toBe("azure");
     });
 });

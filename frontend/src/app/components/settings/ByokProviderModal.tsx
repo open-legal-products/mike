@@ -14,7 +14,7 @@ import {
   normalizeVertexLocation,
 } from "@/app/lib/cloudProviderSettings";
 import type { ApiKeyProvider, ApiKeySettings } from "@/app/lib/mikeApi";
-import type { RouterSlug } from "@/app/components/assistant/ModelToggle";
+import { isRouterSlug } from "@/shared/lib/modelCatalog";
 
 export type ByokProvider = {
   provider: ApiKeyProvider;
@@ -100,18 +100,6 @@ function settingsFor(
   return { endpoint: value };
 }
 
-const MODEL_SELECTION_PROVIDERS: readonly string[] = [
-  "openrouter",
-  "vercel",
-  "opencode-go",
-  "bedrock",
-  "azure",
-  "azure-foundry",
-  "vertex",
-  "xai",
-  "custom",
-];
-
 function validateVertexKey(value: string): string | null {
   return isVertexServiceAccountKey(value)
     ? null
@@ -127,7 +115,9 @@ export function ByokProviderModal({ provider, enabledToggle, onClose }: {
   const { profile, updateApiKey } = useUserProfile();
   const settingsProvider =
     SETTINGS_PROVIDERS.find((slug) => slug === provider?.provider) ?? null;
-  const hasModelSelections = provider && MODEL_SELECTION_PROVIDERS.includes(provider.provider);
+  // Routers (and the cloud providers) also keep Model Selections.
+  const router =
+    provider && isRouterSlug(provider.provider) ? provider.provider : null;
 
   if (!provider) return null;
 
@@ -155,7 +145,7 @@ export function ByokProviderModal({ provider, enabledToggle, onClose }: {
           open
           onClose={onClose}
           breadcrumbs={["Model Providers", provider.name]}
-          size={hasModelSelections ? "md" : "sm"}
+          size={router ? "md" : "sm"}
           className="h-auto max-h-[calc(100vh-2rem)]"
           primaryAction={{ ...saveAction, variant: "blue" }}
           secondaryAction={removeAction ? { ...removeAction, label: "Clear", variant: "danger" } : undefined}
@@ -168,8 +158,8 @@ export function ByokProviderModal({ provider, enabledToggle, onClose }: {
               </div>
             )}
             {fields}
-            {hasModelSelections && profile?.apiKeys[provider.provider]?.configured && (
-              <RouterSettingsSection provider={provider.provider as RouterSlug} />
+            {router && profile?.apiKeys[router]?.configured && (
+              <RouterSettingsSection provider={router} />
             )}
           </div>
         </Modal>

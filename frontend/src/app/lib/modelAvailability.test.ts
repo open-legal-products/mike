@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SETTINGS_MODELS } from "../components/assistant/ModelToggle";
+import { SETTINGS_MODELS } from "@/shared/lib/modelCatalog";
 import type { ApiKeyState } from "./mikeApi";
 import {
     getModelProvider,
