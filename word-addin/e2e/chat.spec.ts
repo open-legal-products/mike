@@ -275,7 +275,7 @@ test("does not send without the required Word document context", async ({
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByRole("alert")).toHaveText(
-    "Mike couldn't read the current Word document. Please try again.",
+    "Mike couldn't read this Word document. Try again.",
   );
   await expect(composer).toHaveValue("Review this document");
   await expect(page.locator("[data-message-id]")).toHaveCount(0);
@@ -682,7 +682,7 @@ test("a reasoning delta replaces Thinking with a live reasoning trace", async ({
   ).toBeVisible();
 });
 
-test("a pre-[DONE] error event surfaces as 'Error: ...' in the assistant bubble", async ({
+test("a pre-[DONE] error event surfaces in the assistant bubble", async ({
   addin,
   page,
 }) => {
@@ -696,8 +696,50 @@ test("a pre-[DONE] error event surfaces as 'Error: ...' in the assistant bubble"
   await page.getByRole("button", { name: "Send" }).click();
 
   // The client throws on the pre-[DONE] error; ChatPanel replaces the bubble
-  // content with the error message.
-  await expect(page.getByText("Error: model rate limited")).toBeVisible();
+  // content with the backend's own (user-facing) message, no "Error:" prefix,
+  // and a toast offers a Retry that resends the turn.
+  await expect(page.getByText("model rate limited").first()).toBeVisible();
+  await expect(
+    page.getByTestId("toast").getByRole("button", { name: "Retry" }),
+  ).toBeVisible();
+});
+
+test("the failed-answer Retry re-sends in its own chat, never in one opened since", async ({
+  addin,
+  page,
+}) => {
+  await addin.mockChatStream(["partial answer"], {
+    errorBefore: "model rate limited",
+  });
+  await addin.gotoTaskpane();
+  await addin.expectAuthedShell();
+
+  await page.getByPlaceholder("How can I help?").fill("Prompt from chat A");
+  await page.getByRole("button", { name: "Send" }).click();
+  const retry = page.getByTestId("toast").getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+
+  // Same chat: Retry re-sends the same prompt.
+  let posts = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/word-chat$/.test(request.url())) {
+      posts += 1;
+    }
+  });
+  await retry.click();
+  await expect.poll(() => posts).toBe(1);
+  await expect(retry).toBeVisible();
+
+  // Another chat: the toast is still on screen, but the prompt has no chat
+  // of its own to go to, so nothing is sent into the new conversation.
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(page.getByText("Prompt from chat A")).toHaveCount(0);
+  await retry.click();
+  await expect(
+    page.getByText("This chat has changed. Open the original chat to check its answer."),
+  ).toBeVisible();
+  expect(posts).toBe(1);
+  await expect(page.getByText("Prompt from chat A")).toHaveCount(0);
 });
 
 test("sends a document snapshot without claiming the model read it", async ({
@@ -1342,7 +1384,10 @@ test("reports a Templates-tab load failure", async ({ addin, page }) => {
   await page.getByRole("menuitem", { name: "Web files" }).click();
   const modal = page.getByRole("dialog", { name: "Add Documents" });
   await modal.getByRole("button", { name: "Templates" }).click();
-  await expect(modal.getByRole("alert")).toContainText("API error: 503");
+  // A 5xx body is never echoed; 503 reads as a temporary outage.
+  await expect(modal.getByRole("alert")).toContainText(
+    "Mike is temporarily unavailable",
+  );
 });
 
 test("uploads desktop files directly from the document source menu", async ({
@@ -2246,7 +2291,7 @@ test("keeps an edit reviewable through its passage when Word withholds revision 
   expect(calls.rejectedChanges).toEqual([]);
 });
 
-test("does not claim an edit was applied when the mutation sync failed before Word changed the document", async ({
+test("says it cannot confirm the outcome when the mutation sync failed mid-batch", async ({
   addin,
   page,
 }) => {
@@ -2263,7 +2308,14 @@ test("does not claim an edit was applied when the mutation sync failed before Wo
   await page.getByRole("button", { name: "Send" }).click();
   await page.getByRole("button", { name: "Apply", exact: true }).click();
 
-  await expect(page.getByText("Couldn’t apply this change.")).toBeVisible();
+  // Word was sent the mutation and then faulted. Re-reading the exact target
+  // ranges proves nothing either way, so the card must not claim the change
+  // failed (it might have landed) nor invite a retry that would double-apply.
+  await expect(
+    page.getByText(
+      "Mike couldn't confirm whether this change was applied — check the document before retrying.",
+    ),
+  ).toBeVisible();
   await expect(
     page.getByText("Applied in Word — review it from Word’s Review tab."),
   ).toHaveCount(0);

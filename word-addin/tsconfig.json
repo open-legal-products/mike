@@ -55,6 +55,7 @@
       "@mike/header-buttons-ui": [
         "../frontend/src/shared/ui/HeaderButtonsUI.tsx"
       ],
+      "@mike/text-button-ui": ["../frontend/src/shared/ui/TextButtonUI.tsx"],
       "@mike/pill-button-ui": [
         "../frontend/src/shared/ui/PillButtonUI.tsx"
       ],

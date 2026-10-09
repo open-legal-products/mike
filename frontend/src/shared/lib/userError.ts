@@ -386,6 +386,33 @@ export interface SupportMailtoContext {
 }
 
 /**
+ * The lines support uses to find a failure in the logs: request id, code,
+ * status, category, page (query and hash stripped), client, time and user
+ * agent. Shared by the support email and the add-in's clipboard block so the
+ * two can never disagree on what is sent. Contains no credentials, no URL
+ * query, and nothing the user typed.
+ */
+export function supportDetailLines(
+    error: Pick<UserFacingError, "kind" | "status" | "code" | "requestId">,
+    context: SupportMailtoContext & { userAgent?: string } = {},
+): string[] {
+    const when = context.when ?? new Date();
+    const userAgent =
+        context.userAgent ??
+        (typeof navigator !== "undefined" ? navigator.userAgent : undefined);
+    const lines: string[] = [];
+    if (error.requestId) lines.push(`Request ID: ${error.requestId}`);
+    if (error.code) lines.push(`Error code: ${error.code}`);
+    if (error.status !== null) lines.push(`HTTP status: ${error.status}`);
+    lines.push(`Category: ${error.kind}`);
+    if (context.page) lines.push(`Page: ${supportPageContext(context.page)}`);
+    if (context.product) lines.push(`Client: ${context.product}`);
+    lines.push(`Time: ${when.toISOString()}`);
+    if (userAgent) lines.push(`Browser: ${userAgent}`);
+    return lines;
+}
+
+/**
  * Build a `mailto:` link to support that carries everything needed to
  * find the failure in the logs. Fields are omitted when unknown so the
  * draft never contains "null".
@@ -409,16 +436,7 @@ export function buildSupportMailto(
     if (context.note) lines.push(`Details: ${context.note}`);
     lines.push("");
     lines.push("--- Details for support (please keep) ---");
-    if (error.requestId) lines.push(`Request ID: ${error.requestId}`);
-    if (error.code) lines.push(`Error code: ${error.code}`);
-    if (error.status !== null) lines.push(`HTTP status: ${error.status}`);
-    lines.push(`Category: ${error.kind}`);
-    if (context.page) lines.push(`Page: ${supportPageContext(context.page)}`);
-    if (context.product) lines.push(`Client: ${context.product}`);
-    lines.push(`Time: ${when.toISOString()}`);
-    if (typeof navigator !== "undefined" && navigator.userAgent) {
-        lines.push(`Browser: ${navigator.userAgent}`);
-    }
+    lines.push(...supportDetailLines(error, { ...context, when }));
     lines.push("", "Thanks,");
 
     const subject = `Mike support: ${error.title}`;

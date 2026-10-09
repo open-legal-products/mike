@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import type { RedlineEdit } from "./redline";
 
+export type WordChatStorageMode = "cloud" | "local";
 export type WorkflowAttachment = { id: string; title: string };
 
 /**
@@ -51,6 +52,10 @@ export type EditCardStatus =
   | "ambiguous"
   | "unsearchable"
   | "conflicted"
+  /** Skipped because the document already carries this exact edit. */
+  | "already-applied"
+  /** Word faulted mid-apply and nothing could prove whether it landed. */
+  | "unverified"
   | "incomplete"
   | "unmanaged"
   | "error"
