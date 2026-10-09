@@ -50,8 +50,11 @@ hand and record it with `mark` (below).
 
 The runner holds a PostgreSQL advisory lock while it writes, so a second run
 against the same database (Compose's `db-init` and an operator, or two deploy
-jobs) waits for the first, then skips what it applied. The lock needs a
-session connection, which is why the transaction pooler will not do.
+jobs) waits for the first, then skips what it applied. A waiting run names the
+session holding the lock (its sessions show as `migrate.sh` in
+`pg_stat_activity`) and gives up after `MIGRATE_LOCK_WAIT` seconds (default
+900). The lock needs a session connection, which is why the transaction pooler
+will not do; the runner refuses a URL on its port, 6543.
 
 `status` and `up` also warn about two kinds of mismatch. A file that "has
 changed since it was applied" was edited after you ran it. A file "recorded as

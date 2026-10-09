@@ -24,6 +24,8 @@
 #   DATABASE_URL    Connection string for a role that owns the public schema
 #                   (on Supabase, the `postgres` direct or session-pooler URL).
 #   MIGRATIONS_DIR  Defaults to backend/migrations beside this script.
+#   MIGRATE_LOCK_WAIT  Seconds to wait for another run's lock before giving
+#                   up (default 900).
 #
 # Fresh installs do not need this script: schema.sql creates the ledger with
 # every migration it already contains recorded. Runs against one database
@@ -38,13 +40,20 @@ LEDGER_MIGRATION="20261009_03_schema_migrations.sql"
 # Session-level advisory lock taken by every command that writes the ledger.
 # It is released when psql disconnects, including when a migration fails or
 # the script is killed. Needs a session (not a transaction-pooler) connection.
-LOCK_KEY="hashtextextended('mike/backend/scripts/migrate.sh', 0)"
+# The key is an arbitrary constant below 2^32, so pg_locks shows it as
+# classid 0, objid LOCK_KEY.
+LOCK_KEY=2026100803
+MIGRATE_LOCK_WAIT="${MIGRATE_LOCK_WAIT:-900}"
+
+# Names this script's sessions in pg_stat_activity, so a run that has to wait
+# can say who holds the lock.
+export PGAPPNAME="${PGAPPNAME:-migrate.sh}"
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-$script_dir/../migrations}"
 
 usage() {
-  sed -n '6,26p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '6,28p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -154,18 +163,35 @@ select pg_try_advisory_lock($LOCK_KEY) as migrate_locked \gset
 SQL
 }
 
+# Describes the session holding the lock, best effort: without
+# pg_read_all_stats another role's application_name reads as null.
+lock_holder() {
+  query -c "select format('pid %s, %s, connected %s', l.pid,
+      coalesce(nullif(a.application_name, ''), 'unnamed'),
+      date_trunc('second', a.backend_start))
+    from pg_locks l left join pg_stat_activity a on a.pid = l.pid
+    where l.locktype = 'advisory' and l.granted
+      and l.classid = 0 and l.objid = $LOCK_KEY and l.objsubid = 1" 2>/dev/null || true
+}
+
 # Runs psql commands from stdin in one session that holds the lock, from the
 # migrations directory so \i takes a bare (character-checked) filename.
+# Retries every 2 seconds while another run holds the lock, for at most
+# MIGRATE_LOCK_WAIT seconds.
 run_locked() {
   { lock_sql; cat; } > "$tmp/script.sql"
-  local said_waiting=false
+  local started=$SECONDS said_waiting=false holder
   while :; do
     rm -f "$tmp/busy"
     (cd "$MIGRATIONS_DIR" && psql_db -f "$tmp/script.sql") || return 1
     [ -e "$tmp/busy" ] || return 0
+    holder="$(lock_holder)"
     if ! $said_waiting; then
-      echo "migrate: another migrate.sh run holds the lock on this database; waiting for it"
+      echo "migrate: another run holds the migration lock (${holder:-holder not visible}); waiting up to ${MIGRATE_LOCK_WAIT}s"
       said_waiting=true
+    fi
+    if [ $((SECONDS - started)) -ge "$MIGRATE_LOCK_WAIT" ]; then
+      die "gave up after ${MIGRATE_LOCK_WAIT}s waiting for the migration lock (${holder:-holder not visible}); set MIGRATE_LOCK_WAIT to wait longer"
     fi
     sleep 2
   done
@@ -274,7 +300,7 @@ cmd_baseline() {
     echo "\i $LEDGER_MIGRATION"
     echo "\endif"
     record_unrun_sql "$tmp/baseline"
-  } | run_locked
+  } | run_locked || die "baseline failed; nothing was recorded"
   echo "Recorded $(wc -l < "$tmp/baseline" | tr -d ' ') migration(s) up to $1 as applied (not run)."
 }
 
@@ -282,7 +308,7 @@ cmd_mark() {
   check_file_arg "${1:-}"
   require_ledger
   echo "$1" > "$tmp/mark"
-  record_unrun_sql "$tmp/mark" | run_locked
+  record_unrun_sql "$tmp/mark" | run_locked || die "mark failed; nothing was recorded"
   echo "Recorded $1 as applied (not run)."
 }
 
@@ -295,6 +321,15 @@ main() {
   esac
 
   [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is not set"
+  # Supabase's transaction pooler hands each statement to any server
+  # connection, so a session lock taken through it outlives this script.
+  case "$DATABASE_URL" in
+    *:6543/* | *:6543 | *:6543\?*)
+      die "DATABASE_URL uses port 6543, Supabase's transaction pooler; use the direct or session-pooler (5432) connection string" ;;
+  esac
+  case "$MIGRATE_LOCK_WAIT" in
+    '' | *[!0-9]*) die "MIGRATE_LOCK_WAIT must be a whole number of seconds" ;;
+  esac
   [ -d "$MIGRATIONS_DIR" ] || die "no migrations directory at $MIGRATIONS_DIR"
   MIGRATIONS_DIR="$(cd "$MIGRATIONS_DIR" && pwd)"
   command -v psql >/dev/null 2>&1 || die "psql is not installed"
