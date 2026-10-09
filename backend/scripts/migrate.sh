@@ -10,7 +10,9 @@
 #   status          List pending migrations. Exits 0 when the database is up
 #                   to date and 2 when files are pending.
 #   up              Apply every pending migration in filename order, stopping
-#                   at the first failure.
+#                   at the first failure. Each file runs in one transaction
+#                   with its ledger row, unless it cannot (see
+#                   runs_in_transaction below).
 #   baseline FILE   Record FILE and every migration that sorts before it as
 #                   applied, without running them. Run once to adopt the
 #                   ledger on a deployment upgraded by hand: FILE is the last
@@ -22,21 +24,36 @@
 #   DATABASE_URL    Connection string for a role that owns the public schema
 #                   (on Supabase, the `postgres` direct or session-pooler URL).
 #   MIGRATIONS_DIR  Defaults to backend/migrations beside this script.
+#   MIGRATE_LOCK_WAIT  Seconds to wait for another run's lock before giving
+#                   up (default 900).
 #
 # Fresh installs do not need this script: schema.sql creates the ledger with
-# every migration it already contains recorded. Do not run two copies of the
-# script against one database at the same time. Needs bash 3.2+ and psql.
+# every migration it already contains recorded. Runs against one database
+# queue on an advisory lock, so a second `up` waits for the first and then
+# skips what it applied. Needs bash 3.2+ and psql 10+.
 set -euo pipefail
 
 # The migration that creates the ledger. `baseline` applies it (idempotent)
 # when the table does not exist yet.
 LEDGER_MIGRATION="20261009_03_schema_migrations.sql"
 
+# Session-level advisory lock taken by every command that writes the ledger.
+# It is released when psql disconnects, including when a migration fails or
+# the script is killed. Needs a session (not a transaction-pooler) connection.
+# The key is an arbitrary constant below 2^32, so pg_locks shows it as
+# classid 0, objid LOCK_KEY.
+LOCK_KEY=2026100803
+MIGRATE_LOCK_WAIT="${MIGRATE_LOCK_WAIT:-900}"
+
+# Names this script's sessions in pg_stat_activity, so a run that has to wait
+# can say who holds the lock.
+export PGAPPNAME="${PGAPPNAME:-migrate.sh}"
+
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-$script_dir/../migrations}"
 
 usage() {
-  sed -n '6,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '6,28p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -130,13 +147,87 @@ check_file_arg() {
   list_files | grep -Fqx "$1" || die "no migration named $1 in $MIGRATIONS_DIR"
 }
 
-# Inserts the filenames listed in $1 (one per line) without a checksum.
-record_unrun() {
+# Prints psql commands that take the migration lock, or, when another run
+# holds it, create $tmp/busy and quit. Waiting is done by retrying from bash
+# instead of in pg_advisory_lock(): a session blocked there holds a snapshot,
+# and CREATE INDEX CONCURRENTLY in the run holding the lock waits for every
+# snapshot in the database to finish, so the two would deadlock.
+lock_sql() {
+  cat <<SQL
+select pg_try_advisory_lock($LOCK_KEY) as migrate_locked \gset
+\if :migrate_locked
+\else
+\! touch '$tmp/busy'
+\q
+\endif
+SQL
+}
+
+# Describes the session holding the lock, best effort: without
+# pg_read_all_stats another role's application_name reads as null.
+lock_holder() {
+  query -c "select format('pid %s, %s, connected %s', l.pid,
+      coalesce(nullif(a.application_name, ''), 'unnamed'),
+      date_trunc('second', a.backend_start))
+    from pg_locks l left join pg_stat_activity a on a.pid = l.pid
+    where l.locktype = 'advisory' and l.granted
+      and l.classid = 0 and l.objid = $LOCK_KEY and l.objsubid = 1" 2>/dev/null || true
+}
+
+# Runs psql commands from stdin in one session that holds the lock, from the
+# migrations directory so \i takes a bare (character-checked) filename.
+# Retries every 2 seconds while another run holds the lock, for at most
+# MIGRATE_LOCK_WAIT seconds.
+run_locked() {
+  { lock_sql; cat; } > "$tmp/script.sql"
+  local started=$SECONDS said_waiting=false holder
+  while :; do
+    rm -f "$tmp/busy"
+    (cd "$MIGRATIONS_DIR" && psql_db -f "$tmp/script.sql") || return 1
+    [ -e "$tmp/busy" ] || return 0
+    holder="$(lock_holder)"
+    if ! $said_waiting; then
+      echo "migrate: another run holds the migration lock (${holder:-holder not visible}); waiting up to ${MIGRATE_LOCK_WAIT}s"
+      said_waiting=true
+    fi
+    if [ $((SECONDS - started)) -ge "$MIGRATE_LOCK_WAIT" ]; then
+      die "gave up after ${MIGRATE_LOCK_WAIT}s waiting for the migration lock (${holder:-holder not visible}); set MIGRATE_LOCK_WAIT to wait longer"
+    fi
+    sleep 2
+  done
+}
+
+# Prints an insert recording the filenames listed in $1 (one per line)
+# without a checksum.
+record_unrun_sql() {
   local values
   values="$(sed "s/.*/('&')/" "$1" | paste -sd, -)"
   [ -n "$values" ] || return 0
-  psql_db -c "insert into public.schema_migrations (filename)
-    values $values on conflict (filename) do nothing"
+  echo "insert into public.schema_migrations (filename)
+  values $values on conflict (filename) do nothing;"
+}
+
+# Whether migration file $1 opts out of the transaction with a line reading
+# exactly `-- migrate:no-transaction`.
+has_no_transaction_marker() {
+  grep -Eq '^-- migrate:no-transaction[[:space:]]*$' "$1"
+}
+
+# Whether migration file $1 runs inside one transaction with its ledger row,
+# so a failure leaves nothing half applied. Files run without one when they
+# carry the marker, manage their own transaction (a statement starting a line
+# with begin, commit, rollback, abort or start transaction, in any form such
+# as `begin isolation level ...;` or `commit and chain;`), or use
+# CONCURRENTLY, which PostgreSQL refuses inside a transaction block. The last
+# two are detected so that shipped migrations, which must not be edited, need
+# no marker. `end;` is not matched: it closes every plpgsql body. A false
+# match only means running unwrapped, as every file did before this check.
+runs_in_transaction() {
+  ! has_no_transaction_marker "$1" &&
+    ! grep -Eiq \
+      -e '^[[:space:]]*(begin|commit|rollback|abort|start[[:space:]]+transaction)([[:space:]][^;]*)?;' \
+      -e 'concurrently' \
+      "$1"
 }
 
 cmd_status() {
@@ -159,7 +250,7 @@ cmd_up() {
 
   # Only rows this script applied (they carry a checksum) count: a baseline
   # or mark legitimately records files ahead of ones still pending.
-  local newest_applied name path
+  local newest_applied name path begin commit note
   newest_applied="$(awk -F'|' '$2 != "" { name = $1 } END { print name }' "$tmp/ledger")"
   if [ -n "$newest_applied" ]; then
     LC_ALL=C awk -v newest="$newest_applied" '$0 < newest' "$tmp/pending" |
@@ -168,35 +259,61 @@ cmd_up() {
       done
   fi
 
+  # The pending list was read before taking the lock, so each file is checked
+  # against the ledger again under it: a run that waited skips whatever the
+  # run it waited for applied. ON_ERROR_STOP ends the session at the first
+  # failure, rolling back that file's transaction (if it has one) and
+  # releasing the lock. The role is reset before the ledger insert, which
+  # must run as the connecting user even if the file switched role. Files
+  # share the session, so after each one it is put back as a new connection
+  # would find it: settings, temp tables, prepared statements and LISTENs.
+  # (DISCARD ALL would do it in one statement but also releases the lock.)
   while read -r name; do
     path="$MIGRATIONS_DIR/$name"
-    echo "Applying $name"
-    # One session: the ledger row is written only if every statement in the
-    # file succeeded (ON_ERROR_STOP aborts the script before the insert). Not
-    # one transaction, because some migrations manage their own or use
-    # CREATE INDEX CONCURRENTLY. psql runs from the migrations directory so
-    # \i takes the bare (character-checked) filename and needs no quoting.
-    if ! (cd "$MIGRATIONS_DIR" && psql_db -v name="$name" -v checksum="$(sha256 "$path")") <<'SQL'
-\i :name
-insert into public.schema_migrations (filename, checksum)
-  values (:'name', :'checksum')
-  on conflict (filename) do nothing;
-SQL
-    then
-      die "$name failed; it and every later migration are still pending"
+    if runs_in_transaction "$path"; then
+      begin="begin;" commit="commit;" note=""
+    else
+      begin="" commit="" note=" (no transaction)"
     fi
-  done < "$tmp/pending"
-  echo "Applied $(wc -l < "$tmp/pending" | tr -d ' ') migration(s)."
+    cat <<SQL
+select exists (select 1 from public.schema_migrations where filename = '$name') as migrate_done \gset
+\if :migrate_done
+\echo 'Skipping $name: another run applied it'
+\else
+\echo 'Applying $name$note'
+$begin
+\i $name
+reset session authorization; reset role;
+insert into public.schema_migrations (filename, checksum)
+  values ('$name', '$(sha256 "$path")')
+  on conflict (filename) do nothing;
+$commit
+reset all; discard temp; deallocate all; unlisten *;
+\endif
+SQL
+  done < "$tmp/pending" > "$tmp/up.sql"
+
+  if ! run_locked < "$tmp/up.sql"; then
+    list_files > "$tmp/files"
+    query -c "select filename from public.schema_migrations" > "$tmp/applied" ||
+      die "the database connection failed; run status to see what is still pending"
+    name="$(grep -Fvx -f "$tmp/applied" "$tmp/files" | head -n 1 || true)"
+    die "${name:-a migration} failed; it and every later migration are still pending"
+  fi
+  echo "Up to date."
 }
 
 cmd_baseline() {
   check_file_arg "${1:-}"
-  if ! ledger_exists; then
-    echo "Creating public.schema_migrations"
-    psql_db -f "$MIGRATIONS_DIR/$LEDGER_MIGRATION"
-  fi
   list_files | LC_ALL=C awk -v last="$1" '$0 <= last' > "$tmp/baseline"
-  record_unrun "$tmp/baseline"
+  {
+    echo "select to_regclass('public.schema_migrations') is null as migrate_no_ledger \gset"
+    echo "\if :migrate_no_ledger"
+    echo "\echo 'Creating public.schema_migrations'"
+    echo "\i $LEDGER_MIGRATION"
+    echo "\endif"
+    record_unrun_sql "$tmp/baseline"
+  } | run_locked || die "baseline failed; nothing was recorded"
   echo "Recorded $(wc -l < "$tmp/baseline" | tr -d ' ') migration(s) up to $1 as applied (not run)."
 }
 
@@ -204,22 +321,38 @@ cmd_mark() {
   check_file_arg "${1:-}"
   require_ledger
   echo "$1" > "$tmp/mark"
-  record_unrun "$tmp/mark"
+  record_unrun_sql "$tmp/mark" | run_locked || die "mark failed; nothing was recorded"
   echo "Recorded $1 as applied (not run)."
 }
 
-case "${1:-}" in
-  -h | --help | help) usage; exit 0 ;;
-  status | up | baseline | mark) ;;
-  "") usage >&2; exit 1 ;;
-  *) die "unknown command: $1 (see --help)" ;;
-esac
+main() {
+  case "${1:-}" in
+    -h | --help | help) usage; exit 0 ;;
+    status | up | baseline | mark) ;;
+    "") usage >&2; exit 1 ;;
+    *) die "unknown command: $1 (see --help)" ;;
+  esac
 
-[ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is not set"
-[ -d "$MIGRATIONS_DIR" ] || die "no migrations directory at $MIGRATIONS_DIR"
-MIGRATIONS_DIR="$(cd "$MIGRATIONS_DIR" && pwd)"
-command -v psql >/dev/null 2>&1 || die "psql is not installed"
+  [ -n "${DATABASE_URL:-}" ] || die "DATABASE_URL is not set"
+  # Supabase's transaction pooler hands each statement to any server
+  # connection, so a session lock taken through it outlives this script.
+  case "$DATABASE_URL" in
+    *:6543/* | *:6543 | *:6543\?*)
+      die "DATABASE_URL uses port 6543, Supabase's transaction pooler; use the direct or session-pooler (5432) connection string" ;;
+  esac
+  case "$MIGRATE_LOCK_WAIT" in
+    '' | *[!0-9]*) die "MIGRATE_LOCK_WAIT must be a whole number of seconds" ;;
+  esac
+  [ -d "$MIGRATIONS_DIR" ] || die "no migrations directory at $MIGRATIONS_DIR"
+  MIGRATIONS_DIR="$(cd "$MIGRATIONS_DIR" && pwd)"
+  command -v psql >/dev/null 2>&1 || die "psql is not installed"
 
-command="$1"
-shift
-"cmd_$command" "$@"
+  local command="$1"
+  shift
+  "cmd_$command" "$@"
+}
+
+# Sourcing the script (as its tests do) defines the functions without running.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

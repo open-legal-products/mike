@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+    mkdtempSync,
+    readFileSync,
+    readdirSync,
+    rmSync,
+    writeFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // Every database records the migrations it has applied in
@@ -46,6 +54,104 @@ describe("schema.sql migration ledger", () => {
             /^LEDGER_MIGRATION="([^"]+)"$/m,
         )?.[1];
         expect(migrations).toContain(ledgerMigration);
+    });
+});
+
+// migrate.sh wraps each file in a transaction with its ledger row unless the
+// file cannot run in one. The rule lives in the script (runs_in_transaction);
+// these tests source it rather than restate it.
+describe("migrate.sh transaction detection", () => {
+    const script = path.join(repoRoot, "backend/scripts/migrate.sh");
+    // Calls a predicate function from the script on one file. Exit 1 is the
+    // predicate's "no"; anything else is rethrown so it cannot pass as a "no".
+    // A script that fails to source also exits 1, hence the explicit 99.
+    const ask = (fn: string, file: string) => {
+        try {
+            execFileSync(
+                "bash",
+                [
+                    "-c",
+                    'source "$1" || exit 99; "$2" "$3"',
+                    "test",
+                    script,
+                    fn,
+                    file,
+                ],
+                { stdio: "pipe" },
+            );
+            return true;
+        } catch (error) {
+            if ((error as { status?: number }).status === 1) return false;
+            throw error;
+        }
+    };
+    const runsInTransaction = (file: string) =>
+        ask("runs_in_transaction", file);
+
+    it.each([
+        ["plain DDL", "create table t (id int);\n", true],
+        [
+            "a plpgsql body (begin without a semicolon, end;)",
+            "create function f() returns void language plpgsql as $$\nbegin\n  perform 1;\nend;\n$$;\n",
+            true,
+        ],
+        ["the opt-out marker", "-- migrate:no-transaction\nselect 1;\n", false],
+        ["its own begin/commit", "BEGIN;\nselect 1;\nCOMMIT;\n", false],
+        ["start transaction", "start transaction;\nselect 1;\ncommit work;\n", false],
+        [
+            "begin with options",
+            "begin isolation level serializable;\nselect 1;\n",
+            false,
+        ],
+        ["commit and chain", "select 1;\ncommit and chain;\n", false],
+        ["abort", "select 1;\nabort;\n", false],
+        [
+            "a marker that is not alone on its line",
+            "-- migrate:no-transaction please\nselect 1;\n",
+            true,
+        ],
+        ["create index concurrently", "create index concurrently i on t (id);\n", false],
+    ])("%s -> %s", (_label, sql, expected) => {
+        const dir = mkdtempSync(path.join(os.tmpdir(), "migrate-tx-"));
+        try {
+            const file = path.join(dir, "m.sql");
+            writeFileSync(file, sql);
+            expect(runsInTransaction(file)).toBe(expected);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    // Shipped files that manage their own transaction or build an index
+    // concurrently. They cannot be edited to add the marker, so detection has
+    // to keep finding them; any later file that runs outside a transaction
+    // must say so with the marker (see AGENTS.md).
+    const unmarkedOutsideTransaction = [
+        "20260805_01_narrow_service_role_grants.sql",
+        "20260813_01_user_id_foreign_keys.sql",
+        "20260828_02_upload_sessions.sql",
+        "20260904_01_organization_access.sql",
+        "20260904_02_migrate_legacy_sharing.sql",
+        "20260917_01_organization_access_followup.sql",
+        "20260921_01_chat_activity.sql",
+    ];
+
+    it("runs every other migration in a transaction unless it is marked", () => {
+        const outside = migrations.filter(
+            (file) =>
+                !runsInTransaction(path.join(repoRoot, "backend/migrations", file)),
+        );
+        const unmarked = outside.filter(
+            (file) =>
+                !ask(
+                    "has_no_transaction_marker",
+                    path.join(repoRoot, "backend/migrations", file),
+                ),
+        );
+        expect(
+            unmarked,
+            "add a `-- migrate:no-transaction` line to a new migration that cannot run in a transaction",
+        ).toEqual(unmarkedOutsideTransaction);
     });
 });
 

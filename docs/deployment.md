@@ -41,9 +41,29 @@ backend/scripts/migrate.sh up
 ```
 
 `up` stops at the first migration that fails; that file and everything after
-it stay pending, so fix the cause and run `up` again. Some migrations are not
-wrapped in a transaction, so a failure can leave part of one applied: restore
-the backup, or finish that file by hand and record it with `mark` (below).
+it stay pending, so fix the cause and run `up` again. Each file runs in a
+transaction with its ledger row, so a failed one leaves nothing behind. The
+exceptions are files that manage their own transaction, use `create index
+concurrently`, or carry a `-- migrate:no-transaction` line (`up` prints "(no
+transaction)" for them): a failure there can leave part of the file applied,
+so restore the backup, or finish that file by hand and record it with `mark`
+(below).
+
+A wrapped file holds its table locks until it commits. On a busy database,
+set a lock timeout so a migration that cannot get its locks fails and rolls
+back instead of queueing application queries behind it, then retry:
+
+```bash
+PGOPTIONS='-c lock_timeout=10s' backend/scripts/migrate.sh up
+```
+
+The runner holds a PostgreSQL advisory lock while it writes, so a second run
+against the same database (Compose's `db-init` and an operator, or two deploy
+jobs) waits for the first, then skips what it applied. A waiting run names the
+session holding the lock (its sessions show as `migrate.sh` in
+`pg_stat_activity`) and gives up after `MIGRATE_LOCK_WAIT` seconds (default
+900). The lock needs a session connection, which is why the transaction pooler
+will not do; the runner refuses a URL on its port, 6543.
 
 `status` and `up` also warn about two kinds of mismatch. A file that "has
 changed since it was applied" was edited after you ran it. A file "recorded as

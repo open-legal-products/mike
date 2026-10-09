@@ -41,6 +41,12 @@ keeps the correct link semantics and is safe in server components.
 Two families coexist. Prefer a token over a raw Tailwind palette class whenever
 one exists; prefer either over a hex literal.
 
+Both families, and their `@theme inline` utility mappings, are declared once in
+`frontend/src/shared/ui/DesignTokensUI.css`. The web app's `globals.css` and the
+Word add-in's `word-addin/src/taskpane/styles.css` both import that file, so a
+token change reaches both targets. Do not redeclare one of these tokens in either
+entry stylesheet; `DesignTokensUI.test.ts` fails if you do.
+
 ### App surfaces (Mike's own)
 
 These back the "liquid glass" chrome and are the ones most feature code needs.

@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-/* Local design tokens shared by the task pane's reusable UI components. */
+/* Design tokens: one source shared with the web app's globals.css. */
+@import "../../../frontend/src/shared/ui/DesignTokensUI.css";
+/* Add-in base layer (borders, body colors, button cursor). */
 @import "../shared/styles/tokens.css";
 @import "../../../frontend/src/shared/ui/LiquidGlassUI.css";
 @import "../../../frontend/src/shared/ui/ThemeTokensUI.css";
