@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "./useAuth";
-import { Input } from "../../shared/ui/input";
+import { InputUI } from "@mike/input-ui";
 import { Label } from "../../shared/ui/label";
 import { WordAddinLogo } from "../components/shell/WordAddinLogo";
 import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
@@ -75,7 +75,7 @@ export function LoginPage(): React.ReactElement {
                 >
                   Email
                 </Label>
-                <Input
+                <InputUI
                   id="email"
                   type="email"
                   value={email}
@@ -106,7 +106,7 @@ export function LoginPage(): React.ReactElement {
                     Forgot password?
                   </a>
                 </div>
-                <Input
+                <InputUI
                   id="password"
                   type="password"
                   value={password}

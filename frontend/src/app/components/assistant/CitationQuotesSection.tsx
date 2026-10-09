@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Check, X } from "lucide-react";
+import { Check } from "lucide-react";
 import { QuoteIcon } from "@radix-ui/react-icons";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { TextSlabUI } from "@/shared/ui/TextSlabUI";
 import type { PanelDocument, PanelDocumentQuote } from "../shared/types";
 import {
@@ -150,23 +151,6 @@ export function CitationQuotesSection({
                                 })}
                             </div>
                         )}
-                        {onClose && (
-                            <PillButtonUI
-                                tone="white"
-                                size="icon-xs"
-                                aria-label="Close citation"
-                                title="Close citation"
-                                onClick={onClose}
-                                // Matches CitationPillUI and the quote index
-                                // pills beside it.
-                                className="h-4 w-4"
-                            >
-                                <X
-                                    aria-hidden="true"
-                                    className="h-2.5 w-2.5"
-                                />
-                            </PillButtonUI>
-                        )}
                     </div>
                 </div>
                 <div>
@@ -184,11 +168,17 @@ export function CitationQuotesSection({
                             onView={() =>
                                 onSelect?.(currentQuote, currentIndex)
                             }
+                            onClose={onClose}
                         />
                     ) : (
                         <RelevantQuoteMessage>
                             No relevant quotes.
                         </RelevantQuoteMessage>
+                    )}
+                    {onClose && (isLoading || error || !currentQuote) && (
+                        <div className="mt-2 flex justify-end">
+                            <TextButtonUI size="xs" title="Close citation" onClick={onClose}>Close</TextButtonUI>
+                        </div>
                     )}
                 </div>
             </div>
@@ -232,18 +222,26 @@ function QuoteItem({
     isActive,
     quoteLabel,
     onView,
+    onClose,
 }: {
     quote: CitationQuoteSectionItem;
     isActive: boolean;
     quoteLabel: string;
     onView: () => void;
+    onClose?: () => void;
 }) {
     const isUnverified = quote.verificationState === "unverified";
     const isSelected = isActive && !isUnverified;
 
     return (
         <div>
-            <TextSlabUI selected={isSelected} className="w-full text-left">
+            {/* Long quotes scroll inside the slab so the actions stay in view;
+                focusable so the scroll is reachable by keyboard. */}
+            <TextSlabUI
+                selected={isSelected}
+                tabIndex={0}
+                className="max-h-40 w-full overflow-y-auto overscroll-contain text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+            >
                 <div>
                     <p
                         className={`font-serif text-sm leading-6 ${
@@ -276,9 +274,14 @@ function QuoteItem({
                         quoteLabel={quoteLabel}
                     />
                 )}
+                {onClose && (
+                    <TextButtonUI size="xs" title="Close citation" onClick={onClose} className="ml-auto">
+                        Close
+                    </TextButtonUI>
+                )}
                 <PillButtonUI
                     tone="black"
-                    size="sm"
+                    size="xs"
                     disabled={isUnverified}
                     onClick={onView}
                 >
@@ -328,7 +331,7 @@ function CiteQuoteButton({
     return (
         <PillButtonUI
             tone="white"
-            size="sm"
+            size="xs"
             onClick={handleClick}
             title="Copy Quote and Citation"
         >

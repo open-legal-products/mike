@@ -9,6 +9,8 @@
 // is delicate. Only the pre-stream preparation lives here.
 
 import type { Db } from "../../lib/supabase";
+import { resolveRequestTimeZone } from "../../lib/userTime";
+import type { McpToolEvent } from "@mike/contracts";
 import {
     buildProjectDocContext,
     buildMessages,
@@ -16,7 +18,9 @@ import {
     buildWorkflowStore,
     attachPriorReasoning,
     enrichWithPriorEvents,
+    loadUserMessageSentTimes,
     appendAskInputsResponseToAssistantMessage,
+    runApprovedConnectorActions,
     generateSpotlightNonce,
     spotlightFilename,
     type AskInputsResponseRequest,
@@ -104,6 +108,9 @@ export type PreparedProjectChatStream = {
     // An ask_inputs continuation that could not be appended is not durable,
     // and must not trigger memory consolidation.
     completedTurnPersisted: boolean;
+    // Connector actions the user approved in this continuation, already run
+    // and appended; the route streams them before the model continues.
+    approvalEvents: McpToolEvent[];
     // Whether the document-WRITING tools are offered this turn. This is a
     // question about the caller's standing on the PROJECT, never about their
     // standing in the thread — see the long note in prepareProjectChatStream.
@@ -146,6 +153,8 @@ export async function prepareProjectChatStream(
         requestedReasoning:
             | ReturnType<typeof resolveEffectiveReasoningLevel>
             | undefined;
+        /** The browser's IANA time zone; unvalidated request input. */
+        requestedTimeZone?: unknown;
     },
 ): Promise<
     | { ok: true; prepared: PreparedProjectChatStream }
@@ -334,6 +343,7 @@ export async function prepareProjectChatStream(
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     let completedTurnPersisted = true;
     let memoryTurn: MemoryConversationTurn | null = null;
+    let approvalEvents: McpToolEvent[] = [];
     if (args.askInputsResponse) {
         const appendResult = await appendAskInputsResponseToAssistantMessage(
             db,
@@ -369,6 +379,15 @@ export async function prepareProjectChatStream(
         if (!completedTurnPersisted) {
             return { ok: false, status: 500, detail: "Failed to save message" };
         }
+        // The append above is the single-use claim; only now may an approved
+        // connector action run.
+        approvalEvents = await runApprovedConnectorActions({
+            db,
+            chatId,
+            messageId: args.askInputsResponse.assistant_message_id,
+            askEventId: args.askInputsResponse.ask_event_id,
+            userId,
+        });
     } else if (lastUser) {
         const { error: userMessageError } = await db
             .from("chat_messages")
@@ -439,12 +458,15 @@ export async function prepareProjectChatStream(
         const historyMessages = replaysReasoning(selectedModel)
             ? await attachPriorReasoning(messages, chatId, selectedModel, db)
             : messages;
+        const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
         const enrichedMessages = await enrichWithPriorEvents(
             historyMessages,
             chatId,
             db,
             docIndex,
             nonce,
+            "chat_messages",
+            timeZone,
         );
         const messagesForLLM: ChatMessage[] = displayed_doc
             ? enrichedMessages.map((m, i) => {
@@ -490,6 +512,13 @@ export async function prepareProjectChatStream(
         if (personalisationPrompt) {
             systemPromptExtra += `\n\n${personalisationPrompt}`;
         }
+        const userSentAt = await loadUserMessageSentTimes(
+            db,
+            "chat_messages",
+            chatId,
+            messagesForLLM,
+            !!args.askInputsResponse,
+        );
         const apiMessages = buildMessages(
             messagesForLLM,
             docAvailability,
@@ -497,6 +526,8 @@ export async function prepareProjectChatStream(
             undefined,
             legalResearchUs,
             nonce,
+            "append",
+            { timeZone, now: new Date(), userSentAt },
         );
 
         const workflowStore = await buildWorkflowStore(userId, userEmail, db);
@@ -508,6 +539,7 @@ export async function prepareProjectChatStream(
                 chatTitle,
                 lastUser,
                 completedTurnPersisted,
+                approvalEvents,
                 allowDocumentMutation,
                 memorySharedAudience,
                 memoryTurn,

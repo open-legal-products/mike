@@ -46,7 +46,7 @@ describe("QuickActionsModal", () => {
         ).toHaveClass("liquid-glass-modal-row-hover");
         expect(
             document.querySelector('[data-slot="quick-actions-list"]'),
-        ).toHaveClass("overflow-x-hidden", "px-1", "pt-1");
+        ).toHaveClass("overflow-x-hidden", "pt-1");
 
         fireEvent.click(
             screen.getByRole("button", { name: /Proofread agreement/ }),

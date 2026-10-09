@@ -7,6 +7,7 @@ import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 
 export const Popover = PopoverPrimitive.Root;
 export const PopoverTrigger = PopoverPrimitive.Trigger;
+export const PopoverAnchor = PopoverPrimitive.Anchor;
 
 export function PopoverContent({
     className,
@@ -21,7 +22,7 @@ export function PopoverContent({
                 align={align}
                 sideOffset={sideOffset}
                 className={cn(
-                    `z-[250] rounded-xl p-3 text-gray-700 outline-none ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`,
+                    `z-[250] rounded-xl p-3 text-gray-700 outline-none ${LIQUID_GLASS_FLOAT_CLASS}`,
                     className,
                 )}
                 {...props}

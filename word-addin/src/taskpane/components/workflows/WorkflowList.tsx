@@ -46,7 +46,7 @@ export function WorkflowList({
           className="min-w-0 flex-1 border-0 bg-transparent text-xs text-gray-800 outline-none placeholder:text-gray-400"
         />
       </label>
-      <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-sm pb-3">
+      <div data-modal-scroll="vertical" className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-sm pb-3">
         {loading ? (
           <div className="flex h-full items-center justify-center">
             <Spinner label="Loading workflows…" />

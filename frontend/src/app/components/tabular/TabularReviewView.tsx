@@ -1,5 +1,8 @@
 "use client";
 
+import { RowActionMenuItems } from "@/app/components/shared/RowActions";
+import { rowActionSelectionIds } from "@/app/components/shared/TablePrimitive";
+import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -7,7 +10,6 @@ import {
     Loader2,
     Square,
     Play,
-    ChevronDown,
     MessageSquare,
     MessageSquareX,
     Download,
@@ -28,6 +30,7 @@ import {
     listProjects,
     grantTabularReviewAccess,
     regenerateTabularCell,
+    stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
     updateTabularReview,
@@ -84,8 +87,11 @@ import { useSidebar } from "@/app/contexts/SidebarContext";
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
-import { ModelToggle, type NoModelsReason } from "../assistant/ModelToggle";
+import { ModelToggle } from "../assistant/ModelToggle";
+import {
+    routerSelections,
+    type NoModelsReason,
+} from "@/shared/lib/modelCatalog";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
@@ -155,6 +161,7 @@ export function TRView({ reviewId, projectId }: Props) {
     const [uploadingDroppedFilenames, setUploadingDroppedFilenames] = useState<
         string[]
     >([]);
+    const [generationError, setGenerationError] = useState<string | null>(null);
     const [dropUploadWarning, setDropUploadWarning] = useState<string | null>(
         null,
     );
@@ -178,12 +185,15 @@ export function TRView({ reviewId, projectId }: Props) {
     const [noModelsWarning, setNoModelsWarning] =
         useState<NoModelsReason | null>(null);
     const [modelRequiredWarning, setModelRequiredWarning] = useState(false);
-    const actionsRef = useRef<HTMLDivElement>(null);
     const tableRef = useRef<TRTableHandle>(null);
     const reviewFileUploadInputRef = useRef<HTMLInputElement>(null);
     const reviewFolderUploadInputRef = useRef<HTMLInputElement>(null);
     const generationAbortRef = useRef<AbortController | null>(null);
     const stopRequestedRef = useRef(false);
+    // The sequence number of the last frame this client has applied. The
+    // server numbers every frame of a run (`id:`), so a dropped connection
+    // resumes from here + 1 instead of replaying the whole grid.
+    const lastFrameIdRef = useRef(0);
     // Only one resume stream may be open at a time — mount, a 202 regenerate
     // and a dropped generate stream can all ask for one.
     const resumeStreamOpenRef = useRef(false);
@@ -219,19 +229,6 @@ export function TRView({ reviewId, projectId }: Props) {
         window.history.replaceState(null, "", newUrl);
     }, [chatOpen, selectedChatId]);
 
-    useEffect(() => {
-        if (!actionsOpen) return;
-        function handleClickOutside(e: MouseEvent) {
-            if (
-                actionsRef.current &&
-                !actionsRef.current.contains(e.target as Node)
-            )
-                setActionsOpen(false);
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () =>
-            document.removeEventListener("mousedown", handleClickOutside);
-    }, [actionsOpen]);
 
     useEffect(() => {
         // Cancellation flag: on a rapid reviewId change the previous fetch
@@ -240,7 +237,7 @@ export function TRView({ reviewId, projectId }: Props) {
         let cancelled = false;
         const fetches: Promise<unknown>[] = [
             getTabularReview(reviewId).then(
-                ({ review, cells, rows, documents }) => {
+                ({ review, cells, rows, documents, active_generation }) => {
                     if (cancelled) return;
                     setReview(review);
                     setCells(cells);
@@ -249,11 +246,22 @@ export function TRView({ reviewId, projectId }: Props) {
                     setColumns(review.columns_config || []);
                     // A run may still be executing server-side (e.g. after a
                     // refresh, or in another tab) — reattach to it through the
-                    // resumable stream instead of showing a spinner nothing will
-                    // ever resolve. `is_running` is the review's live generation
-                    // lease; cells left "generating" cover a run whose lease has
-                    // lapsed but whose terminal states are still landing.
-                    if (
+                    // resumable stream instead of showing a spinner nothing
+                    // will ever resolve. `active_generation` is a run this
+                    // server owns in process: it can be stopped, so the
+                    // toolbar offers Stop for as long as we are attached.
+                    // `is_running` is only the review's generation lease (an
+                    // async run, or another replica's); cells left
+                    // "generating" cover a run whose lease has lapsed but
+                    // whose terminal states are still landing. Those two can
+                    // be watched, not stopped.
+                    lastFrameIdRef.current = 0;
+                    if (active_generation) {
+                        resumeGenerationStream({ stoppable: true }).catch(
+                            (err) =>
+                                console.error("Generation resume failed", err),
+                        );
+                    } else if (
                         review.is_running ||
                         cells.some((c) => c.status === "generating")
                     ) {
@@ -577,6 +585,10 @@ export function TRView({ reviewId, projectId }: Props) {
     async function consumeGenerationStream(response: Response) {
         for await (const frame of readSseFrames(response, {
             signal: generationAbortRef.current?.signal,
+            onEventId: (id) => {
+                const seq = Number.parseInt(id, 10);
+                if (Number.isFinite(seq)) lastFrameIdRef.current = seq;
+            },
         })) {
             try {
                 const data = frame as Record<string, unknown>;
@@ -593,16 +605,23 @@ export function TRView({ reviewId, projectId }: Props) {
                                 : c,
                         ),
                     );
-                } else if (
-                    data.type === "error" &&
-                    data.code === "invalid_api_key"
-                ) {
-                    setApiKeyWarning({
-                        kind: "rejected",
-                        provider: tabularModel
-                            ? getModelProvider(tabularModel)
-                            : null,
-                    });
+                } else if (data.type === "error") {
+                    if (data.code === "invalid_api_key") {
+                        setApiKeyWarning({
+                            kind: "rejected",
+                            provider: tabularModel
+                                ? getModelProvider(tabularModel)
+                                : null,
+                        });
+                    } else {
+                        setGenerationError(
+                            data.safe_to_display === true &&
+                            typeof data.message === "string" &&
+                            data.message.trim()
+                                ? data.message.trim()
+                                : "The review could not be completed. Please try again.",
+                        );
+                    }
                 }
             } catch (err) {
                 console.warn(
@@ -625,7 +644,12 @@ export function TRView({ reviewId, projectId }: Props) {
     // owns a controller for its own lifetime and clears it on the way out —
     // it never overwrites a live run's controller, which `handleGenerate`'s
     // `finally` identity-checks.
-    async function resumeGenerationStream() {
+    // `stoppable` marks a run this server still owns in process (the review
+    // detail reported `active_generation`): it can be stopped through the
+    // endpoint, so the toolbar must read Stop — not Run — for as long as we
+    // are attached to it. Only a resume that owns its abort controller owns
+    // that flag; one borrowed by `handleGenerate` leaves the state to it.
+    async function resumeGenerationStream(opts?: { stoppable?: boolean }) {
         if (resumeStreamOpenRef.current) return;
         resumeStreamOpenRef.current = true;
         const ownedAbort = generationAbortRef.current
@@ -633,10 +657,17 @@ export function TRView({ reviewId, projectId }: Props) {
             : new AbortController();
         if (ownedAbort) generationAbortRef.current = ownedAbort;
         const abort = generationAbortRef.current;
+        const ownsToolbar = Boolean(opts?.stoppable && ownedAbort);
+        if (ownsToolbar) {
+            stopRequestedRef.current = false;
+            setStoppingGeneration(false);
+            setGenerating(true);
+        }
         try {
             const response = await streamTabularGenerationResume(
                 reviewId,
                 abort?.signal,
+                lastFrameIdRef.current + 1,
             );
             if (!response.ok) {
                 throw new Error(`Resume failed: ${response.status}`);
@@ -648,6 +679,21 @@ export function TRView({ reviewId, projectId }: Props) {
             resumeStreamOpenRef.current = false;
             if (ownedAbort && generationAbortRef.current === ownedAbort)
                 generationAbortRef.current = null;
+            if (ownsToolbar) {
+                if (stopRequestedRef.current) {
+                    try {
+                        await refreshAfterStoppedGeneration();
+                    } catch (err) {
+                        console.error(
+                            "Failed to refresh the stopped tabular review",
+                            err,
+                        );
+                    }
+                }
+                stopRequestedRef.current = false;
+                setGenerating(false);
+                setStoppingGeneration(false);
+            }
         }
     }
 
@@ -679,8 +725,12 @@ export function TRView({ reviewId, projectId }: Props) {
             return;
         }
 
+        setGenerationError(null);
         const generationAbort = new AbortController();
         generationAbortRef.current = generationAbort;
+        // A new run numbers its frames from 1, so a reconnect must not ask to
+        // resume from a previous run's sequence number.
+        lastFrameIdRef.current = 0;
         stopRequestedRef.current = false;
         setStoppingGeneration(false);
         setGenerating(true);
@@ -706,7 +756,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 }
                 const provider =
                     payload &&
-                    ["claude", "gemini", "openai"].includes(payload.provider)
+                    ["claude", "gemini", "openai", "mistral"].includes(payload.provider)
                         ? (payload.provider as ModelProvider)
                         : getModelProvider(tabularModel);
                 if (payload?.code === "missing_api_key" && provider) {
@@ -822,7 +872,12 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    function handleStopGeneration() {
+    // Stop is a request to the server, not a hang-up: the generation is a
+    // server-owned run, so dropping the socket would only detach this tab
+    // while the extraction carried on. The endpoint aborts the run, which
+    // ends the attached stream with `cancelled` + `[DONE]`, and the
+    // `stopRequestedRef` path then refreshes the review.
+    async function handleStopGeneration() {
         if (!generating || stoppingGeneration) return;
         setStoppingGeneration(true);
         setCells((current) =>
@@ -838,7 +893,24 @@ export function TRView({ reviewId, projectId }: Props) {
                 : current,
         );
         stopRequestedRef.current = true;
-        generationAbortRef.current?.abort();
+        try {
+            await stopTabularGeneration(reviewId);
+        } catch (err) {
+            // No run to stop here: a deployment whose extraction runs on the
+            // queue, or a run owned by another replica. Dropping our own
+            // stream is all this tab can do — the same thing Stop meant
+            // before the run registry. Any other failure leaves the run
+            // going, and leaving the toolbar stuck on "Stopping…" would be
+            // worse than detaching, so it ends the same way.
+            if (
+                !(
+                    err instanceof MikeApiError &&
+                    err.code === "generation_not_found"
+                )
+            )
+                console.error("Failed to stop the tabular generation", err);
+            generationAbortRef.current?.abort();
+        }
     }
 
     async function handleAddColumn(newColumns: ColumnConfig[]) {
@@ -960,11 +1032,11 @@ export function TRView({ reviewId, projectId }: Props) {
         setExpandedDocumentId(document.id);
     }
 
-    async function handleDeleteDocuments() {
+    async function handleDeleteDocuments(targetIds: string[] = selectedRowIds) {
         // Removing documents deletes their cells — member tier, like every
         // other reshaping of the review.
         if (!requireStructure("remove documents from this review")) return;
-        const rowIdsToDelete = [...selectedRowIds];
+        const rowIdsToDelete = [...targetIds];
         if (rowIdsToDelete.length === 0) return;
         const documentIdsToDelete = new Set(
             rows
@@ -1038,9 +1110,20 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    async function handleClearResults() {
+    async function handleClearResults(targetIds: string[] = selectedRowIds) {
         if (!requireStructure("clear results")) return;
-        await clearResultsForRows([...selectedRowIds]);
+        await clearResultsForRows([...targetIds]);
+    }
+
+    function renderReviewRowActions(ids: string[], close?: () => void) {
+        return (
+            <RowActionMenuItems
+                onClose={close}
+                onClearResults={() => void handleClearResults(ids)}
+                clearResultsDisabled={cellMutationsBlocked}
+                onDelete={() => void handleDeleteDocuments(ids)}
+            />
+        );
     }
 
     async function handleClearAllResults() {
@@ -1418,6 +1501,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                     type: "custom",
                                     render: (
                                         <ModelToggle
+                                            tone="default"
                                             value={tabularModel}
                                             onChange={(model) =>
                                                 void handleReviewModelChange(
@@ -1428,12 +1512,10 @@ export function TRView({ reviewId, projectId }: Props) {
                                             apiKeysLoading={
                                                 profileLoading && !profile
                                             }
-                                            openRouterModels={
-                                                profile?.openRouterModels
-                                            }
-                                            vercelModels={profile?.vercelModels}
-                                            openCodeGoModels={
-                                                profile?.openCodeGoModels
+                                            routerSelections={
+                                                profile
+                                                    ? routerSelections(profile)
+                                                    : undefined
                                             }
                                             onNoModelsClick={setNoModelsWarning}
                                         />
@@ -1521,63 +1603,11 @@ export function TRView({ reviewId, projectId }: Props) {
                                         <div className="h-3 w-24 rounded bg-gray-100 animate-pulse" />
                                     ) : null}
                                     {!loading && selectedRowIds.length > 0 && (
-                                        <>
-                                            {/* Desktop: compact Actions menu */}
-                                            <div
-                                                ref={actionsRef}
-                                                className="relative max-md:hidden"
-                                            >
-                                                <TabPillButtonUI
-                                                    onClick={() =>
-                                                        setActionsOpen(
-                                                            (v) => !v,
-                                                        )
-                                                    }
-                                                >
-                                                    Actions
-                                                    <ChevronDown className="h-3.5 w-3.5" />
-                                                </TabPillButtonUI>
-                                                {actionsOpen && (
-                                                    <div
-                                                        className={`absolute right-0 top-full z-50 mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
-                                                    >
-                                                        <button
-                                                            onClick={
-                                                                handleClearResults
-                                                            }
-                                                            disabled={
-                                                                cellMutationsBlocked
-                                                            }
-                                                            className="theme-dropdown-item w-full px-3 py-1.5 text-left text-xs text-gray-700 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                                                        >
-                                                            Clear results
-                                                        </button>
-                                                        <button
-                                                            onClick={
-                                                                handleDeleteDocuments
-                                                            }
-                                                            className="w-full px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 transition-colors"
-                                                        >
-                                                            Delete
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            {/* Mobile (toolbar dropdown): flattened entries */}
-                                            <TabPillButtonUI
-                                                onClick={handleClearResults}
-                                                disabled={cellMutationsBlocked}
-                                                className="md:hidden"
-                                            >
-                                                Clear results
-                                            </TabPillButtonUI>
-                                            <TabPillButtonUI
-                                                onClick={handleDeleteDocuments}
-                                                className="md:hidden text-red-600"
-                                            >
-                                                Delete
-                                            </TabPillButtonUI>
-                                        </>
+                                        <SelectionActionsMenu
+                                            open={actionsOpen}
+                                            onOpenChange={setActionsOpen}
+                                            renderItems={(close) => renderReviewRowActions(selectedRowIds, close)}
+                                        />
                                     )}
                                     {!loading && (
                                         <TabPillButtonUI
@@ -1638,6 +1668,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 uploadingFilenames={uploadingDroppedFilenames}
                                 dragOverFiles={dragOverReviewFiles}
                                 onSelectionChange={setSelectedRowIds}
+                                rightClickDropdown={(row, close) => renderReviewRowActions(rowActionSelectionIds(row.id, selectedRowIds), close)}
                                 onDocumentOpen={handleDocumentOpen}
                                 onExpand={(cell) => {
                                     setExpandedCell(cell);
@@ -1699,20 +1730,13 @@ export function TRView({ reviewId, projectId }: Props) {
                     const expandedRow = rows.find(
                         (row) => row.id === expandedCell.row_id,
                     );
-                    const citedDocumentId =
-                        expandedCellCitation?.documentId &&
-                        expandedRow?.source_document_ids.includes(
-                            expandedCellCitation.documentId,
-                        )
-                            ? expandedCellCitation.documentId
-                            : undefined;
+                    // Pass navigation intent as an ID. The panel resolves it
+                    // against current row membership and available documents;
+                    // a background removal must not masquerade as navigation.
                     const requestedDocumentId =
-                        citedDocumentId ??
+                        expandedCellCitation?.documentId ??
                         expandedDocumentId ??
-                        expandedRow?.document_id;
-                    const expandedDoc = documents.find(
-                        (document) => document.id === requestedDocumentId,
-                    );
+                        expandedRow?.document_id ?? undefined;
                     const expandedCol = columns.find(
                         (c) => c.index === expandedCell.column_index,
                     );
@@ -1722,7 +1746,7 @@ export function TRView({ reviewId, projectId }: Props) {
                             cell={expandedCell}
                             row={expandedRow}
                             rows={filteredRows}
-                            document={expandedDoc}
+                            documentId={requestedDocumentId}
                             documents={documents}
                             column={expandedCol}
                             columns={columns}
@@ -1753,7 +1777,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                           )
                             }
                             displayDocument={
-                                !!expandedDoc &&
+                                !!requestedDocumentId &&
                                 (expandedCellCitation !== undefined ||
                                     expandedDocumentId !== undefined)
                             }
@@ -1910,6 +1934,12 @@ export function TRView({ reviewId, projectId }: Props) {
                 onClose={() => setOwnerOnlyAction(null)}
             />
 
+            <WarningPopup
+                open={generationError !== null}
+                onClose={() => setGenerationError(null)}
+                title="Review stopped"
+                message={generationError}
+            />
             <WarningPopup
                 open={dropUploadWarning !== null}
                 onClose={() => setDropUploadWarning(null)}

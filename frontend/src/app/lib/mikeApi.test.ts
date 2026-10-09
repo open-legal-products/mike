@@ -1,3 +1,4 @@
+import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 
@@ -6,14 +7,19 @@ import type { AssistantEvent, Chat } from "@/app/components/shared/types";
 // the reporter's own suite covers what it does with it.
 const reportApiFailure = vi.hoisted(() => vi.fn());
 const reportNetworkFailure = vi.hoisted(() => vi.fn());
+const markErrorHandled = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/errorReporting", () => ({
     trackPendingRequest: () => () => {},
+    markErrorHandled,
     reportApiFailure,
     reportNetworkFailure,
 }));
 
+import { userFacingApiError } from "./userFacingError";
 import {
     MikeApiError,
+    SCHEMA_OUT_OF_DATE_MESSAGE,
+    UPSTREAM_UNAVAILABLE_MESSAGE,
     addDocumentToProject,
     clearTabularCells,
     completeUserOnboarding,
@@ -44,15 +50,11 @@ import {
     deleteWorkflow,
     deleteWorkflowAsset,
     deleteWorkflowShare,
+    cancelGoogleDriveOAuth,
+    disconnectGoogleDrive,
     downloadDocumentsZip,
     downloadUserExport,
-    exportAccountData,
-    exportAuditHistory,
-    exportChatData,
-    exportTabularReviewsData,
-    generateChatTitle,
     generateTabularColumnPrompt,
-    getApiKeyStatus,
     getChatAccess,
     getChat,
     getChatPeople,
@@ -68,9 +70,13 @@ import {
     getLibraryFilterOptions,
     getLibraryFolderChildren,
     getLibraryFolderPath,
+    getGoogleDriveStatus,
     getMcpConnector,
     getOllamaModels,
     getOpenCodeGoModels,
+    getXaiModels,
+    getCustomEndpointModels,
+    getBedrockModels,
     getOpenRouterModels,
     getVercelModels,
     getProject,
@@ -84,6 +90,8 @@ import {
     getTabularReviewAccess,
     getTabularReviewPeople,
     getUserExportStatus,
+    getCustomInstructions,
+    getResponseStyle,
     getUserMemory,
     getUserProfile,
     getWorkflow,
@@ -123,7 +131,6 @@ import {
     listProjectSummaries,
     listProjects,
     listProjectsPage,
-    listStandaloneDocuments,
     listSystemWorkflows,
     listTabularReviewIds,
     listTabularReviews,
@@ -154,6 +161,7 @@ import {
     resolveProjectFolderPath,
     resolveDocumentEdit,
     saveApiKey,
+    setApiKeyEnabled,
     bulkDeleteLibraryDocuments,
     searchProjectDirectory,
     searchLibraryDocuments,
@@ -161,11 +169,17 @@ import {
     setProjectMemoryEnabled,
     setUserMemoryEnabled,
     shareWorkflow,
+    startGoogleDriveOAuth,
     startMcpConnectorOAuth,
     startUserExport,
     streamChat,
+    streamChatTurn,
+    stopChatTurn,
     streamProjectChat,
     streamTabularChat,
+    streamTabularChatTurn,
+    stopTabularChatTurn,
+    stopTabularGeneration,
     streamTabularGeneration,
     streamTabularGenerationResume,
     syncUserPasswordSet,
@@ -184,6 +198,8 @@ import {
     updateUserProfile,
     updateWorkflow,
     updateQuickAction,
+    updateCustomInstructions,
+    updateResponseStyle,
     updateUserMemory,
     importWorkflowAddon,
     listQuickActions,
@@ -241,6 +257,10 @@ afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
 });
+
+
+// Chat requests carry the browser's IANA time zone for the assistant.
+const BROWSER_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 describe("MikeApiError / isMfaRequiredError", () => {
     it("carries status and code, defaulting code to null", () => {
@@ -450,6 +470,35 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         });
     });
 
+    // MIKE-BACKEND-H / MIKE-FRONTEND-F: a missing migration used to reach
+    // the screen as "Something went wrong" and be filed twice (backend and
+    // browser). An unreachable backend made the gateway answer 502 and the
+    // browser file one issue PER ENDPOINT. The server side now answers 503
+    // with a code and reports it once itself; the browser shows the
+    // intentional message and only marks the error.
+    it.each([
+        ["schema_out_of_date", SCHEMA_OUT_OF_DATE_MESSAGE, "The server's database needs an update before this can load. Please contact your administrator."],
+        ["upstream_unavailable", UPSTREAM_UNAVAILABLE_MESSAGE, "The server is temporarily unreachable. Please try again shortly."],
+    ])("shows the %s message and leaves the report to the server side", async (code, message, sentence) => {
+        markErrorHandled.mockClear();
+        fetchMock.mockResolvedValue(
+            jsonResponse(
+                {
+                    code,
+                    detail: "raw server text that must not be trusted",
+                    request_id: "req-503-1",
+                },
+                { status: 503 },
+            ),
+        );
+
+        const error = await getUserProfile().catch((caught: unknown) => caught);
+        expect(error).toMatchObject({ status: 503, code, requestId: "req-503-1", message });
+        expect(userFacingApiError(error, "Fallback")).toBe(sentence);
+        expect(reportApiFailure).not.toHaveBeenCalled();
+        expect(markErrorHandled).toHaveBeenCalledExactlyOnceWith(error);
+    });
+
     it("reports a 5xx without a code and never reports a 4xx", async () => {
         fetchMock.mockResolvedValueOnce(
             jsonResponse({ detail: { nested: true } }, { status: 500 }),
@@ -576,7 +625,7 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
     });
 });
 
-describe("blob requests (exportAccountData)", () => {
+describe("blob requests (downloadUserExport)", () => {
     it("returns the blob and the filename from content-disposition", async () => {
         fetchMock.mockResolvedValue(
             new Response("zip-bytes", {
@@ -587,7 +636,7 @@ describe("blob requests (exportAccountData)", () => {
             }),
         );
 
-        const { blob, filename } = await exportAccountData();
+        const { blob, filename } = await downloadUserExport("e1");
 
         expect(filename).toBe("export.zip");
         expect(await blob.text()).toBe("zip-bytes");
@@ -602,10 +651,10 @@ describe("blob requests (exportAccountData)", () => {
                 },
             }),
         );
-        expect((await exportAccountData()).filename).toBe("data.zip");
+        expect((await downloadUserExport("e1")).filename).toBe("data.zip");
 
         fetchMock.mockResolvedValue(new Response("x", { status: 200 }));
-        expect((await exportAccountData()).filename).toBeNull();
+        expect((await downloadUserExport("e1")).filename).toBeNull();
     });
 
     it("throws a MikeApiError on failure", async () => {
@@ -613,7 +662,7 @@ describe("blob requests (exportAccountData)", () => {
             jsonResponse({ detail: "not allowed" }, { status: 403 }),
         );
 
-        await expect(exportAccountData()).rejects.toMatchObject({
+        await expect(downloadUserExport("e1")).rejects.toMatchObject({
             status: 403,
             message: "not allowed",
         });
@@ -649,34 +698,6 @@ describe("audit history", () => {
         expect(init.signal).toBe(controller.signal);
     });
 
-    it("exports with the same active filters and server-side sort", async () => {
-        fetchMock.mockResolvedValue(
-            new Response("history", {
-                status: 200,
-                headers: {
-                    "content-disposition": 'attachment; filename="history.csv"',
-                },
-            }),
-        );
-
-        const result = await exportAuditHistory({
-            q: "agreement",
-            action: "document.edited",
-            status: "failed",
-            surface: "assistant",
-            from: "2026-07-01",
-            to: "2026-07-31",
-            sortBy: "created_at",
-            sortDirection: "desc",
-        });
-
-        expect(lastFetchCall().url).toBe(
-            "/api/audit/export?q=agreement&action=document.edited&status=failed&surface=assistant&from=2026-07-01&to=2026-07-31&sort_by=created_at&sort_dir=desc",
-        );
-        expect(result.filename).toBe("history.csv");
-        expect(await result.blob.text()).toBe("history");
-    });
-
     it("omits every optional audit parameter when no filters are active", async () => {
         fetchMock.mockResolvedValueOnce(
             jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }),
@@ -684,13 +705,6 @@ describe("audit history", () => {
 
         await getAuditHistory({});
         expect(lastFetchCall().url).toBe("/api/audit?");
-
-        fetchMock.mockResolvedValueOnce(
-            new Response("history", { status: 200 }),
-        );
-
-        await exportAuditHistory({});
-        expect(lastFetchCall().url).toBe("/api/audit/export?");
     });
 });
 
@@ -843,6 +857,35 @@ describe("getChat message mapping", () => {
     });
 });
 
+describe("getChat active turn", () => {
+    const chat: Chat = {
+        id: "c1",
+        project_id: null,
+        user_id: "u1",
+        title: "T",
+        created_at: "2026-01-01",
+    };
+
+    it("passes through the turn the server is still generating", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({
+                chat,
+                messages: [],
+                active_turn: { id: "t1", seq: 4, assistant_message_id: "m9" },
+            }),
+        );
+        const detail = await getChat("c1");
+        expect(detail.active_turn).toEqual({ id: "t1", seq: 4, assistant_message_id: "m9" });
+    });
+
+    it("is null when the server reports none, or predates the field", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [] }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+        fetchMock.mockResolvedValue(jsonResponse({ chat, messages: [], active_turn: null }));
+        expect((await getChat("c1")).active_turn).toBeNull();
+    });
+});
+
 describe("mapTRMessages", () => {
     it("maps user and assistant rows including annotations", () => {
         const events: AssistantEvent[] = [{ type: "content", text: "Answer" }];
@@ -969,6 +1012,25 @@ describe("API transport cancellation", () => {
 });
 
 describe("streamChat", () => {
+    it.each(["unavailable", "empty"])("still sends the chat when the browser time zone is %s", async (mode) => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const formatter = Intl.DateTimeFormat();
+        const options = formatter.resolvedOptions();
+        const spy = vi.spyOn(Intl, "DateTimeFormat");
+        if (mode === "unavailable") {
+            spy.mockImplementation(() => { throw new Error("Intl unavailable"); });
+        } else {
+            vi.spyOn(formatter, "resolvedOptions").mockReturnValue({ ...options, timeZone: "" });
+            spy.mockReturnValue(formatter);
+        }
+        try {
+            await streamChat({ messages: [{ role: "user", content: "Hello" }] });
+            expect(JSON.parse(lastFetchCall().init.body as string)).not.toHaveProperty("time_zone");
+            expect(JSON.parse(lastFetchCall().init.body as string).messages).toEqual([{ role: "user", content: "Hello" }]);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
     it("POSTs with the SSE accept header and forwards the signal outside the body", async () => {
         fetchMock.mockResolvedValue(streamResponse([]));
         const controller = new AbortController();
@@ -993,6 +1055,7 @@ describe("streamChat", () => {
             messages: [{ role: "user", content: "hi" }],
             chat_id: "c1",
             model: "gemini-3-flash-preview",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 
@@ -1009,6 +1072,43 @@ describe("streamChat", () => {
 
         expect(response.bodyUsed).toBe(false);
         expect(await readAll(response)).toBe(chunks.join(""));
+    });
+});
+
+describe("streamChatTurn / stopChatTurn (server-owned turns)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+        await streamChatTurn({
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stream?from=7");
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        await streamChatTurn({ chatId: "c1", turnId: "t1" });
+        expect(lastFetchCall().url).toBe("/api/chat/c1/turn/t1/stream?from=1");
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+        await expect(stopChatTurn("c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/chat/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
     });
 });
 
@@ -1030,6 +1130,7 @@ describe("streamProjectChat", () => {
         expect(JSON.parse(init.body as string)).toEqual({
             messages: [{ role: "user", content: "hi" }],
             displayed_doc: { filename: "a.pdf", document_id: "d1" },
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -1055,6 +1156,7 @@ describe("streamTabularChat", () => {
             review_title: "Leases",
             model: "openai-gpt-5.2",
             reasoning: "low",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -1105,6 +1207,83 @@ describe("streamTabularGenerationResume", () => {
         await streamTabularGenerationResume("r1");
 
         expect(lastFetchCall().init.signal).toBeUndefined();
+    });
+
+    it("resumes from a sequence number when the client has already seen frames", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularGenerationResume("r1", undefined, 12);
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/generate/stream?from=12",
+        );
+    });
+});
+
+describe("streamTabularChatTurn / stopTabularChatTurn (server-owned review chat)", () => {
+    it("GETs the turn's stream from a sequence number with the SSE accept header", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+        const controller = new AbortController();
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+            from: 7,
+            signal: controller.signal,
+        });
+
+        const { url, init } = lastFetchCall();
+        expect(url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=7",
+        );
+        expect(init.method ?? "GET").toBe("GET");
+        expect(init.headers).toMatchObject({ Accept: "text/event-stream" });
+        expect(init.signal).toBe(controller.signal);
+    });
+
+    it("defaults to replaying the whole turn", async () => {
+        fetchMock.mockResolvedValue(streamResponse([]));
+
+        await streamTabularChatTurn({
+            reviewId: "r1",
+            chatId: "c1",
+            turnId: "t1",
+        });
+
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/r1/chats/c1/turn/t1/stream?from=1",
+        );
+    });
+
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularChatTurn("r1", "c1", "t1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/chats/c1/turn/t1/stop");
+        expect(init.method).toBe("POST");
+    });
+});
+
+describe("stopTabularGeneration", () => {
+    it("POSTs the stop and returns the server's verdict", async () => {
+        fetchMock.mockResolvedValue(
+            jsonResponse({ stopped: true, finished: false }),
+        );
+
+        await expect(stopTabularGeneration("r1")).resolves.toEqual({
+            stopped: true,
+            finished: false,
+        });
+        const { url, init } = lastFetchCall();
+        expect(url).toBe("/api/tabular-review/r1/generate/stop");
+        expect(init.method).toBe("POST");
     });
 });
 
@@ -1829,6 +2008,7 @@ describe("tabular review chats", () => {
         expect(JSON.parse(lastFetchCall().init.body as string)).toEqual({
             messages: [{ role: "user", content: "q" }],
             chat_id: "c9",
+            time_zone: BROWSER_TIME_ZONE,
         });
     });
 });
@@ -2119,6 +2299,30 @@ describe("thin endpoint wrappers", () => {
             body: { content: "# Preferences", expected_revision: 3 },
         },
         {
+            name: "getCustomInstructions",
+            call: () => getCustomInstructions(),
+            url: "/user/custom-instructions",
+        },
+        {
+            name: "updateCustomInstructions",
+            call: () => updateCustomInstructions("Use British spelling."),
+            url: "/user/custom-instructions",
+            method: "PUT",
+            body: { content: "Use British spelling." },
+        },
+        {
+            name: "getResponseStyle",
+            call: () => getResponseStyle(),
+            url: "/user/response-style",
+        },
+        {
+            name: "updateResponseStyle",
+            call: () => updateResponseStyle({ verbosity: "concise" }),
+            url: "/user/response-style",
+            method: "PUT",
+            body: { verbosity: "concise" },
+        },
+        {
             name: "setUserMemoryEnabled",
             call: () => setUserMemoryEnabled(false),
             url: "/user/memory/settings",
@@ -2187,11 +2391,6 @@ describe("thin endpoint wrappers", () => {
             body: { enabled: true },
         },
         {
-            name: "getApiKeyStatus",
-            call: () => getApiKeyStatus(),
-            url: "/user/api-keys",
-        },
-        {
             name: "saveApiKey",
             call: () => saveApiKey("claude", "sk-ant-1"),
             url: "/user/api-keys/claude",
@@ -2206,6 +2405,29 @@ describe("thin endpoint wrappers", () => {
             url: "/user/api-keys/openai",
             method: "PUT",
             body: { api_key: null },
+        },
+        {
+            // A cloud key travels with its region/endpoint in one request.
+            name: "saveApiKey (with settings)",
+            call: () =>
+                saveApiKey("bedrock", "bedrock-key", { region: "us-east-1" }),
+            url: "/user/api-keys/bedrock",
+            method: "PUT",
+            body: { api_key: "bedrock-key", settings: { region: "us-east-1" } },
+        },
+        {
+            name: "setApiKeyEnabled (off)",
+            call: () => setApiKeyEnabled("openai", false),
+            url: "/user/api-keys/openai",
+            method: "PATCH",
+            body: { enabled: false },
+        },
+        {
+            name: "setApiKeyEnabled (on)",
+            call: () => setApiKeyEnabled("bedrock", true),
+            url: "/user/api-keys/bedrock",
+            method: "PATCH",
+            body: { enabled: true },
         },
         // MCP connectors
         {
@@ -2266,6 +2488,42 @@ describe("thin endpoint wrappers", () => {
             method: "PATCH",
             body: { enabled: true },
         },
+        // Native Google Drive. Unlike the MCP connectors above these are
+        // first-party endpoints under /user/integrations, and the three verbs
+        // share one path — so the route/method pairing is what keeps
+        // "check status" from accidentally becoming "revoke my tokens".
+        {
+            name: "getGoogleDriveStatus",
+            call: () => getGoogleDriveStatus(),
+            url: "/user/integrations/google-drive",
+        },
+        {
+            name: "startGoogleDriveOAuth",
+            call: () => startGoogleDriveOAuth(),
+            url: "/user/integrations/google-drive/oauth/start",
+            method: "POST",
+        },
+        {
+            name: "cancelGoogleDriveOAuth",
+            call: () => cancelGoogleDriveOAuth("state-token"),
+            url: "/user/integrations/google-drive/oauth/cancel",
+            method: "POST",
+            body: { state: "state-token" },
+        },
+        {
+            name: "disconnectGoogleDrive",
+            call: () => disconnectGoogleDrive(),
+            url: "/user/integrations/google-drive",
+            method: "DELETE",
+        },
+        { name: "getGoogleWorkspaceStatus", call: () => getGoogleWorkspaceStatus("gmail"), url: "/user/integrations/gmail" },
+        { name: "startGoogleWorkspaceOAuth", call: () => startGoogleWorkspaceOAuth("gmail"), url: "/user/integrations/gmail/oauth/start", method: "POST" },
+        { name: "cancelGoogleWorkspaceOAuth", call: () => cancelGoogleWorkspaceOAuth("gmail", "state"), url: "/user/integrations/gmail/oauth/cancel", method: "POST", body: { state: "state" } },
+        { name: "disconnectGoogleWorkspace", call: () => disconnectGoogleWorkspace("gmail"), url: "/user/integrations/gmail", method: "DELETE" },
+        { name: "updateGoogleWorkspaceSettings", call: () => updateGoogleWorkspaceSettings("gmail", { requireWriteApproval: true }), url: "/user/integrations/gmail", method: "PATCH", body: { requireWriteApproval: true } },
+        { name: "setGoogleWorkspaceToolEnabled", call: () => setGoogleWorkspaceToolEnabled("google-calendar", "google_calendar_create_event", false), url: "/user/integrations/google-calendar/tools/google_calendar_create_event", method: "PATCH", body: { enabled: false } },
+        { name: "updateGoogleDriveSettings", call: () => updateGoogleDriveSettings({ enabled: false }), url: "/user/integrations/google-drive", method: "PATCH", body: { enabled: false } },
+        { name: "setGoogleDriveToolEnabled", call: () => setGoogleDriveToolEnabled("google_drive_read_file", true), url: "/user/integrations/google-drive/tools/google_drive_read_file", method: "PATCH", body: { enabled: true } },
         // Projects
         {
             name: "getProject",
@@ -2432,11 +2690,6 @@ describe("thin endpoint wrappers", () => {
         },
         // Standalone documents & versions
         {
-            name: "listStandaloneDocuments",
-            call: () => listStandaloneDocuments(),
-            url: "/single-documents",
-        },
-        {
             name: "getDocument",
             call: () => getDocument("d1"),
             url: "/single-documents/d1",
@@ -2521,14 +2774,6 @@ describe("thin endpoint wrappers", () => {
             call: () => deleteChat("c1"),
             url: "/chat/c1",
             method: "DELETE",
-        },
-        {
-            name: "generateChatTitle",
-            call: () =>
-                generateChatTitle("c1", "first message", "gpt-5.6-terra"),
-            url: "/chat/c1/generate-title",
-            method: "POST",
-            body: { message: "first message", model: "gpt-5.6-terra" },
         },
         {
             name: "getChatPeople",
@@ -2949,6 +3194,9 @@ describe("unwrapping and blob wrappers", () => {
         ["OpenRouter", getOpenRouterModels, "/models/openrouter"],
         ["Vercel AI Gateway", getVercelModels, "/models/vercel"],
         ["OpenCode Go", getOpenCodeGoModels, "/models/opencode-go"],
+        ["Amazon Bedrock", getBedrockModels, "/models/bedrock"],
+        ["xAI", getXaiModels, "/models/xai"],
+        ["custom endpoint", getCustomEndpointModels, "/models/custom"],
     ])("loads the %s model catalog", async (_label, load, path) => {
         const models = [{ id: "openai/gpt-5.4", label: "GPT-5.4" }];
         fetchMock.mockResolvedValue(jsonResponse({ models }));
@@ -3022,27 +3270,6 @@ describe("unwrapping and blob wrappers", () => {
             title: "Recovered",
         });
         expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it("exportChatData and exportTabularReviewsData hit their export routes", async () => {
-        fetchMock.mockImplementation(() =>
-            Promise.resolve(
-                new Response("bytes", {
-                    status: 200,
-                    headers: {
-                        "content-disposition": 'attachment; filename="x.zip"',
-                    },
-                }),
-            ),
-        );
-
-        const chats = await exportChatData();
-        expect(lastFetchCall().url).toBe("/api/user/chats/export");
-        expect(chats.filename).toBe("x.zip");
-        expect(await chats.blob.text()).toBe("bytes");
-
-        await exportTabularReviewsData();
-        expect(lastFetchCall().url).toBe("/api/user/tabular-reviews/export");
     });
 
     it("downloadUserExport streams the finished artifact by encoded id", async () => {

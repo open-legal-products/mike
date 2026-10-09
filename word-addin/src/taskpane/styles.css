@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-/* Local design tokens shared by the task pane's reusable UI components. */
+/* Design tokens: one source shared with the web app's globals.css. */
+@import "../../../frontend/src/shared/ui/DesignTokensUI.css";
+/* Add-in base layer (borders, body colors, button cursor). */
 @import "../shared/styles/tokens.css";
 @import "../../../frontend/src/shared/ui/LiquidGlassUI.css";
 @import "../../../frontend/src/shared/ui/ThemeTokensUI.css";
@@ -12,15 +14,19 @@
 @source "../../../frontend/src/shared/ui/PreResponseWrapperUI.tsx";
 @source "../../../frontend/src/shared/ui/DocumentEventBlocksUI.tsx";
 @source "../../../frontend/src/shared/ui/GlassCardUI.tsx";
+@source "../../../frontend/src/shared/ui/InputUI.tsx";
 @source "../../../frontend/src/shared/ui/GlassIconButtonUI.tsx";
 @source "../../../frontend/src/shared/ui/ModalUI.tsx";
+@source "../../../frontend/src/shared/ui/CloseButton.tsx";
 @source "../../../frontend/src/shared/ui/HeaderButtonsUI.tsx";
 @source "../../../frontend/src/shared/ui/PillButtonUI.tsx";
 @source "../../../frontend/src/shared/ui/PillButtonUI.styles.ts";
 @source "../../../frontend/src/shared/ui/TabPillButtonUI.tsx";
+@source "../../../frontend/src/shared/ui/TextButtonUI.tsx";
+@source "../../../frontend/src/shared/ui/TextButtonUI.styles.ts";
 @source "../../../frontend/src/shared/ui/TextSlabUI.tsx";
 @source "../../../frontend/src/shared/ui/ToggleSwitchUI.tsx";
-@source "../../../frontend/src/shared/ui/DropdownUI.tsx";
+@source "../../../frontend/src/shared/ui/dropdown.tsx";
 @source "../../../frontend/src/shared/ui/CitationPillUI.tsx";
 @source "../../../frontend/src/shared/ui/ModelToggleUI.tsx";
 @source "../../../frontend/src/shared/ui/MikeIconUI.tsx";
@@ -28,6 +34,8 @@
 @source "../../../frontend/src/shared/ui/AuthDividerUI.tsx";
 @source "../../../frontend/src/shared/ui/WorkflowSlashCommandUI.tsx";
 @source "../../../frontend/src/shared/ui/LiquidGlassUI.ts";
+@source "../../../frontend/src/shared/ui/ToastUI.tsx";
+@source "../../../frontend/src/shared/ui/NoticeCardUI.tsx";
 
 /* The web supplies these font variables via next/font; the add-in supplies
    them here (the actual font files are loaded via a <link> in index.html).

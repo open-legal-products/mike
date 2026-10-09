@@ -5,7 +5,9 @@
 
 import { isPanelDocument } from "@/app/components/shared/types";
 import { authenticatedFetch } from "@/app/lib/authEvents";
+import type { RouterProfileLists } from "@/shared/lib/modelCatalog";
 import {
+    markErrorHandled,
     reportApiFailure,
     reportNetworkFailure,
     trackPendingRequest,
@@ -38,6 +40,7 @@ import type {
     AssistantEvent,
     Chat,
     ChatDetailOut,
+    ActiveAssistantTurn,
     Citation,
     Document,
     Folder,
@@ -88,6 +91,7 @@ interface ServerChatDetailOut {
     is_owner?: boolean;
     access_role?: "owner" | "editor" | "viewer";
     messages: ServerMessage[];
+    active_turn?: ActiveAssistantTurn | null;
 }
 
 export const API_BASE = "/api";
@@ -148,6 +152,39 @@ export class MikeApiError extends Error {
 export const INTERNAL_ERROR_MESSAGE = "Something went wrong. Please try again.";
 export const MALFORMED_ERROR_RESPONSE_MESSAGE =
     "The request could not be completed. Please try again.";
+/**
+ * The backend's answer when its database is missing a migration (PGRST202/
+ * 204/205, 42P01). Unlike other 5xx it tells the user something actionable
+ * — contact whoever runs the server — so it is shown instead of the generic
+ * fallback (see userFacingApiError).
+ */
+export const SCHEMA_OUT_OF_DATE_CODE = "schema_out_of_date";
+export const SCHEMA_OUT_OF_DATE_MESSAGE =
+    "The server's database needs an update before this can load. Please contact your administrator.";
+/**
+ * The Next gateway's answer (503, Retry-After) when it cannot reach the
+ * backend at all (ECONNREFUSED and friends). The gateway reports it once
+ * per outage; the user can only wait and retry.
+ */
+export const UPSTREAM_UNAVAILABLE_CODE = "upstream_unavailable";
+export const UPSTREAM_UNAVAILABLE_MESSAGE =
+    "The server is temporarily unreachable. Please try again shortly.";
+/**
+ * 5xx codes that the server side (backend or gateway) has already reported
+ * to Sentry, and that carry a message worth showing instead of the generic
+ * fallback. The browser shows the message and does not report them again.
+ */
+const REPORTED_UPSTREAM_MESSAGES: Readonly<Record<string, string>> = {
+    [SCHEMA_OUT_OF_DATE_CODE]: SCHEMA_OUT_OF_DATE_MESSAGE,
+    [UPSTREAM_UNAVAILABLE_CODE]: UPSTREAM_UNAVAILABLE_MESSAGE,
+};
+
+/** The fixed user-facing message for a server-reported code, or null. */
+export function reportedUpstreamMessage(code: string): string | null {
+    return Object.hasOwn(REPORTED_UPSTREAM_MESSAGES, code)
+        ? REPORTED_UPSTREAM_MESSAGES[code]
+        : null;
+}
 
 export function isMfaRequiredError(error: unknown) {
     return (
@@ -259,9 +296,28 @@ async function toApiError(
             code: parsed.code,
             requestId,
         });
+        const code = typeof parsed.code === "string" ? parsed.code : null;
+        const upstreamMessage = code ? reportedUpstreamMessage(code) : null;
+        if (upstreamMessage) {
+            // The backend (schema_out_of_date) or the gateway
+            // (upstream_unavailable) has already reported this failure once,
+            // with detail the browser cannot see. A browser copy would be one
+            // more event per endpoint per page view for the same incident —
+            // the per-route fan-out again — so it is only marked: a screen's
+            // console.error of it is not bridged either. The message is
+            // ours, not the body's `detail`.
+            const upstreamError = new MikeApiError({
+                status: response.status,
+                code,
+                requestId,
+                message: upstreamMessage,
+            });
+            markErrorHandled(upstreamError);
+            return upstreamError;
+        }
         const apiError = new MikeApiError({
             status: response.status,
-            code: typeof parsed.code === "string" ? parsed.code : null,
+            code,
             requestId,
             // A 4xx whose body carries no usable `detail` is a malformed
             // error response, and it is treated as one. `API error: 409` used
@@ -589,31 +645,10 @@ export async function setProjectMemoryEnabled(
     );
 }
 
-export async function exportAccountData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/export");
-}
-
-export async function exportChatData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/chats/export");
-}
-
-export async function exportTabularReviewsData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/tabular-reviews/export");
-}
-
 // --- Async (durable) exports -----------------------------------------------
 // POST schedules a backend job that builds the export off the request thread;
 // the status endpoint is polled until "done"; the download endpoint streams
-// the artifact. Unlike the legacy GET exports above, a large export can
+// the artifact. Unlike a synchronous GET export, a large export can
 // neither time out the request nor die with a closed tab, and a re-click
 // while one is building dedupes onto the running job.
 
@@ -683,7 +718,7 @@ export interface PersonalisationDetails {
     professionalTitle?: ProfessionalTitle | null;
     practiceAreas?: string[];}
 
-export interface UserProfile {
+export interface UserProfile extends RouterProfileLists {
     displayName: string | null;
     organisation: string | null;
     jurisdiction: string | null;
@@ -707,9 +742,6 @@ export interface UserProfile {
     quickActionsVisible: boolean;
     darkMode: boolean;
     projectMemoryDefault: boolean;
-    openRouterModels: string[];
-    vercelModels: string[];
-    openCodeGoModels: string[];
     apiKeyStatus: ApiKeyStatus;
 }
 
@@ -772,28 +804,6 @@ export async function getAuditHistory(
     return apiRequest(`/audit?${qs.toString()}`, { signal });
 }
 
-export async function exportAuditHistory(params: {
-    q?: string;
-    action?: string;
-    status?: string;
-    surface?: string;
-    from?: string;
-    to?: string;
-    sortBy?: "created_at" | "user_email" | "title" | "model";
-    sortDirection?: "asc" | "desc";
-}): Promise<{ blob: Blob; filename: string | null }> {
-    const qs = new URLSearchParams();
-    if (params.q) qs.set("q", params.q);
-    if (params.action) qs.set("action", params.action);
-    if (params.status) qs.set("status", params.status);
-    if (params.surface) qs.set("surface", params.surface);
-    if (params.from) qs.set("from", params.from);
-    if (params.to) qs.set("to", params.to);
-    if (params.sortBy) qs.set("sort_by", params.sortBy);
-    if (params.sortDirection) qs.set("sort_dir", params.sortDirection);
-    return apiBlobRequest(`/audit/export?${qs.toString()}`);
-}
-
 export async function getUserProfile(): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile");
 }
@@ -822,14 +832,100 @@ export async function updateUserProfile(payload: {
     quickActionsVisible?: boolean;
     darkMode?: boolean;
     projectMemoryDefault?: boolean;
-    openRouterModels?: string[];
-    vercelModels?: string[];
-    openCodeGoModels?: string[];
-}): Promise<UserProfile> {
+} & Partial<RouterProfileLists>): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+    });
+}
+
+export interface CustomInstructions {
+    content: string;
+}
+
+export async function getCustomInstructions(
+    signal?: AbortSignal,
+): Promise<CustomInstructions> {
+    return apiRequest<CustomInstructions>("/user/custom-instructions", {
+        signal,
+    });
+}
+
+export async function updateCustomInstructions(
+    content: string,
+): Promise<CustomInstructions> {
+    return apiRequest<CustomInstructions>("/user/custom-instructions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+    });
+}
+
+/**
+ * Mirrors RESPONSE_STYLE_OPTIONS in the backend user module. The language
+ * codes mirror backend/src/lib/responseLanguages.ts and are listed in the
+ * order the selector shows them.
+ */
+export const RESPONSE_STYLE_OPTIONS = {
+    verbosity: ["concise", "balanced", "detailed"],
+    formatting: ["balanced", "less", "more"],
+    tone: ["formal", "balanced", "plain"],
+    language: [
+        "auto",
+        "en-US",
+        "en-GB",
+        "ar",
+        "zh-Hans",
+        "zh-Hant",
+        "cs",
+        "da",
+        "nl",
+        "fi",
+        "fr",
+        "de",
+        "el",
+        "he",
+        "hi",
+        "id",
+        "it",
+        "ja",
+        "ko",
+        "ms",
+        "nb",
+        "pl",
+        "pt-BR",
+        "pt-PT",
+        "ru",
+        "es",
+        "sv",
+        "th",
+        "tr",
+        "uk",
+        "vi",
+    ],
+} as const;
+
+export type ResponseStyleField = keyof typeof RESPONSE_STYLE_OPTIONS;
+
+export type ResponseStyle = {
+    [Field in ResponseStyleField]: (typeof RESPONSE_STYLE_OPTIONS)[Field][number];
+};
+
+export async function getResponseStyle(
+    signal?: AbortSignal,
+): Promise<ResponseStyle> {
+    return apiRequest<ResponseStyle>("/user/response-style", { signal });
+}
+
+/** Sends only the changed fields; the response is the full saved style. */
+export async function updateResponseStyle(
+    update: Partial<ResponseStyle>,
+): Promise<ResponseStyle> {
+    return apiRequest<ResponseStyle>("/user/response-style", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
     });
 }
 
@@ -863,26 +959,46 @@ export type ApiKeyProvider =
     | "claude"
     | "gemini"
     | "openai"
+    | "mistral"
     | "openrouter"
     | "vercel"
     | "opencode-go"
+    | "bedrock"
+    | "azure"
+    | "azure-foundry"
+    | "vertex"
+    | "xai"
+    | "custom"
     | "courtlistener";
 type ApiKeySource = "user" | "env" | null;
+
+/**
+ * The non-secret setting saved with a user's own key: the AWS region of a
+ * Bedrock key, the Azure resource of an Azure OpenAI or Azure AI Foundry key,
+ * the Vertex AI location of a service-account key, the base URL of a custom
+ * OpenAI-compatible endpoint.
+ */
+export type ApiKeySettings = {
+    bedrock?: { region: string } | null;
+    azure?: { endpoint: string } | null;
+    "azure-foundry"?: { endpoint: string } | null;
+    vertex?: { location: string } | null;
+    custom?: { baseUrl: string } | null;
+};
 export type ApiKeyState = Record<
     ApiKeyProvider,
     {
         configured: boolean;
         source: ApiKeySource;
+        enabled?: boolean;
     }
 >;
 
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
     sources?: Partial<Record<ApiKeyProvider, ApiKeySource>>;
+    enabled?: Partial<Record<ApiKeyProvider, boolean>>;
+    settings?: ApiKeySettings;
 };
-
-export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
-    return apiRequest<ApiKeyStatus>("/user/api-keys");
-}
 
 export interface OllamaModelOption {
     id: string;
@@ -937,6 +1053,26 @@ export async function getVercelModels(): Promise<RouterCatalogModel[]> {
     return models;
 }
 
+export async function getBedrockModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>("/models/bedrock");
+    return models;
+}
+
+export async function getXaiModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
+        "/models/xai",
+    );
+    return models;
+}
+
+/** Models reported by the user's own OpenAI-compatible endpoint. */
+export async function getCustomEndpointModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
+        "/models/custom",
+    );
+    return models;
+}
+
 export async function getOpenCodeGoModels(): Promise<RouterCatalogModel[]> {
     const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
         "/models/opencode-go",
@@ -944,14 +1080,32 @@ export async function getOpenCodeGoModels(): Promise<RouterCatalogModel[]> {
     return models;
 }
 
+/**
+ * Save, replace or remove a key. Keys that are saved with a setting (a region,
+ * endpoint, location or base URL) also send it; a setting with a null key changes the saved key's setting only.
+ */
 export async function saveApiKey(
     provider: ApiKeyProvider,
     apiKey: string | null,
+    settings?: ApiKeySettings[keyof ApiKeySettings],
 ): Promise<ApiKeyStatus> {
     return apiRequest<ApiKeyStatus>(`/user/api-keys/${provider}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: apiKey }),
+        body: JSON.stringify(
+            settings ? { api_key: apiKey, settings } : { api_key: apiKey },
+        ),
+    });
+}
+
+export async function setApiKeyEnabled(
+    provider: ApiKeyProvider,
+    enabled: boolean,
+): Promise<ApiKeyStatus> {
+    return apiRequest<ApiKeyStatus>(`/user/api-keys/${provider}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
     });
 }
 
@@ -964,7 +1118,8 @@ interface McpToolSummary {
     enabled: boolean;
     readOnly: boolean;
     destructive: boolean;
-    requiresConfirmation: boolean;
+    /** Changes data; held for approval when the connector asks for permission. */
+    write: boolean;
     lastSeenAt: string;
 }
 
@@ -975,6 +1130,9 @@ export interface McpConnectorSummary {
     serverUrl: string;
     authType: "none" | "bearer" | "oauth";
     enabled: boolean;
+    requireWriteApproval: boolean;
+    /** Disables write tools while preserving individual tool choices. */
+    readOnly?: boolean;
     hasAuthConfig: boolean;
     customHeaderKeys: string[];
     oauthConnected: boolean;
@@ -1021,6 +1179,8 @@ export async function updateMcpConnector(
         name?: string;
         serverUrl?: string;
         enabled?: boolean;
+        requireWriteApproval?: boolean;
+        readOnly?: boolean;
         bearerToken?: string | null;
         headers?: Record<string, string>;
     },
@@ -1077,6 +1237,12 @@ export async function setMcpToolEnabled(
     );
 }
 
+// ---------------------------------------------------------------------------
+// Native Google Drive integration (first-party — not an MCP connector)
+// ---------------------------------------------------------------------------
+
+export type GoogleDriveStatus = import("@mike/contracts").GoogleDriveStatus;
+
 /**
  * Error code the backend attaches when a connector cannot start because the
  * deployment is missing operator-side setup (an OAuth client for a provider
@@ -1090,6 +1256,59 @@ export function isConnectorSetupError(error: unknown): error is MikeApiError {
     return (
         error instanceof MikeApiError &&
         error.code === CONNECTOR_SETUP_REQUIRED_CODE
+    );
+}
+
+export async function getGoogleDriveStatus(): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>("/user/integrations/google-drive");
+}
+
+export async function startGoogleDriveOAuth(): Promise<{
+    authorizationUrl: string;
+}> {
+    return apiRequest<{ authorizationUrl: string }>(
+        "/user/integrations/google-drive/oauth/start",
+        { method: "POST" },
+    );
+}
+
+export async function cancelGoogleDriveOAuth(state: string): Promise<void> {
+    await apiRequest("/user/integrations/google-drive/oauth/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+    });
+}
+
+export async function disconnectGoogleDrive(): Promise<void> {
+    return apiRequest<void>("/user/integrations/google-drive", {
+        method: "DELETE",
+    });
+}
+
+export async function updateGoogleDriveSettings(settings: {
+    enabled?: boolean;
+    requireWriteApproval?: boolean;
+    readOnly?: boolean;
+}): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>("/user/integrations/google-drive", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+    });
+}
+
+export async function setGoogleDriveToolEnabled(
+    toolName: string,
+    enabled: boolean,
+): Promise<GoogleDriveStatus> {
+    return apiRequest<GoogleDriveStatus>(
+        `/user/integrations/google-drive/tools/${encodeURIComponent(toolName)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
     );
 }
 
@@ -1838,6 +2057,7 @@ export interface DocumentVersion {
     file_type?: string | null;
     size_bytes?: number | null;
     page_count?: number | null;
+    textless_page_count?: number | null;
     deleted_at?: string | null;
     deleted_by?: string | null;
 }
@@ -1871,7 +2091,11 @@ export async function replaceDocumentVersionFile(
     versionId: string,
     file: File,
     filename?: string,
-    options?: UploadRequestOptions<DocumentVersion>,
+    options?: UploadRequestOptions<DocumentVersion> & {
+        expectedContentSha256?: string;
+        /** Skip eager PDF generation for frequent editor saves. */
+        generatePdf?: boolean;
+    },
 ): Promise<DocumentVersion> {
     const uploadedFile = filename
         ? new File([file], filename, {
@@ -1882,7 +2106,16 @@ export async function replaceDocumentVersionFile(
     return firstUploadResult(
         await uploadFilesWithSession<DocumentVersion>({
             purpose: "document_version_replace",
-            destination: { document_id: documentId, version_id: versionId },
+            destination: {
+                document_id: documentId,
+                version_id: versionId,
+                ...(options?.expectedContentSha256
+                    ? { expected_content_sha256: options.expectedContentSha256 }
+                    : {}),
+                ...(options?.generatePdf !== undefined
+                    ? { generate_pdf: options.generatePdf }
+                    : {}),
+            },
             files: [{ file: uploadedFile }],
             onProgress: options?.onProgress,
             signal: options?.signal,
@@ -1978,10 +2211,6 @@ export async function uploadStandaloneDocuments(
         onProgress: options?.onProgress,
         signal: options?.signal,
     });
-}
-
-export async function listStandaloneDocuments(): Promise<Document[]> {
-    return apiRequest<Document[]>("/single-documents");
 }
 
 export async function getDocument(documentId: string): Promise<Document> {
@@ -2138,7 +2367,41 @@ export async function getChat(chatId: string): Promise<ChatDetailOut> {
             access_role: raw.access_role,
         },
         messages,
+        active_turn: raw.active_turn ?? null,
     };
+}
+
+/**
+ * Attach to a turn the server is generating (or has just finished) for this
+ * chat. Frames with a sequence number >= `from` are replayed, then the live
+ * ones follow until the turn ends. `from` is the id of the last frame the
+ * caller saw plus one; 1 means everything.
+ */
+export async function streamChatTurn(payload: {
+    chatId: string;
+    turnId: string;
+    from?: number;
+    signal?: AbortSignal;
+}): Promise<Response> {
+    const { chatId, turnId, from = 1, signal } = payload;
+    return apiFetch(
+        `${API_BASE}/chat/${chatId}/turn/${turnId}/stream?from=${from}`,
+        { headers: { Accept: "text/event-stream" }, signal },
+    );
+}
+
+/**
+ * The one way to cut a generation short. Closing the stream only detaches
+ * this client; the server keeps generating for everyone else.
+ */
+export async function stopChatTurn(
+    chatId: string,
+    turnId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest<{ stopped: boolean; finished: boolean }>(
+        `/chat/${chatId}/turn/${turnId}/stop`,
+        { method: "POST" },
+    );
 }
 
 export async function renameChat(chatId: string, title: string): Promise<void> {
@@ -2223,18 +2486,6 @@ export async function deleteChat(chatId: string): Promise<void> {
     await apiRequest(`/chat/${chatId}`, { method: "DELETE" });
 }
 
-export async function generateChatTitle(
-    chatId: string,
-    message: string,
-    model: string,
-): Promise<{ title: string }> {
-    return apiRequest<{ title: string }>(`/chat/${chatId}/generate-title`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, model }),
-    });
-}
-
 const panelDocumentRequests = new Map<string, Promise<PanelDocument>>();
 
 export async function getPanelDocument(
@@ -2255,6 +2506,18 @@ export async function getPanelDocument(
         panelDocumentRequests.set(documentId, request);
     }
     return request;
+}
+
+/**
+ * The browser's IANA time zone (e.g. "Europe/London"), sent with chat requests
+ * so the assistant knows the user's local date and time.
+ */
+function browserTimeZone(): string | undefined {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 export async function streamChat(payload: {
@@ -2278,7 +2541,7 @@ export async function streamChat(payload: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
         signal,
     });
 }
@@ -2308,7 +2571,7 @@ export async function streamProjectChat(payload: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
         signal,
     });
 }
@@ -2506,13 +2769,34 @@ export async function streamTabularGeneration(
  * observer that takes no generation lease and enqueues nothing, so resuming a
  * run can never 409 or restart it. Used when a stream drops mid-run and when
  * the view mounts on a review that is already `is_running`.
+ *
+ * `from` is the sequence number to replay from — the last `id:` seen plus one
+ * — so a reconnect picks up where it left off instead of replaying the whole
+ * run. A server with no in-process run ignores it and tails the database.
  */
 export async function streamTabularGenerationResume(
     reviewId: string,
     signal?: AbortSignal,
+    from?: number,
 ): Promise<Response> {
-    return apiFetch(`${API_BASE}/tabular-review/${reviewId}/generate/stream`, {
-        signal: signal ?? undefined,
+    const query = from ? `?from=${from}` : "";
+    return apiFetch(
+        `${API_BASE}/tabular-review/${reviewId}/generate/stream${query}`,
+        { signal: signal ?? undefined },
+    );
+}
+
+/**
+ * Stop a generation the server is running. Closing the SSE socket no longer
+ * cancels anything, so this is the Stop control's only lever. A deployment
+ * whose extraction runs on the queue — or a run owned by another replica —
+ * has nothing in-process to stop and answers 404 `generation_not_found`.
+ */
+export async function stopTabularGeneration(
+    reviewId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest(`/tabular-review/${reviewId}/generate/stop`, {
+        method: "POST",
     });
 }
 
@@ -2535,9 +2819,45 @@ export async function streamTabularChat(
             project_name: context?.projectName ?? undefined,
             model,
             reasoning,
+            time_zone: browserTimeZone(),
         }),
         signal: signal ?? undefined,
     });
+}
+
+/**
+ * Attach to a review-chat turn the server is generating (or has just
+ * finished). Frames with a sequence number >= `from` are replayed, then the
+ * live ones follow until the turn ends; `from` is the last frame the caller
+ * saw plus one, and 1 means everything.
+ */
+export async function streamTabularChatTurn(payload: {
+    reviewId: string;
+    chatId: string;
+    turnId: string;
+    from?: number;
+    signal?: AbortSignal;
+}): Promise<Response> {
+    const { reviewId, chatId, turnId, from = 1, signal } = payload;
+    return apiFetch(
+        `${API_BASE}/tabular-review/${reviewId}/chats/${chatId}/turn/${turnId}/stream?from=${from}`,
+        { headers: { Accept: "text/event-stream" }, signal },
+    );
+}
+
+/**
+ * The one way to cut a review-chat answer short. Closing the stream only
+ * detaches this client; the server keeps generating for everyone else.
+ */
+export async function stopTabularChatTurn(
+    reviewId: string,
+    chatId: string,
+    turnId: string,
+): Promise<{ stopped: boolean; finished: boolean }> {
+    return apiRequest<{ stopped: boolean; finished: boolean }>(
+        `/tabular-review/${reviewId}/chats/${chatId}/turn/${turnId}/stop`,
+        { method: "POST" },
+    );
 }
 
 export interface TRCitationAnnotation {
@@ -2573,6 +2893,13 @@ export interface TRChat {
     reasoning_level: NonNullable<Message["reasoning"]> | null;
     created_at: string;
     updated_at: string;
+    /**
+     * Set while the server is still generating an answer into this thread. A
+     * panel that has just loaded (a refresh, a second tab, a thread opened
+     * from the list while its answer runs elsewhere) attaches to it instead
+     * of showing a transcript whose last answer is simply missing.
+     */
+    active_turn?: ActiveAssistantTurn | null;
 }
 
 const TABULAR_CHAT_SELECTION_PREFIX = "tabular-review-chat:";
@@ -3014,16 +3341,6 @@ export async function copyDocumentsToWorkflowAssets(
     );
 }
 
-export async function uploadWorkflowAsset(
-    workflowId: string,
-    file: File,
-    options?: UploadRequestOptions<Document>,
-): Promise<Document> {
-    return firstUploadResult(
-        await uploadWorkflowAssets(workflowId, [{ file }], options),
-    );
-}
-
 export async function uploadWorkflowAssets(
     workflowId: string,
     files: UploadSessionInput[],
@@ -3052,4 +3369,64 @@ export async function deleteWorkflowAsset(
     await apiRequest(`/workflows/${workflowId}/assets/${assetId}`, {
         method: "DELETE",
     });
+}
+
+export async function getGoogleWorkspaceStatus(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+) {
+    return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
+        `/user/integrations/${provider}`,
+    );
+}
+export async function startGoogleWorkspaceOAuth(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+) {
+    return apiRequest<{ authorizationUrl: string }>(
+        `/user/integrations/${provider}/oauth/start`,
+        { method: "POST" },
+    );
+}
+export async function cancelGoogleWorkspaceOAuth(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    state: string,
+) {
+    return apiRequest<void>(`/user/integrations/${provider}/oauth/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+    });
+}
+export async function disconnectGoogleWorkspace(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+) {
+    return apiRequest<void>(`/user/integrations/${provider}`, {
+        method: "DELETE",
+    });
+}
+export async function updateGoogleWorkspaceSettings(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    settings: { enabled?: boolean; requireWriteApproval?: boolean; readOnly?: boolean },
+) {
+    return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
+        `/user/integrations/${provider}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(settings),
+        },
+    );
+}
+export async function setGoogleWorkspaceToolEnabled(
+    provider: import("@mike/contracts").GoogleWorkspaceProvider,
+    toolName: string,
+    enabled: boolean,
+) {
+    return apiRequest<import("@mike/contracts").GoogleWorkspaceStatus>(
+        `/user/integrations/${provider}/tools/${encodeURIComponent(toolName)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+        },
+    );
 }

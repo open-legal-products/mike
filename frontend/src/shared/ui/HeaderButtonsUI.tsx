@@ -9,13 +9,18 @@ import {
     LIQUID_GLASS_SUBTLE_CLASS,
 } from "./LiquidGlassUI";
 
+/**
+ * A group of header buttons. The fill is translucent, so a caller that floats
+ * the group over scrolling content adds its own `backdrop-blur-*`; in-flow
+ * groups on the solid page background do not need one.
+ */
 export function HeaderButtonsUI({
     className = "",
     ...props
 }: ComponentProps<"div">) {
     return (
         <div
-            className={`flex shrink-0 items-center gap-2 rounded-full px-1 py-1 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-2xl ${className}`}
+            className={`flex shrink-0 items-center gap-2 rounded-full px-1 py-1 ${LIQUID_GLASS_SUBTLE_CLASS} ${className}`}
             {...props}
         />
     );

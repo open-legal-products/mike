@@ -1,3 +1,4 @@
+import { buildGoogleWorkspaceTools } from "../../../lib/integrations/googleWorkspace";
 import {
   streamChatWithTools,
   resolveModel,
@@ -9,24 +10,18 @@ import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
 import { reportError } from "../../../lib/observability/sentry";
 import type { Db } from "../../../lib/supabase";
-import { buildUserMcpTools, type McpToolEvent } from "../../../lib/mcpConnectors";
-import type { SourceDocument } from "../../../lib/sourceDocuments";
-import {
-  COURTLISTENER_TOOLS,
-  type CaseCitationEvent,
-  type CourtlistenerToolEvent,
-} from "./tools/courtlistenerTools";
+import { buildUserMcpTools } from "../../../lib/mcpConnectors";
+import { buildGoogleDriveTools } from "../../../lib/integrations/googleDrive";
+import { COURTLISTENER_TOOLS } from "./tools/courtlistenerTools";
 import {
   type DocStore,
   type DocIndex,
   type TabularCellStore,
   type WorkflowStore,
   type ToolCall,
-  type AskInputResponseItem,
-  type AskInputsEvent,
-  type EditAnnotation,
   devLog,
   resolveDocLabel,
+  TOOL_ERROR_MESSAGE,
 } from "./types";
 import {
   TOOLS,
@@ -89,7 +84,6 @@ export class AssistantStreamError extends Error {
 
 export const ASSISTANT_ERROR_MESSAGE =
   "The response could not be completed. Please try again.";
-const TOOL_ERROR_MESSAGE = "This tool could not complete its request.";
 
 /**
  * What to tell the client about a failed stream.
@@ -199,12 +193,26 @@ export async function runLLMStream(params: {
   docStore: DocStore;
   docIndex: DocIndex;
   userId: string;
+  /**
+   * The caller's authenticated email. Direct (email-keyed) grants are part of
+   * the per-document role check edit_document runs before it writes, so a
+   * surface that omits it only lets the model edit documents the caller
+   * reaches as creator or organization member.
+   */
+  userEmail?: string | null;
   db: Db;
   write: (s: string) => void;
+  onActivity?: () => void;
   extraTools?: unknown[];
   includeResearchTools?: boolean;
   /** Expose ask_inputs only to clients that can render and answer it. */
   includeAskInputs?: boolean;
+  /**
+   * The surface continues a paused turn from an ask_inputs_response, so a
+   * connector write can wait there for the user's approval. Surfaces without
+   * that continuation refuse writes that need approval instead.
+   */
+  connectorApprovals?: boolean;
   /**
    * May this turn WRITE documents (edit_document, replicate_document, the
    * generate_* family)? Defaults to true; pass false and those tools are
@@ -263,11 +271,13 @@ export async function runLLMStream(params: {
     docStore,
     docIndex,
     userId,
+    userEmail,
     db,
     write: unsafeWrite,
     extraTools,
     includeResearchTools = true,
     includeAskInputs = true,
+    connectorApprovals = false,
     allowDocumentMutation = true,
     workflowStore,
     tabularStore,
@@ -287,6 +297,7 @@ export async function runLLMStream(params: {
     unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   const mcpTools = await buildUserMcpTools(userId, db);
+  const googleDriveTools = await buildGoogleDriveTools(userId, db);
   const conversationTools = includeAskInputs
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
@@ -294,6 +305,8 @@ export async function runLLMStream(params: {
   const advertisedTools = [
     ...baseTools,
     ...mcpTools,
+    ...googleDriveTools,
+    ...(await buildGoogleWorkspaceTools(userId, db)),
     ...(extraTools ?? []),
     ...(clientTools?.schemas ?? []),
   ];
@@ -525,6 +538,7 @@ export async function runLLMStream(params: {
       abortSignal: signal,
       conversationId,
       callbacks: {
+        onActivity: params.onActivity,
         onContentDelta: (delta) => {
           iterText += delta;
           streamVisibleContent(delta);
@@ -625,6 +639,10 @@ export async function runLLMStream(params: {
           courtlistenerTurnState,
           apiKeys,
           nonce,
+          {
+            connectorApprovals: connectorApprovals && includeAskInputs,
+            userEmail,
+          },
         );
         throwIfAborted(signal);
         for (const r of docsRead) {

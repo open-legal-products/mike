@@ -94,6 +94,56 @@ export function uploadJobWallClockMs(
   );
 }
 
+/**
+ * Deadlines for one server-owned SSE run (chat, project chat, Word chat,
+ * tabular generation). `idleMs` aborts a run that has produced no output for
+ * that long (a hung provider or tool). Model progress and data frames re-arm
+ * it, but transport keep-alives do not. `maxMs` is a wall-clock
+ * backstop for a run that never stops emitting.
+ */
+export function streamRunDeadlines(env: NodeJS.ProcessEnv = process.env): {
+  idleMs: number;
+  maxMs: number;
+} {
+  return {
+    idleMs: clamp(
+      envInt("STREAM_IDLE_TIMEOUT_MS", 5 * 60_000, env),
+      30_000,
+      60 * 60_000,
+    ),
+    maxMs: clamp(
+      envInt("STREAM_MAX_LIFETIME_MS", 4 * 60 * 60_000, env),
+      60_000,
+      24 * 60 * 60_000,
+    ),
+  };
+}
+
+/**
+ * Silence limits applied to each raw provider response by providerDeadlines.
+ * `firstChunkMs` includes waiting for headers and the first output of a step.
+ * `chunkMs` bounds gaps after text, reasoning, tool input or a tool call.
+ * Provider clocks end with the provider step, excluding local tool execution;
+ * `streamRunDeadlines` stays as the run-level backstop.
+ */
+export function streamChunkTimeouts(env: NodeJS.ProcessEnv = process.env): {
+  firstChunkMs: number;
+  chunkMs: number;
+} {
+  return {
+    firstChunkMs: clamp(
+      envInt("STREAM_FIRST_CHUNK_TIMEOUT_MS", 2 * 60_000, env),
+      10_000,
+      30 * 60_000,
+    ),
+    chunkMs: clamp(
+      envInt("STREAM_CHUNK_TIMEOUT_MS", 60_000, env),
+      5_000,
+      30 * 60_000,
+    ),
+  };
+}
+
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {
   try {
     const url = new URL(value);

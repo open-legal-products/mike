@@ -180,6 +180,7 @@ export async function officeFileToPdf(
   const profileUrl = pathToFileURL(profileDirectory).href;
 
   const timeoutMs = uploadConversionTimeoutMs();
+  let stderr = "";
   try {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
@@ -195,7 +196,6 @@ export async function officeFileToPdf(
         ],
         { stdio: ["ignore", "ignore", "pipe"] },
       );
-      let stderr = "";
       let timedOut = false;
       // LibreOffice can wedge on a malformed document and never exit, which
       // would hold this worker slot for the life of the process.
@@ -247,10 +247,35 @@ export async function officeFileToPdf(
     outputDirectory,
     `${path.parse(inputPath).name}.pdf`,
   );
-  await fs.promises.access(outputPath, fs.constants.R_OK);
+  try {
+    await fs.promises.access(outputPath, fs.constants.R_OK);
+  } catch (error) {
+    // soffice exits 0 without writing anything when it cannot load the
+    // source ("Error: source file could not be loaded" on stderr). That is a
+    // rejected document, not a missing file: report it as one, and keep
+    // LibreOffice's reason for the server log (the Sentry boundary drops
+    // message text and keeps only the code).
+    throw Object.assign(
+      new Error(
+        `LibreOffice exited without producing a PDF${stderr ? `: ${stderr}` : ""}`,
+        { cause: error },
+      ),
+      { code: "conversion_failed" },
+    );
+  }
   return outputPath;
 }
 
-export function convertedPdfKey(userId: string, docId: string): string {
-  return `converted-pdfs/${userId}/${docId}.pdf`;
+/**
+ * Storage key of a document's PDF rendition. With a version slug the key is
+ * per version, so a rendition never overwrites another version's.
+ */
+export function convertedPdfKey(
+  userId: string,
+  docId: string,
+  versionSlug?: string,
+): string {
+  return versionSlug
+    ? `converted-pdfs/${userId}/${docId}/${versionSlug}.pdf`
+    : `converted-pdfs/${userId}/${docId}.pdf`;
 }

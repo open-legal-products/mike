@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { getTabularReview } from "@/app/lib/mikeApi";
-import type { TabularReview } from "@/app/components/shared/types";
+import type { TabularReview, TabularReviewRow, Document } from "@/app/components/shared/types";
 import { TRView } from "./TabularReviewView";
 
 // What this file pins: the Add Columns button refuses a viewer BEFORE the
@@ -49,7 +50,6 @@ vi.mock("@/app/contexts/SidebarContext", () => ({
     useSidebar: () => ({ setSidebarOpen: vi.fn() }),
 }));
 vi.mock("../assistant/ModelToggle", () => ({ ModelToggle: () => null }));
-vi.mock("./TRTable", () => ({ TRTable: () => <div /> }));
 vi.mock("./TRSidePanel", () => ({ TRSidePanel: () => null }));
 vi.mock("./TRChatPanel", () => ({ TRChatPanel: () => null }));
 vi.mock("./TRWorkflowModal", () => ({ TRWorkflowModal: () => null }));
@@ -108,10 +108,26 @@ beforeEach(() => {
 });
 
 describe("TabularReviewView Add Columns gating", () => {
+    it.each([1, 2])("matches toolbar and right-click actions for %i selected review rows", async (count) => {
+        const user = userEvent.setup();
+        const docs = [1, 2].map((index) => ({ id: `doc-${index}`, filename: `Document ${index}`, file_type: "pdf" })) as Document[];
+        const rows = docs.map((doc, index) => ({ id: `row-${index}`, label: doc.filename, row_type: "document", document_id: doc.id, source_document_ids: [doc.id] })) as TabularReviewRow[];
+        vi.mocked(getTabularReview).mockResolvedValue({ review: review({ access_role: "editor", document_ids: docs.map((doc) => doc.id) }), documents: docs, rows, cells: [] });
+        render(<TRView reviewId="r1" />);
+        await user.click(await screen.findByRole("checkbox", { name: "Select Document 1" }));
+        if (count === 2) await user.click(screen.getByRole("checkbox", { name: "Select Document 2" }));
+        await user.click(screen.getByText("Actions"));
+        const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+        expect(items).toEqual(["Clear results", "Delete"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("Document 1"), { clientX: 40, clientY: 40 });
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(items);
+    });
+
     it("refuses a viewer at the button instead of at the submit", async () => {
         renderAs("viewer");
 
-        fireEvent.click(await screen.findByText("Add Columns"));
+        fireEvent.click((await screen.findAllByText("Add Columns"))[0]);
 
         expect(await screen.findByText("Editors only")).toBeInTheDocument();
         expect(
@@ -123,7 +139,7 @@ describe("TabularReviewView Add Columns gating", () => {
     it("opens the modal for an editor", async () => {
         renderAs("editor");
 
-        fireEvent.click(await screen.findByText("Add Columns"));
+        fireEvent.click((await screen.findAllByText("Add Columns"))[0]);
 
         expect(screen.getByTestId("add-column-modal")).toBeInTheDocument();
         expect(screen.queryByText("Editors only")).not.toBeInTheDocument();

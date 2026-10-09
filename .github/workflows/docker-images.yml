@@ -15,10 +15,11 @@
 name: Docker images
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -54,9 +55,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}

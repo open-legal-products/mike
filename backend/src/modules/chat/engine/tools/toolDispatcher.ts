@@ -1,3 +1,7 @@
+import {
+  isGoogleWorkspaceTool,
+  executeGoogleWorkspaceToolCall,
+} from "../../../../lib/integrations/googleWorkspace";
 import { createDocumentVersions } from "../../../documents/documents.service";
 import {
   getCourtlistenerCases,
@@ -11,6 +15,14 @@ import {
   type CourtlistenerToolEvent,
 } from "./courtlistenerTools";
 import { executeMcpToolCall, type McpToolEvent } from "../../../../lib/mcpConnectors";
+import {
+  APPROVAL_UNAVAILABLE_MESSAGE,
+  planConnectorToolCall,
+} from "./connectorApprovals";
+import {
+  GOOGLE_DRIVE_TOOL_PREFIX,
+  executeGoogleDriveToolCall,
+} from "../../../../lib/integrations/googleDrive";
 import {
   type DocStore,
   type DocIndex,
@@ -276,6 +288,18 @@ export async function runToolCalls(
   courtlistenerState?: CourtlistenerTurnState,
   apiKeys?: import("../../../../lib/llm").UserApiKeys,
   nonce?: string,
+  options: {
+    /**
+     * The surface can pause for an approval and continue the same turn.
+     * Without it, a connector write that needs approval is refused.
+     */
+    connectorApprovals?: boolean;
+    /**
+     * The caller's authenticated email, for the per-document write check
+     * edit_document runs (direct grants are keyed by email).
+     */
+    userEmail?: string | null;
+  } = {},
 ): Promise<{
   toolResults: unknown[];
   docsRead: {
@@ -324,6 +348,7 @@ export async function runToolCalls(
   const courtlistenerEvents: CourtlistenerToolEvent[] = [];
   const caseCitationEvents: CaseCitationEvent[] = [];
   const mcpEvents: McpToolEvent[] = [];
+  const approvalItems: AskInputItem[] = [];
   const courtState: CourtlistenerTurnState = courtlistenerState ?? {
     casesByClusterId: new Map(),
   };
@@ -435,19 +460,74 @@ export async function runToolCalls(
       /* ignore */
     }
 
-    if (tc.function.name.startsWith("mcp_")) {
+    const isConnectorTool =
+      tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
+      isGoogleWorkspaceTool(tc.function.name) ||
+      tc.function.name.startsWith("mcp_");
+    if (isConnectorTool) {
+      const plan = await planConnectorToolCall(
+        userId,
+        tc.function.name,
+        args,
+        db,
+      );
+      if (plan.type === "approval" && options.connectorApprovals) {
+        // Nothing runs now. The turn pauses on this item, and the user's
+        // decision continues it (see connectorApprovals.ts).
+        approvalItems.push({ ...plan.item, id: crypto.randomUUID() });
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({
+            ok: false,
+            status: "awaiting_approval",
+            message: "Waiting for the user's approval. Nothing has run yet.",
+          }),
+        });
+        continue;
+      }
+      // Native Google tools reuse the MCP event surface so the UI renders
+      // them with the existing connector treatment.
       write(
         `data: ${JSON.stringify({
           type: "mcp_tool_start",
           name: tc.function.name,
         })}\n\n`,
       );
-      const { content, event } = await executeMcpToolCall(
-        userId,
-        tc.function.name,
-        args,
-        db,
-      );
+      const { content, event } =
+        plan.type === "result"
+          ? plan
+          : plan.type === "approval"
+            ? {
+                content: JSON.stringify({
+                  ok: false,
+                  error: APPROVAL_UNAVAILABLE_MESSAGE,
+                }),
+                event: {
+                  type: "mcp_tool_call" as const,
+                  connector_id: "",
+                  connector_name: plan.item.connector_name,
+                  tool_name: tc.function.name,
+                  openai_tool_name: tc.function.name,
+                  status: "error" as const,
+                  error: APPROVAL_UNAVAILABLE_MESSAGE,
+                },
+              }
+            : tc.function.name.startsWith("mcp_")
+              ? await executeMcpToolCall(userId, tc.function.name, args, db)
+              : isGoogleWorkspaceTool(tc.function.name)
+                ? await executeGoogleWorkspaceToolCall(
+                    userId,
+                    tc.function.name,
+                    args,
+                    db,
+                  )
+                : await executeGoogleDriveToolCall(
+                    userId,
+                    tc.function.name,
+                    args,
+                    db,
+                  );
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
@@ -1429,6 +1509,7 @@ export async function runToolCalls(
         const result = await runEditDocument({
           documentId: indexed.document_id,
           userId,
+          userEmail: options.userEmail ?? null,
           edits,
           db,
           reuseVersion,
@@ -1706,6 +1787,7 @@ export async function runToolCalls(
                 // it must not see a size that disagrees with content_sha256.
                 size_bytes: raw.byteLength,
                 page_count: active?.page_count ?? null,
+                textless_page_count: active?.textless_page_count ?? null,
                 content_sha256: contentSha256(raw),
               }));
               const { data: insertedVersions, error: verErr } = await createDocumentVersions(db, versionRows);
@@ -1948,6 +2030,23 @@ export async function runToolCalls(
     };
     write(`data: ${JSON.stringify(groupEvent)}\n\n`);
     courtlistenerEvents.push(groupEvent);
+  }
+
+  if (approvalItems.length > 0) {
+    // One pause carries every pending decision: approvals join the model's own
+    // questions when it asked any in the same step.
+    if (askInputsEvents.length > 0) {
+      askInputsEvents[0] = {
+        ...askInputsEvents[0],
+        items: [...askInputsEvents[0].items, ...approvalItems],
+      };
+    } else {
+      askInputsEvents.push({
+        type: "ask_inputs",
+        event_id: crypto.randomUUID(),
+        items: approvalItems,
+      });
+    }
   }
 
   return {

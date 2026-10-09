@@ -274,6 +274,38 @@ describe("attachPriorReasoning", () => {
 });
 
 describe("buildMessages reasoning passthrough", () => {
+  it("keeps reasoning while stamping user messages in their time zone", () => {
+    const formatted = buildMessages(
+      [
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "a1", reasoning: "why a1" },
+        { role: "user", content: "q2" },
+      ],
+      [],
+      undefined,
+      undefined,
+      true,
+      undefined,
+      "append",
+      {
+        timeZone: "Asia/Singapore",
+        now: new Date("2026-10-09T02:00:00Z"),
+        userSentAt: ["2026-10-08T01:00:00Z", null],
+      },
+    ) as Record<string, unknown>[];
+    expect(formatted[1]).toEqual({
+      role: "user",
+      content: "[Sent: Thu 8 Oct 2026, 09:00 (Asia/Singapore)]\nq1",
+    });
+    expect(formatted[2]).toEqual({
+      role: "assistant", content: "a1", reasoning: "why a1",
+    });
+    expect(formatted[3]).toEqual({
+      role: "user",
+      content: "[Sent: Fri 9 Oct 2026, 10:00 (Asia/Singapore)]\nq2",
+    });
+  });
+
   it("carries reasoning on assistant turns only", () => {
     const formatted = buildMessages(
       [

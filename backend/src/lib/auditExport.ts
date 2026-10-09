@@ -1,9 +1,9 @@
 // Audit-history querying + CSV assembly.
 //
-// This lives in lib/ rather than routes/audit.ts because two callers need it:
-// the synchronous GET /audit/export route, and the "audit-csv" export job
-// (lib/dbq/handlers.ts), which runs in a worker where importing an Express
-// router would drag in the whole HTTP surface.
+// This lives in lib/ because two modules need it: the audit module's paginated
+// GET /audit, and the user module's "audit-csv" export job, which runs in a
+// worker where importing an Express router would drag in the whole HTTP
+// surface.
 
 import { listAccessibleProjectIds } from "./access";
 import { normalizeDisplayName } from "./userLookup";

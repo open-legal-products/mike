@@ -25,6 +25,12 @@ vi.mock("../../lib/queue/appJobsQueue", async (importOriginal) => {
     };
 });
 vi.mock("../../lib/supabase", () => ({ createServerSupabase: vi.fn() }));
+const reportError = vi.fn();
+vi.mock("../../lib/observability/sentry", async (importOriginal) => {
+    const actual =
+        await importOriginal<typeof import("../../lib/observability/sentry")>();
+    return { ...actual, reportError: (...args: unknown[]) => reportError(...args) };
+});
 vi.mock("../../lib/storage", () => ({ deleteFile: vi.fn() }));
 
 import { runAppJobDelivery } from "../appJobsWorker";
@@ -134,6 +140,33 @@ describe("runAppJobDelivery", () => {
         const db = makeDb({ claimError: "connection refused" });
         await runAppJobDelivery({ dbJobId: "row-1" }, db as never);
         expect(db.updates).toHaveLength(0);
+    });
+
+    it("reports a claim error once, and logs the same Error object so the console bridge files no duplicate", async () => {
+        // A PostgREST failure is a plain object; wrapped as an Error it gets a
+        // stack and keeps its code on the cause chain. The log line must carry
+        // that same object: a logged message string cannot be matched to the
+        // reported error and became a second "Failure in application" issue.
+        const consoleError = vi
+            .spyOn(console, "error")
+            .mockImplementation(() => {});
+        reportError.mockClear();
+        try {
+            const db = makeDb({ claimError: "connection refused" });
+            await runAppJobDelivery({ dbJobId: "row-1" }, db as never);
+            expect(reportError).toHaveBeenCalledTimes(1);
+            const [reported, context] = reportError.mock.calls[0]!;
+            expect(reported).toBeInstanceOf(Error);
+            expect(context).toMatchObject({
+                tags: { component: "app-jobs", stage: "claim" },
+                fingerprint: ["app-jobs-claim-failed"],
+            });
+            expect(consoleError).toHaveBeenCalledTimes(1);
+            const [, payload] = consoleError.mock.calls[0]!;
+            expect((payload as { error: unknown }).error).toBe(reported);
+        } finally {
+            consoleError.mockRestore();
+        }
     });
 });
 

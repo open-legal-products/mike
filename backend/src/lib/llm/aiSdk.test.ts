@@ -1,5 +1,39 @@
-import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_ITERATIONS, stopNotice } from "./aiSdk";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_MAX_ITERATIONS,
+  maxOutputTokensFor,
+  stopNotice,
+} from "./aiSdk";
+
+describe("maxOutputTokensFor", () => {
+  afterEach(() => {
+    delete process.env.LLM_MAX_OUTPUT_TOKENS;
+  });
+
+  it("leaves the limit to the provider when unset", () => {
+    delete process.env.LLM_MAX_OUTPUT_TOKENS;
+    expect(maxOutputTokensFor("claude")).toBeUndefined();
+    expect(maxOutputTokensFor("gemini")).toBeUndefined();
+  });
+
+  it("keeps 16,384 for OpenCode Go, whose Messages models the Anthropic adapter would cap at 4,096", () => {
+    delete process.env.LLM_MAX_OUTPUT_TOKENS;
+    expect(maxOutputTokensFor("opencode-go")).toBe(16_384);
+  });
+
+  it("uses an operator-set limit for every provider", () => {
+    process.env.LLM_MAX_OUTPUT_TOKENS = "32000";
+    expect(maxOutputTokensFor("claude")).toBe(32_000);
+    expect(maxOutputTokensFor("opencode-go")).toBe(32_000);
+  });
+
+  it("ignores an unusable value rather than sending it upstream", () => {
+    for (const value of ["", "0", "-1", "banana", "1.5"]) {
+      process.env.LLM_MAX_OUTPUT_TOKENS = value;
+      expect(maxOutputTokensFor("claude")).toBeUndefined();
+    }
+  });
+});
 
 describe("stopNotice", () => {
   it("says nothing when the model finished on its own", () => {

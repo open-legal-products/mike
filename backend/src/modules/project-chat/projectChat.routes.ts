@@ -1,4 +1,9 @@
-import { openAssistantSse } from "../../lib/assistantSse";
+import { abortable } from "../../lib/abortable";
+import {
+    attachAssistantTurnSse,
+    startAssistantTurnRun,
+} from "../../lib/assistantTurnRuns";
+import { stopOutcomeFrame } from "../../lib/streamRuns";
 // HTTP layer for the project-chat module.
 //
 // The route handler parses the request body, calls
@@ -16,13 +21,13 @@ import {
     appendAssistantEventsToMessage,
     AssistantStreamError,
     assistantStreamErrorPayload,
-    ASSISTANT_ERROR_MESSAGE,
-    buildCancelledAssistantMessage,
+    buildStoppedAssistantMessage,
     extractCitations,
     isAbortError,
 
     runLLMStream,
     stripTransientAssistantEvents,
+    writeApprovedConnectorFrames,
     PROJECT_EXTRA_TOOLS,
     parseChatMessages,
     parseOptionalAskInputsResponse,
@@ -119,6 +124,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         askInputsResponse,
         requestedModel: model,
         requestedReasoning: parsedReasoning.value,
+        requestedTimeZone: req.body?.time_zone,
     });
     if (!prep.ok) {
         if ("internal" in prep) return void sendInternalError(res, prep.error);
@@ -144,6 +150,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         selectedModel,
         selectedReasoningLevel,
         nonce,
+        approvalEvents,
     } = prep.prepared;
     // Mutable: the title-generation flow below reassigns it once a title
     // has been persisted.
@@ -152,10 +159,26 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     let memoryTurnScheduled = false;
 
     try {
-        // The same SSE setup the chat and word-chat routes use: headers,
-        // flush, an abort controller wired to the client hanging up, and a
-        // write that drops a line raised after the response has ended.
-        const stream = openAssistantSse(res);
+        // The generation is a server-owned run: it survives the caller's
+        // socket and only the Stop endpoint (POST /chat/:chatId/turn/:turnId/
+        // stop) aborts it. `attachAssistantTurnSse` gives the same
+        // { signal, write, finish } the chat route drives its stream with.
+        const run = startAssistantTurnRun({
+            id: assistantMessageId ?? randomUUID(),
+            chatId,
+            userId,
+            assistantMessageId:
+                assistantMessageId ??
+                askInputsResponse?.assistant_message_id ??
+                "",
+        });
+        if (!run) {
+            return void res.status(409).json({
+                code: "turn_in_progress",
+                detail: "A response is already being generated for this chat.",
+            });
+        }
+        const stream = attachAssistantTurnSse(res, run);
         const write = stream.write;
 
         let titlePromise: Promise<void> = Promise.resolve();
@@ -167,9 +190,11 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 `data: ${JSON.stringify({
                     type: "chat_id",
                     chatId,
+                    turnId: run.id,
                     ...(assistantMessageId ? { assistantMessageId } : {}),
                 })}\n\n`,
             );
+            writeApprovedConnectorFrames(write, approvalEvents);
 
             const shouldGenerateTitle =
                 !chatTitle && !!lastUser?.content && !askInputsResponse;
@@ -188,11 +213,13 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 : "";
             titlePromise = shouldGenerateTitle
                 ? generateAssistantChatTitle({
+                      abortSignal: stream.signal,
                       model: titleModelForChat(selectedModel, titleModel),
                       message: titleMessage,
                       apiKeys,
                   })
                       .then(async (title) => {
+                          if (stream.signal.aborted) return;
                           const saved = await updateChatTitle(db, {
                               chatId,
                               title,
@@ -208,15 +235,17 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                       .catch((error) => {
                           // Decided once the reply has settled: see the
                           // logChatTitleFailure calls below.
-                          titleOutcome.failure = { error };
+                          if (!stream.signal.aborted) titleOutcome.failure = { error };
                       })
                 : Promise.resolve();
 
             const { events, citations } = await runLLMStream({
+                onActivity: run?.touch,
                 apiMessages,
                 docStore,
                 docIndex,
                 userId,
+                userEmail,
                 db,
                 write,
                 extraTools: PROJECT_EXTRA_TOOLS,
@@ -233,6 +262,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 projectId,
                 conversationId: chatId,
                 includeMemory: true,
+                connectorApprovals: true,
                 memoryProjectId: projectId,
                 memorySharedAudience,
                 nonce,
@@ -276,7 +306,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 }
             }
 
-            await titlePromise;
+            await abortable(titlePromise, stream.signal).catch(() => {});
             if (titleOutcome.failure) {
                 logChatTitleFailure(
                     "[project-chat/stream] failed to generate chat title",
@@ -341,7 +371,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         } catch (err) {
             // The title ran in parallel with the reply; only now is it known
             // whether its failure is the reply's failure seen twice.
-            await titlePromise;
+            await abortable(titlePromise, stream.signal).catch(() => {});
             if (titleOutcome.failure) {
                 logChatTitleFailure(
                     "[project-chat/stream] failed to generate chat title",
@@ -350,11 +380,12 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 );
             }
             if (isAbortError(err)) {
-                console.log("[project-chat/stream] client aborted stream", {
+                console.log("[project-chat/stream] turn stopped", {
                     chatId,
                 });
                 if (err instanceof AssistantStreamError) {
-                    const partial = buildCancelledAssistantMessage({
+                    const partial = buildStoppedAssistantMessage({
+                        stopReason: run?.stopReason,
                         fullText: err.fullText,
                         events: err.events,
                         buildCitations: (fullText) =>
@@ -388,6 +419,8 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         );
                     }
                 }
+                write(stopOutcomeFrame(run));
+                write("data: [DONE]\n\n");
                 return;
             }
             console.error("[project-chat/stream] error:", err);

@@ -18,6 +18,13 @@ export default function MikeLayout({
     children: React.ReactNode;
 }) {
     const { isAuthenticated, authLoading } = useAuth();
+    const [hasMounted, setHasMounted] = useState(false);
+    useEffect(() => {
+        // An outer auth provider may settle before this streamed boundary
+        // hydrates. Its first client render must still match the SSR loader.
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- one hydration transition, independent of auth or streamed content
+        setHasMounted(true);
+    }, []);
     const router = useRouter();
     const pathname = usePathname();
     const isChatPage =
@@ -105,7 +112,7 @@ export default function MikeLayout({
         }
     }, [authLoading, isAuthenticated, router]);
 
-    if (authLoading) {
+    if (!hasMounted || authLoading) {
         return <FullScreenLoader />;
     }
 
@@ -132,7 +139,14 @@ export default function MikeLayout({
                                             : "relative shrink-0 pb-2 pt-3",
                                     )}
                                 >
-                                    <HeaderButtonsUI className="pointer-events-auto">
+                                    <HeaderButtonsUI
+                                        className={cn(
+                                            "pointer-events-auto",
+                                            // Only the chat page floats this
+                                            // bar over scrolling content.
+                                            isChatPage && "backdrop-blur-2xl",
+                                        )}
+                                    >
                                         <HeaderButtonUI
                                             iconOnly
                                             onClick={handleSidebarToggle}

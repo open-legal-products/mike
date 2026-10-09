@@ -6,7 +6,7 @@ type IconProps = Omit<
 >;
 
 const ICON_BASE_PATH = "/icons";
-const ICON_VERSION = "44";
+const ICON_VERSION = "54";
 
 function AppSidebarIcon({
   name,
@@ -35,10 +35,8 @@ export function ChatSkeuoIcon({
 }: IconProps & { tone?: "blue" | "green" }) {
   return (
     <AppSidebarIcon
-      name="features/chat"
-      className={[className, tone === "green" ? "hue-rotate-[285deg]" : ""]
-        .filter(Boolean)
-        .join(" ")}
+      name={tone === "green" ? "features/chat-complete" : "features/chat"}
+      className={className}
       {...props}
     />
   );

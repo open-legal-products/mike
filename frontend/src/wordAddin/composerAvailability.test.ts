@@ -3,7 +3,10 @@
  * test runner (the add-in package has no unit-test runner of its own).
  */
 import { describe, expect, it, vi } from "vitest";
-import { isModelAvailable } from "../../../word-addin/src/taskpane/lib/modelCatalog";
+import {
+    isModelAvailable,
+    unavailableModelMessage,
+} from "../../../word-addin/src/taskpane/lib/modelCatalog";
 import { loadWithRetry } from "../../../word-addin/src/taskpane/lib/composerPreflight";
 import type { ApiKeyStatus } from "../../../word-addin/src/taskpane/types";
 
@@ -21,21 +24,21 @@ describe("isModelAvailable fail-open", () => {
     it("allows sends while key status is unknown (null)", () => {
         // A flaky WKWebView preflight must not brick the composer: the
         // backend still rejects models it cannot serve.
-        expect(isModelAvailable("gemini-3-flash-preview", null)).toBe(true);
-        expect(isModelAvailable("claude-fable-5", null)).toBe(true);
+        expect(isModelAvailable("gemini-3.8-flash", null)).toBe(true);
+        expect(isModelAvailable("claude-fable-5-1", null)).toBe(true);
         expect(isModelAvailable("openrouter/openai/gpt-5.4", null)).toBe(true);
         expect(isModelAvailable("vercel/openai/gpt-5.4", null)).toBe(true);
         expect(isModelAvailable("opencode-go/glm-5", null)).toBe(true);
     });
 
     it("still gates on a LOADED status", () => {
-        expect(isModelAvailable("gemini-3-flash-preview", NO_KEYS)).toBe(false);
+        expect(isModelAvailable("gemini-3.8-flash", NO_KEYS)).toBe(false);
         expect(isModelAvailable("openrouter/openai/gpt-5.4", NO_KEYS)).toBe(
             false,
         );
         expect(isModelAvailable("opencode-go/glm-5", NO_KEYS)).toBe(false);
         expect(
-            isModelAvailable("gemini-3-flash-preview", {
+            isModelAvailable("gemini-3.8-flash", {
                 ...NO_KEYS,
                 gemini: true,
             }),
@@ -46,6 +49,29 @@ describe("isModelAvailable fail-open", () => {
                 "opencode-go": true,
             }),
         ).toBe(true);
+    });
+});
+
+describe("unavailableModelMessage", () => {
+    it("names the PR #608 provider whose key is missing", () => {
+        expect(
+            unavailableModelMessage("bedrock/us.anthropic.claude-opus-5-5", NO_KEYS),
+        ).toBe("Add an Amazon Bedrock API key before using this model.");
+        expect(unavailableModelMessage("gemini-3.8-flash", NO_KEYS)).toBe(
+            "Add a Google API key before using this model.",
+        );
+    });
+
+    it("asks to turn a switched-off provider back on instead of adding a key", () => {
+        expect(
+            unavailableModelMessage("xai/grok-5", {
+                ...NO_KEYS,
+                xai: false,
+                enabled: { xai: false },
+            }),
+        ).toBe(
+            "xAI is turned off. Turn it back on in Bring Your Own Keys before using this model.",
+        );
     });
 });
 

@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
+
+// This route suite exceeds the production chat request budget. Rate limits
+// have separate tests; avoid turning lifecycle assertions into HTTP 429s.
+vi.hoisted(() => { process.env.RATE_LIMIT_CHAT_MAX = "1000"; });
 
 // ---------------------------------------------------------------------------
 // Hoisted mock fns reconfigured per-test. Access helpers + model settings are
@@ -15,6 +19,7 @@ const {
     getUserModelSettings,
     resolveContentOrgId,
     runLLMStream,
+    extractRowColumns,
     beginMemoryConversationTurn,
     releaseMemoryConversationTurn,
     scheduleMemoryConsolidation,
@@ -25,6 +30,10 @@ const {
     getUserModelSettings: vi.fn(),
     resolveContentOrgId: vi.fn(),
     runLLMStream: vi.fn(),
+    // The synchronous generate loop's one slow call. Mocked so the route's
+    // run lifecycle (detach, resume, stop) can be driven frame by frame
+    // without a model, storage or the extraction pipeline.
+    extractRowColumns: vi.fn(),
     beginMemoryConversationTurn: vi.fn().mockResolvedValue({
         activityId: "activity-1",
     }),
@@ -85,7 +94,7 @@ function resultForTable(table: string): QueryResult {
     ) {
         return {
             ...resolved,
-            data: { ...resolved.data, model: "claude-sonnet-5" },
+            data: { ...resolved.data, model: "claude-sonnet-5-5" },
         };
     }
     return resolved;
@@ -170,6 +179,15 @@ vi.mock("../../modules/chat/engine/index", async (importOriginal) => ({
     runLLMStream: (...args: unknown[]) => runLLMStream(...args),
 }));
 
+// Only `extractRowColumns` is replaced: `finalizeCell` stays real so the
+// "stopped cells go back to pending" write lands in the Supabase stub.
+vi.mock("../../modules/tabular/tabular.extractRow", async (importOriginal) => ({
+    ...(await importOriginal<
+        typeof import("../../modules/tabular/tabular.extractRow")
+    >()),
+    extractRowColumns: (...args: unknown[]) => extractRowColumns(...args),
+}));
+
 vi.mock("../../lib/memory/schedule", () => ({
     beginMemoryConversationTurn: (...args: unknown[]) =>
         beginMemoryConversationTurn(...args),
@@ -193,7 +211,6 @@ vi.mock("../../lib/access", async (importOriginal) => ({
 
 vi.mock("../../modules/user/user.settings", () => ({
     getUserModelSettings: (...args: unknown[]) => getUserModelSettings(...args),
-    getUserApiKeys: vi.fn(async () => ({})),
     persistLastSelectedChatModel: vi.fn(async () => null),
     persistLastSelectedReasoningLevel: vi.fn(async () => null),
 }));
@@ -206,6 +223,7 @@ vi.mock("../../lib/documentVersions", () => ({
 }));
 
 import { app } from "../../app";
+import { resetStreamRunsForTests } from "../../lib/streamRuns";
 import { REVIEW_EDIT_FORBIDDEN } from "../../modules/tabular/tabular.service";
 
 const AUTH = ["Authorization", "Bearer test"] as const;
@@ -236,8 +254,8 @@ describe("tabular.routes", () => {
         );
         getUserModelSettings.mockResolvedValue({
             title_model: "claude-haiku-4-5",
-            tabular_model: "claude-sonnet-5",
-            last_selected_chat_model: "claude-sonnet-5",
+            tabular_model: "claude-sonnet-5-5",
+            last_selected_chat_model: "claude-sonnet-5-5",
             last_selected_reasoning_level: "high",
             legal_research_us: false,
             api_keys: { claude: "sk-test" },
@@ -246,6 +264,13 @@ describe("tabular.routes", () => {
             fullText: "Answer",
             events: [{ type: "content", text: "Answer" }],
             citations: [],
+        });
+        // Default: nothing outstanding, so a route that reaches the loop
+        // finishes immediately. Tests that care drive it themselves.
+        extractRowColumns.mockResolvedValue({
+            processed: [],
+            received: new Set<number>(),
+            missing: [],
         });
     });
 
@@ -302,7 +327,7 @@ describe("tabular.routes", () => {
                     title: "Firm review",
                     document_ids: [],
                     columns_config: [],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                     org_id: "org-1",
                 });
 
@@ -357,7 +382,7 @@ describe("tabular.routes", () => {
                     title: "Gamma",
                     document_ids: ["d1", "d2"],
                     columns_config: [{ index: 0, name: "Col", prompt: "p" }],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(201);
@@ -455,7 +480,7 @@ describe("tabular.routes", () => {
                     document_ids: ["d1", "d2", "d3"],
                     document_grouping: "folder",
                     columns_config: [{ index: 0, name: "Col", prompt: "p" }],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(201);
@@ -575,7 +600,7 @@ describe("tabular.routes", () => {
                     document_ids: ["d1", "d2"],
                     document_grouping: "folder",
                     columns_config: [{ index: 0, name: "Col", prompt: "p" }],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(201);
@@ -622,7 +647,7 @@ describe("tabular.routes", () => {
                     project_id: "p-nope",
                     document_ids: [],
                     columns_config: [],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(404);
@@ -641,7 +666,7 @@ describe("tabular.routes", () => {
                 .send({
                     document_ids: [],
                     columns_config: [],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(500);
@@ -690,10 +715,25 @@ describe("tabular.routes", () => {
                 },
                 error: null,
             };
+            supabaseState.tables.tabular_review_rows = {
+                data: [
+                    {
+                        id: "row-1",
+                        review_id: "r1",
+                        label: "Agreement.pdf",
+                        row_type: "document",
+                        folder_id: null,
+                        document_id: "d1",
+                        sort_index: 0,
+                    },
+                ],
+                error: null,
+            };
             supabaseState.tables.tabular_cells = {
                 data: [
                     {
                         id: "c1",
+                        row_id: "row-1",
                         document_id: "d1",
                         column_index: 0,
                         content: null,
@@ -721,6 +761,56 @@ describe("tabular.routes", () => {
             expect(res.body.documents).toEqual([
                 { id: "d1", current_version_id: null },
             ]);
+        });
+
+        it("withholds rows and cells built from documents the caller cannot read", async () => {
+            supabaseState.tables.tabular_reviews = {
+                data: {
+                    id: "r1",
+                    user_id: "u1",
+                    project_id: null,
+                    document_ids: ["d1"],
+                    columns_config: [],
+                },
+                error: null,
+            };
+            supabaseState.tables.tabular_review_rows = {
+                data: [
+                    {
+                        id: "row-1",
+                        review_id: "r1",
+                        label: "Agreement.pdf",
+                        row_type: "document",
+                        folder_id: null,
+                        document_id: "d1",
+                        sort_index: 0,
+                    },
+                ],
+                error: null,
+            };
+            supabaseState.tables.tabular_cells = {
+                data: [
+                    {
+                        id: "c1",
+                        row_id: "row-1",
+                        document_id: "d1",
+                        column_index: 0,
+                        content: "extracted text",
+                        status: "done",
+                    },
+                ],
+                error: null,
+            };
+            filterAccessibleDocumentIds.mockResolvedValue([]);
+
+            const res = await request(app)
+                .get("/tabular-review/r1")
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body.rows).toEqual([]);
+            expect(res.body.cells).toEqual([]);
+            expect(res.body.documents).toEqual([]);
         });
     });
 
@@ -1401,7 +1491,7 @@ describe("tabular.routes", () => {
             };
             getUserModelSettings.mockResolvedValue({
                 title_model: "claude-haiku-4-5",
-                tabular_model: "claude-sonnet-5",
+                tabular_model: "claude-sonnet-5-5",
                 legal_research_us: false,
                 api_keys: {},
             });
@@ -1616,7 +1706,7 @@ describe("tabular.routes", () => {
             supabaseState.tables.tabular_cells = { data: [], error: null };
             getUserModelSettings.mockResolvedValue({
                 title_model: "claude-haiku-4-5",
-                tabular_model: "claude-sonnet-5",
+                tabular_model: "claude-sonnet-5-5",
                 legal_research_us: false,
                 api_keys: {},
             });
@@ -1754,6 +1844,311 @@ describe("tabular.routes", () => {
         );
     });
 
+    // ── server-owned generation: detach, resume, stop ─────────────────────
+    //
+    // Mirrors chat.routes.test's "server-owned turns" block. The synchronous
+    // generation is a run registered in lib/streamRuns: it survives the
+    // requesting socket closing, any response can attach to it and replay
+    // from a sequence number, and only the Stop endpoint aborts it.
+    describe("server-owned tabular generation", () => {
+        const records = (text: string) =>
+            text.split("\n\n").filter((record) => record.includes("data: "));
+
+        /** A review with one row and one column, ready to generate. */
+        function seedRunnableReview() {
+            supabaseState.tables.tabular_reviews = {
+                data: {
+                    id: "r1",
+                    user_id: "u1",
+                    project_id: null,
+                    updated_at: "2026-09-22T10:00:00.000Z",
+                    columns_config: [{ index: 0, name: "Col", prompt: "p" }],
+                },
+                error: null,
+            };
+            supabaseState.tables.tabular_review_rows = {
+                data: [
+                    {
+                        id: "row-1",
+                        review_id: "r1",
+                        label: "Contract.pdf",
+                        row_type: "document",
+                        folder_id: null,
+                        library_folder_id: null,
+                        document_id: "d1",
+                        sort_index: 0,
+                    },
+                ],
+                error: null,
+            };
+            supabaseState.tables.tabular_cells = { data: [], error: null };
+            supabaseState.rpc = { data: "started", error: null };
+        }
+
+        const startGeneration = () =>
+            request(app)
+                .post("/tabular-review/r1/generate")
+                .set(...AUTH)
+                .send({ expected_updated_at: "2026-09-22T10:00:00.000Z" });
+
+        type ExtractArgs = {
+            row: { id: string };
+            columns: { index: number }[];
+            abortSignal: AbortSignal;
+            sink: {
+                generating: (rowId: string, columnIndex: number) => void;
+                done: (
+                    rowId: string,
+                    columnIndex: number,
+                    result: unknown,
+                ) => void;
+            };
+        };
+
+        /**
+         * An extraction the test releases by hand — the stand-in for a slow
+         * model call. A stop resolves it too, so the route reaches its
+         * "missing columns go back to pending" path exactly as in production.
+         */
+        function heldExtraction() {
+            const held = {
+                release: () => {},
+                started: new Promise<ExtractArgs>((resolve) => {
+                    extractRowColumns.mockImplementation(async (raw: unknown) => {
+                        const args = raw as ExtractArgs;
+                        await args.sink.generating(args.row.id, 0);
+                        resolve(args);
+                        await new Promise<void>((done) => {
+                            held.release = done;
+                            args.abortSignal.addEventListener(
+                                "abort",
+                                () => done(),
+                                { once: true },
+                            );
+                        });
+                        if (args.abortSignal.aborted)
+                            return {
+                                processed: args.columns,
+                                received: new Set<number>(),
+                                missing: [0],
+                            };
+                        await args.sink.done(args.row.id, 0, { value: "Yes" });
+                        return {
+                            processed: args.columns,
+                            received: new Set([0]),
+                            missing: [],
+                        };
+                    });
+                }),
+            };
+            return held;
+        }
+
+        const rpcNames = () => supabaseState.rpcCalls.map((call) => call.fn);
+
+        beforeEach(() => {
+            resetStreamRunsForTests();
+            seedRunnableReview();
+        });
+        afterEach(() => {
+            resetStreamRunsForTests();
+        });
+
+        it("keeps extracting after the requesting socket closes, and a reload attaches from where it left off", async () => {
+            const held = heldExtraction();
+            const first = startGeneration();
+            const firstSettled = first.then(
+                () => "ended",
+                () => "aborted",
+            );
+            const args = await held.started;
+
+            // The refresh: the caller's socket goes away mid-run.
+            first.abort();
+            expect(await firstSettled).toBe("aborted");
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            // The generation is the server's, not the socket's.
+            expect(args.abortSignal.aborted).toBe(false);
+            // And the lease is still held — releasing it here would let a
+            // second tab start a competing run over the same cells.
+            expect(rpcNames()).not.toContain(
+                "finish_tabular_review_generation",
+            );
+
+            // What a reloaded page sees: the review plus the live run.
+            const loaded = await request(app)
+                .get("/tabular-review/r1")
+                .set(...AUTH);
+            expect(loaded.status).toBe(200);
+            expect(loaded.body.active_generation).toMatchObject({
+                id: expect.any(String),
+            });
+            expect(loaded.body.active_generation.seq).toBeGreaterThanOrEqual(1);
+            expect(loaded.body.review.is_running).toBe(false);
+
+            // Attaching replays what the closed socket had already seen, then
+            // tails the live frames to the end.
+            const tail = request(app)
+                .get("/tabular-review/r1/generate/stream?from=1")
+                .set(...AUTH);
+            setTimeout(() => held.release(), 30);
+            const resumed = await tail;
+            expect(resumed.status).toBe(200);
+            expect(resumed.headers["content-type"]).toContain(
+                "text/event-stream",
+            );
+            const lines = records(resumed.text);
+            expect(lines[0]).toBe(
+                'id: 1\ndata: {"type":"cell_update","row_id":"row-1","column_index":0,"content":null,"status":"generating"}',
+            );
+            const done = lines.findIndex((line) => line.includes('"done"'));
+            expect(done).toBeGreaterThan(0);
+            expect(lines[done]).toMatch(/^id: \d+\ndata: /);
+            expect(resumed.text).toContain("data: [DONE]");
+            expect(resumed.text).not.toContain('"type":"cancelled"');
+
+            // The run ended on its own: lease released, nothing left active.
+            expect(rpcNames()).toContain("finish_tabular_review_generation");
+            const after = await request(app)
+                .get("/tabular-review/r1")
+                .set(...AUTH);
+            expect(after.body.active_generation).toBeNull();
+        });
+
+        it("replays only from the requested sequence number", async () => {
+            const held = heldExtraction();
+            const first = startGeneration();
+            const firstDone = first.then((res) => res);
+            await held.started;
+
+            const tail = request(app)
+                .get("/tabular-review/r1/generate/stream?from=2")
+                .set(...AUTH);
+            setTimeout(() => held.release(), 30);
+            const resumed = await tail;
+            // Frame 1 was the "generating" spinner the client already has.
+            expect(resumed.text).not.toContain('"status":"generating"');
+            expect(resumed.text).toContain('"status":"done"');
+            await firstDone;
+        });
+
+        it("stops a run through the endpoint: readers see cancelled then [DONE], cells go back to pending", async () => {
+            const held = heldExtraction();
+            const first = startGeneration();
+            const firstDone = first.then((res) => res);
+            const args = await held.started;
+
+            const stopped = await request(app)
+                .post("/tabular-review/r1/generate/stop")
+                .set(...AUTH);
+            expect(stopped.status).toBe(200);
+            expect(stopped.body).toEqual({ stopped: true, finished: false });
+            expect(args.abortSignal.aborted).toBe(true);
+
+            const text = (await firstDone).text;
+            expect(text).toContain('"status":"pending"');
+            expect(text).toContain('"type":"cancelled"');
+            expect(text).toContain("data: [DONE]");
+            // The stopped cell is persisted back to pending, not left
+            // "generating" for the next reader to puzzle over.
+            expect(
+                supabaseState.updates.filter(
+                    (update) =>
+                        update.table === "tabular_cells" &&
+                        (update.payload as { status?: string }).status ===
+                            "pending",
+                ),
+            ).toHaveLength(1);
+            // And the lease is back, so the review can be run again.
+            expect(rpcNames()).toContain("finish_tabular_review_generation");
+
+            // Stopping again says so rather than pretending: the run is kept
+            // briefly for late readers.
+            const again = await request(app)
+                .post("/tabular-review/r1/generate/stop")
+                .set(...AUTH);
+            expect(again.status).toBe(200);
+            expect(again.body).toEqual({ stopped: false, finished: true });
+        });
+
+        it("answers 404 generation_not_found when nothing is running", async () => {
+            const res = await request(app)
+                .post("/tabular-review/r1/generate/stop")
+                .set(...AUTH);
+
+            expect(res.status).toBe(404);
+            expect(res.body).toEqual({
+                code: "generation_not_found",
+                detail: "No generation is running for this review.",
+            });
+        });
+
+        it("refuses a viewer on stop, with the same 403 generate gives", async () => {
+            // Stopping is a write: it ends a run that is spending the review's
+            // budget and rewriting its cells. A viewer never could start one.
+            ensureReviewAccess.mockResolvedValue({
+                ok: true,
+                isCreator: false,
+                orgRole: "member",
+                projectRole: "viewer",
+            });
+
+            const res = await request(app)
+                .post("/tabular-review/r1/generate/stop")
+                .set(...AUTH);
+
+            expect(res.status).toBe(403);
+            expect(res.body.detail).toBe(REVIEW_EDIT_FORBIDDEN);
+        });
+
+        it("lets an editor stop a run even when they hold no key for the review's model", async () => {
+            // Stop spends nothing, so it must not reuse the start gate: the run
+            // may have been started by a collaborator with their own keys, and
+            // the review's model may not resolve for this caller. Without the
+            // dedicated gate this answered 422 missing_api_key and the run
+            // kept extracting with nobody able to stop it.
+            const held = heldExtraction();
+            const first = startGeneration();
+            const firstDone = first.then((res) => res);
+            const args = await held.started;
+            getUserModelSettings.mockResolvedValue({
+                title_model: "claude-haiku-4-5",
+                tabular_model: "claude-sonnet-5-5",
+                legal_research_us: false,
+                api_keys: {},
+            });
+
+            const stopped = await request(app)
+                .post("/tabular-review/r1/generate/stop")
+                .set(...AUTH);
+            expect(stopped.status).toBe(200);
+            expect(stopped.body).toEqual({ stopped: true, finished: false });
+            expect(args.abortSignal.aborted).toBe(true);
+            await firstDone;
+        });
+
+        it("refuses a second generation while one is still streaming into the review", async () => {
+            const held = heldExtraction();
+            const first = startGeneration();
+            const firstDone = first.then((res) => res);
+            await held.started;
+
+            const second = await startGeneration();
+            expect(second.status).toBe(409);
+            expect(second.body).toEqual({
+                code: "review_running",
+                detail: "This tabular review is already running elsewhere.",
+            });
+            // The loser released the lease it had just claimed instead of
+            // leaving the review wedged until the lease expired.
+            expect(rpcNames()).toContain("finish_tabular_review_generation");
+            expect(extractRowColumns).toHaveBeenCalledTimes(1);
+
+            held.release();
+            expect((await firstDone).text).toContain("data: [DONE]");
+        });
+    });
+
     // ── POST /tabular-review/:reviewId/chat (streaming GUARDS only) ───────
     describe("POST /tabular-review/:reviewId/chat", () => {
         it("returns 400 when no user message is present", async () => {
@@ -1820,7 +2215,7 @@ describe("tabular.routes", () => {
             supabaseState.tables.tabular_cells = { data: [], error: null };
             getUserModelSettings.mockResolvedValue({
                 title_model: "claude-haiku-4-5",
-                tabular_model: "claude-sonnet-5",
+                tabular_model: "claude-sonnet-5-5",
                 legal_research_us: false,
                 api_keys: {},
             });
@@ -1830,7 +2225,7 @@ describe("tabular.routes", () => {
                 .set(...AUTH)
                 .send({
                     messages: [{ role: "user", content: "hello" }],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(422);
@@ -1859,7 +2254,7 @@ describe("tabular.routes", () => {
                     title: "Existing title",
                     review_id: "r1",
                     user_id: "u1",
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                     reasoning_level: "high",
                 },
                 error: null,
@@ -1887,7 +2282,7 @@ describe("tabular.routes", () => {
                 .set(...AUTH)
                 .send({
                     messages: [{ role: "user", content: "Summarise" }],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(200);
@@ -1964,7 +2359,7 @@ describe("tabular.routes", () => {
                     title: "Existing title",
                     review_id: "r1",
                     user_id: "u1",
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                     reasoning_level: "high",
                 },
                 error: null,
@@ -1989,7 +2384,7 @@ describe("tabular.routes", () => {
                 .set(...AUTH)
                 .send({
                     messages: [{ role: "user", content: "Summarise" }],
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                 });
 
             expect(res.status).toBe(200);
@@ -2001,6 +2396,390 @@ describe("tabular.routes", () => {
             });
             expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
             errorSpy.mockRestore();
+        });
+    });
+
+    // ── server-owned review chat: detach, resume, stop ────────────────────
+    //
+    // The same contract chat.routes has: the answer belongs to the server,
+    // not to the socket that asked for it. Closing the socket detaches;
+    // only POST .../turn/:turnId/stop cancels; any response can attach and
+    // replay from a sequence number.
+    describe("server-owned tabular review chat", () => {
+        type StreamParams = { write: (s: string) => void; signal?: AbortSignal };
+        const emitFrom = (params: StreamParams) => (frame: object) =>
+            params.write(`data: ${JSON.stringify(frame)}\n\n`);
+        const records = (text: string) =>
+            text.split("\n\n").filter((record) => record.includes("data: "));
+
+        const CHAT_ROW = {
+            id: "review-chat-1",
+            title: "Existing title",
+            review_id: "r1",
+            user_id: "u1",
+            model: "claude-sonnet-5-5",
+            reasoning_level: "high",
+        };
+
+        function seedChattableReview() {
+            supabaseState.tables.tabular_reviews = {
+                data: {
+                    id: "r1",
+                    user_id: "u1",
+                    project_id: null,
+                    title: "Review",
+                    columns_config: [],
+                },
+                error: null,
+            };
+            supabaseState.tables.tabular_cells = { data: [], error: null };
+            supabaseState.tables.tabular_review_rows = {
+                data: [],
+                error: null,
+            };
+            supabaseState.tables.tabular_review_chats = {
+                data: CHAT_ROW,
+                error: null,
+            };
+            supabaseState.tables.tabular_review_chat_messages = {
+                data: null,
+                error: null,
+            };
+        }
+
+        const send = () =>
+            request(app)
+                .post("/tabular-review/r1/chat")
+                .set(...AUTH)
+                .send({
+                    messages: [{ role: "user", content: "Summarise" }],
+                    chat_id: "review-chat-1",
+                    model: "claude-sonnet-5-5",
+                });
+
+        /** A generation the test releases by hand. */
+        function heldGeneration() {
+            const held = {
+                release: () => {},
+                started: new Promise<StreamParams>((resolve) => {
+                    runLLMStream.mockImplementation(async (raw: unknown) => {
+                        const params = raw as StreamParams;
+                        resolve(params);
+                        emitFrom(params)({
+                            type: "content_delta",
+                            text: "First",
+                        });
+                        await new Promise<void>((done) => {
+                            held.release = done;
+                        });
+                        emitFrom(params)({
+                            type: "content_delta",
+                            text: " second",
+                        });
+                        return {
+                            fullText: "First second",
+                            events: [
+                                { type: "content", text: "First second" },
+                            ],
+                            citations: [],
+                        };
+                    });
+                }),
+            };
+            return held;
+        }
+
+        /**
+         * The live run's id, read the way a reloading panel reads it. The
+         * client itself learns it from the `chat_id` frame's `turnId`, which
+         * the stop test asserts on directly.
+         */
+        async function activeTurnId(): Promise<string> {
+            supabaseState.tables.tabular_review_chats = {
+                data: [CHAT_ROW],
+                error: null,
+            };
+            const listed = await request(app)
+                .get("/tabular-review/r1/chats")
+                .set(...AUTH);
+            supabaseState.tables.tabular_review_chats = {
+                data: CHAT_ROW,
+                error: null,
+            };
+            return listed.body[0].active_turn.id as string;
+        }
+
+        const assistantInsert = () =>
+            supabaseState.inserts.find(
+                ({ table, payload }) =>
+                    table === "tabular_review_chat_messages" &&
+                    (payload as { role?: unknown }).role === "assistant",
+            )?.payload as { id?: string; content?: unknown } | undefined;
+
+        beforeEach(() => {
+            resetStreamRunsForTests();
+            seedChattableReview();
+        });
+        afterEach(() => {
+            resetStreamRunsForTests();
+        });
+
+        it("keeps answering after the requesting socket closes, and a reload attaches from where it left off", async () => {
+            const held = heldGeneration();
+            const first = send();
+            const firstSettled = first.then(
+                () => "ended",
+                () => "aborted",
+            );
+            const params = await held.started;
+
+            // The refresh: the caller's socket goes away mid-answer.
+            first.abort();
+            expect(await firstSettled).toBe("aborted");
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            // The answer belongs to the server, not to that socket.
+            expect(params.signal?.aborted).toBe(false);
+
+            // What a reloaded panel sees: the chat list carries the live turn.
+            supabaseState.tables.tabular_review_chats = {
+                data: [CHAT_ROW],
+                error: null,
+            };
+            const listed = await request(app)
+                .get("/tabular-review/r1/chats")
+                .set(...AUTH);
+            expect(listed.status).toBe(200);
+            const activeTurn = listed.body[0].active_turn as {
+                id: string;
+                seq: number;
+                assistant_message_id: string;
+            };
+            expect(activeTurn.id).toEqual(expect.any(String));
+            expect(activeTurn.assistant_message_id).toBe(activeTurn.id);
+            // chat_id (1) and the first delta (2) are already out.
+            expect(activeTurn.seq).toBeGreaterThanOrEqual(2);
+            supabaseState.tables.tabular_review_chats = {
+                data: CHAT_ROW,
+                error: null,
+            };
+
+            // Attaching from the second frame replays what the closed socket
+            // had already seen, then tails the live frames to the end.
+            const tail = request(app)
+                .get(
+                    `/tabular-review/r1/chats/review-chat-1/turn/${activeTurn.id}/stream?from=2`,
+                )
+                .set(...AUTH);
+            setTimeout(() => held.release(), 30);
+            const resumed = await tail;
+            expect(resumed.status).toBe(200);
+            expect(resumed.headers["content-type"]).toContain(
+                "text/event-stream",
+            );
+            const lines = records(resumed.text);
+            expect(lines[0]).toBe(
+                'id: 2\ndata: {"type":"content_delta","text":"First"}',
+            );
+            const second = lines.findIndex((line) =>
+                line.includes('"text":" second"'),
+            );
+            expect(second).toBeGreaterThan(0);
+            expect(lines[second]).toMatch(/^id: \d+\ndata: /);
+            expect(resumed.text).toContain("data: [DONE]");
+            expect(resumed.text).not.toContain('"type":"chat_id"');
+            expect(resumed.text).not.toContain('"type":"cancelled"');
+
+            // The whole answer was stored; nothing was cancelled.
+            expect(assistantInsert()).toMatchObject({
+                content: [{ type: "content", text: "First second" }],
+            });
+
+            supabaseState.tables.tabular_review_chats = {
+                data: [CHAT_ROW],
+                error: null,
+            };
+            const after = await request(app)
+                .get("/tabular-review/r1/chats")
+                .set(...AUTH);
+            expect(after.body[0].active_turn).toBeNull();
+        });
+
+        it("refuses a second turn while one is generating into the chat", async () => {
+            const held = heldGeneration();
+            const first = send();
+            const firstDone = first.then((res) => res);
+            await held.started;
+
+            const second = await send();
+            expect(second.status).toBe(409);
+            expect(second.body).toEqual({
+                code: "turn_in_progress",
+                detail: "A response is already being generated for this chat.",
+            });
+            // The refused request opened a memory fence it must hand back.
+            expect(releaseMemoryConversationTurn).toHaveBeenCalledWith({
+                db: expect.anything(),
+                surface: "tabular",
+                conversationId: "review-chat-1",
+                turn: { activityId: "activity-1" },
+            });
+
+            held.release();
+            expect((await firstDone).text).toContain("data: [DONE]");
+            expect(runLLMStream).toHaveBeenCalledTimes(1);
+        });
+
+        it.each(["user", "idle", "max_lifetime"] as const)(
+            "persists and replays the %s stop reason",
+            async (reason) => {
+                const { AssistantStreamAbortError } =
+                    await import("../../modules/chat/engine/index.js");
+                const started = new Promise<StreamParams>((resolve) => {
+                    runLLMStream.mockImplementation(async (raw: unknown) => {
+                        const params = raw as StreamParams;
+                        resolve(params);
+                        emitFrom(params)({
+                            type: "content_delta",
+                            text: "Partial",
+                        });
+                        await new Promise<void>((done) =>
+                            params.signal?.addEventListener("abort", () => done(), {
+                                once: true,
+                            }),
+                        );
+                        throw new AssistantStreamAbortError("Partial", [
+                            { type: "content", text: "Partial" },
+                        ]);
+                    });
+                });
+                const first = send();
+                const firstDone = first.then((res) => res);
+                const params = await started;
+
+                // The run id is the assistant row id the route reserved; a
+                // client learns it from the chat_id frame's `turnId`.
+                const turnId = await activeTurnId();
+
+                const unknown = await request(app)
+                    .post("/tabular-review/r1/chats/review-chat-1/turn/not-a-turn/stop")
+                    .set(...AUTH);
+                expect(unknown.status).toBe(404);
+                expect(unknown.body.code).toBe("turn_not_found");
+
+                if (reason === "user") {
+                    const stopped = await request(app)
+                        .post(
+                            `/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stop`,
+                        )
+                        .set(...AUTH);
+                    expect(stopped.status).toBe(200);
+                    expect(stopped.body).toEqual({ stopped: true, finished: false });
+                } else {
+                    const { getAssistantTurnRun } =
+                        await import("../../lib/assistantTurnRuns.js");
+                    getAssistantTurnRun(turnId, "tabular")!.stop(reason);
+                }
+                expect(params.signal?.aborted).toBe(true);
+
+                const text = (await firstDone).text;
+                expect(text).toContain(`"turnId":"${turnId}"`);
+                expect(text).toContain(
+                    reason === "user" ? '"type":"cancelled"' : '"type":"error"',
+                );
+                expect(text).toContain("data: [DONE]");
+                expect(assistantInsert()).toMatchObject({
+                    content: [
+                        { type: "content", text: "Partial" },
+                        reason === "user"
+                            ? { type: "content", text: "Cancelled by user." }
+                            : {
+                                  type: "error",
+                                  message: expect.any(String),
+                                  safe_to_display: true,
+                              },
+                    ],
+                });
+
+                // Stopping again says so rather than pretending; the run is kept
+                // briefly so a late reader still gets the terminal frames.
+                const replay = await request(app).get(`/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stream`).set(...AUTH);
+                expect(replay.status).toBe(200);
+                expect(replay.text).toContain(reason === "user" ? '\"type\":\"cancelled\"' : '\"type\":\"error\"');
+                expect(replay.text).toContain("data: [DONE]");
+
+                const again = await request(app)
+                    .post(`/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stop`)
+                    .set(...AUTH);
+                expect(again.body).toEqual({ stopped: false, finished: true });
+            },
+        );
+
+        it("answers 404 for a turn that belongs to another chat or is unknown", async () => {
+            const held = heldGeneration();
+            const first = send();
+            const firstDone = first.then((res) => res);
+            await held.started;
+            const turnId = await activeTurnId();
+
+            const wrongChat = await request(app)
+                .get(
+                    `/tabular-review/r1/chats/review-chat-2/turn/${turnId}/stream`,
+                )
+                .set(...AUTH);
+            // The chat row the gate loads still says review-chat-1, so the
+            // chat/turn binding is what refuses this.
+            expect(wrongChat.status).toBe(404);
+
+            const unknown = await request(app)
+                .get("/tabular-review/r1/chats/review-chat-1/turn/nope/stream")
+                .set(...AUTH);
+            expect(unknown.status).toBe(404);
+            expect(unknown.body.code).toBe("turn_not_found");
+
+            held.release();
+            await firstDone;
+        });
+
+        it("refuses a viewer on attach and a non-creator on stop", async () => {
+            const held = heldGeneration();
+            const first = send();
+            const firstDone = first.then((res) => res);
+            await held.started;
+            const turnId = await activeTurnId();
+
+            // A caller who cannot see the review cannot watch its answers.
+            ensureReviewAccess.mockResolvedValue({
+                ok: false,
+                reason: "forbidden",
+            });
+            const hidden = await request(app)
+                .get(
+                    `/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stream`,
+                )
+                .set(...AUTH);
+            expect(hidden.status).toBe(404);
+
+            // Review chats are creator-write: a collaborator reads the thread
+            // but may not end its answer.
+            ensureReviewAccess.mockResolvedValue({
+                ok: true,
+                isCreator: false,
+                orgRole: null,
+                projectRole: "editor",
+            });
+            supabaseState.tables.tabular_review_chats = {
+                data: { ...CHAT_ROW, user_id: "someone-else" },
+                error: null,
+            };
+            const refused = await request(app)
+                .post(
+                    `/tabular-review/r1/chats/review-chat-1/turn/${turnId}/stop`,
+                )
+                .set(...AUTH);
+            expect(refused.status).toBe(403);
+
+            held.release();
+            await firstDone;
         });
     });
 
@@ -2020,7 +2799,7 @@ describe("tabular.routes", () => {
                 data: {
                     id: "chat-1",
                     title: "Chat",
-                    model: "claude-sonnet-5",
+                    model: "claude-sonnet-5-5",
                     reasoning_level: "high",
                     review_id: "r1",
                     user_id: "u1",
@@ -2029,8 +2808,8 @@ describe("tabular.routes", () => {
             };
             getUserModelSettings.mockResolvedValue({
                 title_model: "claude-haiku-4-5",
-                tabular_model: "claude-sonnet-5",
-                last_selected_chat_model: "claude-sonnet-5",
+                tabular_model: "claude-sonnet-5-5",
+                last_selected_chat_model: "claude-sonnet-5-5",
                 last_selected_reasoning_level: "high",
                 legal_research_us: false,
                 api_keys: { openai: "sk-test" },
@@ -2039,13 +2818,13 @@ describe("tabular.routes", () => {
             const res = await request(app)
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
-                .send({ model: "gpt-5.6-sol", reasoningLevel: "low" });
+                .send({ model: "gpt-6-astra", reasoningLevel: "low" });
 
             expect(res.status).toBe(200);
             expect(supabaseState.updates).toContainEqual({
                 table: "tabular_review_chats",
                 payload: expect.objectContaining({
-                    model: "gpt-5.6-sol",
+                    model: "gpt-6-astra",
                     reasoning_level: "low",
                 }),
             });
@@ -2084,7 +2863,9 @@ describe("tabular.routes", () => {
                 .set(...AUTH);
 
             expect(res.status).toBe(200);
-      expect(res.body).toEqual([{ id: "chat-1", title: "T", user_id: "u1" }]);
+            expect(res.body).toEqual([
+                { id: "chat-1", title: "T", user_id: "u1", active_turn: null },
+            ]);
         });
     });
 

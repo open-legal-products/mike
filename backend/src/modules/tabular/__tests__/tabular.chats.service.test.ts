@@ -6,10 +6,12 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { ensureReviewAccess, checkProjectAccess } = vi.hoisted(() => ({
-    ensureReviewAccess: vi.fn(),
-    checkProjectAccess: vi.fn(),
-}));
+const { ensureReviewAccess, checkProjectAccess, filterAccessibleDocumentIds } =
+    vi.hoisted(() => ({
+        ensureReviewAccess: vi.fn(),
+        checkProjectAccess: vi.fn(),
+        filterAccessibleDocumentIds: vi.fn(),
+    }));
 // Partial: `creatorScopedAllowed` is pure policy and stays real — the chat
 // gate's orphaned-creator branch is exactly what it decides — and the user
 // facade's graph reads other `lib/access` exports at import time.
@@ -17,6 +19,7 @@ vi.mock("../../../lib/access", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../../lib/access")>()),
     ensureReviewAccess,
     checkProjectAccess,
+    filterAccessibleDocumentIds,
 }));
 
 const {
@@ -46,7 +49,12 @@ const generateChatTitle = vi.hoisted(() => vi.fn());
 vi.mock("../tabular.extract", () => ({ generateChatTitle }));
 
 const loadReviewRows = vi.hoisted(() => vi.fn());
-vi.mock("../tabular.rows", () => ({ loadReviewRows }));
+// Partial: filterReadableReviewRows is pure policy over the (mocked)
+// filterAccessibleDocumentIds verdict and stays real.
+vi.mock("../tabular.rows", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../tabular.rows")>()),
+    loadReviewRows,
+}));
 
 import {
     deleteTabularReviewChat,
@@ -76,6 +84,7 @@ beforeEach(() => {
         projectRole: "owner",
     });
     checkProjectAccess.mockResolvedValue({ ok: false });
+    filterAccessibleDocumentIds.mockImplementation(async (ids: string[]) => ids);
     loadReviewRows.mockResolvedValue([
         { id: "row-1", label: "Contract.pdf" },
     ]);
@@ -497,6 +506,47 @@ describe("prepareTabularChat", () => {
                 op: "insert",
                 payload: { chat_id: "chat-new", role: "user", content: "hi" },
             },
+        );
+    });
+
+    it("keeps rows built from documents the caller cannot read out of the model's context", async () => {
+        // Review access is not document access: the model answers the
+        // caller, so it must not see filenames or extracted text from
+        // documents the caller could not open themselves.
+        loadReviewRows.mockResolvedValue([
+            { id: "row-1", label: "Contract.pdf", source_document_ids: ["d-ok"] },
+            {
+                id: "row-2",
+                label: "Their secret.pdf",
+                source_document_ids: ["d-hidden"],
+            },
+        ]);
+        filterAccessibleDocumentIds.mockResolvedValue(["d-ok"]);
+        const fake = makeFakeDb({
+            tables: {
+                tabular_reviews: { data: REVIEW, error: null },
+                tabular_cells: {
+                    data: [
+                        { column_index: 0, row_id: "row-1", content: "visible" },
+                        { column_index: 0, row_id: "row-2", content: "secret" },
+                    ],
+                    error: null,
+                },
+                tabular_review_chats: {
+                    data: { id: "chat-new", title: null },
+                    error: null,
+                },
+            },
+        });
+        const result = await prepareTabularChat(fake.db, base);
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.data.tabularStore.documents).toEqual([
+            { id: "row-1", filename: "Contract.pdf" },
+        ]);
+        expect([...result.data.tabularStore.cells.keys()]).toEqual(["0:row-1"]);
+        expect(JSON.stringify(result.data.apiMessages)).not.toContain(
+            "Their secret",
         );
     });
 

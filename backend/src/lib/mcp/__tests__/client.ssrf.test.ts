@@ -18,6 +18,7 @@ vi.mock("undici", async (importOriginal) => {
     return { ...actual, fetch: vi.fn() };
 });
 
+import { BlockedDestinationError } from "../../blockedDestination";
 import {
     guardedFetch,
     mcpOAuthCallbackUrl,
@@ -70,6 +71,9 @@ describe("validateRemoteMcpUrl", () => {
             "https://foo.localhost/",
             "https://metadata.google.internal/",
             "https://instance-data/",
+            // PR #608 regression: a fully-qualified name's root dot is the
+            // same host, but slipped past the exact-match name checks.
+            "https://LOCALHOST../",
         ]) {
             await expect(validateRemoteMcpUrl(host), host).rejects.toThrow(
                 /blocked host/,
@@ -388,5 +392,50 @@ describe("guardedFetch redirect following", () => {
         expect(res.status).toBe(302);
         // 1 initial + MAX_MCP_REDIRECTS follows.
         expect(fetchSpy).toHaveBeenCalledTimes(6);
+    });
+});
+
+// PR #608 regression: custom LLM endpoints reuse this guard, and their
+// failures said "MCP server URL …", which is wrong (and confusing) for model
+// traffic. The caller names its own destination.
+describe("guardedFetch caller label", () => {
+    it("names the caller's destination in blocked-address errors", async () => {
+        resolvesTo("10.0.0.5");
+        const error = (await guardedFetch(
+            "https://rebind.example.com/v1/models",
+            undefined,
+            { label: "Model endpoint URL" },
+        ).then(
+            () => null,
+            (err: unknown) => err,
+        )) as Error & { code?: string };
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).toBe(
+            "Model endpoint URL resolves to a blocked network address.",
+        );
+        expect(error.code).toBe("ERR_BLOCKED_DESTINATION");
+    });
+
+    it("re-labels a connect-time rejection from the shared agent", async () => {
+        resolvesTo("93.184.216.34");
+        vi.mocked(undiciFetch).mockRejectedValueOnce(
+            new TypeError("fetch failed", {
+                cause: new BlockedDestinationError(
+                    "Destination resolves to a blocked network address.",
+                ),
+            }),
+        );
+        await expect(
+            guardedFetch("https://rebind.example.com/v1/models", undefined, {
+                label: "Model endpoint URL",
+            }),
+        ).rejects.toThrow("Model endpoint URL resolves to a blocked network address.");
+    });
+
+    it("keeps the MCP wording by default", async () => {
+        resolvesTo("10.0.0.5");
+        await expect(
+            guardedFetch("https://rebind.example.com/"),
+        ).rejects.toThrow("MCP server URL resolves to a blocked network address.");
     });
 });

@@ -3,7 +3,6 @@ import type { Folder } from "../components/shared/types";
 import {
     INITIAL_FOLDER_DELETE_DIALOG_STATE,
     clearDeletedDocumentId,
-    clearDeletedDocumentTarget,
     folderDeleteDialogReducer,
     removeDeletedDocumentTabs,
     type PendingDeleteFolder,
@@ -169,18 +168,5 @@ describe("deleted document reconciliation", () => {
         expect(clearDeletedDocumentId(null, deletedDocumentIds)).toBeNull();
     });
 
-    it("clears a deleted document edit target, passing others through", () => {
-        const deleted = { key: "edit-1", documentId: "document-2" };
-        const surviving = { key: "edit-2", documentId: "document-1" };
 
-        expect(
-            clearDeletedDocumentTarget(deleted, deletedDocumentIds),
-        ).toBeNull();
-        expect(
-            clearDeletedDocumentTarget(surviving, deletedDocumentIds),
-        ).toBe(surviving);
-        expect(
-            clearDeletedDocumentTarget(null, deletedDocumentIds),
-        ).toBeNull();
-    });
 });

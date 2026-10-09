@@ -212,7 +212,7 @@ export function AddColumnModal({
                 onSubmit={handleSubmit}
                 className="flex min-h-0 flex-1 flex-col"
             >
-                <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3">
+                <div data-modal-scroll="vertical" className="min-h-0 flex-1 space-y-5 overflow-y-auto">
                         {columns.map((column, index) => (
                             <div
                                 key={index}
@@ -237,7 +237,7 @@ export function AddColumnModal({
                                                         )
                                                     }
                                                     aria-expanded={!isCollapsed}
-                                                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-gray-300"
+                                                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blue-500/40"
                                                 >
                                                     <ChevronDown
                                                         className={`h-4 w-4 shrink-0 text-gray-600 transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
@@ -319,7 +319,7 @@ export function AddColumnModal({
                                             />
                                         </button>
                                         {presetsOpenIndex === index && (
-                                            <div className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-xl ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}>
+                                            <div className={`absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-xl ${LIQUID_GLASS_FLOAT_CLASS}`}>
                                                 <button
                                                     type="button"
                                                     onClick={() => {
@@ -395,7 +395,7 @@ export function AddColumnModal({
                                             Tags
                                         </FieldLabel>
                                         <div
-                                            className={`mt-1 flex flex-wrap gap-1.5 rounded-xl px-2 py-1.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`}
+                                            className={`mt-1 flex flex-wrap gap-1.5 rounded-xl px-2 py-1.5 ${LIQUID_GLASS_SUBTLE_CLASS}`}
                                         >
                                             {column.tags.map((tag, tagIdx) => (
                                                 <span

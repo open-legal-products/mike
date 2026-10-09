@@ -6,67 +6,84 @@ import { REASONING_LEVELS, type Provider, type ReasoningLevel } from "./types";
 // ---------------------------------------------------------------------------
 // Main-chat tier (top-end) — user picks one of these per message.
 export const CLAUDE_MAIN_MODELS = [
-    "claude-fable-5",
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
 ] as const;
 export const GEMINI_MAIN_MODELS = [
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
+    "gemini-3.8-flash",
     "gemini-3.1-pro-preview",
-    "gemini-3-flash-preview",
 ] as const;
 export const OPENAI_MAIN_MODELS = [
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+] as const;
+export const MISTRAL_MAIN_MODELS = [
+    "mistral-large-4",
+    "mistral-medium-3-5",
+    "mistral-small-2603",
 ] as const;
 // Ollama models are detected dynamically (see GET /models/ollama). Any id of
 // the form "ollama/<tag>" is valid — see providerForModel / resolveModel.
 
 // Mid-tier (used for tabular review) — user picks one in account settings.
-export const CLAUDE_MID_MODELS = [
-    "claude-sonnet-5",
-    "claude-sonnet-4-6",
+export const CLAUDE_MID_MODELS = ["claude-sonnet-5-5"] as const;
+export const GEMINI_MID_MODELS = ["gemini-3.8-flash"] as const;
+export const OPENAI_MID_MODELS = ["gpt-6.1-sol"] as const;
+export const MISTRAL_MID_MODELS = [
+    "mistral-medium-3-5",
+    "mistral-small-2603",
 ] as const;
-export const GEMINI_MID_MODELS = [
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3-flash-preview",
-] as const;
-export const OPENAI_MID_MODELS = ["gpt-5.6-terra", "gpt-5.4"] as const;
 
 // Low-tier (used for title generation, lightweight extractions) — user picks
 // one in account settings.
 export const CLAUDE_LOW_MODELS = ["claude-haiku-4-5"] as const;
-export const GEMINI_LOW_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-] as const;
-export const OPENAI_LOW_MODELS = ["gpt-5.6-luna", "gpt-5.4-mini"] as const;
-
-export const DEFAULT_MAIN_MODEL = "gemini-3-flash-preview";
-export const DEFAULT_TITLE_MODEL = "gemini-3.5-flash-lite";
-export const DEFAULT_TABULAR_MODEL = "gemini-3-flash-preview";
+export const GEMINI_LOW_MODELS = ["gemini-3.5-flash-lite"] as const;
+export const OPENAI_LOW_MODELS = ["gpt-6-luna"] as const;
+export const MISTRAL_LOW_MODELS = ["mistral-small-2603"] as const;
 
 const STANDARD_REASONING_LEVELS: readonly ReasoningLevel[] =
     REASONING_LEVELS.filter((level) => level !== "max");
-const GPT_56_REASONING_LEVELS: readonly ReasoningLevel[] = REASONING_LEVELS;
+const ALWAYS_REASONING_LEVELS: readonly ReasoningLevel[] =
+    REASONING_LEVELS.filter((level) => level !== "none");
 
 /** Explicit AI SDK reasoning levels supported by the selected model family. */
 export function reasoningLevelsForModel(
     model: string,
 ): readonly ReasoningLevel[] {
-    const catalogId = model.replace(/^(?:openrouter|vercel)\//, "");
-    if (/(?:^|\/)gpt-5\.6(?:-|$)/.test(catalogId)) {
-        return GPT_56_REASONING_LEVELS;
+    const catalogId = model.startsWith("bedrock/")
+        ? // Bedrock names Claude "anthropic.claude-…", optionally behind a
+          // cross-region inference-profile prefix ("us.", "us-gov.") or at
+          // the end of an inference-profile ARN, after its last "/".
+          model
+              .split("/")
+              .at(-1)!
+              .replace(/^(?:[a-z]+(?:-[a-z]+)*\.)?anthropic\./, "")
+        : model
+              .replace(/^(?:openrouter|vercel)\//, "")
+              // An explicit protocol is not part of the model name.
+              .replace(
+                  /^((?:vertex|azure-foundry)\/)(?:anthropic|openai|gemini):/,
+                  "$1",
+              )
+              // Vertex pins Claude versions as "claude-opus-5-5@20260101".
+              .replace(/^(vertex\/[^@]+)@/, "$1-");
+    // Astra, Sol 6.1, and current Fable/Opus cannot disable thinking.
+    if (
+        /(?:^|\/)(?:gpt-6-astra|gpt-6\.1-sol|claude-fable-5-1|claude-opus-5-5)(?:$|-)/.test(
+            catalogId,
+        )
+    ) {
+        return catalogId.includes("claude-")
+            ? STANDARD_REASONING_LEVELS.filter((level) => level !== "none")
+            : ALWAYS_REASONING_LEVELS;
+    }
+    if (/(?:^|\/)gpt-(?:5\.6|6(?:\.1)?)(?:-|$)/.test(catalogId)) {
+        return REASONING_LEVELS;
+    }
+    if (/(?:^|\/)mistral-(?:large-4|medium-3-5|small-2603)$/.test(catalogId)) {
+        return ["none", "high"];
     }
     return STANDARD_REASONING_LEVELS;
 }
@@ -126,12 +143,15 @@ const ALL_MODELS = new Set<string>([
     ...CLAUDE_MAIN_MODELS,
     ...GEMINI_MAIN_MODELS,
     ...OPENAI_MAIN_MODELS,
+    ...MISTRAL_MAIN_MODELS,
     ...CLAUDE_MID_MODELS,
     ...GEMINI_MID_MODELS,
     ...OPENAI_MID_MODELS,
+    ...MISTRAL_MID_MODELS,
     ...CLAUDE_LOW_MODELS,
     ...GEMINI_LOW_MODELS,
     ...OPENAI_LOW_MODELS,
+    ...MISTRAL_LOW_MODELS,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -147,9 +167,16 @@ export function providerForModel(model: string): Provider {
     if (model.startsWith("openrouter/")) return "openrouter";
     if (model.startsWith("vercel/")) return "vercel";
     if (model.startsWith("opencode-go/")) return "opencode-go";
+    if (model.startsWith("bedrock/")) return "bedrock";
+    if (model.startsWith("azure/")) return "azure";
+    if (model.startsWith("azure-foundry/")) return "azure-foundry";
+    if (model.startsWith("vertex/")) return "vertex";
+    if (model.startsWith("xai/")) return "xai";
+    if (model.startsWith("custom/")) return "custom";
     if (model.startsWith("claude")) return "claude";
     if (model.startsWith("gemini")) return "gemini";
     if (model.startsWith("gpt-")) return "openai";
+    if (model.startsWith("mistral-")) return "mistral";
     throw new Error(`Unknown model id: ${model}`);
 }
 
@@ -157,15 +184,138 @@ export function providerForModel(model: string): Provider {
 // and localStorage selections outlive catalog renames; mapping here keeps an
 // old saved value working instead of silently kicking it to the fallback.
 export const LEGACY_MODEL_IDS: Record<string, string> = {
+    "claude-fable-5": "claude-fable-5-1",
+    "claude-opus-5": "claude-opus-5-5",
+    "claude-opus-4-8": "claude-opus-5-5",
+    "claude-opus-4-7": "claude-opus-5-5",
+    "claude-sonnet-5": "claude-sonnet-5-5",
+    "claude-sonnet-4-6": "claude-sonnet-5-5",
+    "gemini-3.7-flash": "gemini-3.8-flash",
+    "gemini-3.6-flash": "gemini-3.8-flash",
+    "gemini-3.5-flash": "gemini-3.8-flash",
+    "gemini-3-flash-preview": "gemini-3.8-flash",
+    "gemini-3.1-flash-lite": "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite-preview": "gemini-3.5-flash-lite",
-    "gpt-5.4-lite": "gpt-5.4-mini",
+    "gpt-5.6-sol": "gpt-6-astra",
+    "gpt-5.6-terra": "gpt-6.1-sol",
+    "gpt-5.6-luna": "gpt-6-luna",
+    "gpt-5.5": "gpt-6.1-sol",
+    "gpt-5.4": "gpt-6.1-sol",
+    "gpt-5.4-mini": "gpt-6-luna",
+    "gpt-5.4-lite": "gpt-6-luna",
 };
+
+// ---------------------------------------------------------------------------
+// Account-specific model ids
+// ---------------------------------------------------------------------------
+/**
+ * Providers whose model ids are account-specific (no published catalog), so
+ * Mike accepts whatever id the user typed — subject to the grammar below.
+ */
+export const ACCOUNT_MODEL_PREFIXES = [
+    "bedrock",
+    "azure",
+    "azure-foundry",
+    "vertex",
+    "xai",
+    "custom",
+] as const;
+export type AccountModelPrefix = (typeof ACCOUNT_MODEL_PREFIXES)[number];
+
+/** Each account-specific provider as the settings UI names it. */
+export const ACCOUNT_MODEL_LABELS: Record<AccountModelPrefix, string> = {
+    bedrock: "Amazon Bedrock",
+    azure: "Azure OpenAI",
+    "azure-foundry": "Azure AI Foundry",
+    vertex: "Google Vertex AI",
+    xai: "xAI",
+    custom: "OpenAI-compatible endpoint",
+};
+
+const MAX_ACCOUNT_MODEL_ID_LENGTH = 200;
+// One "/"-separated segment of an account-specific id. Letters, digits and
+// the punctuation real ids use: "." (us.anthropic.claude-…), ":" (ARNs,
+// "llama3.1:8b"), "@" (Vertex version pins), "_", "-" and "+". Everything
+// that changes how a URL is parsed — "?", "#", "%", backslash, whitespace and
+// control characters — is outside the set.
+const ACCOUNT_MODEL_ID_SEGMENT_RE = /^[A-Za-z0-9._:@+-]+$/;
+
+/**
+ * True when `id` (without the app-level prefix) is a well-formed model id for
+ * an account-specific provider. Some SDKs interpolate the id into the request
+ * URL unencoded (@ai-sdk/google-vertex builds
+ * `…/publishers/anthropic/models/${id}:rawPredict`), so an id is a path: it
+ * must not contain empty, "." or ".." segments or URL metacharacters.
+ *
+ * Vertex is stricter still: Claude and Gemini ids are a single path segment,
+ * and partner models are exactly "publisher/model".
+ */
+export function isSafeAccountModelId(
+    prefix: AccountModelPrefix,
+    id: string,
+): boolean {
+    if (!id || id.length > MAX_ACCOUNT_MODEL_ID_LENGTH) return false;
+    // Protocol prefixes are removed before the id reaches the provider.
+    // Validate that resulting path too, so "anthropic:.." cannot hide dots.
+    const explicitProtocol =
+        prefix === "vertex" || prefix === "azure-foundry"
+            ? /^(anthropic|openai|gemini):/.exec(id)
+            : null;
+    const providerId = explicitProtocol
+        ? id.slice(explicitProtocol[0].length)
+        : id;
+    const segments = providerId.split("/");
+    if (
+        segments.some(
+            (segment) =>
+                !ACCOUNT_MODEL_ID_SEGMENT_RE.test(segment) ||
+                /^\.+$/.test(segment),
+        )
+    ) {
+        return false;
+    }
+    if (prefix === "vertex") {
+        if (segments.length > 2) return false;
+        if (
+            segments.length === 2 &&
+            (explicitProtocol
+                ? explicitProtocol[1] !== "openai"
+                : providerId.startsWith("claude"))
+        ) return false;
+    }
+    return true;
+}
+
+/** The account-specific prefix of an app-level model id, if it has one. */
+export function accountModelPrefix(model: string): AccountModelPrefix | null {
+    // "azure-foundry/" does not start with "azure/": the trailing slash keeps
+    // the prefixes from shadowing each other.
+    return (
+        ACCOUNT_MODEL_PREFIXES.find((prefix) =>
+            model.startsWith(`${prefix}/`),
+        ) ?? null
+    );
+}
+
+/** isSafeAccountModelId for an app-level id ("vertex/claude-opus-5-5"). */
+export function isSafeAccountModel(model: string): boolean {
+    const prefix = accountModelPrefix(model);
+    return (
+        prefix !== null &&
+        isSafeAccountModelId(prefix, model.slice(prefix.length + 1))
+    );
+}
 
 export function resolveModel(
     id: string | null | undefined,
     fallback: string,
 ): string {
-    const canonical = id ? (LEGACY_MODEL_IDS[id] ?? id) : id;
+    const canonical =
+        id && getConfiguredModel(id)
+            ? id
+            : id
+              ? (LEGACY_MODEL_IDS[id] ?? id)
+              : id;
     if (
         canonical &&
         (ALL_MODELS.has(canonical) ||
@@ -174,7 +324,12 @@ export function resolveModel(
             /^(?:openrouter|vercel)\/[^\s/]+\/[^\s]+$/.test(canonical) ||
             // OpenCode Go's catalog ids are single-segment ("glm-5"), not the
             // vendor/model pairs OpenRouter and Vercel publish.
-            /^opencode-go\/[^\s]+$/.test(canonical))
+            /^opencode-go\/[^\s]+$/.test(canonical) ||
+            // Bedrock and Vertex model ids, Azure deployment names and the
+            // models behind a custom endpoint are account-specific, and xAI's
+            // catalog is read live, so those are accepted by shape too — but
+            // only by a strict shape, because some of them end up in a URL.
+            isSafeAccountModel(canonical))
     )
         return canonical;
     return fallback;
@@ -186,6 +341,90 @@ export function openRouterModelId(model: string): string {
 
 export function vercelModelId(model: string): string {
     return model.replace(/^vercel\//, "");
+}
+
+/** Bedrock model or inference-profile id, without the app-level prefix. */
+export function bedrockModelId(model: string): string {
+    return model.replace(/^bedrock\//, "");
+}
+
+/** Azure OpenAI deployment name, without the app-level prefix. */
+export function azureDeploymentName(model: string): string {
+    return model.replace(/^azure\//, "");
+}
+
+// Vertex AI and Azure AI Foundry serve several wire protocols, and neither
+// tells an API key which one a model speaks. Mike infers it from the name,
+// and a saved id can state it outright for names the inference gets wrong:
+// "anthropic:prod-sonnet", "openai:mistral-large-2411", "gemini:my-tuned-model".
+const EXPLICIT_PROTOCOL_RE = /^(anthropic|openai|gemini):/;
+
+type ExplicitProtocol = "anthropic" | "openai" | "gemini";
+
+function splitExplicitProtocol(id: string): {
+    protocol: ExplicitProtocol | null;
+    id: string;
+} {
+    const match = EXPLICIT_PROTOCOL_RE.exec(id);
+    return match
+        ? {
+              protocol: match[1] as ExplicitProtocol,
+              id: id.slice(match[0].length),
+          }
+        : { protocol: null, id };
+}
+
+/**
+ * Azure AI Foundry deployment name, without the app-level prefix or an
+ * explicit protocol.
+ */
+export function azureFoundryDeploymentName(model: string): string {
+    return splitExplicitProtocol(model.replace(/^azure-foundry\//, "")).id;
+}
+
+/**
+ * Foundry serves Claude over the Anthropic Messages API and everything else
+ * over Chat Completions. Without an explicit protocol it is read from the
+ * deployment name, which defaults to the model name ("claude-opus-5-5").
+ */
+export function isAzureFoundryClaudeDeployment(model: string): boolean {
+    const { protocol, id } = splitExplicitProtocol(
+        model.replace(/^azure-foundry\//, ""),
+    );
+    if (protocol) return protocol === "anthropic";
+    return /claude/i.test(id);
+}
+
+/** Vertex AI model id, without the app-level prefix or an explicit protocol. */
+export function vertexModelId(model: string): string {
+    return splitExplicitProtocol(model.replace(/^vertex\//, "")).id;
+}
+
+/**
+ * Vertex AI speaks three protocols: Anthropic Messages for Claude
+ * ("claude-opus-5-5@20260101"), OpenAI-compatible Chat Completions for
+ * partner and open models, which are named publisher/model
+ * ("meta/llama-4-maverick-maas"), and its own API for Gemini. An explicit
+ * "openai:" means the Chat Completions endpoint.
+ */
+export function vertexModelProtocol(
+    model: string,
+): "anthropic" | "maas" | "gemini" {
+    const { protocol, id } = splitExplicitProtocol(
+        model.replace(/^vertex\//, ""),
+    );
+    if (protocol) return protocol === "openai" ? "maas" : protocol;
+    if (id.startsWith("claude")) return "anthropic";
+    return id.includes("/") ? "maas" : "gemini";
+}
+
+export function xaiModelId(model: string): string {
+    return model.replace(/^xai\//, "");
+}
+
+/** Model name on a user's own endpoint, without the app-level prefix. */
+export function customEndpointModelId(model: string): string {
+    return model.replace(/^custom\//, "");
 }
 
 export function openCodeGoModelId(model: string): string {

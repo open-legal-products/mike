@@ -1,15 +1,37 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import Image from "next/image";
 import { Plus } from "lucide-react";
+import { ConnectorSetupGuideLink } from "@/app/components/settings/ConnectorSetupGuideLink";
 import { NewCustomMcpModal } from "@/app/components/settings/NewCustomMcpModal";
-import type { McpConnectorFormDraft } from "@/app/components/settings/McpConnectorForm";
+import { ConnectorCard } from "@/app/components/settings/ConnectorCard";
+import {
+  McpConnectorForm,
+  type McpConnectorFormDraft,
+} from "@/app/components/settings/McpConnectorForm";
 import {
   CONNECTOR_PRESETS,
   findConnectorPreset,
   normalizedServerUrl,
 } from "@/app/components/settings/connectorPresets";
-import { McpConnectorDetailsModal } from "@/app/components/settings/McpConnectorDetailsModal";
+import {
+  ConnectorDetailsModal,
+  type ConnectorDetailsView,
+} from "@/app/components/settings/ConnectorDetailsModal";
+import {
+  GoogleAuthorizationCancelledError,
+  GoogleConnectorFlowError,
+  useGoogleConnector,
+  type GoogleConnector,
+  type GoogleConnectorProvider,
+} from "@/app/components/settings/useGoogleConnector";
 import {
   MfaVerificationPopup,
   needsMfaVerification,
@@ -30,11 +52,8 @@ import {
   updateMcpConnector,
 } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import {
-  SettingsDescription,
-  SettingsLabel,
-} from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { SettingsDescription } from "@/app/components/settings/SettingsText";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
@@ -42,6 +61,11 @@ import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 
 type PendingMfaAction =
   | { type: "create"; draft: AddDraft; surface: CreateSurface }
+  | { type: "google-add"; provider: GoogleConnectorProvider }
+  // A Google settings change or delete; replayed as-is after verification.
+  | { type: "google-update"; retry: () => Promise<void> }
+  | { type: "write-approval"; connectorId: string; enabled: boolean }
+  | { type: "read-only"; connectorId: string; enabled: boolean }
   | { type: "save"; connectorId: string }
   | { type: "clear-token"; connectorId: string }
   | { type: "delete"; connectorId: string }
@@ -131,10 +155,7 @@ function connectorSetupGuideUrl(serverUrl: string) {
     if (hostname === "slack.com" || hostname.endsWith(".slack.com")) {
       return `${CONNECTOR_SETUP_GUIDE_URL}#slack`;
     }
-    if (
-      hostname === "googleapis.com" ||
-      hostname.endsWith(".googleapis.com")
-    ) {
+    if (hostname === "googleapis.com" || hostname.endsWith(".googleapis.com")) {
       return `${CONNECTOR_SETUP_GUIDE_URL}#google-hosted-mcp-servers`;
     }
   } catch {
@@ -152,15 +173,27 @@ const CONNECTOR_PLACEHOLDER_COLORS = [
   "bg-rose-400",
 ] as const;
 
-function connectorPlaceholderColor(connector: McpConnectorSummary) {
-  const seed = `${connector.name}:${connector.serverUrl}`;
-  const hash = Array.from(seed).reduce(
+const CONNECTOR_PLACEHOLDER_SHAPES = [
+  "h-5 w-5 rounded-full",
+  "h-5 w-5 rounded-md",
+  "h-4 w-6 rounded-full",
+  "h-4 w-4 rotate-45 rounded",
+] as const;
+
+function connectorPlaceholderClassName(connector: McpConnectorSummary) {
+  // Keep the random-looking mark stable across reloads and connector edits.
+  const hash = Array.from(connector.id).reduce(
     (value, character) => (value * 31 + character.charCodeAt(0)) >>> 0,
     0,
   );
-  return CONNECTOR_PLACEHOLDER_COLORS[
+  const color = CONNECTOR_PLACEHOLDER_COLORS[
     hash % CONNECTOR_PLACEHOLDER_COLORS.length
   ];
+  const shape = CONNECTOR_PLACEHOLDER_SHAPES[
+    Math.floor(hash / CONNECTOR_PLACEHOLDER_COLORS.length) %
+      CONNECTOR_PLACEHOLDER_SHAPES.length
+  ];
+  return `${color} ${shape}`;
 }
 
 function ConnectorBrandIcon({ name }: { name: string }) {
@@ -218,15 +251,94 @@ function ConnectorBrandIcon({ name }: { name: string }) {
     );
   }
 
+  if (name === "Lawve") {
+    return (
+      <svg viewBox="0 0 178 178" className="h-5 w-5" aria-hidden="true">
+        <path fill="#EB523A" d="M89.5 92.9 3 42v68.1l86.5 50.9V92.9Z" />
+        <path fill="#EB3A3A" d="M89.5 92.9 176 42v68.1l-86.5 50.9V92.9Z" />
+        <path fill="#EB663A" d="M45.87 18 3 42.93l86.47 50.76 43.28-25.17L45.87 18Z" />
+        <path fill="#EB663A" d="M133.13 18 176 42.93 89.53 93.69 46.25 68.52 133.13 18Z" />
+        <ellipse fill="#EB3A3A" cx="89.5" cy="68.46" rx="19.22" ry="9.61" />
+        <rect fill="#EB3A3A" x="70.28" y="54.04" width="38.44" height="14.42" />
+        <ellipse fill="#EB6F3A" cx="89.5" cy="53.44" rx="19.22" ry="9.01" />
+        <ellipse fill="#EB3A3A" cx="134.55" cy="42.63" rx="18.62" ry="9.01" />
+        <rect fill="#EB3A3A" x="115.93" y="27.61" width="37.24" height="14.42" />
+        <ellipse fill="#EB6F3A" cx="134.55" cy="27.61" rx="18.62" ry="9.61" />
+        <ellipse fill="#EB3A3A" cx="46.25" cy="42.63" rx="19.22" ry="9.01" />
+        <rect fill="#EB3A3A" x="27.03" y="27.61" width="38.44" height="15.62" />
+        <ellipse fill="#EB6F3A" cx="46.25" cy="27.61" rx="19.22" ry="9.61" />
+      </svg>
+    );
+  }
+
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className="h-5 w-5 fill-black"
-      aria-hidden="true"
-    >
+    <svg viewBox="0 0 24 24" className="h-5 w-5 fill-black dark:fill-white" aria-hidden="true">
       <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z" />
     </svg>
   );
+}
+
+function googleSetupGuideUrl(provider: GoogleConnectorProvider) {
+  return `https://github.com/open-legal-products/mike/blob/main/docs/${
+    provider === "google-drive" ? "google-drive" : "google-workspace"
+  }.md`;
+}
+
+function GoogleConnectorIcon({
+  provider,
+}: {
+  provider: GoogleConnectorProvider;
+}) {
+  return (
+    <Image
+      src={`/icons/integrations/${provider}.png`}
+      alt=""
+      aria-hidden="true"
+      width={20}
+      height={20}
+      unoptimized
+      className="h-5 w-5 object-contain"
+    />
+  );
+}
+
+function googleDetailsView(
+  connector: GoogleConnector,
+): ConnectorDetailsView | null {
+  const status = connector.status;
+  if (!status?.connected) return null;
+  return {
+    id: connector.provider,
+    name: connector.name,
+    tools: status.tools.map((tool) => ({
+      id: tool.name,
+      title: tool.title,
+      description: tool.description,
+      enabled: tool.enabled,
+      write: tool.write,
+    })),
+    toolCount: status.tools.length,
+    requireWriteApproval: status.requireWriteApproval,
+    readOnly: status.readOnly === true,
+    accountEmail: status.accountEmail,
+  };
+}
+
+function mcpDetailsView(connector: McpConnectorSummary): ConnectorDetailsView {
+  return {
+    id: connector.id,
+    name: connector.name,
+    tools: connector.tools.map((tool) => ({
+      id: tool.id,
+      title: tool.title || tool.toolName,
+      description: tool.description,
+      enabled: tool.enabled,
+      write: tool.write,
+    })),
+    toolCount: connector.toolCount,
+    requireWriteApproval: connector.requireWriteApproval,
+    readOnly: connector.readOnly === true,
+  };
 }
 
 export default function ConnectorsPage() {
@@ -279,6 +391,20 @@ export default function ConnectorsPage() {
 
   const selectedConnector = selectedConnectorDetails;
   const initializedDetailConnectorIdRef = useRef<string | null>(null);
+  // Hooks in a fixed order: Discover lists Google in this order too.
+  const googleDrive = useGoogleConnector("google-drive", "Google Drive");
+  const gmail = useGoogleConnector("gmail", "Gmail");
+  const googleCalendar = useGoogleConnector(
+    "google-calendar",
+    "Google Calendar",
+  );
+  const googleConnectors = [googleDrive, gmail, googleCalendar];
+  const [selectedGoogleProvider, setSelectedGoogleProvider] =
+    useState<GoogleConnectorProvider | null>(null);
+  const selectedGoogle =
+    googleConnectors.find(
+      (connector) => connector.provider === selectedGoogleProvider,
+    ) ?? null;
 
   const loadConnectors = useCallback(async () => {
     setLoading(true);
@@ -318,7 +444,8 @@ export default function ConnectorsPage() {
       initializedDetailConnectorIdRef.current = null;
       return;
     }
-    if (initializedDetailConnectorIdRef.current === selectedConnector.id) return;
+    if (initializedDetailConnectorIdRef.current === selectedConnector.id)
+      return;
     initializedDetailConnectorIdRef.current = selectedConnector.id;
     setDetailDraft({
       name: selectedConnector.name,
@@ -423,18 +550,93 @@ export default function ConnectorsPage() {
         setDetailSetupNotice(err.message);
         return;
       }
-      const message = userFacingApiError(err, "Action failed.");
-      if (action.type === "create") {
+      const message = userFacingApiError(
+        err,
+        action.type === "google-add"
+          ? "Failed to add connector."
+          : "Action failed.",
+      );
+      if (action.type === "google-add") {
+        setAddErrorGuideUrl(
+          isConnectorSetupError(err)
+            ? googleSetupGuideUrl(action.provider)
+            : null,
+        );
+        setAddError(message);
+      } else if (action.type === "create") {
         setAddErrorGuideUrl(
           isConnectorSetupError(err)
             ? connectorSetupGuideUrl(action.draft.serverUrl)
             : null,
         );
         setAddError(message);
-      } else if (action.type === "save") setDetailError(message);
+      } else if (
+        action.type === "save" ||
+        action.type === "google-update" ||
+        action.type === "write-approval" ||
+        action.type === "read-only"
+      )
+        setDetailError(message);
       else setError(message);
     }
   };
+
+  // Adding a Google connector behaves like adding Slack: setup problems and
+  // failures appear in the same "Could not add connector" warning.
+  const handleAddGoogle = async (provider: GoogleConnectorProvider) => {
+    const connector = googleConnectors.find(
+      (candidate) => candidate.provider === provider,
+    );
+    if (!connector) return;
+    if (connector.loadFailed) {
+      setAddErrorGuideUrl(null);
+      setAddError(
+        `Could not load ${connector.name}. Reload this page and try again.`,
+      );
+      return;
+    }
+    if (connector.status?.schemaReady === false) {
+      setAddErrorGuideUrl(googleSetupGuideUrl(provider));
+      setAddError(
+        `An administrator needs to apply the ${
+          provider === "google-drive" ? "Google Drive" : "Gmail and Calendar"
+        } database migration and restart the server before you can add ${connector.name}.`,
+      );
+      return;
+    }
+    await runSensitiveAction({ type: "google-add", provider }, async () => {
+      try {
+        await connector.connect();
+      } catch (err) {
+        if (err instanceof GoogleAuthorizationCancelledError) return;
+        if (err instanceof GoogleConnectorFlowError) {
+          setAddErrorGuideUrl(null);
+          setAddError(err.message);
+          return;
+        }
+        throw err;
+      }
+    });
+  };
+
+  /** A Manage-dialog change to a Google connector, under the usual MFA gate. */
+  const runGoogleUpdate = async (busy: string, change: () => Promise<void>) => {
+    const run = async () => {
+      setBusyKey(busy);
+      try {
+        await change();
+      } finally {
+        setBusyKey(null);
+      }
+    };
+    await runSensitiveAction({ type: "google-update", retry: run }, run);
+  };
+
+  const handleDeleteGoogle = (connector: GoogleConnector) =>
+    runGoogleUpdate(`delete:${connector.provider}`, async () => {
+      await connector.disconnect();
+      setSelectedGoogleProvider(null);
+    });
 
   const closeAddModal = () => {
     // "working" is a brief synchronous create with nothing to cancel, so we
@@ -917,6 +1119,44 @@ export default function ConnectorsPage() {
     );
   };
 
+  const handleRequireWriteApproval = async (
+    connectorId: string,
+    enabled: boolean,
+  ) => {
+    await runSensitiveAction(
+      { type: "write-approval", connectorId, enabled },
+      async () => {
+        setBusyKey(`approval:${connectorId}`);
+        try {
+          replaceConnector(
+            await updateMcpConnector(connectorId, {
+              requireWriteApproval: enabled,
+            }),
+            { preserveToolsOnEmpty: true },
+          );
+        } finally {
+          setBusyKey(null);
+        }
+      },
+    );
+  };
+
+  const handleReadOnly = async (connectorId: string, enabled: boolean) => {
+    await runSensitiveAction(
+      { type: "read-only", connectorId, enabled },
+      async () => {
+        setBusyKey(`read-only:${connectorId}`);
+        try {
+          replaceConnector(await updateMcpConnector(connectorId, { readOnly: enabled }), {
+            preserveToolsOnEmpty: true,
+          });
+        } finally {
+          setBusyKey(null);
+        }
+      },
+    );
+  };
+
   const handleToolEnabled = async (
     connectorId: string,
     toolId: string,
@@ -953,7 +1193,9 @@ export default function ConnectorsPage() {
     });
   };
 
-  const handleAddPreset = async (preset: (typeof CONNECTOR_PRESETS)[number]) => {
+  const handleAddPreset = async (
+    preset: (typeof CONNECTOR_PRESETS)[number],
+  ) => {
     const draft = {
       ...emptyAddDraft,
       name: preset.name,
@@ -974,6 +1216,12 @@ export default function ConnectorsPage() {
     if (action.type === "create") {
       await handleCreate(action.draft, action.surface);
     }
+    if (action.type === "google-add") await handleAddGoogle(action.provider);
+    if (action.type === "google-update") await action.retry();
+    if (action.type === "read-only") await handleReadOnly(action.connectorId, action.enabled);
+    if (action.type === "write-approval") {
+      await handleRequireWriteApproval(action.connectorId, action.enabled);
+    }
     if (action.type === "save") await handleSaveSelectedConnector();
     if (action.type === "clear-token") {
       await handleClearBearerToken(action.connectorId);
@@ -992,11 +1240,42 @@ export default function ConnectorsPage() {
     }
   };
 
+  const installedGoogle = googleConnectors.filter(
+    (connector) => connector.status?.connected,
+  );
+  // Discover only offers what is not installed yet: an added connector is
+  // managed from Installed.
+  const discoverGoogle = googleConnectors.filter(
+    (connector) => !connector.status?.connected,
+  );
+  const discoverPresets = CONNECTOR_PRESETS.filter(
+    (preset) =>
+      !connectors.some(
+        (connector) =>
+          normalizedServerUrl(connector.serverUrl) ===
+          normalizedServerUrl(preset.serverUrl),
+      ),
+  );
+  const googleLoading = googleConnectors.some((connector) => connector.loading);
+  const googleAdding = googleConnectors.some(
+    (connector) => connector.phase !== "idle",
+  );
+  const selectedMcpView = selectedConnector
+    ? mcpDetailsView(selectedConnector)
+    : null;
+  const selectedGoogleView = selectedGoogle
+    ? googleDetailsView(selectedGoogle)
+    : null;
+  const selectedIsCustom =
+    !!selectedConnector && !findConnectorPreset(selectedConnector.serverUrl);
+
   return (
-    <div>
-      <div className="mb-4">
-        <div className="flex items-center justify-between gap-3">
-          <SettingsHeading>Installed</SettingsHeading>
+    <div className="@container">
+      <section aria-labelledby="installed-connectors-heading">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <SettingsHeading id="installed-connectors-heading">
+            Installed
+          </SettingsHeading>
           <PillButtonUI
             tone="white"
             size="xs"
@@ -1008,50 +1287,97 @@ export default function ConnectorsPage() {
             Custom
           </PillButtonUI>
         </div>
-      </div>
-
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        {!loading &&
-          (connectors.length === 0 ? (
-            <div className="sm:col-span-2">
-              <SettingsCard>
-                <div className="p-4">
-                  <SettingsDescription>No connectors yet.</SettingsDescription>
-                </div>
-              </SettingsCard>
-            </div>
-          ) : (
-            connectors.map((connector) => (
-              <ConnectorRow
-                key={connector.id}
-                connector={connector}
-                busyKey={busyKey}
-                onOpen={() => void openConnectorDetails(connector.id)}
-                onConnectorEnabled={handleConnectorEnabled}
-              />
-            ))
+        {error && (
+          <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2">
+          {installedGoogle.map((connector) => (
+            <ConnectorRow
+              key={connector.provider}
+              name={connector.name}
+              icon={<GoogleConnectorIcon provider={connector.provider} />}
+              enabled={connector.status?.enabled !== false}
+              busy={busyKey === `connector:${connector.provider}`}
+              onOpen={() => {
+                setSelectedGoogleProvider(connector.provider);
+                void connector.refresh().catch(() => undefined);
+              }}
+              onEnabledChange={(enabled) =>
+                void runGoogleUpdate(`connector:${connector.provider}`, () =>
+                  connector.updateSettings({ enabled }),
+                )
+              }
+            />
           ))}
-      </div>
-
+          {!loading &&
+            connectors.map((connector) => {
+              const preset = findConnectorPreset(connector.serverUrl);
+              return (
+                <ConnectorRow
+                  key={connector.id}
+                  name={connector.name}
+                  icon={
+                    preset ? (
+                      <ConnectorBrandIcon name={preset.name} />
+                    ) : undefined
+                  }
+                  placeholderClassName={connectorPlaceholderClassName(connector)}
+                  enabled={connector.enabled}
+                  busy={busyKey === `connector:${connector.id}`}
+                  onOpen={() => void openConnectorDetails(connector.id)}
+                  onEnabledChange={(enabled) =>
+                    void handleConnectorEnabled(connector.id, enabled)
+                  }
+                />
+              );
+            })}
+          {!loading &&
+            !googleLoading &&
+            connectors.length === 0 &&
+            installedGoogle.length === 0 && (
+              <div className="@min-[32rem]:col-span-2">
+                <GlassCardUI>
+                  <div className="p-4">
+                    <SettingsDescription>
+                      No connectors yet.
+                    </SettingsDescription>
+                  </div>
+                </GlassCardUI>
+              </div>
+            )}
+        </div>
+      </section>
       <section className="mt-6" aria-labelledby="discover-connectors-heading">
         <div className="mb-4">
           <SettingsHeading id="discover-connectors-heading">
             Discover
           </SettingsHeading>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {CONNECTOR_PRESETS.map((preset) => {
-            const isAdded = connectors.some(
-              (connector) =>
-                normalizedServerUrl(connector.serverUrl) ===
-                normalizedServerUrl(preset.serverUrl),
-            );
+        {discoverGoogle.length === 0 && discoverPresets.length === 0 && (
+          <SettingsDescription>
+            Every available connector is installed.
+          </SettingsDescription>
+        )}
+        <div className="grid grid-cols-1 gap-3 @min-[32rem]:grid-cols-2">
+          {discoverGoogle.map((connector) => (
+            <DiscoverCard
+              key={connector.provider}
+              name={connector.name}
+              icon={<GoogleConnectorIcon provider={connector.provider} />}
+              adding={connector.phase === "adding"}
+              authorizing={connector.phase === "authorizing"}
+              loading={connector.loading}
+              disabled={
+                busyKey === "create" ||
+                (googleAdding && connector.phase === "idle")
+              }
+              onAdd={() => void handleAddGoogle(connector.provider)}
+              onCancel={connector.cancel}
+            />
+          ))}
+          {discoverPresets.map((preset) => {
             const isAdding =
               busyKey === "create" &&
               installingPresetUrl !== null &&
@@ -1062,47 +1388,18 @@ export default function ConnectorsPage() {
               authorizingPresetUrl !== null &&
               normalizedServerUrl(authorizingPresetUrl) ===
                 normalizedServerUrl(preset.serverUrl);
-
             return (
-              <SettingsCard key={preset.serverUrl}>
-                <div className="flex items-center gap-3 p-4">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-                    <ConnectorBrandIcon name={preset.name} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <SettingsLabel>{preset.name}</SettingsLabel>
-                  </div>
-                  <PillButtonUI
-                    tone="blue"
-                    size="sm"
-                    onClick={() => {
-                      if (isAuthorizing) cancelReconnectOAuth();
-                      else void handleAddPreset(preset);
-                    }}
-                    disabled={
-                      loading ||
-                      isAdded ||
-                      (busyKey !== null && !isAuthorizing)
-                    }
-                    loading={isAdding && !isAuthorizing}
-                    aria-label={
-                      isAdded
-                        ? `${preset.name} connector added`
-                        : isAuthorizing
-                          ? `Cancel ${preset.name} authorization`
-                        : `Add ${preset.name} connector`
-                    }
-                  >
-                    {isAdded
-                      ? "Added"
-                      : isAuthorizing
-                        ? "Cancel"
-                        : isAdding
-                          ? "Adding..."
-                          : "Add"}
-                  </PillButtonUI>
-                </div>
-              </SettingsCard>
+              <DiscoverCard
+                key={preset.serverUrl}
+                name={preset.name}
+                icon={<ConnectorBrandIcon name={preset.name} />}
+                adding={isAdding && !isAuthorizing}
+                authorizing={isAuthorizing}
+                loading={loading}
+                disabled={(busyKey !== null && !isAdding) || googleAdding}
+                onAdd={() => void handleAddPreset(preset)}
+                onCancel={cancelReconnectOAuth}
+              />
             );
           })}
         </div>
@@ -1125,36 +1422,112 @@ export default function ConnectorsPage() {
         }}
       />
 
-      <McpConnectorDetailsModal
-        connector={selectedConnector}
-        draft={detailDraft}
+      <ConnectorDetailsModal
+        connector={selectedMcpView}
         busyKey={busyKey}
         toolsLoading={loadingConnectorId === selectedConnectorId}
-        clearTokenStatus={
-          selectedConnectorId &&
-          busyKey === `clear-token:${selectedConnectorId}`
-            ? "clearing"
-            : selectedConnectorId === clearedBearerTokenConnectorId
-              ? "cleared"
-              : "idle"
+        details={
+          selectedConnector && selectedIsCustom ? (
+            <McpConnectorForm
+              idPrefix="connector-config"
+              draft={detailDraft}
+              showToken={showDetailToken}
+              tokenPlaceholder={
+                selectedConnector.hasAuthConfig
+                  ? "Saved token encrypted"
+                  : "Bearer token"
+              }
+              tokenAction={
+                selectedConnector.hasAuthConfig ||
+                clearedBearerTokenConnectorId === selectedConnector.id
+                  ? {
+                      label:
+                        clearedBearerTokenConnectorId === selectedConnector.id
+                          ? "Cleared"
+                          : "Clear",
+                      loading:
+                        busyKey === `clear-token:${selectedConnector.id}`,
+                      cleared:
+                        clearedBearerTokenConnectorId === selectedConnector.id,
+                      onClick: () =>
+                        void handleClearBearerToken(selectedConnector.id),
+                    }
+                  : undefined
+              }
+              onDraftChange={(next) =>
+                setDetailDraft({
+                  ...detailDraft,
+                  name: next.name,
+                  serverUrl: next.serverUrl,
+                  bearerToken: next.bearerToken,
+                  customHeaders: next.customHeaders,
+                })
+              }
+              onShowTokenChange={setShowDetailToken}
+            />
+          ) : undefined
         }
-        showToken={showDetailToken}
-        onDraftChange={setDetailDraft}
-        onShowTokenChange={setShowDetailToken}
+        reconnecting={
+          !!selectedConnectorId &&
+          reconnectingConnectorId === selectedConnectorId
+        }
         onClose={() => {
           initializedDetailConnectorIdRef.current = null;
           setSelectedConnectorId(null);
           setSelectedConnectorDetails(null);
         }}
-        onClearBearerToken={handleClearBearerToken}
-        onRefresh={handleRefresh}
-        reconnectingOAuth={
-          !!selectedConnectorId &&
-          reconnectingConnectorId === selectedConnectorId
+        onRefresh={() =>
+          selectedConnector && void handleRefresh(selectedConnector.id)
         }
-        onCancelReconnectOAuth={cancelReconnectOAuth}
-        onDelete={handleDelete}
-        onToolEnabled={handleToolEnabled}
+        onCancelReconnect={cancelReconnectOAuth}
+        onDelete={() =>
+          selectedConnector && void handleDelete(selectedConnector.id)
+        }
+        onToolEnabled={(toolId, enabled) =>
+          selectedConnector &&
+          void handleToolEnabled(selectedConnector.id, toolId, enabled)
+        }
+        onReadOnly={(enabled) =>
+          selectedConnector && void handleReadOnly(selectedConnector.id, enabled)
+        }
+        onRequireWriteApproval={(enabled) =>
+          selectedConnector &&
+          void handleRequireWriteApproval(selectedConnector.id, enabled)
+        }
+      />
+
+      <ConnectorDetailsModal
+        connector={selectedGoogleView}
+        busyKey={busyKey}
+        toolsLoading={false}
+        onClose={() => setSelectedGoogleProvider(null)}
+        onRefresh={() =>
+          selectedGoogle &&
+          void runGoogleUpdate(`refresh:${selectedGoogle.provider}`, () =>
+            selectedGoogle.refresh().then(() => undefined),
+          )
+        }
+        onDelete={() =>
+          selectedGoogle && void handleDeleteGoogle(selectedGoogle)
+        }
+        onToolEnabled={(toolName, enabled) =>
+          selectedGoogle &&
+          void runGoogleUpdate(`tool:${toolName}`, () =>
+            selectedGoogle.setToolEnabled(toolName, enabled),
+          )
+        }
+        onReadOnly={(readOnly) =>
+          selectedGoogle &&
+          void runGoogleUpdate(`read-only:${selectedGoogle.provider}`, () =>
+            selectedGoogle.updateSettings({ readOnly }),
+          )
+        }
+        onRequireWriteApproval={(requireWriteApproval) =>
+          selectedGoogle &&
+          void runGoogleUpdate(`approval:${selectedGoogle.provider}`, () =>
+            selectedGoogle.updateSettings({ requireWriteApproval }),
+          )
+        }
       />
 
       <MfaVerificationPopup
@@ -1197,80 +1570,81 @@ export default function ConnectorsPage() {
   );
 }
 
-function ConnectorSetupGuideLink({ href }: { href: string }) {
+function ConnectorRow({
+  name,
+  icon,
+  placeholderClassName,
+  enabled,
+  busy,
+  onOpen,
+  onEnabledChange,
+}: {
+  name: string;
+  icon?: ReactNode;
+  placeholderClassName?: string;
+  enabled: boolean;
+  busy: boolean;
+  onOpen: () => void;
+  onEnabledChange: (enabled: boolean) => void;
+}) {
   return (
-    <div className="mt-2 pl-[18px]">
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        className="font-medium text-blue-600 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-      >
-        Open connector setup guide
-      </a>
-    </div>
+    <ConnectorCard
+      name={name}
+      icon={icon}
+      placeholderClassName={placeholderClassName}
+      onOpen={onOpen}
+      action={
+        <ToggleSwitchUI
+          checked={enabled}
+          disabled={busy}
+          aria-busy={busy}
+          aria-label={`${name} connector`}
+          onCheckedChange={onEnabledChange}
+        />
+      }
+    />
   );
 }
 
-function ConnectorRow({
-  connector,
-  busyKey,
-  onOpen,
-  onConnectorEnabled,
+function DiscoverCard({
+  name,
+  icon,
+  adding,
+  authorizing,
+  loading,
+  disabled,
+  onAdd,
+  onCancel,
 }: {
-  connector: McpConnectorSummary;
-  busyKey: string | null;
-  onOpen: () => void;
-  onConnectorEnabled: (connectorId: string, enabled: boolean) => Promise<void>;
+  name: string;
+  icon: ReactNode;
+  adding: boolean;
+  authorizing: boolean;
+  loading: boolean;
+  disabled: boolean;
+  onAdd: () => void;
+  onCancel: () => void;
 }) {
-  const preset = findConnectorPreset(connector.serverUrl);
-
   return (
-    <SettingsCard>
-      <div
-        className="cursor-pointer rounded-xl px-4 py-3 transition-colors hover:bg-white/70"
-        role="button"
-        tabIndex={0}
-        onClick={onOpen}
-        onKeyDown={(event) => {
-          if (event.target !== event.currentTarget) return;
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onOpen();
+    <ConnectorCard
+      name={name}
+      icon={icon}
+      action={
+        <PillButtonUI
+          tone="blue"
+          size="sm"
+          onClick={authorizing ? onCancel : onAdd}
+          disabled={loading || (!authorizing && (adding || disabled))}
+          loading={adding}
+          aria-label={
+            authorizing
+              ? `Cancel ${name} authorization`
+              : `Add ${name} connector`
           }
-        }}
-      >
-        <div className="flex items-center gap-3">
-          {preset ? (
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-              <ConnectorBrandIcon name={preset.name} />
-            </div>
-          ) : (
-            <div
-              data-connector-placeholder
-              aria-hidden="true"
-              className={`h-9 w-9 shrink-0 rounded-xl ${connectorPlaceholderColor(connector)}`}
-            />
-          )}
-          <div className="min-w-0 flex-1 text-left">
-            <SettingsLabel>{connector.name}</SettingsLabel>
-          </div>
-          <div
-            className="shrink-0"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <ToggleSwitchUI
-              checked={connector.enabled}
-              disabled={busyKey === `connector:${connector.id}`}
-              aria-busy={busyKey === `connector:${connector.id}`}
-              aria-label={`${connector.name} connector`}
-              onCheckedChange={(enabled) =>
-                void onConnectorEnabled(connector.id, enabled)
-              }
-            />
-          </div>
-        </div>
-      </div>
-    </SettingsCard>
+        >
+          {authorizing ? "Cancel" : adding ? "Adding..." : "Add"}
+        </PillButtonUI>
+      }
+    />
   );
 }

@@ -29,7 +29,8 @@ also register it for Tailwind class scanning in
 Cross-target primitives use the `XxxUI.tsx` convention and are imported
 directly from `@/shared/ui/XxxUI` by the web app. Do not add a web-only
 re-export whose only job is to rename `XxxUI`: it adds another file, test, and
-catalog entry without adding behavior. `GlassCardUI`, `PillButtonUI`,
+catalog entry without adding behavior. The dropdown is the one file named
+without the suffix: `@/shared/ui/dropdown`. `GlassCardUI`, `PillButtonUI`,
 `GlassIconButtonUI`, `TabPillButtonUI`, and `ToggleSwitchUI` are the canonical
 implementations used by both targets. To style a link as a pill, apply
 `pillButtonUIClassName` from `PillButtonUI.styles` directly to the link; this
@@ -39,6 +40,12 @@ keeps the correct link semantics and is safe in server components.
 
 Two families coexist. Prefer a token over a raw Tailwind palette class whenever
 one exists; prefer either over a hex literal.
+
+Both families, and their `@theme inline` utility mappings, are declared once in
+`frontend/src/shared/ui/DesignTokensUI.css`. The web app's `globals.css` and the
+Word add-in's `word-addin/src/taskpane/styles.css` both import that file, so a
+token change reaches both targets. Do not redeclare one of these tokens in either
+entry stylesheet; `DesignTokensUI.test.ts` fails if you do.
 
 ### App surfaces (Mike's own)
 
@@ -70,7 +77,9 @@ Dropdown primitives use `theme-dropdown-item` and
 `theme-dropdown-selected`. They consume the same general liquid-glass hover
 and selected color tokens as the liquid-glass state classes, so menu and
 surface interactions remain visually consistent without copied palette
-utilities.
+utilities. Text inputs and search fields inside `theme-dropdown-surface` use
+a flat grey fill with no glass shadow or blur, retaining their keyboard focus
+rings. The treatment applies to dropdowns and submenus in both web and add-in.
 
 ### shadcn semantic tokens
 
@@ -155,6 +164,32 @@ practice the app uses the plain Tailwind radii directly: `rounded-full` (pills,
 icon buttons), `rounded-lg`/`rounded-md` (rows, list items), `rounded-xl`
 (inputs, cards), `rounded-2xl` (panels, dropdown surfaces).
 
+### Fit content before making a card compact
+
+Account identity, permission level, and action controls must remain readable at
+ordinary lengths. For example, `alex.morgan@example.com` and `Read-only` should
+both be visible without a tooltip, opening a dialog, or horizontal scrolling.
+
+- Give independent information its own line: service name, account email, then
+  permission/status. Do not concatenate everything into one truncated subtitle.
+- Use `min-w-0` on flexible children and `[overflow-wrap:anywhere]` for long
+  unbroken identifiers. Prefer natural wrapping and card growth to ellipsis,
+  clipping, smaller text, or fixed heights. Do not use `overflow-hidden` to hide
+  a layout defect.
+- Let action controls wrap and choose columns using the available container
+  width, including space consumed by application sidebars. Viewport width alone
+  does not describe a card's actual space.
+- A shared minimum height can align short cards and loading states; it must not
+  prevent longer content from increasing the height. Loading, connected, empty,
+  and error states use the same outer layout.
+- Verify realistic emails and deliberately long addresses at mobile, tablet,
+  and desktop widths in light and dark mode. Check the text nodes as well as
+  the outer card: a card can fit while its subtitle silently clips.
+
+Truncation is appropriate only when the omitted text is genuinely secondary and
+the user has an accessible way to inspect it. Account identity and permissions
+in connector cards are essential information.
+
 ## Elevation and the glass surface
 
 The signature surface combines a light fill, hairline border, inset highlight
@@ -208,24 +243,76 @@ Compose the material classes through the established primitives and constants:
 - `LIQUID_FLOAT_PANEL_SURFACE_CLASS`,
   `LIQUID_SUBTLE_PANEL_SURFACE_CLASS`, and `LIQUID_TABLE_SURFACE_CLASS` in
   `components/ui/liquid-surface.ts` — panels and tables
-- `LiquidDropdownContent` / `LiquidDropdownSurface` — menus
+- `DropdownContent` / `DropdownSurface` — menus
 - `GlassIconButtonUI` — circular icon buttons
+
+### Dropdowns
+
+Every menu a button or a right-click opens is built from
+`frontend/src/shared/ui/dropdown.tsx`. Web code imports it from
+`@/shared/ui/dropdown`; the Word add-in uses the `@mike/dropdown-ui` alias.
+There is no separate web wrapper. Do not hand-build a menu from a positioned
+`div` and buttons: that loses keyboard navigation, menu roles, focus return,
+and viewport collision handling.
+
+- `Dropdown`, `DropdownTrigger`, `DropdownContent`, `DropdownItem` (with
+  `selected` and `variant="destructive"`), `DropdownRadioGroup`,
+  `DropdownRadioItem`, `DropdownCheckboxItem`, `DropdownLabel`,
+  `DropdownSeparator` — a menu opened from a button.
+- `DropdownAtPoint` — a right-click menu opened at the cursor.
+- `RowActions` / `RowActionMenuItems` (`components/shared`) — a table row's
+  `···` menu and the same actions as a right-click menu.
+- `SelectionActionsMenu` (`components/shared`) — the toolbar "Actions" menu a
+  table shows while rows are selected.
+- `DropdownSurface` / `DropdownButton` — the menu's look for popovers that are
+  not menus, such as a combobox's option list where focus must stay in the
+  text field.
+
+Menus stack at `z-[250]`, above modals and side panels, so call sites do not
+set a z-index. Pass a `z-*` class to `DropdownContent` only when a menu must
+sit under or over something specific.
+
+Rows sit 4px apart (`DROPDOWN_ROWS_CLASS`, `flex flex-col gap-1`), applied by
+`DropdownContent` and `DropdownRadioGroup`. Do not add `space-y-*` to a menu;
+give any element that wraps rows inside one (a scrolling list, a group)
+`DROPDOWN_ROWS_CLASS` instead. Every focus ring inside a menu is inset, and the
+surface enforces that for controls that bring their own offset ring.
+
+### Scrollbars
+
+Scroll areas get a thin scrollbar with a transparent track from a global base
+rule in `globals.css`, so a classic scrollbar (mouse connected, Windows, Linux)
+does not draw an opaque gutter over a glass surface. Do not restyle scrollbars
+per component; an `overflow-auto` container needs no extra class. The
+spreadsheet (`.fortune-container`) and DOCX editor (`.docx-editor`) are
+excluded because they size and style their own scrollbars.
+
+For modal body scroll areas, add `data-modal-scroll="vertical"` to the scrolling
+element. `ModalUI` supplies matching 8px horizontal negative margins and padding
+to leave room for shadows and focus rings while keeping content aligned. Use
+`data-modal-scroll="horizontal"` for scrolling tab strips; these also get 8px
+vertical margins and padding. Keep this spacing in the shared modal rather than
+adding margin/padding workarounds in its children. Nested menus and inset panels
+keep their own spacing and should not receive this attribute.
 
 ## UI primitives
 
 | Primitive | Location | Use it for |
 | --- | --- | --- |
 | `PillButtonUI` | `shared/ui` | Primary action button (`tone`: black/white/blue/danger). |
+| `TextButtonUI` | `shared/ui` | Background-free actions, with optional icons and loading state. Use `textButtonUIClassName` from `TextButtonUI.styles` for links. No background, border, or shadow; hover changes text color. |
 | `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. |
 | `GlassIconButtonUI` | `shared/ui` | Circular glass icon button — modal close, panel dismiss. Requires `aria-label`. |
 | `GlassCardUI` | `shared/ui` | Canonical liquid-glass card surface. |
 | `TextSlabUI` | `shared/ui` | Inset slab holding quoted or proposed text inside a card — citation quotes, tracked-change diffs, and their loading/empty states. Owns shape, padding, and fill; the caller owns typography. |
 | `ToggleSwitchUI` | `shared/ui` | `role="switch"` toggle with an optional text label. |
 | `CitationPillUI` | `shared/ui` | Canonical numbered citation control for web, tabular review, and Word. Uses neutral gray by default, red for verification errors, and blue for the selected state. |
-| `input`, `form-field` | `components/ui` | shadcn input; `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
+| `InputUI` | `shared/ui` | Canonical shadcn input for the web app and Word add-in. |
+| `form-field` | `components/ui` | `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
+| `NoticeCardUI` | `shared/ui` | The one card every notice is drawn with: glass surface, tone icon (error/success/info), title, message, action row, close button. Do not use it directly in a screen; use one of the two wrappers below. |
+| `WarningPopup` | `components/popups` | One `NoticeCardUI` that a component opens and closes with `open` / `onClose`. |
 | `search-bar` | `components/ui` | Search input with clear button. Pass `label` for a meaningful accessible name. |
-| `dropdown-menu` | `components/ui` | Radix/shadcn menu primitives. |
-| `liquid-dropdown` | `components/ui` | The glass skin over `dropdown-menu` — use this in app chrome. |
+| `dropdown` | `shared/ui` | The one dropdown for the web app and the Word add-in: Radix menu behaviour with the liquid-glass look. See "Dropdowns" below. |
 | `liquid-surface` | `components/ui` | Web-only shared surface class constants. |
 | `empty-state` | `components/ui` | Icon + display heading + copy + optional action, for "nothing here yet". Wrap in `TableEmptyState` inside a table. |
 | `check-square` | `components/ui` | The selection square used by directory/picker rows. Decorative by default; the row owns the ARIA state. |
@@ -263,9 +350,23 @@ These are the rules the primitives already follow. Match them in new work.
   `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40
   focus-visible:ring-offset-2`. If you write `outline-none` you owe the element a
   replacement indicator in the same class string.
+- **Focus rings are blue, never grey.** Use `ring-blue-500/40`, not `ring-ring`
+  or a gray. A control that sets nothing gets the same blue from the base-layer
+  `:focus-visible` rule in `ThemeTokensUI.css` (`--focus-ring-color`).
+- **An inset ring traces the hover fill.** A control carrying a hover or
+  selected fill class (`LIQUID_GLASS_HOVER_CLASS`, `LIQUID_GLASS_SELECTED_CLASS`,
+  and the modal-row pair) gets an inset ring on that fill's perimeter by
+  default. When the fill belongs to a row that wraps the focusable control, as
+  in the sidebar's chat and project rows, give the control `data-focus-fill`
+  and `outline-none` so the row draws the ring instead.
+- **Text fields may hide the ring after a click.** Browsers match
+  `:focus-visible` on a focused text field even when it was clicked. Add
+  `keyboard-focus-ring` (defined in `globals.css`, driven by
+  `useInputModality`) to keep the ring for Tab navigation only; the caret still
+  shows focus after a click.
 - **A background tint is not a focus indicator** when the tint is a small
-  luminance step. `liquid-dropdown` items pair the semantic focus tint with a
-  ring for this reason.
+  luminance step. Dropdown items pair the semantic focus tint with a ring for
+  this reason.
 - **Icon-only controls need a name.** `GlassIconButtonUI` requires `aria-label` in
   its type. When a control has a *visible* label, do not override it with a
   different `aria-label` (WCAG 2.5.3). Name an icon-only control, and let a
@@ -281,6 +382,29 @@ These are the rules the primitives already follow. Match them in new work.
   clear it against white; `bg-gray-100` does not.
 - **Decorative elements are hidden.** Icons inside a labelled control get
   `aria-hidden`.
+
+## Notices: toast or WarningPopup
+
+Both show the same card, `NoticeCardUI`, so they always look alike. A
+change to how a notice looks goes in `NoticeCardUI.tsx`, never in one of the
+wrappers; `WarningPopup.test.tsx` fails if a popup and an error toast stop
+rendering the same card. What differs is who controls the card:
+
+| | Toast (`notifyError`, `showToast`) | `WarningPopup` |
+| --- | --- | --- |
+| Who opens it | Any code, including code with no React component (API client, offline listener) | The component on screen, through its own `open` state |
+| How many | Up to three, stacked at the bottom; repeats collapse | One, at the top centre |
+| Closes | On a timer (paused on hover or focus); errors with actions stay until dismissed | Only when the user closes it or presses Escape |
+| Tones | error, success, info | error |
+| Word add-in | Yes | No (web only) |
+
+Use a **`WarningPopup`** when the message is about something the user just
+did on this screen and they need to read it before moving on: a rejected
+upload, a failed save from a form, a permission refusal.
+
+Use a **toast** when the failure comes from background work, from shared code
+with no component of its own, or when it is a short confirmation ("Changes
+saved"). Do not add a new `WarningPopup` just to report a background failure.
 
 ## Component catalog
 

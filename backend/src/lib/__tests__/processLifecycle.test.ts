@@ -8,6 +8,8 @@ import {
   resetSentryForTests,
   scrubEvent,
 } from "../observability/sentry";
+import { diagnosticEvent } from "../observability/sentryPrivacy";
+import { validateRuntimeConfiguration } from "../runtimeConfig";
 import {
   closeHttpServer,
   createShutdown,
@@ -92,6 +94,77 @@ describe("failBoot (MIKE-BACKEND-2 / -3)", () => {
     );
     expect(effects.exit).toHaveBeenCalledWith(1);
   });
+
+  // MIKE-BACKEND-N: 54 "Failure in boot" events from a restart loop, none of
+  // which said WHICH variable was wrong. Runs the real validator, failBoot,
+  // beforeSend and the outbound privacy boundary: the event that leaves the
+  // process must be titled by stage + code and carry the field NAMES only.
+  it("says which configuration fields failed, and nothing else, through the real pipeline", async () => {
+    const events: Record<string, unknown>[] = [];
+    resetSentryForTests("community");
+    Sentry.init({
+      dsn: "https://test@sentry.invalid/1",
+      defaultIntegrations: false,
+      beforeSend: scrubEvent,
+      transport: () => ({
+        send: async (envelope) => {
+          for (const [header, payload] of envelope[1]) {
+            if (header.type === "event") events.push(diagnosticEvent(payload));
+          }
+          return { statusCode: 200 };
+        },
+        flush: async () => true,
+      }),
+    });
+    let failure: unknown;
+    try {
+      validateRuntimeConfiguration({
+        NODE_ENV: "production",
+        SUPABASE_URL: "https://PRIVATE-HOST.supabase.co",
+        SUPABASE_PUBLISHABLE_KEY: "PRIVATE_PUBLISHABLE",
+        SUPABASE_SECRET_KEY: "PRIVATE_SECRET",
+        FRONTEND_URL: "http://PRIVATE-FRONTEND.example",
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+
+    await failBoot(failure, "runtime-config", {
+      report: (error, context) => {
+        reportError(error, context);
+        return Sentry.withScope((scope) => {
+          scope.setLevel("fatal");
+          for (const [key, value] of Object.entries(context?.tags ?? {})) {
+            scope.setTag(key, value as string);
+          }
+          return Sentry.captureException(error);
+        });
+      },
+      logError: () => {},
+      logInfo: () => {},
+      flush: async () => {
+        await Sentry.flush(2000);
+      },
+      exit: () => {},
+    });
+
+    expect(events).toHaveLength(1);
+    const event = events[0]!;
+    expect(event.tags).toMatchObject({
+      component: "boot",
+      stage: "runtime-config",
+      failure_code: "configuration_invalid",
+      configuration_fields: "API_PUBLIC_URL,FRONTEND_URL",
+    });
+    expect(event.level).toBe("fatal");
+    const exception = (event.exception as { values: { value: string }[] })
+      .values[0]!;
+    expect(exception.value).toBe(
+      "Failure in boot / runtime-config / configuration_invalid",
+    );
+    expect(JSON.stringify(event)).not.toMatch(/PRIVATE|https in production/);
+  });
 });
 
 describe("listenOrFail (MIKE-BACKEND-7 root cause)", () => {
@@ -122,6 +195,19 @@ describe("listenOrFail (MIKE-BACKEND-7 root cause)", () => {
     await vi.waitFor(() => expect(onListening).toHaveBeenCalledOnce());
     expect(effects.exit).not.toHaveBeenCalled();
     await new Promise((resolve) => server.close(resolve));
+  });
+
+  it("binds only to the requested host for the desktop local stack", async () => {
+    const effects = fakeEffects();
+    const onListening = vi.fn();
+    const server = listenOrFail(express(), 0, onListening, effects, "127.0.0.1");
+    try {
+      await vi.waitFor(() => expect(onListening).toHaveBeenCalledOnce());
+      expect((server.address() as AddressInfo).address).toBe("127.0.0.1");
+      expect(effects.exit).not.toHaveBeenCalled();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 

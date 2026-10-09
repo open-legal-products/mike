@@ -5,11 +5,15 @@
 // over. The streaming loop itself stays in tabular.routes.ts.
 
 import {
+    loadUserMessageSentTimes,
     parseOptionalModel,
     parseOptionalReasoning,
+    userMessageStamper,
     type ChatMessage,
+    type MessageTimeContext,
     type TabularCellStore,
 } from "../chat/chat.service";
+import { MESSAGE_TIME_PROMPT, resolveRequestTimeZone } from "../../lib/userTime";
 import { type ReasoningLevel, type UserApiKeys } from "../../lib/llm";
 import { randomUUID } from "node:crypto";
 import {
@@ -37,11 +41,10 @@ import {
 } from "../user/user.service";
 import {
     resolveEffectiveChatModel,
-    resolveEffectiveReasoningLevel,
     titleModelForChat,
 } from "../../lib/modelSelection";
 import { generateChatTitle } from "./tabular.extract";
-import { loadReviewRows } from "./tabular.rows";
+import { filterReadableReviewRows, loadReviewRows } from "./tabular.rows";
 import {
     parseCellContent,
     statusFailure,
@@ -99,6 +102,7 @@ export function buildTabularMessages(
     messages: ChatMessage[],
     tabularStore: TabularCellStore,
     reviewTitle: string,
+    time?: MessageTimeContext,
 ): unknown[] {
     const docList = tabularStore.documents
         .map((d, i) => `- ROW:${i} "${d.filename}"`)
@@ -136,11 +140,17 @@ Rules:
 - quote should be verbatim text from the cell's summary
 - Omit <CITATIONS> if you make no citations
 - Do not fabricate cell content
-- Answer in clear, concise prose. You may use markdown formatting.`;
+- Answer in clear, concise prose. You may use markdown formatting.${
+        time ? `\n\n${MESSAGE_TIME_PROMPT}` : ""
+    }`;
 
     const formatted: unknown[] = [{ role: "system", content: systemContent }];
-    for (const msg of messages) {
-        formatted.push({ role: msg.role, content: msg.content ?? "" });
+    const stamp = userMessageStamper(messages, time);
+    for (const [index, msg] of messages.entries()) {
+        formatted.push({
+            role: msg.role,
+            content: stamp(msg, index, msg.content ?? ""),
+        });
     }
     return formatted;
 }
@@ -194,11 +204,46 @@ export async function listTabularReviewChats(
     return { ok: true, data: (chats ?? []) as ReviewChatSummary[] };
 }
 
+/**
+ * Review-chat READS share one preamble: the caller must be able to see the
+ * review named in the URL, and the chat must actually belong to it. Reading
+ * is collaborative — every member of the review sees every thread in it — so
+ * there is no creator check here, unlike the write gate below.
+ *
+ * Exported because the turn-stream endpoint attaches to a live answer, which
+ * is the same act as reading the transcript it will be stored in.
+ */
+export async function ensureReviewChatReadAccess(
+    db: Db,
+    reviewId: string,
+    chatId: string,
+    userId: string,
+    userEmail: string | null | undefined,
+): Promise<{ ok: true } | ServiceFailure> {
+    const { data: review } = await db
+        .from("tabular_reviews")
+        .select("id, user_id, project_id, org_id")
+        .eq("id", reviewId)
+        .single();
+    if (!review) return failure("not_found", "Review not found");
+    const access = await ensureReviewAccess(review, userId, userEmail, db);
+    if (!access.ok) return failure("not_found", "Review not found");
+
+    const { data: chat, error: chatError } = await db
+        .from("tabular_review_chats")
+        .select("id, review_id")
+        .eq("id", chatId)
+        .single();
+    if (chatError || !chat || chat.review_id !== reviewId)
+        return failure("not_found", "Chat not found");
+    return { ok: true };
+}
+
 // Review-chat writes share one preamble: the caller must be able to access
 // the review named in the URL, and the chat must actually belong to it —
 // previously these two writes checked neither, so any chat id could be hit
 // through any (or a nonexistent) review path.
-async function ensureReviewChatWriteAccess(
+export async function ensureReviewChatWriteAccess(
     db: Db,
     reviewId: string,
     chatId: string,
@@ -406,22 +451,14 @@ export async function listTabularReviewChatMessages(
 ): Promise<TabularResult<Record<string, unknown>[]>> {
     const { reviewId, chatId, userId, userEmail } = args;
 
-    const { data: review } = await db
-        .from("tabular_reviews")
-        .select("id, user_id, project_id, org_id")
-        .eq("id", reviewId)
-        .single();
-    if (!review) return failure("not_found", "Review not found");
-    const access = await ensureReviewAccess(review, userId, userEmail, db);
-    if (!access.ok) return failure("not_found", "Review not found");
-
-    const { data: chat, error: chatError } = await db
-        .from("tabular_review_chats")
-        .select("id, review_id")
-        .eq("id", chatId)
-        .single();
-    if (chatError || !chat || chat.review_id !== reviewId)
-        return failure("not_found", "Chat not found");
+    const gate = await ensureReviewChatReadAccess(
+        db,
+        reviewId,
+        chatId,
+        userId,
+        userEmail,
+    );
+    if (!gate.ok) return gate;
 
     const { data: messages } = await db
         .from("tabular_review_chat_messages")
@@ -486,6 +523,8 @@ export async function prepareTabularChat(
         chatId: string | undefined;
         requestedModel: string | undefined;
         requestedReasoning: string | undefined;
+        /** The browser's IANA time zone; unvalidated request input. */
+        requestedTimeZone?: unknown;
     },
 ): Promise<TabularResult<PreparedTabularChat>> {
     const {
@@ -549,12 +588,25 @@ export async function prepareTabularChat(
         return internalFailure(audienceError);
     }
 
-    // Fetch all cells and logical review rows for this review.
-    const { data: cells } = await db
+    // Fetch all cells and logical review rows for this review, narrowed to
+    // the rows whose source documents the caller can read: the model answers
+    // the caller, so it must not be handed filenames or extracted text the
+    // caller could not open themselves (see filterReadableReviewRows).
+    const { data: allCells } = await db
         .from("tabular_cells")
         .select("*")
         .eq("review_id", reviewId);
-    const rows = await loadReviewRows(db, reviewId);
+    const { rows } = await filterReadableReviewRows(
+        db,
+        await loadReviewRows(db, reviewId),
+        [],
+        userId,
+        userEmail,
+    );
+    const visibleRowIds = new Set(rows.map((row) => row.id));
+    const cells = (allCells ?? []).filter((c: { row_id?: string }) =>
+        visibleRowIds.has(c.row_id as string),
+    );
 
     const sortedColumns = (
         (review.columns_config ?? []) as { index: number; name: string }[]
@@ -685,10 +737,18 @@ export async function prepareTabularChat(
         });
     }
 
+    const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
+    const userSentAt = await loadUserMessageSentTimes(
+        db,
+        "tabular_review_chat_messages",
+        chatId,
+        messages,
+    );
     const apiMessages = buildTabularMessages(
         messages,
         tabularStore,
         review.title || "Untitled Review",
+        { timeZone, now: new Date(), userSentAt },
     );
 
     return {

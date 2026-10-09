@@ -105,6 +105,33 @@ function useDarkTheme(): boolean {
     );
 }
 
+function GlassGradient({
+    offsets,
+    colors,
+    opacities,
+    ...props
+}: React.SVGProps<SVGLinearGradientElement> & {
+    offsets: number[];
+    colors: string | string[];
+    opacities: number[];
+}) {
+    return (
+        <linearGradient {...props}>
+            {offsets.map((offset, index) => (
+                <stop
+                    key={offset}
+                    offset={`${offset}%`}
+                    style={{
+                        stopColor: typeof colors === "string" ? colors : colors[index],
+                        stopOpacity: opacities[index],
+                        transition: STOP_TRANSITION,
+                    }}
+                />
+            ))}
+        </linearGradient>
+    );
+}
+
 function Blades({ ids }: { ids: Record<string, string> }) {
     return (
         <g transform="translate(250, 250)">
@@ -185,158 +212,34 @@ export function MikeIcon({
                 style={{ display: "block" }}
             >
                 <defs>
-                    <linearGradient
+                    <GlassGradient
                         id={m.glassFill}
-                        x1="0%"
-                        y1="0%"
-                        x2="100%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: palette.fillStops[0],
-                                stopOpacity: palette.fillOpacities[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="30%"
-                            style={{
-                                stopColor: palette.fillStops[1],
-                                stopOpacity: palette.fillOpacities[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="70%"
-                            style={{
-                                stopColor: palette.fillStops[2],
-                                stopOpacity: palette.fillOpacities[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: palette.fillStops[3],
-                                stopOpacity: palette.fillOpacities[3],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
-                    <linearGradient
+                        x1="0%" y1="0%" x2="100%" y2="100%"
+                        offsets={[0, 30, 70, 100]}
+                        colors={palette.fillStops}
+                        opacities={palette.fillOpacities}
+                    />
+                    <GlassGradient
                         id={m.specular}
-                        x1="0%"
-                        y1="0%"
-                        x2="0%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="15%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="35%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: "#ffffff",
-                                stopOpacity: palette.specularStops[3],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
-                    <linearGradient
+                        x1="0%" y1="0%" x2="0%" y2="100%"
+                        offsets={[0, 15, 35, 100]}
+                        colors="#ffffff"
+                        opacities={palette.specularStops}
+                    />
+                    <GlassGradient
                         id={m.glassBorder}
-                        x1="0%"
-                        y1="0%"
-                        x2="0%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: palette.borderStops[0],
-                                stopOpacity: palette.borderOpacities[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="50%"
-                            style={{
-                                stopColor: palette.borderStops[1],
-                                stopOpacity: palette.borderOpacities[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: palette.borderStops[2],
-                                stopOpacity: palette.borderOpacities[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
-                    <linearGradient
+                        x1="0%" y1="0%" x2="0%" y2="100%"
+                        offsets={[0, 50, 100]}
+                        colors={palette.borderStops}
+                        opacities={palette.borderOpacities}
+                    />
+                    <GlassGradient
                         id={m.innerLight}
-                        x1="100%"
-                        y1="0%"
-                        x2="0%"
-                        y2="100%"
-                    >
-                        <stop
-                            offset="0%"
-                            style={{
-                                stopColor: palette.innerStops[0],
-                                stopOpacity: palette.innerOpacities[0],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="40%"
-                            style={{
-                                stopColor: palette.innerStops[1],
-                                stopOpacity: palette.innerOpacities[1],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="60%"
-                            style={{
-                                stopColor: palette.innerStops[2],
-                                stopOpacity: palette.innerOpacities[2],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                        <stop
-                            offset="100%"
-                            style={{
-                                stopColor: palette.innerStops[3],
-                                stopOpacity: palette.innerOpacities[3],
-                                transition: STOP_TRANSITION,
-                            }}
-                        />
-                    </linearGradient>
+                        x1="100%" y1="0%" x2="0%" y2="100%"
+                        offsets={[0, 40, 60, 100]}
+                        colors={palette.innerStops}
+                        opacities={palette.innerOpacities}
+                    />
                     <clipPath id={m.topClip}>
                         <rect x="30" y="-25" width="130" height="23" />
                     </clipPath>

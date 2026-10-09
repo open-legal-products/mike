@@ -16,8 +16,9 @@
 # demanding they converge:
 #
 #   upgraded:  schema.sql as of a pinned baseline commit
-#              + only the migrations ADDED since that commit  (git knows)
-#   fresh:     today's schema.sql
+#              + only the migrations ADDED since that commit  (git knows),
+#                applied by backend/scripts/migrate.sh
+#   fresh:     today's schema.sql, which must leave migrate.sh nothing pending
 #
 # Each database is reduced to a canonical, order-independent fingerprint
 # (backend/scripts/schema-fingerprint.sql — see its header for why a raw
@@ -35,8 +36,8 @@ name: Schema drift
 on:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    branches: [main, upstream-main]
   workflow_dispatch:
 
 concurrency:
@@ -81,7 +82,13 @@ jobs:
       - name: Start local Supabase stack
         run: |
           supabase init
-          supabase start -x studio,imgproxy,inbucket,analytics,vector,realtime,storage,edge-runtime,functions,meta
+          # Supabase defaults overlap Linux's ephemeral port range. Dedicated
+          # low ports avoid intermittent collisions with runner outbound traffic.
+          sed -i 's/54320/21320/g; s/54321/21321/g; s/54322/21322/g' supabase/config.toml
+          # setup-cli pins GHCR, disabling the CLI's ECR/GHCR/Docker Hub fallback.
+          # Allow the pinned CLI to recover when one public registry is throttled.
+          env -u SUPABASE_INTERNAL_IMAGE_REGISTRY supabase start \
+            -x studio,imgproxy,mailpit,logflare,vector,realtime,storage-api,edge-runtime,postgres-meta,supavisor
 
       - name: Export stack connection env
         run: |
@@ -111,20 +118,38 @@ jobs:
               -f backend/scripts/schema-fingerprint.sql > "$1"
           }
 
+          # The upgrade goes through backend/scripts/migrate.sh, the way an
+          # operator applies migrations: record what the baseline schema
+          # already contains, then let the runner apply the rest.
+          export DATABASE_URL="$SUPABASE_TEST_DB_URL"
           echo "::group::Upgraded path: baseline schema.sql ($BASELINE_REF) + migrations added since"
           reset_public
           git show "$BASELINE_REF:backend/schema.sql" > /tmp/baseline-schema.sql
           psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 --file /tmp/baseline-schema.sql
-          for migration in $(git diff --name-only --diff-filter=A "$BASELINE_REF" HEAD -- backend/migrations | LC_ALL=C sort); do
-            echo "Applying $migration"
-            psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 --file "$migration"
-          done
+          baseline_last="$(git ls-tree --name-only "$BASELINE_REF" backend/migrations/ | sed 's#.*/##' | LC_ALL=C sort | tail -n 1)"
+          backend/scripts/migrate.sh baseline "$baseline_last"
+          # The runner treats every file sorting after baseline_last as
+          # pending; the upgrade this check models is "the files git added
+          # since the baseline". Refuse to compare if the two ever differ.
+          backend/scripts/migrate.sh status | sed -n 's/^  pending: //p' > /tmp/pending.txt || true
+          git diff --name-only --diff-filter=A "$BASELINE_REF" HEAD -- backend/migrations | sed 's#.*/##' | LC_ALL=C sort > /tmp/added.txt
+          if ! diff -u /tmp/added.txt /tmp/pending.txt; then
+            echo "::error::migrate.sh's pending list differs from the migrations added since $BASELINE_REF."
+            exit 1
+          fi
+          backend/scripts/migrate.sh up
           fingerprint /tmp/upgraded.txt
           echo "::endgroup::"
 
           echo "::group::Fresh path: current schema.sql"
           reset_public
           psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 --file backend/schema.sql
+          # schema.sql must record every migration it contains: anything
+          # pending here would be re-run over a fresh install by migrate.sh.
+          if ! backend/scripts/migrate.sh status; then
+            echo "::error::A fresh install has pending migrations: add them to the schema_migrations list at the end of backend/schema.sql."
+            exit 1
+          fi
           fingerprint /tmp/fresh.txt
           echo "::endgroup::"
 

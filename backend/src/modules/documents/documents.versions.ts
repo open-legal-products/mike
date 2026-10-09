@@ -16,7 +16,7 @@ import {
     uploadFile,
     versionStorageKey,
 } from "../../lib/storage";
-import { docxToPdf } from "../../lib/convert";
+import { convertedPdfKey, docxToPdf } from "../../lib/convert";
 import { enqueueConversion } from "../../lib/queue/conversionQueue";
 import { contentSha256, loadActiveVersion } from "../../lib/documentVersions";
 import { creatorScopedAllowed } from "../../lib/access";
@@ -26,7 +26,7 @@ import {
     shouldConvertToPdf,
 } from "../../lib/documentTypes";
 import { deleteDocumentAndVersionFiles, type Db } from "./documents.shared";
-import { ensureDocumentAccess } from "./documents.access";
+import { canManageDocument, ensureDocumentAccess } from "./documents.access";
 
 // ---------------------------------------------------------------------------
 // Versions list
@@ -56,7 +56,7 @@ export async function listVersions(
     const { data: rows } = await db
         .from("document_versions")
         .select(
-            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, deleted_at, deleted_by",
+            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, textless_page_count, deleted_at, deleted_by",
         )
         .eq("document_id", documentId)
         .order("created_at", { ascending: true });
@@ -193,7 +193,7 @@ export async function createVersionFromDocument(
         ({ pdfStoragePath } = await copyDocumentVersionFiles({
             source: { ...active, file_type: suffix },
             storagePath: key,
-            pdfStoragePath: `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`,
+            pdfStoragePath: convertedPdfKey(userId, documentId, versionSlug),
             transport: "download",
             rendition: "optional",
             sourceBytes: bytes,
@@ -219,7 +219,7 @@ export async function createVersionFromDocument(
         } else {
             try {
                 const pdfBuf = await docxToPdf(Buffer.from(bytes));
-                const pdfKey = `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`;
+                const pdfKey = convertedPdfKey(userId, documentId, versionSlug);
                 await uploadFile(
                     pdfKey,
                     pdfBuf.buffer.slice(
@@ -251,6 +251,7 @@ export async function createVersionFromDocument(
             file_type: sourceType || null,
             size_bytes: active.size_bytes ?? bytes.byteLength,
             page_count: active.page_count,
+            textless_page_count: active.textless_page_count,
             content_sha256: contentSha256(bytes),
         },
     );
@@ -270,7 +271,7 @@ export async function createVersionFromDocument(
             userId,
             storagePath: key,
             fileType: suffix,
-            pdfKey: `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`,
+            pdfKey: convertedPdfKey(userId, documentId, versionSlug),
             finalizeDocumentStatus: false,
         });
     }
@@ -355,7 +356,7 @@ export async function renameVersion(
         .eq("document_id", documentId)
         .is("deleted_at", null)
         .select(
-            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count",
+            "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, textless_page_count",
         )
         .single();
     if (error || !updated) {
@@ -399,8 +400,11 @@ export async function deleteVersion(
         },
     );
     // Deleting a version is creator-scoped (with the admin heir once the
-    // creator's account is gone). Workflow documents are the exception: an
-    // editor on the workflow share manages its versions too.
+    // creator's account is gone) AND needs current content.edit, so a creator
+    // downgraded to Viewer cannot prune history (canManageDocument). Workflow
+    // documents are the exception: an editor on the workflow share manages
+    // its versions too. Versions carry no author column, so the scope is the
+    // document's creator, who manages that document's history.
     //
     // Same split as the whole-document DELETE: a caller with no verdict is
     // told the row does not exist, and a caller who can open the document but
@@ -412,10 +416,7 @@ export async function deleteVersion(
             kind: "doc_not_found",
             detail: "Document not found",
         };
-    if (
-        !creatorScopedAllowed(access, access.doc.user_id) &&
-        !(access.doc.workflow_id && can(access.projectRole, "content.edit"))
-    )
+    if (!canManageDocument(access, access.doc))
         return {
             ok: false,
             kind: "version_forbidden",

@@ -13,16 +13,23 @@ import {
 } from "@/app/lib/mikeApi";
 import type { AccessAssignmentRole } from "@/app/lib/mikeApi";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    SUPPORTED_DOCUMENT_ACCEPT,
+    combineUploadWarnings,
+    formatUnsupportedDocumentWarning,
+    partitionSupportedDocumentFiles,
+} from "@/app/lib/documentUploadValidation";
 import { FileDirectory } from "../shared/FileDirectory";
 import { Modal } from "../modals/Modal";
 import { ModalSelect } from "../modals/ModalSelect";
 import { FieldLabel, FormTextInput } from "../ui/form-field";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+import { ModelToggle } from "../assistant/ModelToggle";
 import {
-    ModelToggle,
+    isRouterModelSelected,
+    routerSelections,
     type NoModelsReason,
-    type RouterSlug,
-} from "../assistant/ModelToggle";
+} from "@/shared/lib/modelCatalog";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
@@ -180,19 +187,10 @@ export function NewTRModal({
     useEffect(() => {
         if (!open || !profile?.tabularModel) return;
         const defaultModel = profile.tabularModel;
-        const router = (["openrouter", "vercel", "opencode-go"] as const).find(
-            (slug) => defaultModel.startsWith(`${slug}/`),
+        const routerSelectionValid = isRouterModelSelected(
+            defaultModel,
+            routerSelections(profile),
         );
-        const selectedByRouter: Record<RouterSlug, string[]> = {
-            openrouter: profile.openRouterModels,
-            vercel: profile.vercelModels,
-            "opencode-go": profile.openCodeGoModels,
-        };
-        const routerSelectionValid =
-            !router ||
-            selectedByRouter[router].includes(
-                defaultModel.slice(router.length + 1),
-            );
         const providerAvailable =
             !apiKeys ||
             isModelAvailable(defaultModel, apiKeys, configuredModelIds);
@@ -329,8 +327,19 @@ export function NewTRModal({
     async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
         const files = Array.from(e.target.files ?? []);
         if (!files.length) return;
+        // `accept` is a hint the OS picker can be talked out of, so the file
+        // types the converter cannot read are filtered here too, and named,
+        // rather than spending an upload session on a guaranteed rejection.
+        const { supported, unsupported } =
+            partitionSupportedDocumentFiles(files);
+        const unsupportedWarning =
+            formatUnsupportedDocumentWarning(unsupported);
+        setUploadError(unsupportedWarning);
+        if (supported.length === 0) {
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            return;
+        }
         setUploading(true);
-        setUploadError(null);
         try {
             const uploadProjectId = isProjectMode
                 ? projectId
@@ -340,10 +349,10 @@ export function NewTRModal({
             const outcomes = uploadProjectId
                 ? await uploadProjectDocuments(
                       uploadProjectId,
-                      files.map((file) => ({ file })),
+                      supported.map((file) => ({ file })),
                   )
                 : await uploadStandaloneDocuments(
-                      files.map((file) => ({ file })),
+                      supported.map((file) => ({ file })),
                   );
             const uploaded = outcomes.flatMap((outcome) =>
                 outcome.status === "completed" && outcome.result
@@ -366,17 +375,25 @@ export function NewTRModal({
             // review, so say which ones instead of leaving the picker looking
             // as though the upload simply produced nothing.
             if (uploaded.length < outcomes.length) {
-                setUploadError(failedUploadMessage(outcomes));
+                setUploadError(
+                    combineUploadWarnings(
+                        unsupportedWarning,
+                        failedUploadMessage(outcomes),
+                    ),
+                );
             }
         } catch (err) {
             console.error("Upload failed:", err);
             setUploadError(
-                err instanceof UploadBatchError
-                    ? failedUploadMessage(err.outcomes)
-                    : userFacingApiError(
-                          err,
-                          "The selected files could not be uploaded. Please try again.",
-                      ),
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    err instanceof UploadBatchError
+                        ? failedUploadMessage(err.outcomes)
+                        : userFacingApiError(
+                              err,
+                              "The selected files could not be uploaded. Please try again.",
+                          ),
+                ),
             );
         } finally {
             setUploading(false);
@@ -534,7 +551,7 @@ export function NewTRModal({
             <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt"
+                accept={SUPPORTED_DOCUMENT_ACCEPT}
                 multiple
                 className="hidden"
                 onChange={handleUpload}
@@ -569,9 +586,9 @@ export function NewTRModal({
                                 onChange={setSelectedModel}
                                 apiKeys={apiKeys}
                                 apiKeysLoading={profileLoading && !profile}
-                                openRouterModels={profile?.openRouterModels}
-                                vercelModels={profile?.vercelModels}
-                                openCodeGoModels={profile?.openCodeGoModels}
+                                routerSelections={
+                                    profile ? routerSelections(profile) : undefined
+                                }
                                 onNoModelsClick={setNoModelsWarning}
                                 modalInput
                             />
@@ -646,6 +663,13 @@ export function NewTRModal({
                         directGrants={directGrants}
                         onDirectGrantsChange={setDirectGrants}
                         inheritedFromProject={isProjectMode || underProject}
+                        inheritedProjectId={
+                            isProjectMode
+                                ? projectId
+                                : underProject
+                                  ? selectedProjectId || null
+                                  : null
+                        }
                         ownerLabel="Review owners"
                     />
                 ) : (

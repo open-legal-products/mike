@@ -18,7 +18,6 @@ import {
     Loader2,
     PanelLeft,
     RefreshCw,
-    X,
 } from "lucide-react";
 import type {
     ColumnConfig,
@@ -32,6 +31,7 @@ import { PdfView } from "../shared/views/PdfView";
 import { SpreadsheetView } from "../shared/views/SpreadsheetView";
 import { DocxView } from "../shared/views/DocxView";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
+import { DocumentPaneTitle } from "../shared/DocumentPaneTitle";
 import { SubfolderSvgIcon } from "../shared/FolderSvgIcon";
 import { CitationQuotesSection } from "../assistant/CitationQuotesSection";
 import { cn } from "@/app/lib/utils";
@@ -40,7 +40,7 @@ import {
     LIQUID_GLASS_PRESSED_CLASS,
     LIQUID_FLOAT_PANEL_SURFACE_CLASS,
 } from "@/app/components/ui/liquid-surface";
-import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
+import { CloseButton } from "@/shared/ui/CloseButton";
 import { CitationPillUI } from "@/shared/ui/CitationPillUI";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 
@@ -48,8 +48,8 @@ interface Props {
     cell: TabularCell;
     row: TabularReviewRow;
     rows: TabularReviewRow[];
-    document?: Document;
-    documents?: Document[];
+    documentId?: string;
+    documents: Document[];
     column: ColumnConfig;
     columns: ColumnConfig[];
     onClose: () => void;
@@ -83,10 +83,10 @@ type TRPanelCitation = {
 };
 
 const FLAG_BADGE: Record<string, string> = {
-    green: "bg-emerald-600 backdrop-blur-md border border-emerald-300/20 text-white shadow-md",
-    grey: "bg-slate-500 backdrop-blur-md border border-slate-300/20 text-white shadow-md",
-    yellow: "bg-amber-500 backdrop-blur-md border border-amber-300/20 text-white shadow-md",
-    red: "bg-red-600 backdrop-blur-md border border-red-300/20 text-white shadow-md",
+    green: "bg-emerald-600 border border-emerald-300/20 text-white shadow-md",
+    grey: "bg-slate-500 border border-slate-300/20 text-white shadow-md",
+    yellow: "bg-amber-500 border border-amber-300/20 text-white shadow-md",
+    red: "bg-red-600 border border-red-300/20 text-white shadow-md",
 };
 
 const MIN_DOCUMENT_PANE_WIDTH = 420;
@@ -102,8 +102,8 @@ export function TRSidePanel({
     cell,
     row,
     rows,
-    document: initialDocument,
-    documents = [],
+    documentId,
+    documents,
     column,
     columns,
     onClose,
@@ -140,17 +140,21 @@ export function TRSidePanel({
         );
         return sourceDocument ? [sourceDocument] : [];
     });
+    // Keep navigation intent separate from current availability. A refresh can
+    // remove the requested source without requesting a different selection.
+    const requestedDocumentId = citationDocumentId ?? documentId;
+    const requestedDocument = sourceDocuments.find(
+        (document) => document.id === requestedDocumentId,
+    );
+    const availableRequestedDocumentId = requestedDocument?.id;
     const [regenerating, setRegenerating] = useState(false);
     const [folderExpanded, setFolderExpanded] = useState(false);
     const [activeDocumentId, setActiveDocumentId] = useState(
-        citationDocumentId ?? initialDocument?.id,
+        requestedDocumentId,
     );
     const doc =
-        documents.find(
-            (document) =>
-                document.id === activeDocumentId &&
-                row.source_document_ids.includes(document.id),
-        ) ?? initialDocument;
+        sourceDocuments.find((document) => document.id === activeDocumentId) ??
+        requestedDocument;
     const activeVersionNumber =
         doc?.active_version_number ?? doc?.latest_version_number ?? 1;
     const documentViewType = resolveDocumentViewType({
@@ -183,7 +187,19 @@ export function TRSidePanel({
             : undefined,
     );
 
-    // Re-sync when the panel opens for a different cell or citation
+    const resolvedDocumentId = doc?.id;
+    useEffect(() => {
+        if (!activeDocumentId || activeDocumentId === resolvedDocumentId) return;
+        // A removed secondary source must not stay selected and reappear on a
+        // later refresh. Primitive IDs keep equivalent refreshes inert. Run
+        // before the navigation reset below so a new citation takes precedence.
+        setActiveDocumentId(availableRequestedDocumentId);
+        setDocCitation(undefined);
+        setDocumentPaneOpen((open) => open && !!availableRequestedDocumentId);
+    }, [activeDocumentId, resolvedDocumentId, availableRequestedDocumentId]);
+
+    // Reset on navigation intent, not on refreshed row/document object identity.
+    // Background review updates must preserve a source picked inside the panel.
     useEffect(() => {
         setDocCitation(
             displayDocument && citationQuote
@@ -197,17 +213,11 @@ export function TRSidePanel({
                   }
                 : undefined,
         );
-        const nextDocument = citationDocumentId
-            ? documents.find(
-                  (document) =>
-                      document.id === citationDocumentId &&
-                      row.source_document_ids.includes(document.id),
-              )
-            : initialDocument;
-        setActiveDocumentId(nextDocument?.id);
-        setDocumentPaneOpen(displayDocument && !!nextDocument);
+        setActiveDocumentId(requestedDocumentId);
+        setDocumentPaneOpen(displayDocument && !!requestedDocumentId);
     }, [
         cell.id,
+        row.id,
         displayDocument,
         citationCell,
         citationDocumentId,
@@ -215,9 +225,7 @@ export function TRSidePanel({
         citationQuote,
         citationRef,
         citationSheet,
-        documents,
-        initialDocument,
-        row,
+        requestedDocumentId,
     ]);
 
     useEffect(
@@ -291,7 +299,6 @@ export function TRSidePanel({
     }
 
     function handleCitationOpen(citation: TRPanelCitation) {
-        setDocCitation(citation);
         const citedDocument = citation.documentId
             ? documents.find(
                   (document) =>
@@ -300,6 +307,7 @@ export function TRSidePanel({
               )
             : doc;
         if (citedDocument) {
+            setDocCitation(citation);
             setActiveDocumentId(citedDocument.id);
             setDocumentPaneOpen(true);
         }
@@ -328,7 +336,7 @@ export function TRSidePanel({
             {/* Resizable document panel — left */}
             {documentPaneOpen && doc && (
                 <div
-                    className="relative flex shrink-0 flex-col border-r border-white/30 px-3 pb-3"
+                    className="relative flex shrink-0 flex-col border-r border-white/30"
                     style={{ width: documentPaneWidth }}
                 >
                     <div
@@ -339,24 +347,14 @@ export function TRSidePanel({
                         className="absolute inset-y-0 left-0 z-20 w-1.5 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-blue-400/60"
                         title="Resize document pane"
                     />
-                    {/* Doc header */}
-                    <div className="flex min-h-11 shrink-0 items-center gap-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                            <FileTypeIcon
-                                fileType={doc.file_type ?? doc.filename}
-                                className="h-4 w-4"
-                            />
-                            <div
-                                className="min-w-0 truncate text-sm font-medium text-gray-700"
-                                title={doc.filename}
-                            >
-                                {doc.filename}
-                            </div>
-                        </div>
-                    </div>
+                    <DocumentPaneTitle
+                        filename={doc.filename}
+                        fileType={doc.file_type}
+                        versionNumber={doc.active_version_number}
+                    />
                     {/* Quote row */}
                     {docCitation?.quote && (
-                        <div className="-mx-3 shrink-0 py-2">
+                        <div className="shrink-0">
                             <CitationQuotesSection
                                 quotes={[
                                     {
@@ -371,12 +369,18 @@ export function TRSidePanel({
                                     docCitation,
                                 )}
                                 citationRef={docCitation.citationRef}
+                                // Dismisses the quote and its highlight; the
+                                // document stays open.
+                                onClose={() => setDocCitation(undefined)}
                             />
                         </div>
                     )}
                     {documentViewType === "docx" ? (
                         <DocxView
+                            rounded="top-right"
                             documentId={doc.id}
+                            // A read-only preview: no EigenPal editing toolbar.
+                            toolbarVisible={false}
                             quotes={
                                 docCitation
                                     ? [
@@ -390,6 +394,7 @@ export function TRSidePanel({
                         />
                     ) : documentViewType === "spreadsheet" ? (
                         <SpreadsheetView
+                            rounded="top-right"
                             documentId={doc.id}
                             highlightCells={
                                 docCitation?.sheet || docCitation?.cell
@@ -404,6 +409,7 @@ export function TRSidePanel({
                         />
                     ) : (
                         <PdfView
+                            rounded="top-right"
                             doc={{ document_id: doc.id }}
                             quote={docCitation?.quote}
                             fallbackPage={docCitation?.page}
@@ -415,7 +421,7 @@ export function TRSidePanel({
             {/* Info column — right, 300px fixed */}
             <div className="flex w-[300px] shrink-0 flex-col overflow-hidden">
                 {/* Header */}
-                <div className="mb-2 flex min-h-11 shrink-0 items-center justify-end gap-1.5 px-3">
+                <div className="flex h-11 shrink-0 items-center justify-end gap-1.5 px-3">
                     {doc && (
                         <button
                             type="button"
@@ -461,9 +467,12 @@ export function TRSidePanel({
                             )}
                         </button>
                     )}
-                    <GlassIconButtonUI onClick={onClose} aria-label="Close">
-                        <X className="h-3.5 w-3.5" />
-                    </GlassIconButtonUI>
+                    {/* 12px from the top, like the document panel's close. */}
+                    <CloseButton
+                        onClick={onClose}
+                        label="Close panel"
+                        className="mt-3 self-start"
+                    />
                 </div>
 
                 {/* Analysis panel */}

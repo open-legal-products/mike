@@ -492,6 +492,8 @@ export type ScrubbableEvent = {
             };
         }[];
     };
+    /** A message event's own call-site stack (attachStacktrace). */
+    stacktrace?: { frames?: { filename?: string; abs_path?: string }[] };
     request?: {
         data?: unknown;
         cookies?: unknown;
@@ -542,8 +544,56 @@ function findNested(
     return null;
 }
 
-/** Kept for callers and tests: SDK-shaped redaction. */
-export const redactSensitiveValues = redactShaped;
+/**
+ * Code the `next dev` toolchain runs, never Mike's: Next's own dist (the dev
+ * server, hot reloader, dev overlay, console interceptor), React and the
+ * scheduler it drives, and the Turbopack dev runtime. On the server these are
+ * `node_modules/<pkg>/…` paths; in the browser Turbopack serves the same
+ * modules as chunks named after their path (`node_modules_next_dist_<hash>._.js`).
+ * Mike's own code is `src/…` on the server and `[project]`/`src_…` chunks in
+ * the browser, so it never matches.
+ */
+const DEV_TOOLCHAIN_FRAME =
+    /(?:^|\/)node_modules\/(?:next\/dist|react-dom|react|scheduler)\/|(?:^|\/)_next\/static\/chunks\/(?:node_modules_(?:next_dist|react-dom|react|scheduler)_|(?:\[|%5B)turbopack(?:\]|%5D)_)/i;
+const STACK_LINE_LOCATION = /\(?([^\s()]+):\d+:\d+\)?\s*$/;
+
+/**
+ * True for an AUTOMATIC capture (console bridge, global unhandled handler)
+ * in a `next dev` build whose every known frame is dev-toolchain code.
+ * MIKE-FRONTEND-M: a Turbopack compile error of the developer's own
+ * unsaved edits (hot-reloader-turbopack `getCompilationErrors` →
+ * next-dev-server `findPageComponents` → base-server rendering `/_error`),
+ * forwarded to the browser's dev overlay and caught as unhandled there.
+ * MIKE-FRONTEND-K: the dev overlay logging it through console.error. Neither
+ * is a defect in Mike and both went to the project's shared community
+ * Sentry. An explicit report, a production build, or any event with a
+ * frame in Mike's own code (including the stack of an Error nested in the
+ * console arguments) is kept.
+ */
+function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolean {
+    if (!automatic || event.tags?.build_mode !== "development") return false;
+    const locations: string[] = [];
+    for (const frames of [
+        event.stacktrace?.frames,
+        ...(event.exception?.values ?? []).map((value) => value.stacktrace?.frames),
+    ]) {
+        for (const frame of frames ?? []) {
+            const location = frame.abs_path || frame.filename;
+            if (location) locations.push(location);
+        }
+    }
+    const nestedStack = event.extra?.error_stack;
+    if (typeof nestedStack === "string") {
+        for (const line of nestedStack.split("\n").slice(1)) {
+            const location = line.match(STACK_LINE_LOCATION)?.[1];
+            if (location) locations.push(location);
+        }
+    }
+    const known = locations.filter(
+        (location) => location !== "<anonymous>" && location !== "native",
+    );
+    return known.length > 0 && known.every((location) => DEV_TOOLCHAIN_FRAME.test(location));
+}
 
 const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
 const THROTTLE_WINDOW_MS = 60_000;
@@ -658,6 +708,10 @@ export function createEventScrubber(options?: {
                 event.message = label;
             }
         }
+
+        const consoleCapture =
+            mechanism === CONSOLE_CAPTURE_MECHANISM || event.logger === "console";
+        if (isDevToolchainNoise(event, automatic || consoleCapture)) return null;
 
         event.tags = {
             ...event.tags,

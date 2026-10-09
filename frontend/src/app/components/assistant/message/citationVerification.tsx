@@ -67,7 +67,7 @@ export function CitationVerificationBadge({
       <PopoverTrigger asChild>
         <PillButtonUI
           tone="white"
-          size="sm"
+          size="xs"
           className="w-fit gap-1 font-sans !text-red-600 hover:!text-red-700"
         >
           <CircleAlert className="h-3 w-3" aria-hidden="true" />

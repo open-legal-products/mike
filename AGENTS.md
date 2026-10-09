@@ -25,6 +25,13 @@ decorative pill badges unless a pill is specifically requested. This does not
 apply to established interactive pill controls such as `PillButton`,
 `TabPillButton`, and `OptionPill`.
 
+Keep ordinary account identifiers and their permission/status text fully visible.
+Do not truncate a normal-length email or hide its status to make a compact card
+fit. Put independent information on separate lines, allow long unbroken values
+to wrap, and let controls or cards reflow based on available container width.
+Verify both realistic and unusually long content at narrow widths; match loading
+states to the same layout. See the content-fitting rules in `docs/design-system.md`.
+
 Before creating UI markup, search these locations in order:
 
 1. `frontend/src/app/components/ui/` contains reusable web primitives such as
@@ -170,12 +177,21 @@ For every new migration:
    not exists`, `create or replace` for functions, drop-before-create for
    policies and constraints, and guarded data backfills or type changes.
 4. Update `backend/schema.sql` with the migration's final database shape in the
-   same change.
+   same change, and add the migration's filename to the `schema_migrations`
+   list at the end of that file (`backend/src/__tests__/migrationLedger.test.ts`
+   checks the list matches the directory).
 5. Preserve RLS, grants, ownership, security-definer settings, and explicit
    `search_path` hardening when changing database objects.
 
-Existing deployments apply only files newer than their recorded version, in
-filename order. Do not assume every historical migration is safely replayable,
+Each database records the migrations it has applied in
+`public.schema_migrations`; `backend/scripts/migrate.sh` (also run by Compose's
+`db-init`) applies the files it does not list, in filename order, exactly
+once, each inside a transaction with its ledger row. Do not write `begin` /
+`commit` in a new migration; if it cannot run in a transaction (for example
+`create index concurrently`), add a line reading `-- migrate:no-transaction`.
+Never edit or rename a migration that has shipped: deployments that ran it
+would not run the new version. Do not assume every historical migration is
+safely replayable,
 and do not apply migrations to a remote or production database unless the user
 explicitly requests it and the target has been confirmed. See
 `docs/deployment.md` for deployment procedure and `.github/workflows/schema-drift.yml`
@@ -233,6 +249,12 @@ only when a real browser flow is necessary.
 When changing dependencies, update the `package-lock.json` belonging to the
 affected package. Before handing off work, run `git diff --check`, inspect the
 diff for unrelated changes, and report which verification commands were run.
+
+## Branch Names
+
+Name branches after the change they contain, using a descriptive prefix such as
+`docs/`, `fix/`, `feat/`, `refactor/`, `test/`, or `chore/` (for example,
+`docs/shorten-readme-telemetry`). Never use `claude/` as a prefix.
 
 ## Pull Requests
 

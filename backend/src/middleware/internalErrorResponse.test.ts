@@ -33,6 +33,17 @@ describe("protectInternalErrorResponses", () => {
     vi.clearAllMocks();
   });
 
+  it("omits callback query credentials from logs and error reports", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    await request(testApp(500, { detail: "callback failed" }))
+      .get("/test?code=private-oauth-code&state=private-oauth-state");
+    expect(reportMessage).toHaveBeenCalledWith("callback failed", expect.objectContaining({
+      extra: expect.objectContaining({ path: "/test" }),
+    }));
+    expect(JSON.stringify(reportMessage.mock.calls)).not.toContain("private-oauth");
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain("private-oauth");
+  });
+
   it("reports a hand-written 5xx under its mounted route pattern, so two routers with the same relative path stay separate issues", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const app = express();

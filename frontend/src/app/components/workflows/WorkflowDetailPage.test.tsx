@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,6 +8,7 @@ import {
     listWorkflowShares,
     MikeApiError,
     shareWorkflow,
+    updateWorkflow,
 } from "@/app/lib/mikeApi";
 import type { Workflow } from "../shared/types";
 import { WorkflowDetailPage } from "./WorkflowDetailPage";
@@ -41,8 +42,8 @@ vi.mock("@/app/hooks/useQueryParamTab", () => ({
     useQueryParamTab: () => ["prompt", vi.fn()],
 }));
 
-vi.mock("@/app/components/workflows/WorkflowPromptEditor", () => ({
-    WorkflowPromptEditor: () => null,
+vi.mock("@/app/components/ui/markdown-editor", () => ({
+    MarkdownEditor: () => null,
 }));
 vi.mock("./WorkflowAssets", () => ({
     WorkflowAssets: () => null,
@@ -106,6 +107,28 @@ describe("WorkflowDetailPage access mutations", () => {
                 removeEventListener: vi.fn(),
             }),
         );
+    });
+
+    it.each([1, 2])("matches toolbar and right-click actions for %i selected columns", async (count) => {
+        const user = userEvent.setup();
+        const tabular = { ...workflow, metadata: { ...workflow.metadata, type: "tabular" as const },
+            columns_config: [0, 1].map((index) => ({ index, name: `Column ${index + 1}`, prompt: "Extract text", format: "text" as const })),
+        };
+        vi.mocked(getWorkflow).mockResolvedValue(tabular);
+        vi.mocked(updateWorkflow).mockResolvedValue(tabular);
+        render(<WorkflowDetailPage id="workflow-1" workflowType="tabular" />);
+        await user.click(await screen.findByRole("checkbox", { name: "Select Column 1" }));
+        if (count === 2) await user.click(screen.getByRole("checkbox", { name: "Select Column 2" }));
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+        expect(items).toEqual(count === 1 ? ["View", "Delete"] : ["Delete 2 columns"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("Column 1"), { clientX: 40, clientY: 40 });
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(items);
+        if (count === 2) {
+            await user.click(screen.getByRole("menuitem", { name: "Delete 2 columns" }));
+            expect(updateWorkflow).toHaveBeenCalledWith("workflow-1", { columns_config: [] });
+        }
     });
 
     async function openAccess(user: ReturnType<typeof userEvent.setup>) {

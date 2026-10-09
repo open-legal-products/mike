@@ -145,3 +145,18 @@ describe("resolvePanelDocumentVersionResult", () => {
     });
 
 });
+
+
+describe("historical version resilience", () => {
+    const version = (id: string, version_number: number, deleted_at: string | null = null) => ({
+        id, version_number, deleted_at, source: "upload", filename: "agreement.docx", created_at: "2026-08-17T00:00:00Z",
+    });
+    it("never substitutes current bytes when the requested historical version is missing", async () => {
+        const loadVersions = vi.fn().mockResolvedValue({ current_version_id: "current", versions: [version("current", 3)] });
+        await expect(resolvePanelDocumentVersionResult({ ...document, version_number: 2 }, loadVersions)).resolves.toEqual({ status: "unavailable" });
+    });
+    it.each([null, 2])("refuses a deleted version for version number %s", async (version_number) => {
+        const loadVersions = vi.fn().mockResolvedValue({ current_version_id: "deleted", versions: [version("deleted", 2, "2026-09-01T00:00:00Z")] });
+        await expect(resolvePanelDocumentVersionResult({ ...document, version_number }, loadVersions)).resolves.toEqual({ status: "unavailable" });
+    });
+});

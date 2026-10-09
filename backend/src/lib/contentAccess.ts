@@ -103,29 +103,6 @@ export async function getContentGrantRole(
         : null;
 }
 
-export async function getContentGrantRoles(
-    db: Db,
-    kind: ContentGrantKind,
-    resourceIds: string[],
-    userEmail: string | null | undefined,
-): Promise<Map<string, ProjectRole>> {
-    const email = normalizeEmail(userEmail);
-    if (!email || resourceIds.length === 0) return new Map();
-    const config = GRANT_CONFIG[kind];
-    const { data } = await db
-        .from(config.table)
-        .select(`${config.resourceColumn}, role`)
-        .in(config.resourceColumn, resourceIds)
-        .eq("email", email);
-    const result = new Map<string, ProjectRole>();
-    for (const row of (data ?? []) as Record<string, unknown>[]) {
-        const id = row[config.resourceColumn];
-        if (typeof id === "string" && isProjectRole(row.role))
-            result.set(id, row.role);
-    }
-    return result;
-}
-
 export type ContentGrantWriteResult =
     | { ok: true; grant: ContentAccessGrant }
     | { ok: false; kind: "validation"; detail: string }

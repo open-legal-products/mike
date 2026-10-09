@@ -135,7 +135,7 @@ test("uses a floating icon header with no logo, tabs, or visible sign-out button
     page.getByRole("menuitem", { name: "Chat", exact: true }),
   ).toHaveCount(0);
   await expect(assistantItem).toHaveAttribute("data-selected", "true");
-  await expect(page.getByRole("menu")).toHaveClass(/rounded-xl/);
+  await expect(page.getByRole("menu")).toHaveClass(/rounded-2xl/);
   await expect(assistantItem).toHaveClass(/rounded-lg/);
   await expect(assistantItem.locator("svg")).toHaveCount(0);
   await quickActionsItem.hover();
@@ -368,7 +368,12 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
       {
         id: `long-assistant-${index}`,
         role: "assistant",
-        content: `Section ${index + 1} contains several provisions that require careful review and follow-up.`,
+        content: [
+          {
+            type: "content",
+            text: `Section ${index + 1} contains several provisions that require careful review and follow-up.`,
+          },
+        ],
       },
     ]).flat(),
   });
@@ -381,9 +386,31 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
     .getByRole("button", { name: /Long document review/ })
     .click();
 
+  // Restored history positions asynchronously. Establish the user-scrolled-up
+  // condition after it is visible instead of clicking a transient load arrow.
+  const messagesContainer = page.getByTestId("messages-container");
+  await expect(messagesContainer).toHaveCSS("opacity", "1");
+  await expect(page.getByText("Section 6 contains", { exact: false })).toBeVisible();
+  await expect
+    .poll(() => messagesContainer.evaluate((container) => {
+      const users = container.querySelectorAll<HTMLElement>("[data-message-id]");
+      const latestUser = users[users.length - 1];
+      if (!latestUser) return Number.POSITIVE_INFINITY;
+      return Math.abs(
+        latestUser.getBoundingClientRect().top -
+        container.getBoundingClientRect().top - 80,
+      );
+    }))
+    .toBeLessThan(2);
+  await messagesContainer.hover();
+  await page.mouse.wheel(0, -10_000);
+  await expect
+    .poll(() => messagesContainer.evaluate((container) => container.scrollTop))
+    .toBeLessThan(2);
+
   const scrollButton = page.getByRole("button", { name: "Scroll to bottom" });
   await expect(scrollButton).toBeVisible();
-  await scrollButton.dispatchEvent("click");
+  await scrollButton.click();
 
   const immediateBottomDistance = await page
     .getByTestId("messages-container")
@@ -413,7 +440,6 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
   await expect(
     page.getByText("Review complete.", { exact: true }),
   ).toBeVisible();
-  const messagesContainer = page.getByTestId("messages-container");
   const settledMessageY = await waitForStableSample(async () =>
     latestUserMessage.evaluate((element) =>
       Math.round(element.getBoundingClientRect().y),
@@ -1459,23 +1485,53 @@ test("selects a workflow from the plus menu and attaches it to chat", async ({
   });
 });
 
-test("model toggle sends the selected frontend model", async ({
-  addin,
-  page,
-}) => {
-  await addin.mockChatStream(["Using the selected model."]);
-  await addin.gotoTaskpane({ documentText: "Current Word document" });
-  await addin.expectAuthedShell();
+for (const model of [
+  {
+    provider: "openai",
+    group: "OpenAI",
+    label: "GPT-6.1 Sol",
+    id: "gpt-6.1-sol",
+  },
+  {
+    provider: "mistral",
+    group: "Mistral AI",
+    label: "Mistral Medium 3.5",
+    id: "mistral-medium-3-5",
+  },
+]) {
+  test(`model toggle sends the selected frontend model (${model.label})`, async ({
+    addin,
+    page,
+  }) => {
+    // Only the chosen provider has a key, including the Mistral-only case.
+    await addin.mockApiJson("GET", "**/user/api-keys", {
+      claude: false,
+      gemini: false,
+      openai: model.provider === "openai",
+      mistral: model.provider === "mistral",
+      openrouter: false,
+      vercel: false,
+      "opencode-go": false,
+      courtlistener: false,
+    });
+    await addin.mockChatStream(["Using the selected model."]);
+    await addin.gotoTaskpane({ documentText: "Current Word document" });
+    await addin.expectAuthedShell();
 
-  await page.getByRole("button", { name: "Choose model" }).click();
-  await page.getByRole("menuitem", { name: "OpenAI", exact: true }).click();
-  await page.getByRole("menuitem", { name: "GPT-5.4", exact: true }).click();
-  await page.getByPlaceholder("How can I help?").fill("Hello");
-  const requestPromise = page.waitForRequest("**/word-chat");
-  await page.getByRole("button", { name: "Send" }).click();
-  const body = (await requestPromise).postDataJSON();
-  expect(body.model).toBe("gpt-5.4");
-});
+    await page.getByRole("button", { name: "Choose model" }).click();
+    const group = page.getByRole("menuitem", { name: model.group, exact: true });
+    if ((await group.getAttribute("aria-expanded")) !== "true") {
+      await group.click();
+    }
+    await page.getByRole("menuitem", { name: model.label, exact: true }).click();
+    await page.getByPlaceholder("How can I help?").fill("Hello");
+    const requestPromise = page.waitForRequest("**/word-chat");
+    await page.getByRole("button", { name: "Send" }).click();
+    const body = (await requestPromise).postDataJSON();
+    expect(body.model).toBe(model.id);
+    await expect(page.getByText("Using the selected model.")).toBeVisible();
+  });
+}
 
 test("composer controls fit a narrow Word task pane", async ({
   addin,

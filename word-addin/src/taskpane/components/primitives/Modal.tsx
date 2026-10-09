@@ -73,9 +73,7 @@ export function Modal({
         ) : undefined
       }
     >
-      <div className="flex min-h-0 flex-1 flex-col [&_.overflow-y-auto]:-mx-2 [&_.overflow-y-auto]:px-2">
-        {children}
-      </div>
+      {children}
     </ModalUI>
   );
 }

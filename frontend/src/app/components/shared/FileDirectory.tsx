@@ -40,7 +40,7 @@ const DIRECTORY_CHECKBOX_CLASS =
     "h-2.5 w-2.5 shrink-0 justify-self-center cursor-pointer rounded border-gray-200 accent-black disabled:cursor-not-allowed";
 
 const DIRECTORY_TABS: { value: DirectoryTab; label: string }[] = [
-    { value: "files", label: "Files" },
+    { value: "files", label: "Documents" },
     { value: "templates", label: "Templates" },
     { value: "projects", label: "Projects" },
 ];

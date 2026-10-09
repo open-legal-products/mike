@@ -1,10 +1,8 @@
 // Stable public API. Keep implementations in the topic files below.
 export {
-  ROUTER_PROFILE_FIELDS,
   normalizeRouterModels,
 } from "./user.profile.routerPreferences";
 export {
-  type PersonalisationUpdate,
   validateProfilePayload,
   validateOnboardingPayload,
   readBooleanBodyField,
@@ -16,6 +14,5 @@ export {
   lookupUserByEmail,
   updateUserProfile,
   completeUserOnboarding,
-  type RecordPasswordSetResult,
   recordPasswordSet,
 } from "./user.profile.operations";

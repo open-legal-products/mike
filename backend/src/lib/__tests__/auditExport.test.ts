@@ -190,9 +190,9 @@ describe("queryEvents display names", () => {
 
 describe("audit CSV user column", () => {
     // The export deliberately skips display-name resolution, so the "user"
-    // column is the email even when the author has a profile name. Both the
-    // sync GET /audit/export route and the async "audit-csv" export job render
-    // through buildAuditCsv, so pinning this here pins both.
+    // column is the email even when the author has a profile name. The
+    // "audit-csv" export job renders through buildAuditCsv, so pinning this
+    // here pins the export.
     it("falls back to the email and never resolves profile names", async () => {
         const { db, wasProfileLookupRun } = makeProfileDb(
             [

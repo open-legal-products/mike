@@ -27,6 +27,7 @@ export function CitationPillUI({
         <button
             type={type}
             aria-current={active ? "true" : undefined}
+            aria-pressed={active}
             data-active={active ? "true" : undefined}
             className={twMerge(
                 clsx(

@@ -30,6 +30,7 @@ function renderTable(row: Chat) {
     const chats = [row];
     return render(
         <ProjectAssistantTable
+            canCreateChat={true}
             chats={chats}
             filteredChats={chats}
             selectedChatIds={[]}
@@ -51,13 +52,19 @@ function renderTable(row: Chat) {
 
 /** Open the row's action menu and click Rename. */
 function clickRename() {
-    fireEvent.click(screen.getByText("···"));
+    fireEvent.pointerDown(
+        screen.getByText("···"),
+        new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+    );
     fireEvent.click(screen.getByText("Rename"));
 }
 
 /** Open the row's action menu and click Delete. */
 function clickDelete() {
-    fireEvent.click(screen.getByText("···"));
+    fireEvent.pointerDown(
+        screen.getByText("···"),
+        new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+    );
     fireEvent.click(screen.getByText("Delete"));
 }
 

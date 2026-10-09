@@ -27,7 +27,7 @@ function isLoginMfaBootstrapRoute(req: Request) {
   }
   return (
     (req.method === "GET" || req.method === "POST") &&
-    (path === "/user/profile" || path === "/users/profile")
+    path === "/user/profile"
   );
 }
 
@@ -48,7 +48,7 @@ async function enforceLoginMfaIfEnabled(
   if (error) {
     devLog("[auth/mfa] login preference lookup failed", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       userId: res.locals.userId,
       error: error.message,
       code: error.code,
@@ -67,7 +67,7 @@ async function enforceLoginMfaIfEnabled(
   if (assuranceError) {
     devLog("[auth/mfa] login assurance lookup failed", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       userId: res.locals.userId,
       error: assuranceError.message,
     });
@@ -85,7 +85,7 @@ async function enforceLoginMfaIfEnabled(
   if (assurance.nextLevel === "aal2" && assurance.currentLevel !== "aal2") {
     devLog("[auth/mfa] login verification required", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       userId: res.locals.userId,
     });
     res.status(403).json({
@@ -161,7 +161,15 @@ export async function requireAuth(
   }
 
   res.locals.userId = user.id;
-  res.locals.userEmail = user.email?.toLowerCase() ?? "";
+  // `userEmail` is an AUTHORIZATION input, not a display value: direct grants
+  // (projects, chats, reviews, workflows) and organization invitations are
+  // all matched against it. An address the account has not proved it owns
+  // must therefore match nothing — otherwise signing up as someone else's
+  // address (before they do) inherits whatever was shared or extended to it.
+  // Such a session still authenticates; it only stops matching email-keyed
+  // grants until the address is confirmed.
+  res.locals.userEmail =
+    user.email && user.email_confirmed_at ? user.email.toLowerCase() : "";
   res.locals.token = token;
   // Id only — enough for "how many users are affected", never the email.
   setCurrentUser(user.id);
@@ -173,7 +181,7 @@ export async function requireAuth(
   if (syncError) {
     devLog("[auth/profile-email] sync failed", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       userId: user.id,
       error: syncError.message,
     });
@@ -193,7 +201,7 @@ export async function requireMfaIfEnrolled(
   if (!token) {
     devLog("[auth/mfa] missing auth session", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
     });
     res.status(401).json({ detail: "Missing auth session" });
     return;
@@ -207,7 +215,7 @@ export async function requireMfaIfEnrolled(
   if (error) {
     devLog("[auth/mfa] assurance lookup failed", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       userId: res.locals.userId,
       error: error.message,
     });
@@ -221,7 +229,7 @@ export async function requireMfaIfEnrolled(
 
   devLog("[auth/mfa] assurance level", {
     method: req.method,
-    path: req.originalUrl,
+    path: req.originalUrl.split("?")[0],
     userId: res.locals.userId,
     currentLevel: data.currentLevel,
     nextLevel: data.nextLevel,
@@ -232,7 +240,7 @@ export async function requireMfaIfEnrolled(
     const { data: userData, error: userError } = await admin.auth.getUser(token);
     devLog("[auth/mfa] user factors", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       userId: res.locals.userId,
       factorCount: userData.user?.factors?.length ?? 0,
       factors: summarizeMfaFactors(userData.user?.factors),
@@ -243,7 +251,7 @@ export async function requireMfaIfEnrolled(
   if (data.nextLevel === "aal2" && data.currentLevel !== "aal2") {
     devLog("[auth/mfa] verification required", {
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       userId: res.locals.userId,
     });
     res.status(403).json({

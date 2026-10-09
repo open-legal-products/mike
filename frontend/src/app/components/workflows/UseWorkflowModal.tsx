@@ -14,11 +14,12 @@ import { ModalSelect } from "../modals/ModalSelect";
 import { ModalTextarea } from "../modals/ModalTextarea";
 import { WorkflowPickerContent } from "./WorkflowPickerContent";
 import { workflowDetailPath } from "./workflowRoutes";
+import { ModelToggle } from "../assistant/ModelToggle";
 import {
-    ModelToggle,
+    isRouterModelSelected,
+    routerSelections,
     type NoModelsReason,
-    type RouterSlug,
-} from "../assistant/ModelToggle";
+} from "@/shared/lib/modelCatalog";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
@@ -143,19 +144,10 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             return;
         }
         const defaultModel = profile.tabularModel;
-        const router = (["openrouter", "vercel", "opencode-go"] as const).find(
-            (slug) => defaultModel.startsWith(`${slug}/`),
+        const routerSelectionValid = isRouterModelSelected(
+            defaultModel,
+            routerSelections(profile),
         );
-        const routerSelections: Record<RouterSlug, string[]> = {
-            openrouter: profile.openRouterModels,
-            vercel: profile.vercelModels,
-            "opencode-go": profile.openCodeGoModels,
-        };
-        const routerSelectionValid =
-            !router ||
-            routerSelections[router].includes(
-                defaultModel.slice(router.length + 1),
-            );
         if (
             routerSelectionValid &&
             (!apiKeys ||
@@ -457,12 +449,10 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
                                     onChange={setSelectedModel}
                                     apiKeys={apiKeys}
                                     apiKeysLoading={profileLoading && !profile}
-                                    openRouterModels={
-                                        profile?.openRouterModels
-                                    }
-                                    vercelModels={profile?.vercelModels}
-                                    openCodeGoModels={
-                                        profile?.openCodeGoModels
+                                    routerSelections={
+                                        profile
+                                            ? routerSelections(profile)
+                                            : undefined
                                     }
                                     onNoModelsClick={setNoModelsWarning}
                                 />

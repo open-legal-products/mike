@@ -8,7 +8,7 @@ import {
     textStep,
     tick,
 } from "../../lib/llm/__tests__/mockLanguageModel";
-import type { AssistantEvent } from "@mike/contracts";
+import type { AssistantEvent, ConnectorApprovalItem } from "@mike/contracts";
 
 // #383's model-selection describes grew this file past the chat limiter's
 // 30-requests-per-window budget, so the last describe began answering 429
@@ -71,7 +71,7 @@ const { streamWithProvider, unexpectedFetch } = vi.hoisted(() => ({
 }));
 
 vi.mock("../../modules/chat/chat.title", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../../modules/chat/chat.title")>()),
+    ...(await importOriginal<typeof import("../../modules/chat/chat.title.js")>()),
     generateAssistantChatTitle: vi.fn(async () => "Generated Title"),
 }));
 
@@ -85,7 +85,25 @@ vi.mock("../../lib/mcpConnectors", async (importOriginal) => ({
     buildUserMcpTools: vi.fn(async () => []),
 }));
 
+const { executeApprovedGoogleWorkspaceCall } = vi.hoisted(() => ({
+    executeApprovedGoogleWorkspaceCall: vi.fn(),
+}));
+
+const { executeApprovedGoogleDriveCall } = vi.hoisted(() => ({
+    executeApprovedGoogleDriveCall: vi.fn(),
+}));
+vi.mock("../../lib/integrations/googleDrive", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/integrations/googleDrive")>()),
+    executeApprovedGoogleDriveCall,
+}));
+
+vi.mock("../../lib/integrations/googleWorkspace", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/integrations/googleWorkspace")>()),
+    executeApprovedGoogleWorkspaceCall,
+}));
+
 beforeEach(() => {
+    resetAssistantTurnRunsForTests();
     unexpectedFetch.mockClear();
     streamWithProvider.mockReset();
     vi.stubGlobal("fetch", unexpectedFetch);
@@ -401,11 +419,10 @@ vi.mock("../../modules/user/user.settings", () => ({
     })),
     persistLastSelectedChatModel: vi.fn(async () => null),
     persistLastSelectedReasoningLevel: vi.fn(async () => null),
-    getUserApiKeys: vi.fn(async () => ({})),
 }));
 
-// generate-title calls completeText; stub it so the success-path tests don't
-// reach a real LLM. Everything else in lib/llm stays real.
+// Chat title generation calls completeText; stub it so the success-path tests
+// don't reach a real LLM. Everything else in lib/llm stays real.
 vi.mock("../../lib/llm", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../lib/llm")>();
     return {
@@ -415,11 +432,12 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 });
 
 import { app } from "../../app";
+import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { createServerSupabase } from "../../lib/supabase";
 
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
-    model: "gemini-3-flash-preview",
+    model: "gemini-3.8-flash",
 };
 
 function findAssistantReservation() {
@@ -560,6 +578,45 @@ describe("POST /chat — streaming endpoint", () => {
     expect(releaseMemoryConversationTurn).not.toHaveBeenCalled();
   });
 
+  it("gives the model the browser's time zone and today's date", async () => {
+    const chatLib = await import("../../modules/chat/engine/index.js");
+    runLLMStream.mockResolvedValue({
+      fullText: "hi",
+      events: [{ type: "content", text: "hi" }],
+      citations: [],
+    });
+    const res = await request(app)
+      .post("/chat")
+      .set("Authorization", "Bearer test")
+      .send({ ...VALID_BODY, time_zone: "Europe/London" });
+    expect(res.status).toBe(200);
+    const call = vi.mocked(chatLib.buildMessages).mock.calls.at(-1)!;
+    const time = call[7] as { timeZone: string; now: Date; userSentAt: unknown[] };
+    expect(time.timeZone).toBe("Europe/London");
+    expect(time.now).toBeInstanceOf(Date);
+    expect(time.userSentAt).toHaveLength(1);
+    // buildMessages is stubbed in this file; run the real one on the
+    // arguments the route passed.
+    const actual = await vi.importActual<
+      typeof import("../../modules/chat/engine/contextBuilders")
+    >("../../modules/chat/engine/contextBuilders");
+    const [system, user] = actual.buildMessages(
+      ...(call as Parameters<typeof actual.buildMessages>),
+    ) as { content: string }[];
+    expect(system.content).toContain("MESSAGE TIMES:");
+    expect(user.content).toMatch(/^\[Sent: .+ \(Europe\/London\)\]\nhello$/);
+
+    const invalid = await request(app)
+      .post("/chat")
+      .set("Authorization", "Bearer test")
+      .send({ ...VALID_BODY, time_zone: "Not/AZone" });
+    expect(invalid.status).toBe(200);
+    expect(
+      (vi.mocked(chatLib.buildMessages).mock.calls.at(-1)![7] as { timeZone: string })
+        .timeZone,
+    ).toBe("UTC");
+  });
+
   it("stops before streaming or scheduling when the user message is not durable", async () => {
     dbControl.failUserMessageInsert = true;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -641,7 +698,7 @@ describe("POST /chat — streaming endpoint", () => {
             memory_curator_model: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
-            last_selected_chat_model: "gpt-5.6-luna",
+            last_selected_chat_model: "gpt-6-luna",
             api_keys: { openai: "test-key" },
         });
 
@@ -652,11 +709,11 @@ describe("POST /chat — streaming endpoint", () => {
 
         expect(res.status).toBe(200);
         expect(runLLMStream).toHaveBeenCalledWith(
-            expect.objectContaining({ model: "gpt-5.6-luna" }),
+            expect.objectContaining({ model: "gpt-6-luna" }),
         );
         expect(dbInserts).toContainEqual({
             table: "chats",
-            value: expect.objectContaining({ model: "gpt-5.6-luna" }),
+            value: expect.objectContaining({ model: "gpt-6-luna" }),
         });
     expect(userSettings.persistLastSelectedChatModel).not.toHaveBeenCalled();
     });
@@ -936,7 +993,7 @@ describe("POST /chat — streaming endpoint", () => {
             const first = await request(app)
                 .post("/chat")
                 .set("Authorization", "Bearer test")
-                .send({ ...VALID_BODY, model: "gpt-5.6-terra" });
+                .send({ ...VALID_BODY, model: "gpt-6.1-sol" });
 
             expect(first.text).toContain('"type":"ask_inputs"');
             expect(first.text).not.toContain('"type":"error"');
@@ -997,7 +1054,7 @@ describe("POST /chat — streaming endpoint", () => {
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send({
-                    model: "gpt-5.6-terra",
+                    model: "gpt-6.1-sol",
                     chat_id: "chat-1",
                     messages: [
                         { role: "user", content: "Draft a letter." },
@@ -1025,10 +1082,14 @@ describe("POST /chat — streaming endpoint", () => {
                     }),
                 }),
             });
+            // Records carry an SSE `id:` line (the turn's sequence number)
+            // ahead of `data:` now that a client can resume a stream.
             const deltas = second.text
                 .split("\n\n")
-                .filter((line) => line.startsWith("data: {"))
-                .map((line) => JSON.parse(line.slice(6)))
+                .filter((record) => record.includes("data: {"))
+                .map((record) =>
+                    JSON.parse(record.slice(record.indexOf("data: ") + 6)),
+                )
                 .filter((event) => event.type === "content_delta");
             expect(deltas.map((event) => event.text).join("")).toBe(
                 "I will use New York law.",
@@ -1064,7 +1125,7 @@ describe("POST /chat — streaming endpoint", () => {
                 document_name: "Contract.docx",
                 storage: "cloud",
                 document_context: "GOVERNED BY DELAWARE LAW",
-                model: "gemini-3-flash-preview",
+                model: "gemini-3.8-flash",
             });
 
         expect(res.status).toBe(200);
@@ -1201,7 +1262,7 @@ describe("POST /chat — streaming endpoint", () => {
             memory_curator_model: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
-            last_selected_chat_model: "gpt-5.6-luna",
+            last_selected_chat_model: "gpt-6-luna",
             api_keys: { openai: "test-key" },
         });
 
@@ -1216,7 +1277,7 @@ describe("POST /chat — streaming endpoint", () => {
 
         expect(res.status).toBe(200);
         expect(runLLMStream).toHaveBeenCalledWith(
-            expect.objectContaining({ model: "gpt-5.6-luna" }),
+            expect.objectContaining({ model: "gpt-6-luna" }),
         );
     });
 
@@ -1480,6 +1541,100 @@ describe("POST /chat — streaming endpoint", () => {
     });
     expect(scheduleMemoryConsolidation).not.toHaveBeenCalled();
     });
+
+    it.each([
+        ["google-calendar", "approve"], ["google-calendar", "reject"],
+        ["google-drive", "approve"], ["google-drive", "reject"],
+    ] as const)(
+        "resumes a %s approval through the chat route with a %s decision",
+        async (provider, decision) => {
+            const execute = provider === "google-drive" ? executeApprovedGoogleDriveCall : executeApprovedGoogleWorkspaceCall;
+            const approval: ConnectorApprovalItem = {
+                id: "calendar-approval",
+                kind: "approval",
+                connector_name: provider === "google-drive" ? "Google Drive" : "Google Calendar",
+                tool_name: provider === "google-drive" ? "google_drive_update_file" : "google_calendar_update_event",
+                title: "Move meeting",
+                arguments: provider === "google-drive" ? { file_id: "file-1", name: "Final" } : {
+                    calendar_id: "primary",
+                    event_id: "event-1",
+                    start: { dateTime: "2026-10-01T15:00:00+08:00" },
+                },
+                binding: {
+                    type: "google",
+                    provider,
+                    grant_id: "reviewed-grant",
+                    etag: "reviewed-version",
+                },
+            };
+            const row = {
+                id: "assistant-existing",
+                chat_id: "chat-1",
+                role: "assistant",
+                content: [{ type: "ask_inputs", event_id: "ask-1", items: [approval] }],
+                citations: null,
+                author_user_id: "u1",
+                created_at: "2026-01-01T00:00:00Z",
+            };
+            dbControl.assistantMessageRows = [row];
+            execute.mockResolvedValue({
+                content: '{"ok":true,"data":{"id":"event-1"}}',
+                event: {
+                    type: "mcp_tool_call",
+                    connector_id: "google-calendar-native",
+                    connector_name: "Google Calendar",
+                    tool_name: approval.tool_name,
+                    openai_tool_name: approval.tool_name,
+                    status: "ok",
+                },
+            });
+            const response = { id: approval.id, kind: "approval", decision };
+            const body = {
+                ...VALID_BODY,
+                chat_id: "chat-1",
+                ask_inputs_response: {
+                    assistant_message_id: row.id,
+                    ask_event_id: "ask-1",
+                    responses: [{ ...response, arguments: { event_id: "unreviewed-event" } }],
+                },
+            };
+            const res = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(body);
+
+            expect(res.status).toBe(200);
+            expect(res.text).not.toContain('"type":"error"');
+            expect(res.text).toContain("data: [DONE]");
+            expect(runLLMStream).toHaveBeenCalledTimes(1);
+            expect(row.content).toContainEqual(expect.objectContaining({
+                type: "ask_inputs_response",
+                responses: [response],
+            }));
+            if (decision === "approve") {
+                expect(execute).toHaveBeenCalledExactlyOnceWith(
+                    "u1", approval, expect.anything(),
+                );
+                expect(row.content).toContainEqual(expect.objectContaining({
+                    type: "mcp_tool_call", approval_id: approval.id, status: "ok",
+                }));
+                expect(res.text).toContain('"type":"mcp_tool_result"');
+            } else {
+                expect(execute).not.toHaveBeenCalled();
+                expect(res.text).not.toContain('"type":"mcp_tool_result"');
+            }
+
+            const retry = await request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(body);
+            expect(retry.status).toBe(409);
+            expect(retry.body.code).toBe("ask_inputs_stale");
+            expect(execute).toHaveBeenCalledTimes(
+                decision === "approve" ? 1 : 0,
+            );
+        },
+    );
 
     it("does not allocate or insert a new assistant message for an ask-input continuation", async () => {
     dbControl.assistantMessageRows = [
@@ -1797,17 +1952,17 @@ describe("PATCH /chat/:chatId", () => {
         const res = await request(app)
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
-            .send({ model: "gemini-3-flash-preview" });
+            .send({ model: "gemini-3.8-flash" });
 
         expect(res.status).toBe(200);
         expect(dbUpdates).toContainEqual({
             table: "chats",
-            value: { model: "gemini-3-flash-preview" },
+            value: { model: "gemini-3.8-flash" },
             filters: [{ column: "id", value: "chat-1" }],
         });
         expect(userSettings.persistLastSelectedChatModel).toHaveBeenCalledWith(
             "u1",
-            "gemini-3-flash-preview",
+            "gemini-3.8-flash",
             expect.anything(),
         );
     });
@@ -1848,13 +2003,13 @@ describe("PATCH /word-chat/:chatId/model", () => {
             .patch(`/word-chat/${chatId}/model`)
             .query({ document_id: documentId })
             .set("Authorization", "Bearer test")
-            .send({ model: "gemini-3-flash-preview" });
+            .send({ model: "gemini-3.8-flash" });
 
         expect(res.status).toBe(200);
         expect(dbUpdates).toContainEqual({
             table: "word_chats",
             value: expect.objectContaining({
-                model: "gemini-3-flash-preview",
+                model: "gemini-3.8-flash",
             }),
             filters: [
                 { column: "id", value: chatId },
@@ -1863,7 +2018,7 @@ describe("PATCH /word-chat/:chatId/model", () => {
         });
         expect(userSettings.persistLastSelectedChatModel).toHaveBeenCalledWith(
             "u1",
-            "gemini-3-flash-preview",
+            "gemini-3.8-flash",
             expect.anything(),
         );
     });
@@ -1907,9 +2062,8 @@ describe("PATCH /word-chat/:chatId/model", () => {
 // A table-aware supabase stub lets us vary how u1 reaches the project: a
 // direct 'viewer' grant (may read, must not write), or org membership, which
 // inherits project member and may write. The security property under test:
-// POST /chat with an existing chat_id and POST /chat/:chatId/generate-title
-// are WRITES and must require content.edit, while GET /chat/:chatId stays a
-// read open to viewers.
+// POST /chat with an existing chat_id is a WRITE and must require
+// content.edit, while GET /chat/:chatId stays a read open to viewers.
 //
 // The same stub backs the sharing routes (PATCH/DELETE/people): it records
 // every update/delete with its filters, so a test can prove the write was
@@ -2117,7 +2271,7 @@ async function seedResolvableModel() {
         memory_curator_model: null,
         last_selected_reasoning_level: null,
         tabular_model: null,
-        last_selected_chat_model: "gpt-5.6-luna",
+        last_selected_chat_model: "gpt-6-luna",
         api_keys: { openai: "test-key" },
     });
 }
@@ -2157,25 +2311,6 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
         expect(res.status).toBe(403);
         expect(res.body).toHaveProperty("detail");
         expect(runLLMStream).not.toHaveBeenCalled();
-    });
-
-    it("403s a personal-project Viewer calling generate-title", async () => {
-        mockedCreate.mockImplementation(
-      () =>
-        makeRbacDb(null, "colleague-1", {
-                grantRole: "viewer",
-                project: { org_id: null },
-                chat: { org_id: null },
-            }) as never,
-        );
-
-        const res = await request(app)
-            .post("/chat/chat-1/generate-title")
-            .set("Authorization", "Bearer test")
-            .send({ message: "hello there" });
-
-        expect(res.status).toBe(403);
-        expect(res.body).toHaveProperty("detail");
     });
 
     // A Viewer can open the project, so answering "Project not found" told
@@ -2242,40 +2377,6 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
 
         expect(res.status).toBe(200);
         expect(runLLMStream).toHaveBeenCalledTimes(1);
-    });
-
-    it("still lets an org admin generate a title", async () => {
-        await seedResolvableModel();
-        mockedCreate.mockImplementation(() => makeRbacDb("admin") as never);
-
-        const res = await request(app)
-            .post("/chat/chat-1/generate-title")
-            .set("Authorization", "Bearer test")
-            .send({ message: "hello there" });
-
-        expect(res.status).toBe(200);
-        expect(res.body.title).toBe("Generated Title");
-    });
-
-    // The update's error used to be ignored, so a failed write still
-    // answered 200 with the new title: the sidebar renamed the chat and the
-    // next reload silently put the old name back.
-    it("reports a failed title write instead of answering 200", async () => {
-        await seedResolvableModel();
-        mockedCreate.mockImplementation(
-            () =>
-                makeRbacDb("admin", "colleague-1", {
-                    chatWriteError: "title update failed",
-                }) as never,
-        );
-
-        const res = await request(app)
-            .post("/chat/chat-1/generate-title")
-            .set("Authorization", "Bearer test")
-            .send({ message: "hello there" });
-
-        expect(res.status).toBe(500);
-        expect(res.body.detail).toBe("Something went wrong. Please try again.");
     });
 
     it("still lets a project viewer GET the chat (reads stay project.view)", async () => {
@@ -3050,19 +3151,6 @@ describe("chat grants, deletion and roster", () => {
             expect(res.body.is_owner).toBe(false);
         });
 
-        it("may generate a title (content.edit)", async () => {
-            await seedResolvableModel();
-            mockedCreate.mockImplementation(directShare);
-
-            const res = await request(app)
-                .post("/chat/chat-1/generate-title")
-                .set("Authorization", "Bearer test")
-                .send({ message: "hello there" });
-
-            expect(res.status).toBe(200);
-            expect(res.body.title).toBe("Generated Title");
-        });
-
         it("marks a collaborator's generated turn as shared memory context", async () => {
             mockedCreate.mockImplementation(directShare);
 
@@ -3090,5 +3178,321 @@ describe("chat grants, deletion and roster", () => {
             );
             expect(chatWrites("delete")).toEqual([]);
         });
+    });
+});
+
+
+/**
+ * Server-owned turns. The generation is a run registered in
+ * lib/assistantTurnRuns: it survives the requesting socket closing, any
+ * response can attach to it (a reload, a second tab) and replay from a
+ * sequence number, and only the Stop endpoint aborts it.
+ */
+describe("server-owned turns: resume, stop, concurrency", () => {
+    type StreamParams = { write: (s: string) => void; signal?: AbortSignal };
+    const emitFrom = (params: StreamParams) => (frame: object) =>
+        params.write(`data: ${JSON.stringify(frame)}\n\n`);
+    const records = (text: string) =>
+        text.split("\n\n").filter((record) => record.includes("data: "));
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        runLLMStream.mockReset();
+        dbInserts.length = 0;
+        dbUpdates.length = 0;
+        dbRpcCalls.length = 0;
+        // GET /chat/:chatId reads rows through this list.
+        dbControl.assistantMessageRows = [];
+        resetAssistantTurnRunsForTests();
+    });
+
+    /** A generation the test releases by hand. */
+    function heldGeneration() {
+        const held = {
+            release: () => {},
+            started: new Promise<StreamParams>((resolve) => {
+                runLLMStream.mockImplementation(async (params: unknown) => {
+                    const p = params as StreamParams;
+                    resolve(p);
+                    emitFrom(p)({ type: "content_delta", text: "First" });
+                    await new Promise<void>((done) => {
+                        held.release = done;
+                    });
+                    emitFrom(p)({ type: "content_delta", text: " second" });
+                    return {
+                        fullText: "First second",
+                        events: [{ type: "content", text: "First second" }],
+                        citations: [],
+                    };
+                });
+            }),
+        };
+        return held;
+    }
+
+    it("keeps generating after the requesting socket closes, and a reload attaches from where it left off", async () => {
+        const held = heldGeneration();
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY);
+        const firstSettled = first.then(
+            () => "ended",
+            () => "aborted",
+        );
+        const params = await held.started;
+
+        // The refresh: the caller's socket goes away mid-answer.
+        first.abort();
+        expect(await firstSettled).toBe("aborted");
+        expect(params.signal?.aborted).toBe(false);
+
+        // What a reloaded page sees: the transcript plus the live turn.
+        const loaded = await request(app)
+            .get("/chat/chat-1")
+            .set("Authorization", "Bearer test");
+        expect(loaded.status).toBe(200);
+        const turnId = findAssistantReservation()?.value as { id: string };
+        // chat_id (1) and the first delta (2) are out; the generated title
+        // frame lands whenever its mocked call resolves.
+        expect(loaded.body.active_turn).toMatchObject({
+            id: turnId.id,
+            assistant_message_id: turnId.id,
+        });
+        expect(loaded.body.active_turn.seq).toBeGreaterThanOrEqual(2);
+
+        // Attach from the second frame: the replay skips chat_id, then the
+        // live tail arrives once the generation is released.
+        const tail = request(app)
+            .get(`/chat/chat-1/turn/${turnId.id}/stream?from=2`)
+            .set("Authorization", "Bearer test");
+        setTimeout(() => held.release(), 30);
+        const resumed = await tail;
+        expect(resumed.status).toBe(200);
+        expect(resumed.headers["content-type"]).toContain("text/event-stream");
+        const lines = records(resumed.text);
+        expect(lines[0]).toBe('id: 2\ndata: {"type":"content_delta","text":"First"}');
+        const second = lines.findIndex((line) => line.includes('"text":" second"'));
+        expect(second).toBeGreaterThan(0);
+        expect(lines[second]).toMatch(/^id: \d+\ndata: /);
+        expect(resumed.text).toContain("data: [DONE]");
+        expect(resumed.text).not.toContain('"type":"chat_id"');
+
+        // The whole answer was stored: nothing was cancelled.
+        expect(findAssistantUpdate()?.value).toMatchObject({
+            content: [{ type: "content", text: "First second" }],
+        });
+        const after = await request(app)
+            .get("/chat/chat-1")
+            .set("Authorization", "Bearer test");
+        expect(after.body.active_turn).toBeNull();
+    });
+
+    it("refuses a second turn while one is generating into the chat", async () => {
+        const held = heldGeneration();
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send({ ...VALID_BODY, chat_id: "chat-1" });
+        const firstDone = first.then((res) => res);
+        await held.started;
+        const second = await request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send({ ...VALID_BODY, chat_id: "chat-1" });
+        expect(second.status).toBe(409);
+        expect(second.body).toEqual({
+            code: "turn_in_progress",
+            detail: "A response is already being generated for this chat.",
+        });
+        held.release();
+        expect((await firstDone).text).toContain("data: [DONE]");
+        expect(runLLMStream).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["idle", "max_lifetime"] as const)(
+        "persists %s as a deadline error and failed audit",
+        async (reason) => {
+            const { AssistantStreamAbortError } =
+                await import("../../modules/chat/engine/index.js");
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            const started = new Promise<StreamParams>((resolve) => {
+                runLLMStream.mockImplementation(async (params: unknown) => {
+                    const p = params as StreamParams;
+                    resolve(p);
+                    emitFrom(p)({ type: "content_delta", text: "Partial" });
+                    await new Promise<void>((done) =>
+                        p.signal?.addEventListener("abort", () => done(), {
+                            once: true,
+                        }),
+                    );
+                    throw new AssistantStreamAbortError("Partial", [
+                        { type: "content", text: "Partial" },
+                    ]);
+                });
+            });
+            const firstDone = request(app)
+                .post("/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            const turnId = (findAssistantReservation()?.value as { id: string }).id;
+            getAssistantTurnRun(turnId)!.stop(reason);
+            const text = (await firstDone).text;
+            expect(text).toContain('"type":"error"');
+            expect(text).not.toContain('"type":"cancelled"');
+            expect(findAssistantUpdate()?.value).toMatchObject({
+                content: [
+                    { type: "content", text: "Partial" },
+                    {
+                        type: "error",
+                        message: expect.any(String),
+                        safe_to_display: true,
+                    },
+                ],
+            });
+            expect(
+                dbInserts.find(({ table }) => table === "db_jobs")?.value,
+            ).toMatchObject({
+                kind: "audit.chat_turn",
+                payload: { base: { status: "failed" } },
+            });
+        },
+    );
+
+    it("user Stop persists partial history while title generation is pending", async () => {
+        const { generateAssistantChatTitle } =
+            await import("../../modules/chat/chat.title.js");
+        const { AssistantStreamAbortError } =
+            await import("../../modules/chat/engine/index.js");
+        const { getAssistantTurnRun } =
+            await import("../../lib/assistantTurnRuns.js");
+        let releaseTitle!: (title: string) => void;
+        vi.mocked(generateAssistantChatTitle).mockImplementationOnce(
+            () =>
+                new Promise<string>((resolve) => {
+                    releaseTitle = resolve;
+                }),
+        );
+        const started = new Promise<StreamParams>((resolve) => {
+            runLLMStream.mockImplementation(async (params: unknown) => {
+                const p = params as StreamParams;
+                resolve(p);
+                emitFrom(p)({ type: "content_delta", text: "Partial before stop" });
+                await new Promise<void>((done) =>
+                    p.signal?.addEventListener("abort", () => done(), {
+                        once: true,
+                    }),
+                );
+                throw new AssistantStreamAbortError("Partial before stop", [
+                    { type: "content", text: "Partial before stop" },
+                ]);
+            });
+        });
+        const response = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY)
+            .then((r) => r);
+        await started;
+        const id = (findAssistantReservation()?.value as { id: string }).id;
+        vi.useFakeTimers();
+        getAssistantTurnRun(id)!.stop();
+        await vi.advanceTimersByTimeAsync(30001);
+        vi.useRealTimers();
+        const terminal = await response;
+        const savedBeforeTitleResolved = findAssistantUpdate()?.value;
+        releaseTitle("Late title");
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(terminal.text).toContain('"type":"cancelled"');
+        expect(savedBeforeTitleResolved).toMatchObject({
+            content: [
+                { type: "content", text: "Partial before stop" },
+                { type: "content", text: "Cancelled by user." },
+            ],
+        });
+    });
+
+    it("stops a run through the endpoint: readers see cancelled then [DONE], the partial answer is stored", async () => {
+        const { AssistantStreamAbortError } = await import("../../modules/chat/engine/index.js");
+        const started = new Promise<StreamParams>((resolve) => {
+            runLLMStream.mockImplementation(async (params: unknown) => {
+                const p = params as StreamParams;
+                resolve(p);
+                emitFrom(p)({ type: "content_delta", text: "Partial" });
+                await new Promise<void>((done) =>
+                    p.signal?.addEventListener("abort", () => done(), { once: true }),
+                );
+                throw new AssistantStreamAbortError("Partial", [
+                    { type: "content", text: "Partial" },
+                ]);
+            });
+        });
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY);
+        const firstDone = first.then((res) => res);
+        await started;
+        const turnId = (findAssistantReservation()?.value as { id: string }).id;
+
+        const unknown = await request(app)
+            .post(`/chat/chat-1/turn/not-a-turn/stop`)
+            .set("Authorization", "Bearer test");
+        expect(unknown.status).toBe(404);
+        expect(unknown.body.code).toBe("turn_not_found");
+
+        const stopped = await request(app)
+            .post(`/chat/chat-1/turn/${turnId}/stop`)
+            .set("Authorization", "Bearer test");
+        expect(stopped.status).toBe(200);
+        expect(stopped.body).toEqual({ stopped: true, finished: false });
+
+        const text = (await firstDone).text;
+        expect(text).toContain('"type":"cancelled"');
+        expect(text).toContain("data: [DONE]");
+        expect(findAssistantUpdate()?.value).toMatchObject({
+            content: [
+                { type: "content", text: "Partial" },
+                { type: "content", text: "Cancelled by user." },
+            ],
+        });
+
+        // Stopping again is a no-op that says so; the run is kept briefly
+        // for late readers, and a replay of it ends at once.
+        const again = await request(app)
+            .post(`/chat/chat-1/turn/${turnId}/stop`)
+            .set("Authorization", "Bearer test");
+        expect(again.body).toEqual({ stopped: false, finished: true });
+        const replay = await request(app)
+            .get(`/chat/chat-1/turn/${turnId}/stream`)
+            .set("Authorization", "Bearer test");
+        expect(replay.status).toBe(200);
+        expect(records(replay.text)[0]).toContain('"type":"chat_id"');
+        expect(replay.text).toContain("data: [DONE]");
+    });
+
+    it("answers 404 for a turn that belongs to another chat or is unknown", async () => {
+        const held = heldGeneration();
+        const first = request(app)
+            .post("/chat")
+            .set("Authorization", "Bearer test")
+            .send(VALID_BODY);
+        const firstDone = first.then((res) => res);
+        await held.started;
+        const turnId = (findAssistantReservation()?.value as { id: string }).id;
+        const wrongChat = await request(app)
+            .get(`/chat/chat-2/turn/${turnId}/stream`)
+            .set("Authorization", "Bearer test");
+        expect(wrongChat.status).toBe(404);
+        const unknown = await request(app)
+            .get(`/chat/chat-1/turn/nope/stream`)
+            .set("Authorization", "Bearer test");
+        expect(unknown.status).toBe(404);
+        expect(unknown.body.code).toBe("turn_not_found");
+        held.release();
+        await firstDone;
     });
 });

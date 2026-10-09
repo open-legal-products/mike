@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EditCard } from "./EditCard";
+import { EditCard, applyOptimisticResolution } from "./EditCard";
 
 const { resolveDocumentEdit } = vi.hoisted(() => ({
     resolveDocumentEdit: vi.fn(),
@@ -20,6 +20,21 @@ const annotation = {
 };
 
 describe("EditCard", () => {
+    it("resolves every EigenPal revision run and reverts on failure", () => {
+        const { container } = render(
+            <div data-document-id="document-1"><div className="docx-view-container">
+                {["first", "second"].map((text) => <span key={text}
+                    data-revision-kind="insert" data-revision-id="8">{text}</span>)}
+                <span data-revision-kind="delete" data-revision-id="7">old text</span>
+            </div></div>,
+        );
+        const revert = applyOptimisticResolution({ ...annotation, ins_w_id: "8", del_w_id: "7" }, "reject");
+        expect(container.querySelectorAll(".docx-edit-hidden")).toHaveLength(2);
+        expect(container.querySelector('[data-revision-id="7"]')).toHaveClass("docx-edit-kept");
+        revert();
+        expect(container.querySelectorAll(".docx-edit-hidden, .docx-edit-kept")).toHaveLength(0);
+        expect(container.querySelector('[data-revision-id="8"]')).not.toHaveStyle({ display: "none" });
+    });
     beforeEach(() => {
         resolveDocumentEdit.mockReset();
     });

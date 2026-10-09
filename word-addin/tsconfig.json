@@ -34,11 +34,17 @@
       "@mike/edit-cards-section-ui": [
         "../frontend/src/shared/ui/EditCardsSectionUI.tsx"
       ],
+      "@mike/reasoning-disclosure": [
+        "../frontend/src/shared/hooks/useReasoningDisclosure.ts"
+      ],
       "@mike/pre-response-wrapper-ui": [
         "../frontend/src/shared/ui/PreResponseWrapperUI.tsx"
       ],
       "@mike/document-event-blocks-ui": [
         "../frontend/src/shared/ui/DocumentEventBlocksUI.tsx"
+      ],
+      "@mike/input-ui": [
+        "../frontend/src/shared/ui/InputUI.tsx"
       ],
       "@mike/glass-card-ui": [
         "../frontend/src/shared/ui/GlassCardUI.tsx"
@@ -59,7 +65,7 @@
         "../frontend/src/shared/ui/ToggleSwitchUI.tsx"
       ],
       "@mike/dropdown-ui": [
-        "../frontend/src/shared/ui/DropdownUI.tsx"
+        "../frontend/src/shared/ui/dropdown.tsx"
       ],
       "@mike/citation-pill-ui": [
         "../frontend/src/shared/ui/CitationPillUI.tsx"
@@ -90,6 +96,16 @@
       ],
       "@mike/sentry-event": [
         "../frontend/src/shared/lib/sentryEvent.ts"
+      ],
+      "@mike/toast-store": ["../frontend/src/shared/lib/toastStore.ts"],
+      "@mike/toast-ui": [
+        "../frontend/src/shared/ui/ToastUI.tsx"
+      ],
+      "@mike/user-error": [
+        "../frontend/src/shared/lib/userError.ts"
+      ],
+      "@mike/model-catalog": [
+        "../frontend/src/shared/lib/modelCatalog.ts"
       ]
     },
     "jsx": "react-jsx",

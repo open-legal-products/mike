@@ -1,5 +1,5 @@
-// Data export (the route owns the Content-Type / Content-Disposition headers
-// and filenames; these functions just build the payloads).
+// Data export: scheduling the durable export jobs, polling their status and
+// loading the finished artifact.
 //
 // Service layer behind user.routes.ts — see user.shared.ts for the module's
 // contract.
@@ -13,72 +13,14 @@ import {
 } from "./user.exportContracts";
 import type { DbJob } from "../../lib/dbq/types";
 import { downloadFile } from "../../lib/storage";
-import {
-    buildUserAccountExport,
-    buildUserChatsExport,
-    buildUserTabularReviewsExport,
-} from "./user.dataExport";
 import { type Db, errorMessage } from "./user.shared";
-
-export async function exportUserAccount(
-    db: Db,
-    userId: string,
-    userEmail: string | undefined,
-): Promise<{ ok: true; data: unknown } | { ok: false; error: unknown }> {
-    try {
-        const data = await buildUserAccountExport(db, userId, userEmail);
-        return { ok: true, data };
-    } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/export] failed", { userId, error: detail });
-        return { ok: false, error: err };
-    }
-}
-
-export async function exportUserChats(
-    db: Db,
-    userId: string,
-    userEmail: string | undefined,
-): Promise<{ ok: true; data: unknown } | { ok: false; error: unknown }> {
-    try {
-        const data = await buildUserChatsExport(db, userId, userEmail);
-        return { ok: true, data };
-    } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/chats/export] failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
-    }
-}
-
-export async function exportUserTabularReviews(
-    db: Db,
-    userId: string,
-    userEmail: string | undefined,
-): Promise<{ ok: true; data: unknown } | { ok: false; error: unknown }> {
-    try {
-        const data = await buildUserTabularReviewsExport(db, userId, userEmail);
-        return { ok: true, data };
-    } catch (err) {
-        const detail = errorMessage(err);
-        console.error("[user/tabular-reviews/export] failed", {
-            userId,
-            error: detail,
-        });
-        return { ok: false, error: err };
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Async exports (durable): POST creates a DB-queue job that builds the
 // export off the request thread; GET polls it; the download endpoint streams
-// the finished artifact. The synchronous exports above still work (curl
-// users, older clients) — the frontend uses this flow so a large export can
-// neither time out the request nor die with a dropped tab. Artifacts expire
-// after 24 hours (the runner's retention sweep deletes the file and the job
-// row).
+// the finished artifact, so a large export can neither time out the request
+// nor die with a dropped tab. Artifacts expire after 24 hours (the runner's
+// retention sweep deletes the file and the job row).
 
 export type ValidateExportRequestResult =
     | { ok: true; type: ExportType; payload: Record<string, unknown> }
@@ -112,7 +54,7 @@ export function validateExportRequest(input: {
         type,
     };
     if (type === "audit-csv") {
-        // Same validation the sync GET /audit/export route applies.
+        // Same filter validation GET /audit applies, capped at one CSV page.
         const parsed = parseQuery(params, AUDIT_EXPORT_LIMIT);
         if (!parsed.ok) return { ok: false, detail: parsed.error };
         payload.query = parsed.query;

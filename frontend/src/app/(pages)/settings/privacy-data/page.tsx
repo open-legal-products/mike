@@ -7,7 +7,7 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
@@ -288,7 +288,7 @@ export default function PrivacyDataPage() {
     <div className="space-y-8">
       <section className="space-y-3">
         <SettingsHeading>Export data</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow>
             <div className="space-y-1">
               <SettingsLabel>Export chats</SettingsLabel>
@@ -369,12 +369,12 @@ export default function PrivacyDataPage() {
               {isExportingMemory ? "Exporting..." : "Export"}
             </PillButtonUI>
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
 
       <section className="space-y-3">
         <SettingsHeading>Delete data</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow>
             <div className="space-y-1">
               <SettingsLabel>Delete all chats</SettingsLabel>
@@ -456,7 +456,7 @@ export default function PrivacyDataPage() {
               Delete
             </PillButtonUI>
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
       <ConfirmPopup
         open={!!pendingDeleteAction}

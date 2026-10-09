@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { sealManifest } from "../../lib/manifestSigning";
 import { type Db } from "../../lib/supabase";
+import { throwIfError, uniqueStrings } from "./user.shared";
 
 const PAGE_SIZE = 1000;
 
@@ -13,17 +14,6 @@ export function userExportFilename(
     userId: string,
 ) {
     return `mike-${kind}-export-${userId.slice(0, 8)}-${nowStamp()}.json`;
-}
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-    return [...new Set(values.filter((value): value is string => !!value))];
-}
-
-async function throwIfError<T extends { message?: string } | null>(
-    error: T,
-    context: string,
-) {
-    if (error) throw new Error(`${context}: ${error.message ?? "unknown error"}`);
 }
 
 async function selectAll(
@@ -175,11 +165,17 @@ async function loadApiKeyStatus(db: Db, userId: string) {
         query
             .eq("user_id", userId)
             .order("provider", { ascending: true }),
-        "provider, created_at, updated_at",
+        // Never the key material (encrypted_key, iv, auth_tag): only what
+        // the user can already see in Settings.
+        "provider, settings, enabled, created_at, updated_at",
     );
     return rows.map((row) => ({
         provider: row.provider,
         has_key: true,
+        // A disabled provider keeps its key; enabled defaults to true.
+        enabled: row.enabled !== false,
+        // The non-secret region/endpoint/location/base URL saved with it.
+        settings: row.settings ?? null,
         created_at: row.created_at,
         updated_at: row.updated_at,
     }));

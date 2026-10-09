@@ -1,19 +1,13 @@
-# Dependabot automatically opens PRs to keep dependencies patched.
+# Dependabot proposes updates; maintainers review and merge after CI passes.
+# Group names appear in PR titles and make the review order explicit:
+# priority-1 security fixes, priority-2 production, priority-3 development/tools.
+# Routine updates stay grouped weekly. Security updates are advisory-driven and
+# do not wait for this weekly schedule or the version-update cooldown.
 #
-# This pairs with .github/workflows/security.yml: that workflow FAILS the
-# build when a high/critical advisory is published against a locked
-# dependency; Dependabot is the bot that FIXES it — it watches the GitHub
-# Advisory Database and opens a PR bumping the affected package to the
-# patched version, usually within hours of the CVE landing. Review, check
-# CI is green, merge: the gate is green again without anyone running
-# `npm audit fix` by hand.
-#
-# One repo setting is needed for the CVE-fix PRs (this file alone only
-# schedules version bumps): Settings → Advanced Security →
-# "Dependabot security updates" → Enable. It's free for public repos.
-#
-# Dependabot never pushes directly — everything arrives as a PR that CI
-# (including the audit gate and test suites) runs against first.
+# REQUIRED REPOSITORY SETTINGS (an admin must enable both):
+# Settings -> Advanced Security -> Dependabot alerts AND security updates.
+# This file configures the updater; it cannot enable those repository settings.
+# See SECURITY.md for setup, verification and the review policy.
 
 version: 2
 updates:
@@ -25,13 +19,13 @@ updates:
       day: "monday"
     open-pull-requests-limit: 10
     groups:
-      security-fixes:
+      priority-1-security-fixes:
         applies-to: security-updates
         patterns: ["*"]
-      dev-dependencies:
+      priority-3-development:
         applies-to: version-updates
         dependency-type: "development"
-      production-dependencies:
+      priority-2-production:
         applies-to: version-updates
         dependency-type: "production"
 
@@ -44,16 +38,16 @@ updates:
     open-pull-requests-limit: 10
     groups:
       # One PR per batch of CVE fixes instead of one PR per advisory
-      security-fixes:
+      priority-1-security-fixes:
         applies-to: security-updates
         patterns: ["*"]
       # Routine version bumps arrive as (at most) two grouped weekly PRs —
       # one for dev deps, one for production deps — never as a flood of
       # per-package PRs.
-      dev-dependencies:
+      priority-3-development:
         applies-to: version-updates
         dependency-type: "development"
-      production-dependencies:
+      priority-2-production:
         applies-to: version-updates
         dependency-type: "production"
 
@@ -65,13 +59,13 @@ updates:
       day: "monday"
     open-pull-requests-limit: 10
     groups:
-      security-fixes:
+      priority-1-security-fixes:
         applies-to: security-updates
         patterns: ["*"]
-      dev-dependencies:
+      priority-3-development:
         applies-to: version-updates
         dependency-type: "development"
-      production-dependencies:
+      priority-2-production:
         applies-to: version-updates
         dependency-type: "production"
 
@@ -84,13 +78,13 @@ updates:
       day: "monday"
     open-pull-requests-limit: 10
     groups:
-      security-fixes:
+      priority-1-security-fixes:
         applies-to: security-updates
         patterns: ["*"]
-      dev-dependencies:
+      priority-3-development:
         applies-to: version-updates
         dependency-type: "development"
-      production-dependencies:
+      priority-2-production:
         applies-to: version-updates
         dependency-type: "production"
 
@@ -100,3 +94,10 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    groups:
+      priority-1-security-fixes:
+        applies-to: security-updates
+        patterns: ["*"]
+      priority-3-actions:
+        applies-to: version-updates
+        patterns: ["*"]

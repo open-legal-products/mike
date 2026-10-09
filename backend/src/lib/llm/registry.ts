@@ -67,25 +67,6 @@ export function getConfiguredModel(id: string): ConfiguredModel | null {
   return loadModelRegistry().models.find((model) => model.id === id) ?? null;
 }
 
-export function getCommitteeModel(
-  id: string,
-  additionalCommittees: CommitteeModel[] = [],
-): CommitteeModel | null {
-  return (
-    additionalCommittees.find((committee) => committee.id === id) ??
-    loadModelRegistry().committees.find((committee) => committee.id === id) ??
-    null
-  );
-}
-
-export function configuredModelIds(
-  additionalCommittees: CommitteeModel[] = [],
-): string[] {
-  return configuredModelSummaries(additionalCommittees).map(
-    (summary) => summary.id,
-  );
-}
-
 export type ConfiguredModelSummary = {
   id: string;
   label: string;
@@ -120,6 +101,7 @@ export function apiKeyForConfiguredModel(
   model: ConfiguredModel,
   apiKeys?: UserApiKeys,
 ): string | null {
+  if (model.apiKeyProvider && apiKeys?.disabledProviders?.includes(model.apiKeyProvider)) return null;
   if (model.apiKey?.trim()) return model.apiKey.trim();
   if (model.apiKeyProvider) {
     const userKey = apiKeys?.[model.apiKeyProvider];
@@ -182,6 +164,7 @@ const USER_API_KEY_PROVIDERS = new Set<keyof UserApiKeys>([
   "claude",
   "gemini",
   "openai",
+  "mistral",
   "openrouter",
   "vercel",
   "opencode-go",

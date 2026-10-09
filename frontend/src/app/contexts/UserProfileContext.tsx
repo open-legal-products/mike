@@ -1,6 +1,6 @@
 "use client";
 
-import React, {
+import {
     createContext,
     useContext,
     useEffect,
@@ -14,6 +14,7 @@ import { useAuth } from "@/app/contexts/AuthContext";
 import {
     type ApiKeyState,
     type ApiKeyProvider,
+    type ApiKeySettings,
     type PersonalisationDetails,
     type PracticeSetting,
     type ProfessionalTitle,
@@ -21,7 +22,9 @@ import {
     completeUserOnboarding,
     getUserProfile,
     isMfaRequiredError,
+    MikeApiError,
     saveApiKey,
+    setApiKeyEnabled,
     syncUserPasswordSet,
     updateUserMfaOnLogin,
     updateUserProfile,
@@ -34,13 +37,19 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Message } from "@/app/components/shared/types";
 import { applyDarkMode } from "@/app/lib/theme";
+import {
+    ROUTER_PROFILE_FIELDS,
+    routerProfileLists,
+    type RouterProfileLists,
+    type RouterSlug,
+} from "@/shared/lib/modelCatalog";
 import { publishTabularChatSettingsUpdate } from "@/app/lib/tabularChatSettingsEvents";
 import {
     clearConfiguredModels,
     refreshConfiguredModels,
 } from "@/app/hooks/useConfiguredModels";
 
-interface UserProfile {
+interface UserProfile extends RouterProfileLists {
     displayName: string | null;
     organisation: string | null;
     jurisdiction: string | null;
@@ -62,12 +71,11 @@ interface UserProfile {
     mfaOnLogin: boolean;
     legalResearchUs: boolean;
     quickActionsVisible: boolean;
-    openRouterModels: string[];
-    vercelModels: string[];
-    openCodeGoModels: string[];
     darkMode: boolean;
     projectMemoryDefault: boolean;
     apiKeys: ApiKeyState;
+    /** Settings saved with the user's own keys (region, endpoint, location, base URL). */
+    apiKeySettings: ApiKeySettings;
 }
 
 interface UserProfileContextType {
@@ -105,16 +113,20 @@ interface UserProfileContextType {
     updateMfaOnLogin: (enabled: boolean) => Promise<boolean>;
     updateLegalResearchUs: (enabled: boolean) => Promise<boolean>;
     updateQuickActionsVisible: (visible: boolean) => Promise<boolean>;
-    updateOpenRouterModels: (models: string[]) => Promise<boolean>;
-    updateVercelModels: (models: string[]) => Promise<boolean>;
-    updateOpenCodeGoModels: (models: string[]) => Promise<boolean>;
+    /** Save one router's Model Selections. */
+    updateRouterModels: (
+        router: RouterSlug,
+        models: string[],
+    ) => Promise<boolean>;
     updateDarkMode: (enabled: boolean) => Promise<void>;
     updateProjectMemoryDefault: (enabled: boolean) => Promise<void>;
     updateApiKey: (
         provider: ApiKeyProvider,
         value: string | null,
+        settings?: ApiKeySettings[keyof ApiKeySettings],
     ) => Promise<boolean>;
     reloadProfile: () => Promise<void>;
+    updateApiKeyEnabled: (provider: ApiKeyProvider, enabled: boolean) => Promise<boolean>;
     incrementMessageCredits: () => Promise<boolean>;
 }
 
@@ -126,9 +138,16 @@ const API_KEY_PROVIDERS: ApiKeyProvider[] = [
     "claude",
     "gemini",
     "openai",
+    "mistral",
     "openrouter",
     "vercel",
     "opencode-go",
+    "bedrock",
+    "azure",
+    "azure-foundry",
+    "vertex",
+    "xai",
+    "custom",
     "courtlistener",
 ];
 
@@ -137,9 +156,16 @@ function emptyApiKeys(): ApiKeyState {
         claude: { configured: false, source: null },
         gemini: { configured: false, source: null },
         openai: { configured: false, source: null },
+        mistral: { configured: false, source: null },
         openrouter: { configured: false, source: null },
         vercel: { configured: false, source: null },
         "opencode-go": { configured: false, source: null },
+        bedrock: { configured: false, source: null },
+        azure: { configured: false, source: null },
+        "azure-foundry": { configured: false, source: null },
+        vertex: { configured: false, source: null },
+        xai: { configured: false, source: null },
+        custom: { configured: false, source: null },
         courtlistener: { configured: false, source: null },
     };
 }
@@ -150,6 +176,7 @@ function toProfile(data: ApiUserProfile): UserProfile {
     for (const provider of API_KEY_PROVIDERS) {
         apiKeys[provider] = {
             configured: !!apiKeyStatus[provider],
+            enabled: apiKeyStatus.enabled?.[provider] !== false,
             source:
                 apiKeyStatus.sources?.[provider] ??
                 (apiKeyStatus[provider] ? "user" : null),
@@ -173,16 +200,9 @@ function toProfile(data: ApiUserProfile): UserProfile {
             profile.lastSelectedReasoningLevel ?? "high",
         mfaOnLogin: profile.mfaOnLogin === true,
         projectMemoryDefault: profile.projectMemoryDefault !== false,
-        openRouterModels: Array.isArray(profile.openRouterModels)
-            ? profile.openRouterModels
-            : [],
-        vercelModels: Array.isArray(profile.vercelModels)
-            ? profile.vercelModels
-            : [],
-        openCodeGoModels: Array.isArray(profile.openCodeGoModels)
-            ? profile.openCodeGoModels
-            : [],
+        ...routerProfileLists(profile),
         apiKeys,
+        apiKeySettings: apiKeyStatus.settings ?? {},
     };
 }
 
@@ -239,12 +259,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 mfaOnLogin: false,
                 legalResearchUs: true,
                 quickActionsVisible: true,
-                openRouterModels: [],
-                vercelModels: [],
-                openCodeGoModels: [],
+                ...routerProfileLists({}),
                 darkMode: false,
                 projectMemoryDefault: true,
                 apiKeys: emptyApiKeys(),
+                apiKeySettings: {},
             });
         } finally {
             setLoading(false);
@@ -512,43 +531,13 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         [user],
     );
 
-    const updateOpenRouterModels = useCallback(
-        async (openRouterModels: string[]): Promise<boolean> => {
+    const updateRouterModels = useCallback(
+        async (router: RouterSlug, models: string[]): Promise<boolean> => {
             if (!user) return false;
             try {
-                const updated = await updateUserProfile({ openRouterModels });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
-                return true;
-            } catch {
-                return false;
-            }
-        },
-        [user],
-    );
-
-    const updateVercelModels = useCallback(
-        async (vercelModels: string[]): Promise<boolean> => {
-            if (!user) return false;
-            try {
-                const updated = await updateUserProfile({ vercelModels });
-                setProfile((prev) =>
-                    prev ? { ...prev, ...toProfile(updated) } : null,
-                );
-                return true;
-            } catch {
-                return false;
-            }
-        },
-        [user],
-    );
-
-    const updateOpenCodeGoModels = useCallback(
-        async (openCodeGoModels: string[]): Promise<boolean> => {
-            if (!user) return false;
-            try {
-                const updated = await updateUserProfile({ openCodeGoModels });
+                const updated = await updateUserProfile({
+                    [ROUTER_PROFILE_FIELDS[router]]: models,
+                });
                 setProfile((prev) =>
                     prev ? { ...prev, ...toProfile(updated) } : null,
                 );
@@ -601,11 +590,12 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         async (
             provider: ApiKeyProvider,
             value: string | null,
+            settings?: ApiKeySettings[keyof ApiKeySettings],
         ): Promise<boolean> => {
             if (!user) return false;
             const normalized = value?.trim() ? value.trim() : null;
             try {
-                const status = await saveApiKey(provider, normalized);
+                const status = await saveApiKey(provider, normalized, settings);
                 setProfile((prev) =>
                     prev
                         ? {
@@ -614,13 +604,47 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                                   ...prev.apiKeys,
                                   [provider]: {
                                       configured: status[provider],
+                                      enabled: status.enabled?.[provider] !== false,
                                       source:
                                           status.sources?.[provider] ?? null,
                                   },
                               },
+                              apiKeySettings: status.settings ?? {},
                           }
                         : null,
                 );
+                void refreshConfiguredModels();
+                return true;
+            } catch (error) {
+                if (isMfaRequiredError(error)) throw error;
+                // A 400 is the server rejecting the value (an unusable base
+                // URL, a malformed key file); the caller shows its reason
+                // instead of a "try again" a retry cannot fix.
+                if (error instanceof MikeApiError && error.status === 400) {
+                    throw error;
+                }
+                return false;
+            }
+        },
+        [user],
+    );
+
+    const updateApiKeyEnabled = useCallback(
+        async (provider: ApiKeyProvider, enabled: boolean): Promise<boolean> => {
+            if (!user) return false;
+            try {
+                const status = await setApiKeyEnabled(provider, enabled);
+                setProfile((prev) => prev ? {
+                    ...prev,
+                    apiKeys: {
+                        ...prev.apiKeys,
+                        [provider]: {
+                            configured: status[provider],
+                            source: status.sources?.[provider] ?? null,
+                            enabled: status.enabled?.[provider] !== false,
+                        },
+                    },
+                } : null);
                 void refreshConfiguredModels();
                 return true;
             } catch (error) {
@@ -668,12 +692,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             updateMfaOnLogin,
             updateLegalResearchUs,
             updateQuickActionsVisible,
-            updateOpenRouterModels,
-            updateVercelModels,
-            updateOpenCodeGoModels,
+            updateRouterModels,
             updateDarkMode,
             updateProjectMemoryDefault,
             updateApiKey,
+            updateApiKeyEnabled,
             reloadProfile,
             incrementMessageCredits,
         }),
@@ -692,12 +715,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             updateMfaOnLogin,
             updateLegalResearchUs,
             updateQuickActionsVisible,
-            updateOpenRouterModels,
-            updateVercelModels,
-            updateOpenCodeGoModels,
+            updateRouterModels,
             updateDarkMode,
             updateProjectMemoryDefault,
             updateApiKey,
+            updateApiKeyEnabled,
             reloadProfile,
             incrementMessageCredits,
         ],
@@ -710,8 +732,12 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     );
 }
 
+export function useOptionalUserProfile() {
+    return useContext(UserProfileContext);
+}
+
 export function useUserProfile() {
-    const context = useContext(UserProfileContext);
+    const context = useOptionalUserProfile();
     if (context === undefined) {
         throw new Error(
             "useUserProfile must be used within a UserProfileProvider",

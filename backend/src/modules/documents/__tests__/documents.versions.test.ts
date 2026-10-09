@@ -9,7 +9,12 @@ const mocks = vi.hoisted(() => ({
   deleteSource: vi.fn(),
   enqueueConversion: vi.fn(),
 }));
-vi.mock("../documents.access", () => ({ ensureDocumentAccess: mocks.access }));
+// Only the verdict is stubbed; canManageDocument stays real so the policy
+// under test is the production one.
+vi.mock("../documents.access", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../documents.access")>()),
+  ensureDocumentAccess: mocks.access,
+}));
 vi.mock("../documents.shared", () => ({
   deleteDocumentAndVersionFiles: mocks.deleteSource,
 }));
@@ -233,6 +238,17 @@ describe("version deletion caller policy", () => {
       expect(fake.rpc).not.toHaveBeenCalled();
     },
   );
+
+  it("denies a creator whose role was reduced to viewer", async () => {
+    // Authorship is provenance, not standing: a downgraded creator may no
+    // longer prune the history of a document in that project.
+    mocks.access.mockResolvedValue(access("viewer", true, "project", null));
+    const fake = db();
+    expect(
+      await deleteVersion("target", "v", "actor", undefined, fake.db),
+    ).toMatchObject({ ok: false, kind: "version_forbidden" });
+    expect(fake.rpc).not.toHaveBeenCalled();
+  });
 
   it("still hides the document from a caller with no verdict at all", async () => {
     mocks.access.mockResolvedValue({ ok: false });

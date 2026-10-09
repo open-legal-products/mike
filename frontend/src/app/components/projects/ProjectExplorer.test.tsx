@@ -55,10 +55,10 @@ describe("ProjectExplorer actions", () => {
         const onDocClick = vi.fn();
         render(<ProjectExplorer documents={[document]} onDocClick={onDocClick} onDownloadDoc={onDownloadDoc} />);
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
-        fireEvent.click(screen.getByRole("button", { name: "Download" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Download" }));
         expect(onDownloadDoc).toHaveBeenCalledWith(document);
         expect(onDocClick).not.toHaveBeenCalled();
-        expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Download" })).toBeNull();
     });
 
     it("offers a folder download and disables it while another download starts", () => {
@@ -66,9 +66,9 @@ describe("ProjectExplorer actions", () => {
         const onDownloadFolder = vi.fn().mockResolvedValue(undefined);
         const { rerender } = render(<ProjectExplorer documents={[]} folders={[folder]} onDocClick={vi.fn()} onDownloadFolder={onDownloadFolder} downloading />);
         fireEvent.contextMenu(screen.getByText("Drafts"));
-        expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+        expect(screen.getByRole("menuitem", { name: "Download" })).toHaveAttribute("aria-disabled", "true");
         rerender(<ProjectExplorer documents={[]} folders={[folder]} onDocClick={vi.fn()} onDownloadFolder={onDownloadFolder} />);
-        fireEvent.click(screen.getByRole("button", { name: "Download" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Download" }));
         expect(onDownloadFolder).toHaveBeenCalledWith(folder);
     });
 
@@ -161,8 +161,8 @@ describe("ProjectExplorer actions", () => {
 
         fireEvent.contextMenu(screen.getByText("Drafts"));
 
-        expect(screen.getByRole("button", { name: "Rename" })).toBeVisible();
-        fireEvent.click(screen.getByRole("button", { name: "New subfolder" }));
+        expect(screen.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+        fireEvent.click(screen.getByRole("menuitem", { name: "New subfolder" }));
         const input = screen.getByPlaceholderText("Folder name");
         fireEvent.change(input, { target: { value: "Revisions" } });
         fireEvent.keyDown(input, { key: "Enter" });
@@ -192,12 +192,12 @@ describe("ProjectExplorer actions", () => {
         );
 
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
-        fireEvent.click(screen.getByRole("button", { name: "Open" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Open" }));
         expect(onDocClick).toHaveBeenCalledWith(document);
-        expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "Open" })).toBeNull();
 
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
-        fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Add to chat" }));
         expect(onAddToChat).toHaveBeenCalledWith(document);
     });
 
@@ -219,8 +219,8 @@ describe("ProjectExplorer actions", () => {
         );
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
         expect(
-            screen.getByRole("button", { name: "Add to chat" }),
-        ).toBeDisabled();
+            screen.getByRole("menuitem", { name: "Add to chat" }),
+        ).toHaveAttribute("aria-disabled", "true");
     });
 
     it("renames a file without offering new subfolder", async () => {
@@ -243,9 +243,9 @@ describe("ProjectExplorer actions", () => {
 
         fireEvent.contextMenu(screen.getByText("Draft.docx"));
         expect(
-            screen.queryByRole("button", { name: "New subfolder" }),
+            screen.queryByRole("menuitem", { name: "New subfolder" }),
         ).toBeNull();
-        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
 
         const input = screen.getByDisplayValue("Draft.docx");
         fireEvent.change(input, { target: { value: "Final.docx" } });

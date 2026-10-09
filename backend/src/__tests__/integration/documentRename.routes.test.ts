@@ -39,6 +39,7 @@ const activeVersion = {
   file_type: "pdf",
   size_bytes: 1024,
   page_count: 2,
+  textless_page_count: 1,
   content_sha256: "a".repeat(64),
 };
 const enrichedFields = {
@@ -49,6 +50,7 @@ const enrichedFields = {
   file_type: activeVersion.file_type,
   size_bytes: activeVersion.size_bytes,
   page_count: activeVersion.page_count,
+  textless_page_count: activeVersion.textless_page_count,
   content_sha256: activeVersion.content_sha256,
 };
 const paths = [

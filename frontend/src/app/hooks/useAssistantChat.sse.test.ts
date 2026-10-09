@@ -559,7 +559,58 @@ describe("useAssistantChat SSE parsing", () => {
         const assistant = result.current.messages.findLast(
             (m) => m.role === "assistant",
         );
-        expect(assistant?.error).toBe("Sorry, something went wrong.");
+        expect(assistant?.error).toBe("Too many requests. Wait a moment and try again.");
+        expect(result.current.isResponseLoading).toBe(false);
+    });
+
+    it("clears the Thinking placeholder when the stream breaks for good", async () => {
+        const encoder = new TextEncoder();
+        let delivered = false;
+        // A finished connector step leaves "Thinking..." up until the next
+        // frame; then the connection fails before any turn id arrived, so
+        // there is nothing to resume.
+        fetchMock.mockResolvedValue(
+            new Response(
+                new ReadableStream({
+                    // Deliver the frames, then fail the next read: erroring
+                    // straight away would discard the queued frames.
+                    pull(controller) {
+                        if (delivered) {
+                            controller.error(new TypeError("network error"));
+                            return;
+                        }
+                        delivered = true;
+                        controller.enqueue(
+                            encoder.encode(
+                                'data: {"type":"mcp_tool_start","name":"gmail_send"}\n\n' +
+                                    'data: {"type":"mcp_tool_result","name":"gmail_send","connector_name":"Gmail","tool_name":"gmail_send","status":"ok"}\n\n',
+                            ),
+                        );
+                    },
+                }),
+                { headers: { "Content-Type": "text/event-stream" } },
+            ),
+        );
+        const { result } = renderHook(() => useAssistantChat());
+        await act(async () => {
+            await result.current.handleChat(userMessage());
+        });
+
+        const assistant = result.current.messages.findLast(
+            (m) => m.role === "assistant",
+        );
+        expect(assistant?.error).toBe("The answer may still be running. Check chat history before sending the question again.");
+        expect(assistant?.events).toContainEqual(
+            expect.objectContaining({ type: "mcp_tool_call", status: "ok" }),
+        );
+        expect(assistant?.events?.some((e) => e.type === "thinking")).toBe(
+            false,
+        );
+        expect(
+            assistant?.events?.some(
+                (e) => "isStreaming" in e && e.isStreaming,
+            ),
+        ).toBe(false);
         expect(result.current.isResponseLoading).toBe(false);
     });
 

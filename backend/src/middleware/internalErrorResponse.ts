@@ -71,14 +71,14 @@ export function protectInternalErrorResponses(
           http_method: req.method,
           http_route: route,
         },
-        extra: { path: req.originalUrl, body: errorBody ?? body },
+        extra: { path: req.originalUrl.split("?")[0], body: errorBody ?? body },
         fingerprint: ["sanitized-5xx", req.method, route ?? ""],
       },
     );
     console.error("[http/sanitized-internal-error]", {
       requestId,
       method: req.method,
-      path: req.originalUrl,
+      path: req.originalUrl.split("?")[0],
       status: res.statusCode,
       error: errorBody?.detail ?? body,
     });

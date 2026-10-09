@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetModelRegistryCache } from "../llm/registry";
 import {
     getUserRouterModels,
     isRouterModelSelected,
@@ -162,7 +163,7 @@ describe("resolveRequestedModel outside-selection behaviour", () => {
                 "throw",
             ),
         ).rejects.toThrow(
-            "Model vercel/pricy/frontier is not in your saved Vercel AI Gateway models — add it in Settings → Bring Your Own Keys → Routers.",
+            "Model vercel/pricy/frontier is not in your saved Vercel AI Gateway models — open Vercel AI Gateway in Settings → Bring Your Own Keys and add it under Model Selections.",
         );
     });
 
@@ -197,13 +198,37 @@ describe("router slugs", () => {
             openrouter: ["openai/gpt-5.4"],
             vercel: [],
             "opencode-go": ["glm-5"],
+            bedrock: ["us.anthropic.claude-opus-5-5"],
+            azure: ["claude-opus-5-5"],
+            "azure-foundry": [],
+            vertex: [],
+            xai: ["grok-4.3"],
+            custom: [],
         };
+
+        expect(isRouterModelSelected("xai/grok-4.3", selections)).toBe(true);
+        // An Azure OpenAI deployment must not unlock the same name on Foundry.
+        expect(
+            isRouterModelSelected("azure-foundry/claude-opus-5-5", selections),
+        ).toBe(false);
+        expect(isRouterModelSelected("custom/grok-4.3", selections)).toBe(
+            false,
+        );
 
         expect(
             isRouterModelSelected("opencode-go/glm-5", selections),
         ).toBe(true);
         expect(
             isRouterModelSelected("opencode-go/kimi-k3", selections),
+        ).toBe(false);
+        expect(
+            isRouterModelSelected(
+                "bedrock/us.anthropic.claude-opus-5-5",
+                selections,
+            ),
+        ).toBe(true);
+        expect(
+            isRouterModelSelected("azure/us.anthropic.claude-opus-5-5", selections),
         ).toBe(false);
         // A selection is per-router: the same catalog id saved for one router
         // must not unlock another.
@@ -234,5 +259,38 @@ describe("router slugs", () => {
         ).rejects.toThrow(
             "Model opencode-go/glm-5 is not in your saved OpenCode Go models",
         );
+    });
+});
+
+// PR #608 regression: the new prefixes (azure/, bedrock/, custom/, …) are
+// ordinary names an operator may already use in MIKE_MODEL_CONFIG_JSON.
+// providerForModel lets configured models win; router gating must agree, or
+// the operator's model is rejected as "not in your saved Azure OpenAI models".
+describe("operator-configured models that share a router prefix", () => {
+    const original = process.env.MIKE_MODEL_CONFIG_JSON;
+
+    beforeEach(() => {
+        process.env.MIKE_MODEL_CONFIG_JSON = JSON.stringify({
+            models: [
+                {
+                    id: "azure/gpt-internal",
+                    provider: "openai-compatible",
+                    location: "cloud",
+                    baseUrl: "https://llm.internal.example/v1",
+                },
+            ],
+        });
+        resetModelRegistryCache();
+    });
+
+    afterEach(() => {
+        if (original === undefined) delete process.env.MIKE_MODEL_CONFIG_JSON;
+        else process.env.MIKE_MODEL_CONFIG_JSON = original;
+        resetModelRegistryCache();
+    });
+
+    it("is not classified as a router model", () => {
+        expect(routerForModelId("azure/gpt-internal")).toBeNull();
+        expect(routerForModelId("azure/my-deployment")).toBe("azure");
     });
 });

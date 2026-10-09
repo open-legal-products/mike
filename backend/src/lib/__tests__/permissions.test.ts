@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
     can,
     isProjectRole,
-    strongerRole,
     type Capability,
     type ProjectRole,
 } from "../permissions";
@@ -70,20 +69,5 @@ describe("permissions matrix", () => {
         expect(isProjectRole("manager")).toBe(false);
         expect(isProjectRole("member")).toBe(false);
         expect(isProjectRole(undefined)).toBe(false);
-    });
-});
-
-describe("strongerRole", () => {
-    it("keeps the stronger of two roles regardless of argument order", () => {
-        expect(strongerRole("viewer", "owner")).toBe("owner");
-        expect(strongerRole("owner", "viewer")).toBe("owner");
-        expect(strongerRole("editor", "viewer")).toBe("editor");
-        expect(strongerRole("viewer", "editor")).toBe("editor");
-    });
-
-    it("lets null lose to any role, so a branch can only add standing", () => {
-        expect(strongerRole(null, "viewer")).toBe("viewer");
-        expect(strongerRole("viewer", null)).toBe("viewer");
-        expect(strongerRole(null, null)).toBeNull();
     });
 });

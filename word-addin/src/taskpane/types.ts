@@ -35,6 +35,22 @@ export interface Chat {
   model?: string | null;
   reasoning_level?: import("./lib/wordChatTypes").ReasoningLevel | null;
   created_at: string;
+  /**
+   * A turn the server is still generating into this chat, so a pane opening
+   * it attaches instead of showing a transcript whose last answer is
+   * missing. A LOCAL chat carries the id alone (`active_turn_id`), because
+   * nothing about it is stored server-side to report it back.
+   */
+  active_turn_id?: string | null;
+}
+
+/** A turn still generating, as `GET /word-chat/:chatId` reports it. */
+export interface ActiveWordTurn {
+  id: string;
+  /** Frames emitted so far; a pane attaches from the next one it needs. */
+  seq: number;
+  /** The assistant row the answer is (or will be) stored in. */
+  assistant_message_id: string;
 }
 
 /** A document read the model completed during an assistant turn. */
@@ -188,24 +204,29 @@ export interface QuickAction {
  * must not drag the API client's runtime dependencies into the web app's
  * type-check.
  */
-export interface ApiKeyStatus {
-  claude: boolean;
-  gemini: boolean;
-  openai: boolean;
-  openrouter: boolean;
-  vercel: boolean;
-  "opencode-go": boolean;
-  courtlistener: boolean;
-  sources?: Partial<
-    Record<
-      | "claude"
-      | "gemini"
-      | "openai"
-      | "openrouter"
-      | "vercel"
-      | "opencode-go"
-      | "courtlistener",
-      "user" | "env" | null
-    >
-  >;
-}
+/** Key providers reported by GET /user/api-keys. */
+export type ApiKeyProvider =
+  | "claude"
+  | "gemini"
+  | "openai"
+  | "mistral"
+  | "openrouter"
+  | "vercel"
+  | "opencode-go"
+  | "bedrock"
+  | "azure"
+  | "azure-foundry"
+  | "vertex"
+  | "xai"
+  | "custom"
+  | "courtlistener";
+
+/**
+ * GET /user/api-keys: whether each provider has a usable key (false for a
+ * key that is saved but switched off), where it came from, and whether a
+ * saved key is switched on.
+ */
+export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
+  sources?: Partial<Record<ApiKeyProvider, "user" | "env" | null>>;
+  enabled?: Partial<Record<ApiKeyProvider, boolean>>;
+};

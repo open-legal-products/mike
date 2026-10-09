@@ -5,7 +5,7 @@ vi.mock("../user.settings", () => ({ getUserModelSettings: settings }));
 import { resolveUserChatSelection } from "../user.chatSelection";
 
 const profile = {
-  last_selected_chat_model: "gemini-3.7-flash",
+  last_selected_chat_model: "gemini-3.8-flash",
   last_selected_reasoning_level: "low",
   api_keys: { openai: "dummy", claude: "dummy", gemini: "dummy" },
 };
@@ -18,11 +18,11 @@ beforeEach(() => {
 describe("cross-surface chat selection", () => {
   it.each([
     [
-      { requestedModel: "gpt-5.6-luna", chatModel: "claude-fable-5" },
-      "gpt-5.6-luna",
+      { requestedModel: "gpt-6-luna", chatModel: "claude-fable-5-1" },
+      "gpt-6-luna",
     ],
-    [{ chatModel: "claude-fable-5" }, "claude-fable-5"],
-    [{}, "gemini-3.7-flash"],
+    [{ chatModel: "claude-fable-5-1" }, "claude-fable-5-1"],
+    [{}, "gemini-3.8-flash"],
   ])(
     "selects request, then chat, then profile: %j",
     async (args, selectedModel) => {
@@ -60,7 +60,7 @@ describe("cross-surface chat selection", () => {
     expect(
       await resolveUserChatSelection(db, {
         userId: "actor",
-        requestedModel: "gpt-5.6-luna",
+        requestedModel: "gpt-6-luna",
       }),
     ).toMatchObject({ ok: false, status: 422, code: "missing_api_key" });
   });

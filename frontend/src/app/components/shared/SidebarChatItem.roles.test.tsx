@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SidebarChatItem } from "./SidebarChatItem";
 import type { Chat } from "@/app/components/shared/types";
@@ -177,13 +177,61 @@ describe("SidebarChatItem role gates", () => {
         );
         openMenu();
         fireEvent.click(await screen.findByText("Rename"));
-        const input = screen.getByRole("textbox");
+        const input = await screen.findByLabelText("Chat title");
         fireEvent.change(input, { target: { value: "New title" } });
-        fireEvent.keyDown(input, { key: "Enter" });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
         expect(
             await screen.findByText(/could not be renamed/i),
         ).toBeInTheDocument();
+        // The modal stays open with the typed title so it can be retried.
+        expect(screen.getByLabelText("Chat title")).toHaveValue("New title");
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: "Save" })).toBeEnabled(),
+        );
+    });
+
+    it("renames through the rename modal", async () => {
+        renameChat.mockResolvedValue(undefined);
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive
+                onSelect={vi.fn()}
+            />,
+        );
+        openMenu();
+        fireEvent.click(await screen.findByText("Rename"));
+        const input = await screen.findByLabelText("Chat title");
+        expect(input).toHaveValue("Quarterly filing");
+        fireEvent.change(input, { target: { value: "  New title  " } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+        expect(renameChat).toHaveBeenCalledWith("chat-1", "New title");
+        await waitFor(() =>
+            expect(screen.queryByLabelText("Chat title")).not.toBeInTheDocument(),
+        );
+    });
+
+    it("keeps the actions trigger revealed while its menu is open", async () => {
+        // The trigger is zero-width until the row is hovered; collapsing it
+        // under an open menu moves the menu's anchor.
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive={false}
+                onSelect={vi.fn()}
+            />,
+        );
+        const trigger = screen.getByRole("button", {
+            name: "Actions for Quarterly filing",
+        });
+        expect(trigger).toHaveClass("pointer-events-none");
+        openMenu();
+        await screen.findByText("Rename");
+
+        expect(trigger).toHaveClass("w-6", "opacity-100");
+        expect(trigger).not.toHaveClass("pointer-events-none");
     });
 
     it("marks a colleague's chat as shared", async () => {

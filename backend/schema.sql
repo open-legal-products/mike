@@ -56,6 +56,21 @@ create table if not exists public.user_profiles (
   -- Whether projects this user creates start with shared memory enabled. Any
   -- project owner can still turn a given project's memory on or off later.
   project_memory_default boolean not null default true,
+  -- Free-form instructions added to the system prompt of every assistant
+  -- conversation. Edited in Settings > Personalisation.
+  custom_instructions text not null default ''
+    constraint user_profiles_custom_instructions_length
+    check (char_length(custom_instructions) <= 8000),
+  -- Response style preferences from Settings > Personalisation (verbosity,
+  -- headers and lists, tone, language) as one JSON object holding only the
+  -- choices that differ from the default. The backend owns the defaults and
+  -- validates every value, so a new setting needs no migration.
+  response_style jsonb not null default '{}'::jsonb
+    constraint user_profiles_response_style_check
+    check (
+      jsonb_typeof(response_style) = 'object'
+      and octet_length(response_style::text) <= 2000
+    ),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -148,17 +163,140 @@ revoke all on function public.sync_user_password_set(uuid)
 grant execute on function public.sync_user_password_set(uuid)
   to service_role;
 
+-- Merges a change into one user's response style and returns the result, or
+-- null when the user has no profile. A null value in the patch removes that
+-- key, which is how a setting returns to its default. Merging in the database
+-- keeps two quick changes to different settings from overwriting each other.
+create or replace function public.merge_user_response_style(
+  p_user_id uuid,
+  p_patch jsonb
+)
+returns jsonb
+language sql
+set search_path = ''
+as $$
+  update public.user_profiles
+     set response_style = jsonb_strip_nulls(response_style || p_patch),
+         updated_at = now()
+   where user_id = p_user_id
+     and jsonb_typeof(p_patch) = 'object'
+  returning response_style;
+$$;
+
+revoke all on function public.merge_user_response_style(uuid, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.merge_user_response_style(uuid, jsonb)
+  to service_role;
+
 create or replace function public.handle_user_email_updated()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  old_email text := lower(btrim(coalesce(old.email, '')));
+  new_email text := lower(btrim(coalesce(new.email, '')));
 begin
   update public.user_profiles
   set email = lower(new.email),
       updated_at = now()
   where user_id = new.id;
+
+  -- Direct grants are keyed by normalized email, so they belong to whoever
+  -- holds that address. When this account's address changes, its grants
+  -- follow it: left behind, the person silently loses their shares and
+  -- whoever later registers the old address (a reassigned mailbox) inherits
+  -- them, Owner grants included. A grant already held by the new address is
+  -- kept at the stronger of the two roles.
+  if old_email = '' or old_email = new_email then
+    return new;
+  end if;
+
+  if new_email = '' then
+    delete from public.project_access_grants where email = old_email;
+    delete from public.chat_access_grants where email = old_email;
+    delete from public.tabular_review_access_grants where email = old_email;
+    delete from public.workflow_shares where shared_with_email = old_email;
+    return new;
+  end if;
+
+  update public.project_access_grants as kept
+     set role = moved.role, updated_at = now()
+    from public.project_access_grants as moved
+   where moved.email = old_email
+     and kept.email = new_email
+     and kept.project_id = moved.project_id
+     and (case moved.role when 'owner' then 2 when 'editor' then 1 else 0 end)
+       > (case kept.role when 'owner' then 2 when 'editor' then 1 else 0 end);
+  delete from public.project_access_grants as moved
+   where moved.email = old_email
+     and exists (
+       select 1 from public.project_access_grants as kept
+        where kept.project_id = moved.project_id
+          and kept.email = new_email
+     );
+  update public.project_access_grants
+     set email = new_email, updated_at = now()
+   where email = old_email;
+
+  update public.chat_access_grants as kept
+     set role = moved.role, updated_at = now()
+    from public.chat_access_grants as moved
+   where moved.email = old_email
+     and kept.email = new_email
+     and kept.chat_id = moved.chat_id
+     and (case moved.role when 'owner' then 2 when 'editor' then 1 else 0 end)
+       > (case kept.role when 'owner' then 2 when 'editor' then 1 else 0 end);
+  delete from public.chat_access_grants as moved
+   where moved.email = old_email
+     and exists (
+       select 1 from public.chat_access_grants as kept
+        where kept.chat_id = moved.chat_id
+          and kept.email = new_email
+     );
+  update public.chat_access_grants
+     set email = new_email, updated_at = now()
+   where email = old_email;
+
+  update public.tabular_review_access_grants as kept
+     set role = moved.role, updated_at = now()
+    from public.tabular_review_access_grants as moved
+   where moved.email = old_email
+     and kept.email = new_email
+     and kept.tabular_review_id = moved.tabular_review_id
+     and (case moved.role when 'owner' then 2 when 'editor' then 1 else 0 end)
+       > (case kept.role when 'owner' then 2 when 'editor' then 1 else 0 end);
+  delete from public.tabular_review_access_grants as moved
+   where moved.email = old_email
+     and exists (
+       select 1 from public.tabular_review_access_grants as kept
+        where kept.tabular_review_id = moved.tabular_review_id
+          and kept.email = new_email
+     );
+  update public.tabular_review_access_grants
+     set email = new_email, updated_at = now()
+   where email = old_email;
+
+  update public.workflow_shares as kept
+     set role = moved.role
+    from public.workflow_shares as moved
+   where moved.shared_with_email = old_email
+     and kept.shared_with_email = new_email
+     and kept.workflow_id = moved.workflow_id
+     and (case moved.role when 'owner' then 2 when 'editor' then 1 else 0 end)
+       > (case kept.role when 'owner' then 2 when 'editor' then 1 else 0 end);
+  delete from public.workflow_shares as moved
+   where moved.shared_with_email = old_email
+     and exists (
+       select 1 from public.workflow_shares as kept
+        where kept.workflow_id = moved.workflow_id
+          and kept.shared_with_email = new_email
+     );
+  update public.workflow_shares
+     set shared_with_email = new_email
+   where shared_with_email = old_email;
+
   return new;
 end;
 $$;
@@ -330,10 +468,17 @@ alter table public.org_invitations enable row level security;
 create table if not exists public.user_api_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('claude', 'gemini', 'openai', 'openrouter', 'vercel', 'opencode-go', 'courtlistener')),
+  provider text not null check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener')),
   encrypted_key text not null,
   iv text not null,
   auth_tag text not null,
+  enabled boolean not null default true,
+  -- Non-secret companion to the key: {"region": ...} for Bedrock,
+  -- {"endpoint": ...} for Azure OpenAI and Azure AI Foundry,
+  -- {"location": ...} for Vertex AI, {"baseUrl": ...} for a custom
+  -- OpenAI-compatible endpoint. Null for single-value keys.
+  settings jsonb constraint user_api_keys_settings_check
+    check (settings is null or jsonb_typeof(settings) = 'object'),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(user_id, provider)
@@ -430,6 +575,10 @@ create table if not exists public.user_mcp_connectors (
   auth_type text not null default 'none'
     check (auth_type in ('none', 'bearer', 'oauth')),
   enabled boolean not null default true,
+  -- Write tools (user_mcp_connector_tools.requires_confirmation) wait for the
+  -- user's approval in the assistant turn when this is set.
+  require_write_approval boolean not null default false,
+  read_only boolean not null default false,
   tool_policy jsonb not null default '{}'::jsonb,
   encrypted_auth_config text,
   auth_config_iv text,
@@ -445,6 +594,7 @@ alter table public.user_mcp_connectors enable row level security;
 
 create table if not exists public.user_mcp_oauth_tokens (
   id uuid primary key default gen_random_uuid(),
+  grant_id uuid not null default gen_random_uuid(),
   connector_id uuid not null references public.user_mcp_connectors(id) on delete cascade,
   encrypted_access_token text,
   access_token_iv text,
@@ -734,6 +884,8 @@ create table if not exists public.document_versions (
   file_type text,
   size_bytes integer,
   page_count integer,
+  -- PDF pages without a text layer (scanned without OCR); null = not measured.
+  textless_page_count integer,
   content_sha256 text,
   deleted_at timestamptz,
   deleted_by uuid references auth.users(id) on delete set null,
@@ -1124,6 +1276,12 @@ create index if not exists quick_actions_user_surface_order_idx
 
 create index if not exists quick_actions_workflow_idx
   on public.quick_actions(workflow_id);
+
+-- Workflow metadata is accessed through the backend service role only.
+alter table public.default_workflow_installations enable row level security;
+alter table public.quick_actions enable row level security;
+revoke all on public.default_workflow_installations from public, anon, authenticated;
+revoke all on public.quick_actions from public, anon, authenticated;
 
 create table if not exists public.mike_workflows (
   id uuid primary key default gen_random_uuid(),
@@ -2924,6 +3082,7 @@ returns table (
   pdf_storage_path text,
   size_bytes integer,
   page_count integer,
+  textless_page_count integer,
   active_version_number integer
 )
 language sql
@@ -2946,6 +3105,7 @@ as $$
     v.pdf_storage_path,
     v.size_bytes,
     v.page_count,
+    v.textless_page_count,
     v.version_number as active_version_number
   from public.documents d
   left join public.document_versions v
@@ -6870,12 +7030,14 @@ begin
   end if;
   insert into public.document_versions(
     id, document_id, storage_path, pdf_storage_path, source, version_number,
-    filename, file_type, size_bytes, page_count, content_sha256
+    filename, file_type, size_bytes, page_count, textless_page_count,
+    content_sha256
   ) values (
     v_id, p_document_id, p_version->>'storage_path', p_version->>'pdf_storage_path',
     coalesce(p_version->>'source', 'upload'), v_number,
     p_version->>'filename', p_version->>'file_type',
     (p_version->>'size_bytes')::integer, (p_version->>'page_count')::integer,
+    (p_version->>'textless_page_count')::integer,
     p_version->>'content_sha256'
   ) returning * into v_row;
   if p_activate then
@@ -7226,3 +7388,305 @@ revoke all on function public.document_cache_writer_active(text[])
   from public, anon, authenticated;
 grant execute on function public.document_cache_writer_active(text[])
   to service_role;
+
+-- 2026-09-21: Native Google Drive integration.
+--
+-- First-party Drive tools that call the GA Drive REST API directly with a
+-- per-user OAuth token — no dependency on Google's preview-gated MCP server.
+-- One token row per user (connecting again overwrites). The short-lived
+-- OAuth state rows for the PKCE flow live in google_workspace_oauth_states
+-- as provider 'google-drive' (merged on 2026-10-01). The token table is
+-- service-role only: RLS is enabled with no user policies, so only the
+-- backend (service key) can read the encrypted tokens.
+
+CREATE TABLE IF NOT EXISTS public.user_google_drive_tokens (
+  user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  encrypted_access_token text,
+  access_token_iv text,
+  access_token_tag text,
+  encrypted_refresh_token text,
+  refresh_token_iv text,
+  refresh_token_tag text,
+  scope text,
+  expires_at timestamptz,
+  enabled boolean NOT NULL DEFAULT true,
+  grant_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  require_write_approval boolean NOT NULL DEFAULT false,
+  read_only boolean NOT NULL DEFAULT false,
+  disabled_tools text[] NOT NULL DEFAULT '{}',
+  -- The Google account this connection signed in as; display only.
+  account_email text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.user_google_drive_tokens ENABLE ROW LEVEL SECURITY;
+
+-- This table is created after the "Direct client grant hardening" section
+-- above ran, so its per-table revokes and its one-shot
+-- `grant ... on all tables in schema public to service_role` never saw it.
+-- Repeat both statements here explicitly, following the same pattern as the
+-- MCP OAuth tables: browser roles get nothing (the backend fronts all
+-- access), service_role gets the data privileges the backend needs.
+revoke all on public.user_google_drive_tokens from anon, authenticated;
+
+grant select, insert, update, delete
+  on public.user_google_drive_tokens
+  to service_role;
+
+-- Serialize connection replacement/disconnect on the owning auth row. State is
+-- consumed in the same transaction as the token write: cancelled, expired or
+-- replayed callbacks cannot recreate a connection after disconnect.
+create or replace function public.complete_google_drive_oauth(p_state_hash text, p_tokens jsonb)
+returns boolean language plpgsql security definer set search_path = '' as $$
+declare
+  v_user_id uuid;
+begin
+  select user_id into v_user_id from public.google_workspace_oauth_states
+    where state_hash = p_state_hash and provider = 'google-drive';
+  if not found then return false; end if;
+  perform 1 from auth.users where id = v_user_id for update;
+  if not found then return false; end if;
+  delete from public.google_workspace_oauth_states
+    where state_hash = p_state_hash and provider = 'google-drive'
+      and user_id = v_user_id and expires_at > now();
+  if not found then return false; end if;
+  insert into public.user_google_drive_tokens (
+    user_id, account_email, encrypted_access_token, access_token_iv, access_token_tag,
+    encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at
+  ) values (
+    v_user_id, p_tokens->>'account_email', p_tokens->>'encrypted_access_token',
+    p_tokens->>'access_token_iv', p_tokens->>'access_token_tag',
+    p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv',
+    p_tokens->>'refresh_token_tag', p_tokens->>'scope',
+    (p_tokens->>'expires_at')::timestamptz
+  ) on conflict (user_id) do update set
+    grant_id = gen_random_uuid(),
+    account_email = excluded.account_email,
+    encrypted_access_token = excluded.encrypted_access_token,
+    access_token_iv = excluded.access_token_iv, access_token_tag = excluded.access_token_tag,
+    encrypted_refresh_token = excluded.encrypted_refresh_token,
+    refresh_token_iv = excluded.refresh_token_iv, refresh_token_tag = excluded.refresh_token_tag,
+    scope = excluded.scope, expires_at = excluded.expires_at, updated_at = now();
+  return true;
+end;
+$$;
+revoke all on function public.complete_google_drive_oauth(text, jsonb) from public, anon, authenticated;
+grant execute on function public.complete_google_drive_oauth(text, jsonb) to service_role;
+
+create or replace function public.disconnect_google_drive(p_user_id uuid)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_token jsonb;
+begin
+  perform 1 from auth.users where id = p_user_id for update;
+  if not found then return null; end if;
+  delete from public.google_workspace_oauth_states
+    where user_id = p_user_id and provider = 'google-drive';
+  delete from public.user_google_drive_tokens where user_id = p_user_id
+    returning to_jsonb(user_google_drive_tokens) into v_token;
+  return v_token;
+end;
+$$;
+revoke all on function public.disconnect_google_drive(uuid) from public, anon, authenticated;
+grant execute on function public.disconnect_google_drive(uuid) to service_role;
+-- Migration date: 2026-09-22
+-- Independent Gmail/Calendar grants. Connector settings survive reconnects.
+create table if not exists public.user_google_workspace_tokens (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  provider text not null check (provider in ('gmail', 'google-calendar')),
+  grant_id uuid not null default gen_random_uuid(),
+  account_email text not null, account_id text not null,
+  encrypted_access_token text not null, access_token_iv text not null, access_token_tag text not null,
+  encrypted_refresh_token text not null, refresh_token_iv text not null, refresh_token_tag text not null,
+  scope text not null, expires_at timestamptz not null,
+  write_enabled boolean not null default false,
+  enabled boolean not null default true,
+  require_write_approval boolean not null default false,
+  read_only boolean not null default false,
+  disabled_tools text[] not null default '{}',
+  primary key (user_id, provider)
+);
+create table if not exists public.google_workspace_oauth_states (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- Every Google connection's pending OAuth sign-ins, including Drive's.
+  provider text not null check (provider in ('gmail', 'google-calendar', 'google-drive')),
+  state_hash text not null unique,
+  encrypted_state_config text not null, state_config_iv text not null, state_config_tag text not null,
+  expires_at timestamptz not null
+);
+create index if not exists google_workspace_states_owner on public.google_workspace_oauth_states(user_id, provider);
+alter table public.user_google_workspace_tokens enable row level security;
+alter table public.google_workspace_oauth_states enable row level security;
+revoke all on public.user_google_workspace_tokens, public.google_workspace_oauth_states from public, anon, authenticated;
+grant select, insert, update, delete on public.user_google_workspace_tokens, public.google_workspace_oauth_states to service_role;
+
+create or replace function public.complete_google_workspace_oauth(p_state_hash text, p_provider text, p_tokens jsonb)
+returns boolean language plpgsql security definer set search_path = '' as $$
+declare v_state public.google_workspace_oauth_states;
+begin
+  select * into v_state from public.google_workspace_oauth_states where state_hash = p_state_hash and provider = p_provider;
+  if not found then return false; end if;
+  perform 1 from auth.users where id = v_state.user_id for update;
+  if not found then return false; end if;
+  delete from public.google_workspace_oauth_states where state_hash = p_state_hash and provider = p_provider and expires_at > now() returning * into v_state;
+  if not found then return false; end if;
+  insert into public.user_google_workspace_tokens(user_id, provider, account_email, account_id, encrypted_access_token, access_token_iv, access_token_tag, encrypted_refresh_token, refresh_token_iv, refresh_token_tag, scope, expires_at, write_enabled)
+  values (v_state.user_id, p_provider, p_tokens->>'account_email', p_tokens->>'account_id', p_tokens->>'encrypted_access_token', p_tokens->>'access_token_iv', p_tokens->>'access_token_tag', p_tokens->>'encrypted_refresh_token', p_tokens->>'refresh_token_iv', p_tokens->>'refresh_token_tag', p_tokens->>'scope', (p_tokens->>'expires_at')::timestamptz, coalesce((p_tokens->>'write_enabled')::boolean, false))
+  on conflict (user_id, provider) do update set
+    grant_id = gen_random_uuid(), account_email = excluded.account_email, account_id = excluded.account_id, encrypted_access_token = excluded.encrypted_access_token,
+    access_token_iv = excluded.access_token_iv, access_token_tag = excluded.access_token_tag,
+    encrypted_refresh_token = excluded.encrypted_refresh_token, refresh_token_iv = excluded.refresh_token_iv, refresh_token_tag = excluded.refresh_token_tag,
+    scope = excluded.scope, expires_at = excluded.expires_at, write_enabled = excluded.write_enabled;
+  return true;
+end;
+$$;
+
+create or replace function public.disconnect_google_workspace(p_user_id uuid, p_provider text)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  perform 1 from auth.users where id = p_user_id for update;
+  if not found then return; end if;
+  delete from public.google_workspace_oauth_states where user_id = p_user_id and provider = p_provider;
+  delete from public.user_google_workspace_tokens where user_id = p_user_id and provider = p_provider;
+end;
+$$;
+
+revoke all on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) from public, anon, authenticated;
+grant execute on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Migration ledger (backend/migrations/20261009_03_schema_migrations.sql)
+-- ---------------------------------------------------------------------------
+-- One row per file in backend/migrations/ that this database has applied;
+-- backend/scripts/migrate.sh reads it to find pending migrations. A fresh
+-- install already contains every migration below, so it records them all,
+-- without checksums because none was run as a file.
+--
+-- Adding a migration? Add its filename to this list in the same change:
+-- backend/src/__tests__/migrationLedger.test.ts fails until you do, and a
+-- missing name makes every fresh install re-run that migration on its first
+-- `migrate.sh up`.
+create table if not exists public.schema_migrations (
+  filename text primary key,
+  checksum text,
+  applied_at timestamptz not null default now()
+);
+
+alter table public.schema_migrations enable row level security;
+revoke all on public.schema_migrations from anon, authenticated, service_role;
+
+insert into public.schema_migrations (filename) values
+  ('20260419_tabular_chat_jsonb.sql'),
+  ('20260421_01_docx_editing.sql'),
+  ('20260421_02_user_api_keys.sql'),
+  ('20260423_01_docx_editing_wids.sql'),
+  ('20260423_02_docx_version_number.sql'),
+  ('20260424_01_docx_version_display_name.sql'),
+  ('20260424_02_docx_version_number_upload.sql'),
+  ('20260427_01_move_storage_to_versions.sql'),
+  ('20260427_02_tabular_review_shared_with.sql'),
+  ('20260427_03_user_profile_organisation.sql'),
+  ('20260428_workflow_shares_unique.sql'),
+  ('20260502_secure_user_api_keys.sql'),
+  ('20260508_01_revoke_client_grants_backend_tables.sql'),
+  ('20260508_02_revoke_client_grants_user_profiles.sql'),
+  ('20260509_add_openai_user_api_key_provider.sql'),
+  ('20260511_contact_messages.sql'),
+  ('20260513_projects_shared_with_jsonb.sql'),
+  ('20260517_tabular_review_document_ids.sql'),
+  ('20260523_courtlistener_bulk_indexes.sql'),
+  ('20260528_01_add_courtlistener_user_api_key_provider.sql'),
+  ('20260528_02_add_openrouter_user_api_key_provider.sql'),
+  ('20260528_03_user_profile_model_preferences.sql'),
+  ('20260602_01_add_document_version_file_metadata.sql'),
+  ('20260602_02_add_document_version_filename_temp.sql'),
+  ('20260602_03_drop_documents_file_metadata.sql'),
+  ('20260602_04_drop_documents_filename.sql'),
+  ('20260603_drop_structure_tree.sql'),
+  ('20260606_oss_schema_diff.sql'),
+  ('20260610_01_soft_deleted_document_versions.sql'),
+  ('20260610_02_user_profile_mfa_on_login.sql'),
+  ('20260611_user_profile_legal_research_us.sql'),
+  ('20260613_01_chats_overview_rpc.sql'),
+  ('20260613_02_projects_overview_rpc.sql'),
+  ('20260613_03_tabular_reviews_overview_rpc.sql'),
+  ('20260613_04_user_mcp_connectors.sql'),
+  ('20260613_05_workflows_overview_rpc.sql'),
+  ('20260615_01_mcp_connector_oauth.sql'),
+  ('20260625_01_workflow_metadata.sql'),
+  ('20260629_01_workflow_open_source_submissions.sql'),
+  ('20260703_01_user_profile_email.sql'),
+  ('20260703_02_project_practice.sql'),
+  ('20260704_01_chat_message_citations.sql'),
+  ('20260710_01_library_documents.sql'),
+  ('20260716_01_chat_messages_workflow.sql'),
+  ('20260724_02_tabular_folder_rows.sql'),
+  ('20260726_01_tabular_reviews_pagination.sql'),
+  ('20260727_01_tabular_review_ids_overview.sql'),
+  ('20260728_audit_events.sql'),
+  ('20260731_01_document_version_content_sha256.sql'),
+  ('20260805_01_narrow_service_role_grants.sql'),
+  ('20260807_01_projects_and_workflows_overview_pagination.sql'),
+  ('20260809_01_word_addin_chats.sql'),
+  ('20260811_01_workflow_restructure.sql'),
+  ('20260811_02_workflow_addon_pack_folders.sql'),
+  ('20260812_01_collection_pagination_queries.sql'),
+  ('20260813_01_user_id_foreign_keys.sql'),
+  ('20260813_02_user_dark_mode.sql'),
+  ('20260814_01_normalize_project_sharing_emails.sql'),
+  ('20260814_02_assistant_quick_actions.sql'),
+  ('20260818_01_user_router_models.sql'),
+  ('20260818_02_add_vercel_user_api_key_provider.sql'),
+  ('20260819_01_auth_email_confirmation.sql'),
+  ('20260819_01_harden_replace_user_router_models.sql'),
+  ('20260819_02_quick_action_surfaces.sql'),
+  ('20260820_01_add_opencode_go_user_api_key_provider.sql'),
+  ('20260820_02_word_document_edits.sql'),
+  ('20260821_01_google_oauth_profiles.sql'),
+  ('20260821_02_password_capability.sql'),
+  ('20260822_01_resolve_folder_upload_paths.sql'),
+  ('20260822_01_tabular_generation_lease.sql'),
+  ('20260823_01_unified_workflow_catalog.sql'),
+  ('20260825_01_auth_handoff_tickets.sql'),
+  ('20260826_01_task_model_selection.sql'),
+  ('20260826_02_rename_last_selected_chat_model.sql'),
+  ('20260826_03_chat_reasoning_selection.sql'),
+  ('20260827_01_tabular_chat_model_reasoning.sql'),
+  ('20260827_02_reasoning_max.sql'),
+  ('20260827_03_remove_minimal_reasoning.sql'),
+  ('20260828_02_upload_sessions.sql'),
+  ('20260829_01_db_jobs.sql'),
+  ('20260901_01_transparent_tables.sql'),
+  ('20260901_02_project_visibility_scopes.sql'),
+  ('20260901_03_workflow_assets_as_documents.sql'),
+  ('20260904_01_organization_access.sql'),
+  ('20260904_02_migrate_legacy_sharing.sql'),
+  ('20260905_01_scoped_memory_files.sql'),
+  ('20260908_01_remove_transparent_tables.sql'),
+  ('20260909_01_memory_safety_boundaries.sql'),
+  ('20260914_01_document_lifecycle.sql'),
+  ('20260915_01_cleanup_drain_and_rollout.sql'),
+  ('20260916_01_upload_document_row_created.sql'),
+  ('20260917_01_organization_access_followup.sql'),
+  ('20260917_02_memory_followup.sql'),
+  ('20260921_01_chat_activity.sql'),
+  ('20260921_02_google_drive_integration.sql'),
+  ('20260922_01_google_workspace.sql'),
+  ('20260930_01_workflow_metadata_access.sql'),
+  ('20261001_01_connector_write_access.sql'),
+  ('20261002_01_google_drive_writes.sql'),
+  ('20261002_02_google_drive_account_email.sql'),
+  ('20261002_03_connector_read_only.sql'),
+  ('20261002_04_remove_user_time_zone.sql'),
+  ('20261002_05_mcp_oauth_grants.sql'),
+  ('20261002_06_user_custom_instructions.sql'),
+  ('20261006_01_user_response_style.sql'),
+  ('20261007_01_add_mistral_user_api_key_provider.sql'),
+  ('20261008_01_email_change_moves_grants.sql'),
+  ('20261008_02_document_version_textless_pages.sql'),
+  ('20261008_03_bedrock_azure_user_api_keys.sql'),
+  ('20261009_01_vertex_foundry_xai_custom_user_api_keys.sql'),
+  ('20261009_02_user_api_key_enabled.sql'),
+  ('20261009_03_schema_migrations.sql')
+on conflict (filename) do nothing;

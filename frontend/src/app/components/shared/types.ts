@@ -3,8 +3,6 @@ import type { AssistantEvent as WireAssistantEvent } from "@mike/contracts";
 
 import type {
   SourceDocument,
-  SourceDocumentAction,
-  SourceDocumentMetadata,
   SourceDocumentQuote,
   SourceDocumentType,
   SourceSubdocument,
@@ -83,6 +81,9 @@ export interface Project {
 }
 
 export interface Document {
+  /** Server-computed permissions on GET /single-documents/:id; absent fails closed. */
+  can_edit?: boolean;
+  can_delete?: boolean;
   id: string;
   user_id?: string;
   project_id: string | null;
@@ -98,6 +99,8 @@ export interface Document {
   pdf_storage_path: string | null;
   size_bytes: number | null;
   page_count: number | null;
+  /** PDF pages without a text layer; null for non-PDFs and unmeasured versions. */
+  textless_page_count?: number | null;
   structure_tree: StructureNode[] | null;
   status: "pending" | "processing" | "ready" | "error";
   created_at: string | null;
@@ -113,8 +116,6 @@ export interface Document {
 }
 
 export type PanelDocumentType = SourceDocumentType;
-export type PanelDocumentMetadata = SourceDocumentMetadata;
-export type PanelDocumentAction = SourceDocumentAction;
 export type PanelDocumentQuote = SourceDocumentQuote;
 export type PanelSubdocument = SourceSubdocument;
 export type PanelDocument = SourceDocument;
@@ -579,11 +580,6 @@ export function isSpreadsheetFilename(filename: string): boolean {
   return ext === "xlsx" || ext === "xlsm" || ext === "xls";
 }
 
-export function isDocxFilename(filename: string): boolean {
-  const ext = filename.split(".").pop()?.toLowerCase();
-  return ext === "docx" || ext === "doc";
-}
-
 /**
  * Human-readable cell locator for a spreadsheet citation, e.g. "Sheet1!B7".
  * Falls back to whichever of `sheet`/`cell` is present.
@@ -624,16 +620,6 @@ function getDocumentCitationQuotes(a: Citation): DocumentCitationQuote[] {
     return a.quotes.filter((entry) => entry.quote.trim().length > 0);
   }
   return [{ page: a.page, quote: a.quote, sheet: a.sheet, cell: a.cell }];
-}
-
-/**
- * Expand a citation into one or more (page, quote) entries suitable for
- * highlighting in the PDF viewer. A single-page citation yields one entry; a
- * cross-page citation with page "N-M" and a `[[PAGE_BREAK]]` split yields two.
- */
-export function expandCitationToEntries(a: Citation): CitationQuote[] {
-  if (a.kind === "case") return [];
-  return getDocumentCitationQuotes(a).flatMap(expandDocumentQuoteEntry);
 }
 
 /**
@@ -858,9 +844,24 @@ export interface WorkflowAddon {
 
 // API helpers
 
+/** A turn still generating into a chat, as served by GET /chat/:id. */
+export interface ActiveAssistantTurn {
+  id: string;
+  /** Frames emitted so far; a client attaches from the next one it needs. */
+  seq: number;
+  /** The assistant row the answer is (or will be) stored in. */
+  assistant_message_id: string;
+}
+
 export interface ChatDetailOut {
   chat: Chat;
   messages: Message[];
+  /**
+   * Set while the server is still generating an answer for this chat. A
+   * client that has just loaded (a refresh, a second tab) attaches to it
+   * instead of treating the hidden reservation as "no answer".
+   */
+  active_turn?: ActiveAssistantTurn | null;
 }
 
 export interface TabularReviewDetailOut {
@@ -868,4 +869,12 @@ export interface TabularReviewDetailOut {
   cells: TabularCell[];
   rows: TabularReviewRow[];
   documents: Document[];
+  /**
+   * A generation the server is running *in this process*: present only while
+   * the backend still holds the run's frames, which is what makes it
+   * attachable (`?from=<seq + 1>`) and stoppable through
+   * `POST /tabular-review/:id/generate/stop`. `review.is_running` is the
+   * weaker database lease, which an async or another replica's run also holds.
+   */
+  active_generation?: { id: string; seq: number } | null;
 }

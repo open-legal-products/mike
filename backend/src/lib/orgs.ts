@@ -44,9 +44,9 @@ export const INVITATION_TTL_DAYS = 14;
  * ONE list, because two different call sites ask the same question and used
  * to disagree about the answer: `deleteOrg` below (may this org be deleted?)
  * and account deletion (`listOrgsBlockingAccountDeletion` in
- * lib/userDataCleanup.ts). The account-deletion probe omitted `chats`, so an
- * org whose only remaining content was a chat looked empty and was deleted —
- * while `deleteOrg` refused the very same delete over the API.
+ * modules/user/user.dataCleanup.ts). The account-deletion probe omitted
+ * `chats`, so an org whose only remaining content was a chat looked empty and
+ * was deleted — while `deleteOrg` refused the very same delete over the API.
  *
  * Every one of these foreign keys is ON DELETE RESTRICT, so an incomplete
  * probe does not silently detach content: the database refuses the delete and
@@ -1031,11 +1031,10 @@ export async function acceptInvitation(
     // (apart from an org's creator). Idempotent for the already-a-member
     // case: mark the invitation answered rather than 500ing on the unique.
     const existing = await getOrgRole(params.userId, invite.org_id, db);
-    // Grants are FLOORS, not ceilings — the same rule `strongerRole` applies
-    // to project access. Accepting an admin invitation while already a member
-    // raises you to admin; accepting a member invitation while already an
-    // admin leaves you an admin, because an invitation is an offer of
-    // access, not an instruction to reduce it. Demotion is what
+    // Roles are FLOORS, not ceilings. Accepting an admin invitation while
+    // already a member raises you to admin; accepting a member invitation
+    // while already an admin leaves you an admin, because an invitation is an
+    // offer of access, not an instruction to reduce it. Demotion is what
     // PATCH /orgs/:orgId/members exists for, where an admin does it on
     // purpose and the last-admin guard gets a say.
     const effectiveRole: OrgRole =

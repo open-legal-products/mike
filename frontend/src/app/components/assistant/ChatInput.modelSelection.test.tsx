@@ -34,7 +34,7 @@ vi.mock("./ModelToggle", async (importOriginal) => ({
         onReasoningChange?: (reasoning: "xhigh") => void;
     }) => (
         <>
-            <button type="button" onClick={() => onChange("gpt-5.6-sol")}>
+            <button type="button" onClick={() => onChange("gpt-6-astra")}>
                 Select test model
             </button>
             <button type="button" onClick={() => onReasoningChange?.("xhigh")}>
@@ -83,7 +83,7 @@ function mockProfile(apiKeysDegraded: boolean) {
             openRouterModels: [],
             vercelModels: [],
             openCodeGoModels: [],
-            lastSelectedChatModel: "gpt-5.6-luna",
+            lastSelectedChatModel: "gpt-6-luna",
             lastSelectedReasoningLevel: "high",
             apiKeys: emptyApiKeys(),
         },
@@ -105,7 +105,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         render(
             <ChatInput
                 chatKey="chat-1"
-                chatModel="gpt-5.6-luna"
+                chatModel="gpt-6-luna"
                 chatReasoningLevel="high"
                 onSubmit={vi.fn()}
                 onCancel={vi.fn()}
@@ -141,7 +141,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
 
         await waitFor(() =>
             expect(persistChatModelSelection).toHaveBeenCalledWith(
-                "gpt-5.6-sol",
+                "gpt-6-astra",
                 undefined,
             ),
         );
@@ -152,7 +152,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         render(
             <ChatInput
                 chatKey="chat-1"
-                chatModel="gpt-5.6-luna"
+                chatModel="gpt-6-luna"
                 chatReasoningLevel="high"
                 onSubmit={vi.fn()}
                 onCancel={vi.fn()}
@@ -166,7 +166,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
 
         await waitFor(() =>
             expect(persistChatModelSelection).toHaveBeenCalledWith(
-                "gpt-5.6-sol",
+                "gpt-6-astra",
                 "chat-1",
             ),
         );
@@ -178,7 +178,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         render(
             <ChatInput
                 chatKey={tabularChatKey}
-                chatModel="gpt-5.6-luna"
+                chatModel="gpt-6-luna"
                 chatReasoningLevel="high"
                 onSubmit={vi.fn()}
                 onCancel={vi.fn()}
@@ -192,7 +192,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
 
         await waitFor(() =>
             expect(persistChatModelSelection).toHaveBeenCalledWith(
-                "gpt-5.6-sol",
+                "gpt-6-astra",
                 tabularChatKey,
             ),
         );
@@ -218,7 +218,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         rerender(
             <ChatInput
                 chatKey="chat-1"
-                chatModel="gpt-5.6-luna"
+                chatModel="gpt-6-luna"
                 chatReasoningLevel="high"
                 onSubmit={vi.fn()}
                 onCancel={vi.fn()}
@@ -274,7 +274,7 @@ describe("ChatInput model selection vs. a degraded profile", () => {
         fireEvent.click(screen.getByRole("button", { name: "Send message" }));
         await waitFor(() =>
             expect(onSubmit).toHaveBeenCalledWith(
-                expect.objectContaining({ model: "gpt-5.6-luna" }),
+                expect.objectContaining({ model: "gpt-6-luna" }),
             ),
         );
     });

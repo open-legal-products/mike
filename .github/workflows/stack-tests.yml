@@ -18,8 +18,8 @@ name: Stack tests
 on:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    branches: [main, upstream-main]
   workflow_dispatch:
 
 # Booting a Supabase stack is the slowest job in the repo, so cancel runs
@@ -59,7 +59,13 @@ jobs:
       - name: Start local Supabase stack
         run: |
           supabase init
-          supabase start -x studio,imgproxy,inbucket,analytics,vector,realtime,storage,edge-runtime,functions,meta
+          # Supabase defaults overlap Linux's ephemeral port range. Dedicated
+          # low ports avoid intermittent collisions with runner outbound traffic.
+          sed -i 's/54320/21320/g; s/54321/21321/g; s/54322/21322/g' supabase/config.toml
+          # setup-cli pins GHCR, disabling the CLI's ECR/GHCR/Docker Hub fallback.
+          # Allow the pinned CLI to recover when one public registry is throttled.
+          env -u SUPABASE_INTERNAL_IMAGE_REGISTRY supabase start \
+            -x studio,imgproxy,mailpit,logflare,vector,realtime,storage-api,edge-runtime,postgres-meta,supavisor
 
       # Derive the connection env vars from `supabase status -o json` exactly
       # as backend/scripts/test-stack.sh does (same JSON keys, same node

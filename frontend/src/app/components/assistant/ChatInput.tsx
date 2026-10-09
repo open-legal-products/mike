@@ -33,11 +33,7 @@ import {
     workflowSlashCommand,
 } from "./workflowSlashCommands";
 import { ApiKeyMissingPopup } from "../popups/ApiKeyMissingPopup";
-import {
-    ModelToggle,
-    type NoModelsReason,
-    type ReasoningLevel,
-} from "./ModelToggle";
+import { ModelToggle, type ReasoningLevel } from "./ModelToggle";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { WarningPopup } from "../popups/WarningPopup";
 import {
@@ -66,11 +62,16 @@ import {
     type UploadProgress,
 } from "@/app/lib/mikeApi";
 import {
+    SUPPORTED_DOCUMENT_ACCEPT,
     formatUnsupportedDocumentWarning,
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
+import {
+    routerSelections,
+    type NoModelsReason,
+} from "@/shared/lib/modelCatalog";
 
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
@@ -199,17 +200,17 @@ function ChatInputForChatImpl(
     // /user/profile request rewrite the saved composer selection to the
     // default — permanently. null means "not loaded", which the hook leaves
     // the stored selection alone for.
+    const savedRouterSelections = useMemo(
+        () => (profile ? routerSelections(profile) : undefined),
+        [profile],
+    );
     const [model, setModel] = useSelectedModel({
         selectionKey: chatKey,
         chatModel,
         lastSelectedModel: profile?.lastSelectedChatModel,
         routerSelections:
-            profile && !apiKeysDegraded
-                ? {
-                  openRouterModels: profile.openRouterModels,
-                  vercelModels: profile.vercelModels,
-                  openCodeGoModels: profile.openCodeGoModels,
-                  }
+            savedRouterSelections && !apiKeysDegraded
+                ? savedRouterSelections
                 : null,
         apiKeys: apiKeysDegraded ? undefined : profile?.apiKeys,
         configuredModelIds,
@@ -252,6 +253,7 @@ function ChatInputForChatImpl(
     const [activeSlashIndex, setActiveSlashIndex] = useState(0);
     const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
     const dragDepthRef = useRef(0);
+    const localFileInputRef = useRef<HTMLInputElement>(null);
     const settingsSaveRef = useRef<Promise<boolean>>(Promise.resolve(true));
     // `ChatInput` keys this component by chat. Mark this generation inactive
     // during the keyed unmount so upload callbacks from the previous thread
@@ -535,13 +537,27 @@ function ChatInputForChatImpl(
         };
     }, [composerOpen, enableGlobalFileDrop, handleDroppedFiles]);
 
-    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setValue(e.target.value);
+    const updateInput = (el: HTMLTextAreaElement) => {
+        setValue(el.value);
         setActiveSlashIndex(0);
         setSlashMenuDismissed(false);
-        const el = e.target;
         el.style.height = "auto";
         el.style.height = `${el.scrollHeight}px`;
+    };
+
+    const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const el = event.currentTarget;
+        if (!composerOpen || event.clipboardData.files.length > 0) return;
+        // Preserve spacing when inserting into an existing sentence or code.
+        const replacesMessage = !el.value.trim()
+            || (el.selectionStart === 0 && el.selectionEnd === el.value.length);
+        if (!replacesMessage) return;
+        const pasted = event.clipboardData.getData("text/plain");
+        const trimmed = pasted.trim();
+        if (!pasted || pasted === trimmed) return;
+        event.preventDefault();
+        el.setRangeText(trimmed, 0, el.value.length, "end");
+        updateInput(el);
     };
 
     const submitMessage = (
@@ -677,7 +693,7 @@ function ChatInputForChatImpl(
                     {(selectedWorkflow || attachedDocs.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
                             {selectedWorkflow && (
-                                <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow backdrop-blur-sm">
+                                <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow">
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -786,7 +802,8 @@ function ChatInputForChatImpl(
                                 isLoading,
                             })}
                             value={value}
-                            onChange={handleChange}
+                            onChange={(event) => updateInput(event.target)}
+                            onPaste={handlePaste}
                             onKeyDown={handleKeyDown}
                             role="combobox"
                             aria-autocomplete="list"
@@ -801,18 +818,20 @@ function ChatInputForChatImpl(
                                     ? `${WORKFLOW_SLASH_MENU_ID}-${resolvedSlashIndex}`
                                     : undefined
                             }
-                            className="w-full resize-none text-sm overflow-hidden border-0 text-base p-0 bg-transparent outline-none placeholder:text-gray-400 leading-6 max-h-48"
+                            className="w-full resize-none text-sm overflow-x-hidden overflow-y-auto border-0 text-base p-0 bg-transparent outline-none placeholder:text-gray-400 leading-6 max-h-48"
                         />
                     </div>
 
                     {/* Controls */}
                     <div
                         ref={controlsRef}
-                        className="flex items-center justify-between py-2.5 pr-2.5 pl-1.5"
+                        className="flex items-center justify-between py-2 pr-2 pl-1.5"
                     >
                         <div className="flex items-center gap-1">
                             {!hideAddDocButton && composerOpen && (
                                 <AddDocButton
+                                    onLocalFiles={() => localFileInputRef.current?.click()}
+                                    uploading={uploadingFiles.length > 0}
                                     onBrowseAll={() => {
                                         setDocSelectorInitialTab("files");
                                         setDocSelectorOpen(true);
@@ -832,7 +851,7 @@ function ChatInputForChatImpl(
                                     }}
                                     aria-label="Open workflows"
                                     className={cn(
-                                        "flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm transition-colors",
+                                        "flex h-7.5 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm transition-colors",
                                         selectedWorkflow
                                             ? "text-blue-600 hover:text-blue-700"
                                             : "text-gray-400 hover:text-gray-700",
@@ -865,10 +884,12 @@ function ChatInputForChatImpl(
                                     apiKeysLoading={
                                         profileLoading && !profile
                                     }
-                                    openRouterModels={profile?.openRouterModels}
-                                    vercelModels={profile?.vercelModels}
-                                    openCodeGoModels={profile?.openCodeGoModels}
+                                    routerSelections={savedRouterSelections}
                                     compact={compactControls}
+                                    triggerClassName={cn(
+                                        "h-7.5",
+                                        compactControls && "w-7.5",
+                                    )}
                                     onNoModelsClick={setNoModelsWarning}
                                     reasoningLevel={reasoningLevel}
                                     onReasoningChange={handleReasoningChange}
@@ -880,7 +901,7 @@ function ChatInputForChatImpl(
                                     isLoading ? "Stop response" : "Send message"
                                 }
                                 className={cn(
-                                    "relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[11px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border-0 active:enabled:scale-95 transition-all duration-150",
+                                    "relative flex h-7.5 w-7.5 cursor-pointer items-center justify-center rounded-full border-0 bg-gradient-to-b from-neutral-700 to-black text-white transition-all duration-150 active:enabled:scale-95 disabled:from-neutral-600 disabled:to-black",
                                     "shadow-[0_3px_9px_rgba(15,23,42,0.10),inset_1px_1px_0_rgba(255,255,255,0.22),inset_-1px_-1px_0_rgba(255,255,255,0.10),inset_-4px_-4px_9px_rgba(15,23,42,0.2)]",
                                 )}
                                 onClick={handleActionClick}
@@ -906,6 +927,20 @@ function ChatInputForChatImpl(
                 </div>
             </div>
 
+            <input
+                ref={localFileInputRef}
+                type="file"
+                accept={SUPPORTED_DOCUMENT_ACCEPT}
+                multiple
+                hidden
+                aria-label="Upload Documents"
+                disabled={!composerOpen || uploadingFiles.length > 0}
+                onChange={(event) => {
+                    const files = Array.from(event.currentTarget.files ?? []);
+                    event.currentTarget.value = "";
+                    if (files.length) void handleDroppedFiles(files);
+                }}
+            />
             <AddDocumentsModal
                 open={docSelectorOpen}
                 keepMounted

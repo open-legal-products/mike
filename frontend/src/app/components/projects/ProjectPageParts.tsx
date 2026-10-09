@@ -57,12 +57,32 @@ export function formatDate(iso: string) {
 export function DocIcon({
     fileType,
     muted = false,
+    warning = null,
 }: {
     fileType: string | null;
     muted?: boolean;
+    /** Shown as a badge on the icon, e.g. a PDF without a text layer. */
+    warning?: string | null;
 }) {
-    return (
+    const icon = (
         <FileTypeIcon fileType={fileType} className="h-3.5 w-3.5" muted={muted} />
+    );
+    if (!warning) return icon;
+    return (
+        <span
+            className="relative inline-flex"
+            title={warning}
+            aria-label={warning}
+            role="img"
+        >
+            {icon}
+            <span
+                aria-hidden="true"
+                className="absolute -bottom-1 -right-1 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-amber-500 text-[7px] font-bold leading-none text-white ring-1 ring-white"
+            >
+                !
+            </span>
+        </span>
     );
 }
 

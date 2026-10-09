@@ -6,6 +6,13 @@ const mocks = vi.hoisted(() => ({
   downloadFile: vi.fn(),
   uploadFile: vi.fn(),
   apply: vi.fn(),
+  docAccess: vi.fn(),
+}));
+// Only the verdict is stubbed; `can` stays real so the role policy under test
+// is the production one.
+vi.mock("../../../../../lib/access", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../lib/access")>()),
+  ensureDocAccess: mocks.docAccess,
 }));
 vi.mock("../../../../../lib/documentVersions", () => ({
   loadActiveVersion: mocks.active,
@@ -43,6 +50,12 @@ const editRow = {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.docAccess.mockResolvedValue({
+    ok: true,
+    isCreator: false,
+    orgRole: null,
+    projectRole: "editor",
+  });
   mocks.active.mockResolvedValue({
     id: "active",
     filename: "Renamed.docx",
@@ -109,9 +122,75 @@ const run = (
     db,
     documentId: "doc",
     userId: "actor",
+    userEmail: "actor@example.com",
     edits: [],
     reuseVersion,
   });
+describe("assistant document-edit authorization", () => {
+  // The turn-level `allowDocumentMutation` gate is decided from the chat's
+  // container; an attachment can come from anywhere the caller can READ. The
+  // write itself must be authorized against the specific document.
+  const docRow = {
+    id: "doc",
+    user_id: "owner",
+    project_id: "project",
+    org_id: null,
+    workflow_id: null,
+  };
+
+  it("refuses a caller who can only read the document, before touching bytes", async () => {
+    mocks.docAccess.mockResolvedValue({
+      ok: true,
+      isCreator: false,
+      orgRole: null,
+      projectRole: "viewer",
+    });
+    const fake = scriptedDb([{ table: "documents", data: docRow }]);
+    const result = await run(fake.db);
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.error).toMatch(/permission to edit/);
+    expect(mocks.docAccess).toHaveBeenCalledWith(
+      docRow,
+      "actor",
+      "actor@example.com",
+      fake.db,
+    );
+    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+    fake.done();
+  });
+
+  it("treats a document the caller cannot reach as missing", async () => {
+    mocks.docAccess.mockResolvedValue({ ok: false });
+    const fake = scriptedDb([{ table: "documents", data: docRow }]);
+    expect(await run(fake.db)).toEqual({
+      ok: false,
+      error: "Document not found.",
+    });
+    expect(mocks.downloadFile).not.toHaveBeenCalled();
+    fake.done();
+  });
+
+  it("re-checks on a reused same-turn version too", async () => {
+    mocks.docAccess.mockResolvedValue({
+      ok: true,
+      isCreator: true,
+      orgRole: null,
+      projectRole: "viewer",
+    });
+    const fake = scriptedDb([{ table: "documents", data: docRow }]);
+    const result = await run(fake.db, {
+      versionId: "reused",
+      versionNumber: 7,
+      storagePath: "same-turn",
+    });
+    expect(result).toMatchObject({ ok: false });
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    fake.done();
+  });
+});
+
 describe("assistant document-edit lifecycle", () => {
   it("saves edit rows before activation and returns annotations with the allocated version and inherited filename", async () => {
     const fake = newVersionDb();

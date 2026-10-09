@@ -1,5 +1,9 @@
 "use client";
 
+import { findPendingAskInput } from "@/app/lib/pendingAskInput";
+import { useDocumentViewers } from "@/app/hooks/useDocumentViewers";
+import { useDocumentPermissions } from "@/app/hooks/useDocumentPermissions";
+
 import {
     use,
     useCallback,
@@ -22,8 +26,10 @@ import {
     Trash2,
 } from "lucide-react";
 import {
+    UploadBatchError,
     deleteChat,
     deleteDocument,
+    failedUploadMessage,
     getDocument,
     getProject,
     listProjectChats,
@@ -44,6 +50,7 @@ import {
 } from "@/app/lib/chatActivity";
 import { useAssistantHistoryStatuses } from "@/app/hooks/useAssistantHistoryStatuses";
 import { useAssistantChat } from "@/app/hooks/useAssistantChat";
+import { useChatRoute } from "@/app/hooks/useChatRoute";
 import { useAssistantMessageLayout } from "@/app/hooks/useAssistantMessageLayout";
 import { useProjectPicker } from "@/app/hooks/useProjectPicker";
 import {
@@ -69,6 +76,7 @@ import { ProjectDocumentTabs } from "@/app/components/projects/ProjectDocumentTa
 import {
     ProjectDocumentPanels,
     type ProjectDocumentTab,
+    type ProjectDocumentAnnotation,
 } from "@/app/components/projects/ProjectDocumentPanels";
 import { useProjectDocumentRefresh } from "@/app/hooks/useProjectDocumentRefresh";
 import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
@@ -84,25 +92,28 @@ import {
     providerLabel,
 } from "@/app/lib/modelAvailability";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { MikeIcon } from "@/shared/ui/MikeIconUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useSidebar } from "@/app/contexts/SidebarContext";
 import { HeaderActionsMenu } from "@/app/components/shared/HeaderActionsMenu";
 import type {
     Chat,
-    CitationQuote,
+    AssistantEvent,
+    PanelDocument,
     Citation,
     Document,
     EditAnnotation,
     Message,
     Project,
 } from "@/app/components/shared/types";
-import { expandCitationToEntries } from "@/app/components/shared/types";
+import { panelDocumentFromCitation, panelDocumentFromCaseEvent, panelDocumentType } from "@/app/components/shared/types";
+import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
+import { resolvePanelDocumentVersionResult } from "@/app/components/assistant/panelDocumentVersion";
+import type { DocumentContentMode } from "@/app/components/shared/DocumentContent";
 import {
     INITIAL_FOLDER_DELETE_DIALOG_STATE,
     clearDeletedDocumentId,
-    clearDeletedDocumentTarget,
     folderDeleteDialogReducer,
     removeDeletedDocumentTabs,
 } from "@/app/lib/folderDeleteState";
@@ -117,20 +128,16 @@ import {
     documentUploadFolderSegments,
     type DocumentUploadEntry,
 } from "@/app/lib/documentDirectoryUpload";
-import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
+import {
+    SUPPORTED_DOCUMENT_ACCEPT,
+    combineUploadWarnings,
+    formatUnsupportedDocumentWarning,
+    partitionSupportedDocumentFiles,
+} from "@/app/lib/documentUploadValidation";
 
 interface Props {
     params: Promise<{ id: string; chatId?: string }>;
 }
-
-type EditScrollTarget = {
-    key: string;
-    documentId: string;
-    inserted_text?: string;
-    deleted_text?: string;
-    ins_w_id?: string | null;
-    del_w_id?: string | null;
-};
 
 const ICON_SIZE = 28;
 const GAP = 14;
@@ -281,7 +288,7 @@ function Divider({ onDrag }: { onDrag: (dx: number) => void }) {
 }
 
 export default function ProjectAssistantChatPage({ params }: Props) {
-    const { id: projectId, chatId: routeChatId = "" } = use(params);
+    const { id: projectId } = use(params);
     const router = useRouter();
 
     const { setSidebarOpen } = useSidebar();
@@ -293,7 +300,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
 
     const [project, setProject] = useState<Project | null>(null);
     const [projectLoaded, setProjectLoaded] = useState(false);
-    const [activeChatId, setActiveChatId] = useState(routeChatId);
+    const {
+        chatId: activeChatId,
+        openChat,
+        adoptChat,
+        claimCreated,
+    } = useChatRoute(`/projects/${projectId}/assistant/chat`);
     const activeChatIdRef = useRef(activeChatId);
     useLayoutEffect(() => {
         activeChatIdRef.current = activeChatId;
@@ -339,6 +351,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // Upload state
     const fileInputRef = useRef<HTMLInputElement>(null);
     const folderInputRef = useRef<HTMLInputElement>(null);
+    const documentViewers = useDocumentViewers();
+    const [deleteTarget, setDeleteTarget] = useState<{ id: string; filename: string } | null>(null);
+    const [deletingDocument, setDeletingDocument] = useState(false);
     const projectExplorerRef = useRef<ProjectExplorerHandle>(null);
     const [addDocumentsOpen, setAddDocumentsOpen] = useState(false);
     const projectPicker = useProjectPicker();
@@ -351,19 +366,24 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     const [documentDropError, setDocumentDropError] = useState<string | null>(
         null,
     );
+    const [uploadWarning, setUploadWarning] = useState<string | null>(null);
 
     // Tabs
     const [tabs, setTabs] = useState<ProjectDocumentTab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
-    const [activeQuotes, setActiveQuotes] = useState<CitationQuote[] | null>(
-        null,
-    );
-    const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
     const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
-    const [editScrollTarget, setEditScrollTarget] =
-        useState<EditScrollTarget | null>(null);
-
+    const [resolvingEdits, setResolvingEdits] = useState<
+        Record<string, string>
+    >({});
+    const [resolvedEditStatuses, setResolvedEditStatuses] = useState<
+        Record<string, "accepted" | "rejected">
+    >({});
+    const openRequest = useRef(0);
     const activeTab = tabs.find((t) => t.documentId === activeTabId) ?? null;
+    const activeCitation =
+        activeTab?.annotation?.kind === "citation"
+            ? activeTab.annotation.citation
+            : null;
     const chatInputRef = useRef<ChatInputHandle | null>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
     const latestUserMessageRef = useRef<HTMLDivElement>(null);
@@ -388,19 +408,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             ? (initialMessages[0]?.reasoning ?? null)
             : undefined,
     );
-    const createdChatIdRef = useRef<string | null>(null);
-    const adoptCreatedChat = useCallback(
-        (chatId: string) => {
-            createdChatIdRef.current = chatId;
-            setActiveChatId(chatId);
-            window.history.pushState(
-                null,
-                "",
-                `/projects/${projectId}/assistant/chat/${chatId}`,
-            );
-        },
-        [projectId],
-    );
     const {
         messages,
         rejectedApiKey,
@@ -413,7 +420,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         resetChat,
     } = useAssistantChat({
         initialMessages,
-        onChatCreated: adoptCreatedChat,
+        onChatCreated: adoptChat,
         chatId: activeChatId || undefined,
         projectId,
     });
@@ -433,7 +440,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     Date.parse(chatActivityAt(existing) ?? "")
             ) {
                 byId.set(chat.id, chat);
-        }
+            }
         }
         return sortChatsByActivity(Array.from(byId.values()));
     }, [chats, projectChats, projectId]);
@@ -467,6 +474,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // surface, and what appears afterwards is already correct.
     const projectRole = roleFromLoaded(project);
     const canEditContent = can(projectRole, "content.edit");
+    const documentPermissions = useDocumentPermissions(
+        tabs.filter((tab) => !["case", "legislation"].includes(tab.sourceDocument?.type ?? ""))
+            .map((tab) => tab.documentId),
+        canEditContent,
+    );
     const canManageProject = can(projectRole, "access.manage");
     // There is no creator exception on a PROJECT chat. The server derives the
     // caller's whole standing here from the project role
@@ -526,43 +538,42 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [activeChatId]);
 
     useEffect(() => {
-        if (activeTabId) return;
-        setActiveQuotes(null);
-        setActiveCitation(null);
-        setEditScrollTarget(null);
-    }, [activeTabId]);
-
-    useEffect(() => {
         setSidebarOpen(false);
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const projectRequestGeneration = useRef(0);
-    const refreshProject = useCallback(async (documentIdToRefresh?: string) => {
-        const generation = ++projectRequestGeneration.current;
-        try {
-            const loaded = await getProject(projectId);
-            if (generation === projectRequestGeneration.current) {
-                setProject(loaded);
+    const refreshProject = useCallback(
+        async (documentIdToRefresh?: string) => {
+            const generation = ++projectRequestGeneration.current;
+            try {
+                const loaded = await getProject(projectId);
+                if (generation === projectRequestGeneration.current) {
+                    setProject(loaded);
+                }
+            } catch {
+                // Keep the current workspace usable when a background check fails.
+            } finally {
+                // Settled either way: a failed fetch leaves the role unknown, and
+                // the composer should come back read-only rather than stay hidden.
+                if (generation === projectRequestGeneration.current) {
+                    setProjectLoaded(true);
+                }
+                if (documentIdToRefresh) {
+                    setTabs((current) =>
+                        current.map((tab) =>
+                            tab.documentId === documentIdToRefresh
+                                ? {
+                                      ...tab,
+                                      refetchKey: (tab.refetchKey ?? 0) + 1,
+                                  }
+                                : tab,
+                        ),
+                    );
+                }
             }
-        } catch {
-            // Keep the current workspace usable when a background check fails.
-        } finally {
-            // Settled either way: a failed fetch leaves the role unknown, and
-            // the composer should come back read-only rather than stay hidden.
-            if (generation === projectRequestGeneration.current) {
-                setProjectLoaded(true);
-            }
-            if (documentIdToRefresh) {
-                setTabs((current) =>
-                    current.map((tab) =>
-                        tab.documentId === documentIdToRefresh
-                            ? { ...tab, refetchKey: (tab.refetchKey ?? 0) + 1 }
-                            : tab,
-                    ),
-                );
-            }
-        }
-    }, [projectId]);
+        },
+        [projectId],
+    );
     useEffect(() => {
         return () => {
             projectRequestGeneration.current += 1;
@@ -629,16 +640,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }, [projectMutationSignature, refreshProject]);
 
     useEffect(() => {
-        setActiveChatId(routeChatId);
-    }, [routeChatId]);
-
-    useEffect(() => {
         setCurrentChatId(activeChatId || null);
     }, [activeChatId, setCurrentChatId]);
 
     useEffect(() => {
-        if (activeChatId && createdChatIdRef.current === activeChatId) {
-            createdChatIdRef.current = null;
+        if (claimCreated(activeChatId)) {
             const firstUserMessage = messages.find(
                 (message) => message.role === "user",
             );
@@ -737,67 +743,77 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     function openTab(
         docId: string,
         filename: string,
-        quotes?: CitationQuote[],
+        annotation?: ProjectDocumentAnnotation,
         versionId?: string | null,
         fileType?: string | null,
+        sourceDocument?: PanelDocument,
     ) {
+        openRequest.current += 1;
         setTabs((prev) => {
             const existing = prev.find((t) => t.documentId === docId);
             if (existing) {
-                if (
-                    (versionId !== undefined &&
-                        existing.versionId !== versionId) ||
-                    (fileType !== undefined && existing.fileType !== fileType)
-                ) {
-                    return prev.map((t) =>
-                        t.documentId === docId
-                            ? {
-                                  ...t,
-                                  versionId:
-                                      versionId === undefined
-                                          ? t.versionId
-                                          : versionId,
-                                  fileType: fileType ?? t.fileType,
-                              }
-                            : t,
-                    );
-                }
-                return prev;
+                const versionChanged =
+                    versionId !== undefined && existing.versionId !== versionId;
+                return prev.map((tab) =>
+                    tab.documentId === docId
+                        ? {
+                              ...tab,
+                              filename,
+                              versionId:
+                                  versionId === undefined
+                                      ? tab.versionId
+                                      : versionId,
+                              fileType: fileType ?? tab.fileType,
+                              sourceDocument:
+                                  sourceDocument ??
+                                  (versionChanged
+                                      ? undefined
+                                      : tab.sourceDocument),
+                              annotation,
+                              warning: versionChanged ? null : tab.warning,
+                          }
+                        : tab,
+                );
             }
             return [
                 ...prev,
-                { documentId: docId, filename, versionId, fileType },
+                {
+                    documentId: docId,
+                    filename,
+                    versionId,
+                    fileType,
+                    sourceDocument,
+                    annotation,
+                },
             ];
         });
         setActiveTabId(docId);
-        setActiveQuotes(quotes && quotes.length ? quotes : null);
-        setActiveCitation(null);
         setSelectedDocId(docId);
     }
 
     function closeTab(docId: string) {
+        openRequest.current += 1;
         if (activeTabId === docId) {
             const idx = tabs.findIndex((tab) => tab.documentId === docId);
-            const fallback = idx < 0 ? null : tabs[idx + 1] ?? tabs[idx - 1] ?? null;
+            const fallback =
+                idx < 0 ? null : (tabs[idx + 1] ?? tabs[idx - 1] ?? null);
             setActiveTabId(fallback?.documentId ?? null);
-            setActiveQuotes(null);
-            setActiveCitation(null);
             setSelectedDocId(fallback?.documentId ?? null);
         }
         setTabs((prev) => prev.filter((tab) => tab.documentId !== docId));
     }
 
     function switchTab(docId: string) {
+        openRequest.current += 1;
         setActiveTabId(docId);
-        setActiveQuotes(null);
-        setActiveCitation(null);
         setSelectedDocId(docId);
     }
 
     // ── Handlers ──────────────────────────────────────────────────────────────
     const handleSubmit = useCallback(
         (message: Message, options?: Parameters<typeof handleChat>[1]) => {
-            if (!activeTab) return handleChat(message, options);
+            if (!activeTab || activeTab.sourceDocument?.type === "case")
+                return handleChat(message, options);
             return handleChat(message, {
                 ...options,
                 displayedDoc: {
@@ -813,14 +829,62 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         openTab(doc.id, doc.filename, undefined, null, doc.file_type);
     };
 
-    const handleCitationClick = (citation: Citation) => {
-        if (citation.kind === "case") return;
-        openTab(
-            citation.document_id,
-            citation.filename,
-            expandCitationToEntries(citation),
+    const handleCloseAnnotation = (documentId: string) => {
+        openRequest.current += 1;
+        setTabs((current) =>
+            current.map((tab) =>
+                tab.documentId === documentId
+                    ? { ...tab, annotation: undefined }
+                    : tab,
+            ),
         );
-        setActiveCitation(citation);
+    };
+
+    const handleCitationClick = async (
+        citation: Citation,
+        showQuotes = true,
+    ) => {
+        if (showQuotes && activeCitation === citation && activeTab) {
+            handleCloseAnnotation(activeTab.documentId);
+            return;
+        }
+        const request = ++openRequest.current;
+        const result = await resolvePanelDocumentVersionResult(
+            panelDocumentFromCitation(citation, showQuotes),
+        );
+        if (request !== openRequest.current) return;
+        if (result.status !== "resolved") {
+            setDocumentDropError(
+                result.status === "denied"
+                    ? "This document is no longer available."
+                    : "This document could not be opened. Please try again.",
+            );
+            return;
+        }
+        const document = result.document;
+        openTab(
+            document.document_id,
+            document.title,
+            showQuotes ? { kind: "citation", citation } : undefined,
+            document.version_id,
+            document.type,
+            document,
+        );
+    };
+
+    const handleCaseClick = (
+        event: Extract<AssistantEvent, { type: "case_citation" }>,
+    ) => {
+        const document = panelDocumentFromCaseEvent(event);
+        if (document)
+            openTab(
+                document.document_id,
+                document.title,
+                undefined,
+                null,
+                document.type,
+                document,
+            );
     };
 
     const handleOpenDocument = (args: {
@@ -829,19 +893,49 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         versionId: string | null;
         versionNumber: number | null;
     }) => {
-        openTab(args.documentId, args.filename, undefined, args.versionId);
+        openTab(
+            args.documentId,
+            args.filename,
+            undefined,
+            args.versionId,
+            undefined,
+            {
+                document_id: args.documentId,
+                title: args.filename,
+                type: panelDocumentType(args.filename),
+                version_id: args.versionId,
+                version_number: args.versionNumber,
+                quotes: [],
+                metadata: [],
+            },
+        );
     };
 
-    const handleEditViewClick = (ann: EditAnnotation, filename: string) => {
-        openTab(ann.document_id, filename, undefined, ann.version_id ?? null);
-        setEditScrollTarget({
-            key: `${ann.edit_id}-${Date.now()}`,
-            documentId: ann.document_id,
-            inserted_text: ann.inserted_text,
-            deleted_text: ann.deleted_text,
-            ins_w_id: ann.ins_w_id ?? null,
-            del_w_id: ann.del_w_id ?? null,
-        });
+    const handleEditViewClick = (
+        ann: EditAnnotation,
+        filename: string,
+        changeNumber?: number,
+    ) => {
+        const edit = {
+            ...ann,
+            status: resolvedEditStatuses[ann.edit_id] ?? ann.status,
+        };
+        openTab(
+            ann.document_id,
+            filename,
+            { kind: "edit", edit, changeNumber },
+            ann.version_id ?? null,
+            undefined,
+            {
+                document_id: ann.document_id,
+                title: filename,
+                type: panelDocumentType(filename),
+                version_id: ann.version_id,
+                version_number: ann.version_number,
+                metadata: [],
+                quotes: [],
+            },
+        );
     };
 
     const patchTab = useCallback(
@@ -855,7 +949,27 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         [],
     );
 
-    const handleEditError = (args: { documentId: string; message: string }) => {
+    const finishResolvingEdit = (editId: string) =>
+        setResolvingEdits((current) => {
+            const next = { ...current };
+            delete next[editId];
+            return next;
+        });
+    const handleEditResolveStart = (args: {
+        editId: string;
+        documentId: string;
+    }) => {
+        setResolvingEdits((current) => ({
+            ...current,
+            [args.editId]: args.documentId,
+        }));
+    };
+    const handleEditError = (args: {
+        editId: string;
+        documentId: string;
+        message: string;
+    }) => {
+        finishResolvingEdit(args.editId);
         patchTab(args.documentId, { warning: args.message });
     };
 
@@ -866,7 +980,31 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         [patchTab],
     );
 
-    const handleEditResolved = (args: { documentId: string }) => {
+    const handleEditResolved: NonNullable<
+        Extract<DocumentContentMode, { kind: "edit" }>["onResolved"]
+    > = (args) => {
+        finishResolvingEdit(args.editId);
+        setResolvedEditStatuses((current) => ({
+            ...current,
+            [args.editId]: args.status,
+        }));
+        setTabs((current) =>
+            current.map((tab) =>
+                tab.annotation?.kind === "edit" &&
+                tab.annotation.edit.edit_id === args.editId
+                    ? {
+                          ...tab,
+                          annotation: {
+                              ...tab.annotation,
+                              edit: {
+                                  ...tab.annotation.edit,
+                                  status: args.status,
+                              },
+                          },
+                      }
+                    : tab,
+            ),
+        );
         invalidateDocxBytes(args.documentId);
         // Apply metadata and the forced refresh together to avoid downloading twice.
         void refreshProject(args.documentId);
@@ -895,12 +1033,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         // and is persisted server-side, instead of being cut to
         // "Cancelled by user." in the chat the user just left.
         detach();
-        setActiveChatId(nextChatId);
-        window.history.pushState(
-            null,
-            "",
-            `/projects/${projectId}/assistant/chat/${nextChatId}`,
-        );
+        openChat(nextChatId);
     }
 
     function handleNewChat() {
@@ -909,13 +1042,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             return;
         }
         resetChat();
-        setActiveChatId("");
+        openChat("");
         setComposerResetKey((current) => current + 1);
-        window.history.pushState(
-            null,
-            "",
-            `/projects/${projectId}/assistant/chat`,
-        );
     }
 
     async function handleDeleteChat() {
@@ -1046,10 +1174,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     }
 
     async function uploadEntries(
-        entries: DocumentUploadEntry[],
+        selectedEntries: DocumentUploadEntry[],
         openInViewer = false,
     ) {
-        if (!entries.length) return;
+        if (!selectedEntries.length) return;
         if (!canEditContent) {
             // Only accuse somebody of lacking a role once we know they do.
             if (projectRole) {
@@ -1057,6 +1185,21 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             }
             return;
         }
+
+        // A drop or a folder selection carries whatever was on disk, and
+        // `accept` cannot constrain either. Filter to the types the converter
+        // can read before spending an upload session (or creating folders) on
+        // files the server is guaranteed to refuse.
+        const { supported, unsupported } = partitionSupportedDocumentFiles(
+            selectedEntries.map((entry) => entry.file),
+        );
+        const supportedFiles = new Set(supported);
+        const entries = selectedEntries.filter((entry) =>
+            supportedFiles.has(entry.file),
+        );
+        const unsupportedWarning = formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
+        if (!entries.length) return;
 
         const pendingUploads = entries.map((entry) => ({
             clientId: crypto.randomUUID(),
@@ -1163,24 +1306,32 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     : [],
             );
             addUploadedDocuments(uploaded);
-            if (openInViewer) {
-                uploaded.forEach(handleDocClick);
-                if (outcomes.some((outcome) => outcome.status === "error")) {
-                    setDocumentDropError(
-                        "Some files could not be uploaded. Please try again.",
-                    );
-                }
-            }
-        } catch (err) {
-            console.error("Upload failed:", err);
-            if (openInViewer) {
-                setDocumentDropError(
-                    userFacingApiError(
-                        err,
-                        "Files could not be uploaded. Please try again.",
+            if (openInViewer) uploaded.forEach(handleDocClick);
+            // Per-file outcomes, not an all-or-nothing batch: the files that
+            // landed stay in the tree and the ones that did not are named.
+            // Dropping the failures silently is what made a partly-failed bulk
+            // upload look like it simply did nothing (#8).
+            if (uploaded.length < outcomes.length) {
+                setUploadWarning(
+                    combineUploadWarnings(
+                        unsupportedWarning,
+                        failedUploadMessage(outcomes),
                     ),
                 );
             }
+        } catch (err) {
+            console.error("Upload failed:", err);
+            setUploadWarning(
+                combineUploadWarnings(
+                    unsupportedWarning,
+                    err instanceof UploadBatchError
+                        ? failedUploadMessage(err.outcomes)
+                        : userFacingApiError(
+                              err,
+                              "Files could not be uploaded. Please try again.",
+                          ),
+                ),
+            );
         } finally {
             setUploadingDocuments((current) =>
                 current.filter((upload) => !pendingIds.has(upload.clientId)),
@@ -1391,9 +1542,6 @@ export default function ProjectAssistantChatPage({ params }: Props) {
             setSelectedDocId((currentId) =>
                 clearDeletedDocumentId(currentId, deletedDocumentIds),
             );
-            setEditScrollTarget((currentTarget) =>
-                clearDeletedDocumentTarget(currentTarget, deletedDocumentIds),
-            );
             dispatchFolderDeleteDialog({
                 type: "complete",
                 folderId: pending.folder.id,
@@ -1454,13 +1602,28 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         await moveSubfolderToFolder(projectId, folderId, targetFolderId);
     };
 
+    const requestDeleteDoc = async (docId: string) => {
+        if (!canEditContent) return;
+        setDeleteTarget({
+            id: docId,
+            filename: tabs.find((tab) => tab.documentId === docId)?.filename
+                ?? project?.documents?.find((document) => document.id === docId)?.filename
+                ?? "this file",
+        });
+    };
+
     const handleDeleteDoc = async (docId: string) => {
+        if (!canEditContent || deletingDocument) return;
+        setDeletingDocument(true);
         try {
+            const document = await getDocument(docId);
+            if (document.can_delete !== true) {
+                setDocumentDropError("You do not have permission to delete this file.");
+                return;
+            }
             await deleteDocument(docId);
         } catch (err) {
-            // The explorer fires this as `void onDeleteDoc(...)`, so a
-            // rejection here would be an unhandled promise and a silent
-            // no-op for the user. Say what happened, keep the row.
+            // Keep the file and its live draft intact if deletion fails.
             console.error("Delete failed:", err);
             setDocumentDropError(
                 userFacingApiError(
@@ -1469,7 +1632,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 ),
             );
             return;
+        } finally {
+            setDeletingDocument(false);
         }
+        documentViewers.discardDeleted([docId]);
+        setDeleteTarget(null);
         setProject((prev) =>
             prev
                 ? {
@@ -1483,10 +1650,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         setTabs((prev) => prev.filter((t) => t.documentId !== docId));
         if (activeTabId === docId) {
             setActiveTabId(null);
-            setActiveQuotes(null);
-            setActiveCitation(null);
             setSelectedDocId(null);
-            setEditScrollTarget(null);
         }
     };
 
@@ -1750,8 +1914,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 folders={project?.folders ?? []}
                                 selectedDocId={selectedDocId}
                                 onDocClick={handleDocClick}
-                                onDownloadDoc={explorerDownload.downloadDocument}
-                                onDownloadFolder={explorerDownload.downloadFolder}
+                                onDownloadDoc={
+                                    explorerDownload.downloadDocument
+                                }
+                                onDownloadFolder={
+                                    explorerDownload.downloadFolder
+                                }
                                 downloading={explorerDownload.downloading}
                                 onAddToChat={(document) =>
                                     chatInputRef.current?.addDoc(document)
@@ -1765,7 +1933,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 onRenameFolder={handleRenameFolder}
                                 onRenameDoc={handleRenameDoc}
                                 onDeleteFolder={requestDeleteFolder}
-                                onDeleteDoc={handleDeleteDoc}
+                                onDeleteDoc={canEditContent ? requestDeleteDoc : undefined}
                                 onMoveDoc={handleMoveDoc}
                                 onMoveFolder={handleMoveFolder}
                                 uploadingDocuments={uploadingDocuments}
@@ -1834,11 +2002,20 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     </div>
                 )}
                 <ProjectDocumentTabs
+                    onAddToChat={(document) =>
+                        chatInputRef.current?.addDoc(document)
+                    }
+                    addToChatDisabled={!canSendChat}
+                    onDownloadDoc={(document) => documentViewers.download(document.id, document.id, tabs.find((tab) => tab.documentId === document.id)?.versionId, document.filename)}
+                    downloading={explorerDownload.downloading}
+                    onRenameDoc={handleRenameDoc}
+                    onDeleteDoc={requestDeleteDoc}
+                    documentPermissions={documentPermissions}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
                     onActivate={switchTab}
-                    onClose={closeTab}
+                    onClose={(id) => documentViewers.requestClose([id], () => closeTab(id))}
                     onReorder={(draggedId, targetId, position) =>
                         setTabs((current) =>
                             reorderTabs(
@@ -1852,15 +2029,64 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                     }
                 />
                 <ProjectDocumentPanels
+                    canEdit={canEditContent}
+                    documentPermissions={documentPermissions}
+                    onDownloadReady={documentViewers.registerDownload}
+                    onCloseGuardReady={documentViewers.registerCloseGuard}
                     tabs={tabs}
                     documents={project?.documents ?? []}
                     activeTabId={activeTabId}
-                    quotes={activeQuotes ?? undefined}
-                    highlightEdit={editScrollTarget}
+                    onVersionChange={(documentId, version) => documentViewers.requestClose([documentId], () => {
+                        openRequest.current += 1;
+                        setTabs((current) =>
+                            current.map((tab) => {
+                                if (tab.documentId !== documentId) return tab;
+                                const document = panelDocumentAtVersion(
+                                    tab.sourceDocument ?? {
+                                        document_id: documentId,
+                                        title: tab.filename,
+                                        type: panelDocumentType(tab.filename),
+                                        metadata: [],
+                                        quotes: [],
+                                    },
+                                    version,
+                                );
+                                return {
+                                    ...tab,
+                                    filename: document.title,
+                                    fileType: document.type,
+                                    versionId: version.id,
+                                    sourceDocument: document,
+                                    annotation: undefined,
+                                    warning: null,
+                                };
+                            }),
+                        );
+                    })}
+                    onCloseAnnotation={handleCloseAnnotation}
+                    isDocumentReloading={(documentId) =>
+                        Object.values(resolvingEdits).includes(documentId)
+                    }
+                    isEditReloading={(editId) => !!resolvingEdits[editId]}
+                    onEditResolveStart={handleEditResolveStart}
+                    onEditResolved={handleEditResolved}
+                    onEditError={handleEditError}
                     onWarningDismiss={dismissTabWarning}
                 />
             </div>
 
+            {documentViewers.confirmation}
+            <ConfirmPopup
+                open={!!deleteTarget}
+                title="Delete file?"
+                message={`Delete “${deleteTarget?.filename ?? "this file"}” and its versions, including any unsaved edits? This cannot be undone.`}
+                confirmLabel="Delete file"
+                confirmVariant="danger"
+                confirmStatus={deletingDocument ? "loading" : "idle"}
+                confirmDisabled={!canEditContent}
+                onCancel={() => { if (!deletingDocument) setDeleteTarget(null); }}
+                onConfirm={() => { if (deleteTarget) void handleDeleteDoc(deleteTarget.id); }}
+            />
             <Divider onDrag={onChatDividerDrag} />
 
             {/* RIGHT: Assistant Panel */}
@@ -1934,7 +2160,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                             <HeaderActionsMenu
                                 triggerClassName="h-6 w-6"
                                 onCloseAutoFocus={(event) => {
-                                    if (editingChatTitle) event.preventDefault();
+                                    if (editingChatTitle)
+                                        event.preventDefault();
                                 }}
                                 items={[
                                     {
@@ -1967,7 +2194,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                         variant: "danger" as const,
                                     },
                                 ].filter((item) =>
-                                    activeChatId ? true : item.label === "Memory",
+                                    activeChatId
+                                        ? true
+                                        : item.label === "Memory",
                                 )}
                             />
                         }
@@ -2019,6 +2248,11 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                             const lastAssistantIdx = messages
                                 .map((m) => m.role)
                                 .lastIndexOf("assistant");
+                            // The message still waiting on the user's input
+                            // or approval, if any.
+                            const pendingAskInputIndex =
+                                findPendingAskInput(messages)?.messageIndex ??
+                                -1;
                             return messages.map((msg, i) =>
                                 msg.role === "user" ? (
                                     <div
@@ -2053,17 +2287,41 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                             i === messages.length - 1 &&
                                             isResponseLoading
                                         }
+                                        awaitingInput={
+                                            i === pendingAskInputIndex
+                                        }
                                         isError={!!msg.error}
                                         citations={msg.citations}
                                         citationStatus={msg.citationStatus}
                                         activeCitation={activeCitation}
                                         onCitationClick={handleCitationClick}
+                                        onCaseClick={handleCaseClick}
+                                        onOpenCitationSource={(citation) => {
+                                            void handleCitationClick(
+                                                citation,
+                                                false,
+                                            );
+                                        }}
                                         minHeight={
                                             i === lastAssistantIdx
                                                 ? minHeight
                                                 : "0px"
                                         }
                                         onEditViewClick={handleEditViewClick}
+                                        onEditResolveStart={
+                                            handleEditResolveStart
+                                        }
+                                        isEditReloading={(editId) =>
+                                            !!resolvingEdits[editId]
+                                        }
+                                        isDocReloading={(documentId) =>
+                                            Object.values(
+                                                resolvingEdits,
+                                            ).includes(documentId)
+                                        }
+                                        resolvedEditStatuses={
+                                            resolvedEditStatuses
+                                        }
                                         onOpenDocument={handleOpenDocument}
                                         onEditError={handleEditError}
                                         onEditResolved={handleEditResolved}
@@ -2147,6 +2405,12 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 onClose={projectPicker.clearError}
                 title="Projects could not be loaded"
                 message={projectPicker.error ?? ""}
+            />
+            <WarningPopup
+                open={!!uploadWarning}
+                onClose={() => setUploadWarning(null)}
+                title="Some files were not uploaded"
+                message={uploadWarning ?? ""}
             />
             <WarningPopup
                 open={!!documentDropError}

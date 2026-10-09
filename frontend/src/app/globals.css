@@ -2,141 +2,7 @@
 @import "tw-animate-css";
 @import "../shared/ui/LiquidGlassUI.css";
 @import "../shared/ui/ThemeTokensUI.css";
-
-@custom-variant dark (&:is(.dark *));
-
-@theme inline {
-    --color-background: var(--background);
-    --color-foreground: var(--foreground);
-    --color-app-background: var(--app-background);
-    --color-app-surface: var(--app-surface);
-    --color-app-surface-hover: var(--app-surface-hover);
-    --color-app-surface-active: var(--app-surface-active);
-    --color-app-floating: var(--app-floating);
-    --font-sans: var(--font-inter);
-    --font-serif: var(--font-eb-garamond);
-    --color-blue: rgb(0, 136, 255);
-    --color-blue-50: rgba(0, 136, 255, 0.05);
-    --color-blue-100: rgba(0, 136, 255, 0.1);
-    --color-blue-200: rgba(0, 136, 255, 0.3);
-    --color-blue-600: rgb(0, 136, 255);
-    --color-blue-700: rgb(0, 120, 230);
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
-    --color-ring: var(--ring);
-    --color-input: var(--input);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-accent: var(--accent);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-secondary: var(--secondary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-primary: var(--primary);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
-    --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
-    --radius-sm: calc(var(--radius) - 4px);
-    --radius-md: calc(var(--radius) - 2px);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) + 4px);
-}
-
-:root {
-    --radius: 0.625rem;
-    --app-background: #f9fafb;
-    --app-surface: #fdfdfe;
-    --app-surface-hover: #f9fafb;
-    --app-surface-active: #eff0f3;
-    --app-floating: #fefefe;
-    --table-grid-border: #e5e7eb;
-    --background: oklch(0.985 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.646 0.222 41.116);
-    --chart-2: oklch(0.6 0.118 184.704);
-    --chart-3: oklch(0.398 0.07 227.392);
-    --chart-4: oklch(0.828 0.189 84.429);
-    --chart-5: oklch(0.769 0.188 70.08);
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-    color-scheme: dark;
-    --app-background: #0b0f14;
-    --app-surface: #131922;
-    --app-surface-hover: #19212c;
-    --app-surface-active: #222c38;
-    --app-floating: #171e28;
-    --table-grid-border: #2b3645;
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.488 0.243 264.376);
-    --chart-2: oklch(0.696 0.17 162.48);
-    --chart-3: oklch(0.769 0.188 70.08);
-    --chart-4: oklch(0.627 0.265 303.9);
-    --chart-5: oklch(0.645 0.246 16.439);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
-}
+@import "../shared/ui/DesignTokensUI.css";
 
 /* Table surfaces are transparent. Sticky layers retain an opaque page-color
    backing so content scrolling beneath them never shows through. */
@@ -275,18 +141,33 @@
 .dark .bg-green-50,
 .dark .bg-green-100,
 .dark .bg-emerald-50 { background-color: rgba(6, 78, 59, 0.32); }
-.dark .border-green-200,
 .dark .border-emerald-200 { border-color: rgba(52, 211, 153, 0.32); }
 .dark .text-green-700,
 .dark .text-green-800,
 .dark .text-emerald-700 { color: #6ee7b7; }
 .dark .bg-blue-50,
 .dark .bg-blue-100 { background-color: rgba(3, 73, 130, 0.3); }
-.dark .border-blue-200 { border-color: rgba(56, 189, 248, 0.3); }
 
 @layer base {
     * {
         @apply border-border outline-ring/50;
+    }
+
+    /* Thin, track-less scrollbars on every scroll area, so a classic
+       (mouse / Windows) scrollbar does not draw an opaque gutter on glass
+       surfaces. The spreadsheet and DOCX editors size and style their own. */
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent)
+            transparent;
+    }
+
+    .fortune-container,
+    .fortune-container *,
+    .docx-editor,
+    .docx-editor * {
+        scrollbar-width: auto;
+        scrollbar-color: auto;
     }
 
     body {
@@ -315,27 +196,12 @@
         opacity: 0;
     }
 
-    .sidebar-fade-in-3 {
-        animation: sidebarFadeIn 0.3s ease-out forwards;
-        animation-delay: 0.25s;
-        opacity: 0;
-    }
-
     @keyframes sidebarFadeIn {
         from {
             opacity: 0;
         }
         to {
             opacity: 1;
-        }
-    }
-
-    @keyframes scroll-left {
-        0% {
-            transform: translateX(0);
-        }
-        100% {
-            transform: translateX(calc(-100% + 100px));
         }
     }
 
@@ -346,10 +212,6 @@
         to {
             background-position: -200% 0;
         }
-    }
-
-    .animate-shimmer {
-        animation: shimmer 8s linear infinite;
     }
 }
 
@@ -547,6 +409,20 @@
     color: transparent;
 }
 
+/* PDF.js ends each text line with a <br>. The stock viewer stylesheet takes
+   those out of flow and hides their selection; without that they sat at the
+   layer's left edge and a drag selection painted a bar there on every line. */
+.pdf-text-layer br {
+    position: absolute;
+    color: transparent;
+    white-space: pre;
+    cursor: text;
+}
+
+.pdf-text-layer br::selection {
+    background: transparent;
+}
+
 .docx-view-container span.docx-text-highlight,
 .docx-view-container .docx-text-highlight {
     background-color: var(--docx-highlight-background) !important;
@@ -565,58 +441,17 @@
     box-decoration-break: clone;
 }
 
-/* docx-preview tracked-change styling */
-.docx-view-container ins {
-    color: #16a34a;
-    text-decoration: none;
-    background-color: rgba(22, 163, 74, 0.08);
-}
-
-.docx-view-container del {
-    color: #dc2626;
-    text-decoration: line-through;
-    background-color: rgba(220, 38, 38, 0.08);
-}
-
-/* Kill docx-preview's default dark-gray wrapper chrome — let the scroll
-   container's own bg show through. */
-.docx-view-container .docx-wrapper {
-    background: transparent !important;
-    padding: 0 !important;
-}
-
-.docx-view-container .docx-wrapper > section.docx {
-    margin: 0 auto 16px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.docx-view-container .docx-edit-flash {
-    animation: docxEditFlash 2s ease-out;
-    border-radius: 2px;
-}
-
 /* Optimistic Accept/Reject: instantly hide rejected side / de-style kept side.
    These are ephemeral DOM mutations; the real re-render replaces the markup. */
 .docx-view-container .docx-edit-hidden {
     display: none !important;
 }
 
-.docx-view-container ins.docx-edit-kept,
-.docx-view-container del.docx-edit-kept {
+.docx-view-container .docx-edit-kept {
     color: inherit !important;
     background-color: transparent !important;
     text-decoration: none !important;
-}
-
-@keyframes docxEditFlash {
-    0%, 20% {
-        background-color: rgba(59, 130, 246, 0.45);
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.45);
-    }
-    100% {
-        background-color: rgba(59, 130, 246, 0);
-        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0);
-    }
+    border-bottom: none !important;
 }
 
 .uploading-ellipsis {
@@ -680,4 +515,14 @@
     .uploading-ellipsis-two {
         opacity: 0;
     }
+}
+
+/* Text fields always match :focus-visible, even after a click. Keep the
+   Tailwind focus ring for keyboard navigation only; useInputModality sets the
+   attribute. Clears only the ring, not the field's own shadows. Unlayered on
+   purpose: EigenPal's unlayered `.docx-editor .focus-visible\:ring-2` rules
+   would otherwise win inside the editor chrome (comment column, composer). */
+:root[data-input-modality="pointer"] .keyboard-focus-ring:focus-visible {
+    --tw-ring-shadow: 0 0 #0000;
+    --tw-ring-offset-shadow: 0 0 #0000;
 }

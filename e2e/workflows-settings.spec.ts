@@ -1,19 +1,19 @@
 /**
  * E2E tests for Workflows and Settings features.
  *
- * Test user: e2e@mike.local / E2eTestPass1! (session loaded from e2e/.auth/user.json)
+ * Test user: this worker's account (e2eAccount; e2e@mike.local on worker 0)
  *
  * Key source facts used by these selectors:
  *  - WorkflowList.tsx: h1 "Workflows"; Plus icon button (no aria-label) opens NewWorkflowModal
  *  - NewWorkflowModal.tsx: placeholder "Workflow name"; submit button text "Create workflow"
  *  - New accounts receive editable default workflows, including "Proofread"
- *  - WorkflowPromptEditor.tsx: editorProps class = "workflow-editor-content" on the ProseMirror div
+ *  - markdown-editor.tsx: editorProps class = "markdown-editor-content" on the ProseMirror div
  *  - WorkflowDetailPage save status: text "Saving…" → "Saved" rendered in a plain <span>
  *  - settings/page.tsx: h2 "Profile"; display name autosaves on blur
  *  - settings/layout.tsx: h1 "Settings" in layout header
- *  - settings/models/page.tsx: h2 "API Keys"; label texts include "Anthropic (Claude) API Key" etc.
+ *  - settings/byok/page.tsx: provider cards open dialogs with individually labelled key fields.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./fixtures";
 
 /**
  * Create an assistant workflow from an already-open NewWorkflowModal and wait
@@ -160,7 +160,7 @@ test.describe("Workflows", () => {
            quiet says nothing about whether it has mounted. The expect() below
            waits on the editor itself, which is what this test types into. */
 
-        /* Step 2: type into the WorkflowPromptEditor */
+        /* Step 2: type into the workflow prompt editor */
         // The editor is dynamically imported; wait until it is ready.
         // When readOnly=false (custom workflow), contenteditable="true".
         const editorDiv = page.locator(".ProseMirror");
@@ -208,6 +208,7 @@ test.describe("Settings", () => {
 
     test("settings page loads and shows user email", async ({
         page,
+        e2eAccount,
     }) => {
         await page.goto("/settings");
 
@@ -226,7 +227,7 @@ test.describe("Settings", () => {
         // value rather than page text.
         // REGRESSION: fails if user auth context is not propagated to the settings page
         await expect(page.getByPlaceholder("Enter your email")).toHaveValue(
-            "e2e@mike.local",
+            e2eAccount.email,
             { timeout: 10_000 },
         );
     });
@@ -300,9 +301,9 @@ test.describe("Settings", () => {
         }).toPass({ timeout: 90_000 });
     });
 
-    /* ── Test 7: API keys page loads and shows all three provider sections ── */
+    /* ── Test 7: BYOK provider cards and key dialogs ── */
 
-    test("API keys page loads and shows Anthropic, Google, and OpenAI sections", async ({
+    test("API keys page shows provider cards and opens key dialogs", async ({
         page,
     }) => {
         // API keys were split out of /settings/models into their own settings
@@ -315,22 +316,42 @@ test.describe("Settings", () => {
             page.getByRole("heading", { name: "Settings" }),
         ).toBeVisible({ timeout: 10_000 });
 
-        // The h2 "API Keys" section is present
-        // REGRESSION: fails if the /settings/byok page is broken or the API Keys section is removed
+        // The h2 "Saved Providers" and "Available Providers" sections are present
+        // REGRESSION: fails if the /settings/byok page is broken or its provider sections are removed
         await expect(
-            page.getByRole("heading", { name: "API Keys" }),
+            page.getByRole("heading", { name: "Saved Providers" }),
         ).toBeVisible({ timeout: 10_000 });
 
-        // All three provider label texts (from MODEL_API_KEY_FIELDS in api-keys/page.tsx) must appear
-        // REGRESSION: fails if any provider section is removed from the API keys page
-        await expect(
-            page.getByText("Anthropic (Claude) API Key"),
-        ).toBeVisible({ timeout: 10_000 });
-        await expect(page.getByText("Google (Gemini) API Key")).toBeVisible({
-            timeout: 10_000,
-        });
-        await expect(page.getByText("OpenAI API Key")).toBeVisible({
-            timeout: 10_000,
-        });
+        for (const [provider, label] of [
+            ["Anthropic (Claude)", "Anthropic (Claude) API Key"],
+            ["Google (Gemini)", "Google (Gemini) API Key"],
+            ["OpenAI", "OpenAI API Key"],
+            ["Amazon Bedrock", "Amazon Bedrock API Key"],
+            ["Azure OpenAI", "Azure OpenAI API Key"],
+            ["Azure AI Foundry", "Azure AI Foundry API Key"],
+            ["Google Vertex AI", "Google Vertex AI service-account key"],
+            ["xAI", "xAI API Key"],
+            ["OpenAI-compatible endpoint", "OpenAI-compatible endpoint API Key"],
+        ]) {
+            // No key is saved here, so each provider opens from its Add
+            // button. Exact: "Add OpenAI" is also the start of the
+            // OpenAI-compatible endpoint's button name.
+            const card = page.getByRole("button", {
+                name: `Add ${provider}`,
+                exact: true,
+            });
+            await expect(card).toBeVisible();
+            await card.click();
+            const dialog = page.getByRole("dialog", {
+                name: provider,
+                exact: true,
+            });
+            await expect(dialog).toBeVisible();
+            await expect(dialog.getByLabel(label, { exact: true })).toBeVisible();
+            await page.keyboard.press("Escape");
+            await expect(dialog).toBeHidden();
+            await expect(card).toBeFocused();
+        }
+
     });
 });

@@ -6,20 +6,46 @@
 // out, no req/res). The profile-row loaders (ensureProfileRow / loadProfile)
 // are exported for intra-module reuse by user.mfa.ts; the facade does NOT
 // re-export them, so they stay off the module's public surface.
-import { isSupportedOpenCodeGoModel } from "../../lib/llm";
+import {
+    isSafeAccountModelId,
+    isSupportedOpenCodeGoModel,
+    type AccountModelPrefix,
+} from "../../lib/llm";
 import { type RouterSlug } from "../../lib/routerModels";
 
 const CATALOG_MODEL_ID_RE = /^[^\s/]+\/[^\s]+$/;
+
+/** Accepts a router's catalog id or account-specific model id. */
+type ModelIdCheck = (id: string) => boolean;
+
+const accountModelId =
+    (prefix: AccountModelPrefix): ModelIdCheck =>
+    (id) =>
+        isSafeAccountModelId(prefix, id);
 
 /**
  * A router's catalog-id shape. OpenRouter and Vercel publish vendor/model
  * pairs; OpenCode Go publishes bare model names ("glm-5"), so requiring a
  * slash there would reject its entire catalog.
  */
-const ROUTER_MODEL_ID_RE: Record<RouterSlug, RegExp> = {
-    openrouter: CATALOG_MODEL_ID_RE,
-    vercel: CATALOG_MODEL_ID_RE,
-    "opencode-go": /^[^\s]+$/,
+const ROUTER_MODEL_ID_CHECK: Record<RouterSlug, ModelIdCheck> = {
+    openrouter: (id) => CATALOG_MODEL_ID_RE.test(id),
+    vercel: (id) => CATALOG_MODEL_ID_RE.test(id),
+    "opencode-go": (id) => /^[^\s]+$/.test(id),
+    // Account-specific ids with no published catalog: Bedrock model and
+    // inference-profile ids ("us.anthropic.claude-opus-5-5", ARNs), Azure
+    // and Foundry deployment names, Vertex model ids
+    // ("gemini-3.1-pro-preview", "claude-opus-5-5@20260101",
+    // "meta/llama-4-maverick-maas"), xAI model names and whatever a custom
+    // endpoint calls its models. Some of these are interpolated into request
+    // URLs, so they must pass the strict grammar in isSafeAccountModelId —
+    // the same check resolveModel applies at request time.
+    bedrock: accountModelId("bedrock"),
+    azure: accountModelId("azure"),
+    "azure-foundry": accountModelId("azure-foundry"),
+    vertex: accountModelId("vertex"),
+    xai: accountModelId("xai"),
+    custom: accountModelId("custom"),
 };
 
 /**
@@ -30,6 +56,12 @@ export const ROUTER_PROFILE_FIELDS: Record<RouterSlug, string> = {
     openrouter: "openRouterModels",
     vercel: "vercelModels",
     "opencode-go": "openCodeGoModels",
+    bedrock: "bedrockModels",
+    azure: "azureModels",
+    "azure-foundry": "azureFoundryModels",
+    vertex: "vertexModels",
+    xai: "xaiModels",
+    custom: "customModels",
 };
 
 export function normalizeRouterModels(
@@ -48,13 +80,13 @@ export function normalizeRouterModels(
         // the router's own slug (OpenRouter's "openrouter/auto", Vercel's
         // "vercel/v0-1.5-md"); for those the raw id IS the canonical form
         // and stripping would destroy it.
-        const catalogIdRe = ROUTER_MODEL_ID_RE[provider];
+        const isValidId = ROUTER_MODEL_ID_CHECK[provider];
         const stripped = trimmed.replace(new RegExp(`^${provider}/`), "");
-        const model = catalogIdRe.test(stripped) ? stripped : trimmed;
+        const model = isValidId(stripped) ? stripped : trimmed;
         if (
             !model ||
             model.length > 200 ||
-            !catalogIdRe.test(model) ||
+            !isValidId(model) ||
             (provider === "opencode-go" &&
                 !isSupportedOpenCodeGoModel(model)) ||
             seen.has(model)

@@ -1,14 +1,20 @@
 import crypto from "crypto";
 import dns from "dns/promises";
 import net from "net";
+import { promisify } from "node:util";
 import { Agent, fetch as undiciFetch } from "undici";
+import {
+    BlockedDestinationError,
+    isBlockedDestinationError,
+} from "../blockedDestination";
 import { isBlockedIp } from "../privateIp";
 import { configuredApiPublicUrl } from "../runtimeConfig";
 import {
-    BLOCKED_METADATA_HOSTS,
     HEADER_NAME_RE,
     MAX_CUSTOM_HEADER_VALUE_LENGTH,
     MAX_CUSTOM_HEADERS,
+    canonicalHostname,
+    isBlockedHostname,
     type ConnectorRow,
     type Db,
     type McpConnectorAuthConfig,
@@ -185,18 +191,62 @@ function truthyAnnotation(
     return annotations?.[key] === true;
 }
 
-export function toolRequiresConfirmation(
+export function isMcpWriteTool(
     annotations: Record<string, unknown> | null | undefined,
 ) {
-    // Gate only genuinely destructive tools behind human confirmation. We do
-    // NOT gate on openWorldHint (almost every useful connector — Gmail, Slack,
-    // GitHub — is "open world", so gating on it disables everything), and we
-    // require readOnlyHint to be *explicitly* false rather than merely absent
-    // (a missing hint must not be treated the same as readOnlyHint:false).
+    // Missing annotations do not establish read-only behavior. Only explicitly
+    // read-only, non-destructive tools may bypass the write protections.
     return (
         truthyAnnotation(annotations, "destructiveHint") ||
-        annotations?.readOnlyHint === false
+        annotations?.readOnlyHint !== true
     );
+}
+
+/** Also protect cached tools discovered before conservative classification. */
+export function mcpToolRequiresWriteAccess(
+    tool: Pick<ToolCacheRow, "annotations" | "requires_confirmation">,
+) {
+    return tool.requires_confirmation || isMcpWriteTool(tool.annotations);
+}
+
+const deriveCredentialFingerprint = promisify(crypto.scrypt);
+
+/** An opaque binding to the destination and credentials, stable across token refresh. */
+export async function mcpConnectionFingerprint(
+    connector: ConnectorRow,
+    oauthGrantId: string | null,
+) {
+    const config = decryptAuthConfig(connector);
+    // Use a slow, asynchronous derivation for potentially low-entropy custom
+    // credentials. The application key also prevents offline guessing from
+    // a fingerprint alone without blocking the request event loop.
+    const credentials =
+        connector.encrypted_auth_config || oauthGrantId
+            ? (
+                (await deriveCredentialFingerprint(
+                    JSON.stringify({
+                        oauthGrantId,
+                        bearerToken: config.bearerToken ?? null,
+                        headers: Object.entries(config.headers ?? {}).sort(([a], [b]) =>
+                            a.localeCompare(b),
+                        ),
+                    }),
+                    encryptionKey(),
+                    32,
+                )) as Buffer
+            ).toString("hex")
+            : null;
+    return crypto
+        .createHash("sha256")
+        .update(
+            JSON.stringify([
+                connector.server_url,
+                connector.transport,
+                connector.auth_type,
+                credentials,
+            ]),
+        )
+        .digest("hex");
 }
 
 function toToolSummary(row: ToolCacheRow): McpToolSummary {
@@ -209,7 +259,7 @@ function toToolSummary(row: ToolCacheRow): McpToolSummary {
         enabled: row.enabled,
         readOnly: truthyAnnotation(row.annotations, "readOnlyHint"),
         destructive: truthyAnnotation(row.annotations, "destructiveHint"),
-        requiresConfirmation: row.requires_confirmation,
+        write: mcpToolRequiresWriteAccess(row),
         lastSeenAt: row.last_seen_at,
     };
 }
@@ -228,11 +278,16 @@ export function toConnectorSummary(
         serverUrl: connector.server_url,
         authType: connector.auth_type ?? "none",
         enabled: connector.enabled,
+        requireWriteApproval: connector.require_write_approval === true,
+        readOnly: connector.read_only === true,
         hasAuthConfig: !!connector.encrypted_auth_config,
         customHeaderKeys: Object.keys(authConfig.headers ?? {}),
         oauthConnected: !!oauthToken?.encrypted_access_token,
         toolPolicy: connector.tool_policy ?? {},
-        tools: tools.map(toToolSummary),
+        tools: tools.map((tool) => ({
+            ...toToolSummary(tool),
+            enabled: tool.enabled && !(connector.read_only && mcpToolRequiresWriteAccess(tool)),
+        })),
         toolCount,
         createdAt: connector.created_at,
         updatedAt: connector.updated_at,
@@ -242,27 +297,29 @@ export function toConnectorSummary(
 // Private/reserved IP classification lives in lib/privateIp.ts so every
 // guarded egress check reuses the exact same ranges.
 
-export async function validateRemoteMcpUrl(rawUrl: string): Promise<string> {
+/** How guard errors name the URL when the caller does not say. */
+const DEFAULT_GUARD_LABEL = "MCP server URL";
+
+export async function validateRemoteMcpUrl(
+    rawUrl: string,
+    label: string = DEFAULT_GUARD_LABEL,
+): Promise<string> {
     let url: URL;
     try {
         url = new URL(rawUrl);
     } catch {
-        throw new Error("MCP server URL must be a valid URL.");
+        throw new Error(`${label} must be a valid URL.`);
     }
     if (url.protocol !== "https:") {
-        throw new Error("MCP server URL must use HTTPS.");
+        throw new Error(`${label} must use HTTPS.`);
     }
     url.username = "";
     url.password = "";
     url.hash = "";
 
-    const hostname = url.hostname.toLowerCase();
-    if (
-        hostname === "localhost" ||
-        hostname.endsWith(".localhost") ||
-        BLOCKED_METADATA_HOSTS.has(hostname)
-    ) {
-        throw new Error("MCP server URL points to a blocked host.");
+    const hostname = canonicalHostname(url);
+    if (isBlockedHostname(hostname)) {
+        throw new BlockedDestinationError(`${label} points to a blocked host.`);
     }
 
     // URL.hostname wraps IPv6 literals in brackets ("[::1]"), which net.isIP
@@ -278,7 +335,9 @@ export async function validateRemoteMcpUrl(rawUrl: string): Promise<string> {
         ? [{ address: literalHost }]
         : await dns.lookup(hostname, { all: true, verbatim: true });
     if (!addresses.length || addresses.some(({ address }) => isBlockedIp(address))) {
-        throw new Error("MCP server URL resolves to a blocked network address.");
+        throw new BlockedDestinationError(
+            `${label} resolves to a blocked network address.`,
+        );
     }
 
     return url.toString();
@@ -359,9 +418,11 @@ const guardedAgent = new Agent({
                         !addresses.length ||
                         addresses.some(({ address }) => isBlockedIp(address))
                     ) {
+                        // Shared by every caller; guardedFetch re-labels it
+                        // with the caller's own wording.
                         callback(
-                            new Error(
-                                "MCP server URL resolves to a blocked network address.",
+                            new BlockedDestinationError(
+                                "Destination resolves to a blocked network address.",
                             ),
                             [],
                         );
@@ -396,6 +457,40 @@ const MAX_MCP_REDIRECTS = 5;
 export async function guardedFetch(
     input: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
+    options: {
+        /**
+         * What the URL is, as guard errors should call it ("Model endpoint
+         * URL"). Defaults to the MCP wording this guard was written for.
+         */
+        label?: string;
+    } = {},
+): Promise<Response> {
+    const label = options.label ?? DEFAULT_GUARD_LABEL;
+    try {
+        return await guardedFetchUnlabelled(input, init, label);
+    } catch (error) {
+        // A connect-time rejection surfaces from undici as "fetch failed"
+        // with the shared agent's caller-neutral error as its cause.
+        if (
+            isBlockedDestinationError(error) &&
+            !(
+                error instanceof BlockedDestinationError &&
+                error.message.startsWith(label)
+            )
+        ) {
+            throw new BlockedDestinationError(
+                `${label} resolves to a blocked network address.`,
+                { cause: error },
+            );
+        }
+        throw error;
+    }
+}
+
+async function guardedFetchUnlabelled(
+    input: Parameters<typeof fetch>[0],
+    init: Parameters<typeof fetch>[1] | undefined,
+    label: string,
 ): Promise<Response> {
     const isRequest = typeof input === "object" && input instanceof Request;
     let url =
@@ -404,7 +499,7 @@ export async function guardedFetch(
             : input instanceof URL
               ? input.toString()
               : input.url;
-    await validateRemoteMcpUrl(url);
+    await validateRemoteMcpUrl(url, label);
     // The request MUST go through the `undici` package's own `fetch`, not the
     // global one. Node's built-in fetch is a copy of undici frozen at the
     // version Node was built with (6.x on Node 22), while `guardedAgent` comes
@@ -460,7 +555,7 @@ export async function guardedFetch(
         }
         await response.body?.cancel().catch(() => undefined);
 
-        const validated = await validateRemoteMcpUrl(target);
+        const validated = await validateRemoteMcpUrl(target, label);
         // Header names configured for connector authentication are arbitrary,
         // so there is no complete denylist for secrets. On a cross-origin hop,
         // retain only the small set needed for GET/HEAD content negotiation.

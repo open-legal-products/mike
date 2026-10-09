@@ -1,6 +1,23 @@
+import { availableParallelism, totalmem } from "node:os";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+
+// Local worker cap. Vitest's default for `vitest run` is one fork per CPU
+// core minus one, so on a 10-12 core laptop a single `npm test` starts 9-11
+// forks, and running the frontend and backend suites together doubles that.
+// The frontend forks each boot jsdom. That was enough to crash a teammate's
+// laptop. Locally we use at most half the cores and at most one worker per
+// 4 GiB of RAM (8 GiB -> 2, 16 GiB -> 4). CI runners are dedicated machines,
+// so they keep Vitest's default. To change the cap for one run, pass
+// `--maxWorkers=<n>` or set VITEST_MAX_WORKERS.
+const localMaxWorkers = Math.max(
+    Math.min(
+        Math.floor(availableParallelism() / 2),
+        Math.floor(totalmem() / (4 * 1024 ** 3)),
+    ),
+    1,
+);
 
 const resolvePath = (relative: string) =>
     fileURLToPath(new URL(relative, import.meta.url));
@@ -11,9 +28,25 @@ export default defineConfig({
         // Mirror the `@/*` path alias from tsconfig.json so unit tests resolve
         // the same module specifiers the app uses.
         alias: [
+            // Cross-target tests resolve runtime dependencies from this package,
+            // including on CI where word-addin/node_modules is absent.
+            {
+                find: /^react$/,
+                replacement: resolvePath("./node_modules/react/index.js"),
+            },
+            {
+                find: /^@sentry\/react$/,
+                replacement: resolvePath("./node_modules/@sentry/react/build/esm/index.js"),
+            },
             {
                 find: /^@mike\/upload-session-client$/,
                 replacement: resolvePath("./src/shared/api/uploadSessionClient.ts"),
+            },
+            // Word add-in sources under test import the shared model catalog
+            // through the add-in's alias.
+            {
+                find: /^@mike\/model-catalog$/,
+                replacement: resolvePath("./src/shared/lib/modelCatalog.ts"),
             },
             {
                 find: /^@\/(.*)$/,
@@ -28,13 +61,43 @@ export default defineConfig({
             // the same client API the app uses.
             {
                 find: /^@sentry\/nextjs$/,
-                replacement: "@sentry/react",
+                replacement: resolvePath("./node_modules/@sentry/react/build/esm/index.js"),
+            },
+            // The Word add-in consumes shared modules through per-file
+            // `@mike/*` aliases (see word-addin/webpack.config.js). Mirror them
+            // so add-in modules under test here resolve the same files.
+            {
+                find: "@mike/sentry-event",
+                replacement: resolvePath("./src/shared/lib/sentryEvent.ts"),
+            },
+            {
+                find: "@mike/user-error",
+                replacement: resolvePath("./src/shared/lib/userError.ts"),
+            },
+            {
+                find: "@mike/toast-store",
+                replacement: resolvePath("./src/shared/lib/toastStore.ts"),
+            },
+            {
+                find: "@mike/toast-ui",
+                replacement: resolvePath("./src/shared/ui/ToastUI.tsx"),
+            },
+            {
+                find: "@mike/secure-uuid",
+                replacement: resolvePath("./src/shared/lib/secureUuid.ts"),
+            },
+            {
+                find: "@mike/upload-session-client",
+                replacement: resolvePath(
+                    "./src/shared/api/uploadSessionClient.ts",
+                ),
             },
         ],
     },
     test: {
         globals: true,
         environment: "jsdom",
+        maxWorkers: process.env.CI ? undefined : localMaxWorkers,
         setupFiles: ["./vitest.setup.ts"],
         // jsdom 27's CSS-color parser (@asamuzakjp/css-color) is CJS but
         // require()s the ESM-only @csstools/css-calc. That require() happens

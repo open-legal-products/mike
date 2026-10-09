@@ -12,13 +12,11 @@ import { ChevronLeft, Loader2, Plus, Search, X } from "lucide-react";
 import { usePageChrome } from "@/app/contexts/PageChromeContext";
 import { cn } from "@/app/lib/utils";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
 } from "@/app/components/ui/liquid-surface";
@@ -121,15 +119,13 @@ export function PageHeader({
             className={cn(
                 "flex items-center justify-between",
                 "mx-4 md:mx-8",
-                "min-h-[76px] pb-5 pt-4",
+                "min-h-[76px] pb-5 pt-3",
                 shrink && "shrink-0",
             )}
         >
             {headerContent}
             {hasActions && (
-                // Pinned to the top rather than centred, so the buttons line up
-                // with the sidebar's first control however tall the title grows.
-                <div className="ml-4 mt-0.5 hidden shrink-0 items-center gap-3 self-start md:flex">
+                <div className="ml-4 hidden shrink-0 items-center gap-3 md:flex">
                     <PageHeaderActionGroups
                         groupedActionItems={groupedActionItems}
                         actionsDisabled={actionsDisabled}
@@ -585,8 +581,8 @@ function CollapsedBreadcrumbGroup({
 }) {
     return (
         <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
+            <Dropdown>
+                <DropdownTrigger asChild>
                     <button
                         type="button"
                         className="text-gray-500 transition-colors hover:text-gray-700"
@@ -595,13 +591,13 @@ function CollapsedBreadcrumbGroup({
                     >
                         …
                     </button>
-                </DropdownMenuTrigger>
-                <LiquidDropdownContent
+                </DropdownTrigger>
+                <DropdownContent
                     align="start"
-                    className="z-[150] min-w-44 p-1 font-sans"
+                    className="min-w-44 p-1 font-sans"
                 >
                     {items.map((item, index) => (
-                        <LiquidDropdownItem
+                        <DropdownItem
                             key={index}
                             disabled={!item.onClick}
                             onSelect={item.onClick}
@@ -614,10 +610,10 @@ function CollapsedBreadcrumbGroup({
                             }
                         >
                             {item.label}
-                        </LiquidDropdownItem>
+                        </DropdownItem>
                     ))}
-                </LiquidDropdownContent>
-            </DropdownMenu>
+                </DropdownContent>
+            </Dropdown>
             <span className="text-gray-300">›</span>
         </span>
     );

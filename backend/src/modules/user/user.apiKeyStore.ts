@@ -2,19 +2,47 @@ import crypto from "crypto";
 import { createServerSupabase } from "../../lib/supabase";
 import type { Db } from "../../lib/supabase";
 import { logError } from "../../lib/log";
-import type { UserApiKeys } from "../../lib/llm";
+import type { ProviderSettings, UserApiKeys } from "../../lib/llm";
+import {
+    envAzureCredentials,
+    envAzureFoundryCredentials,
+    envBedrockCredentials,
+    envVertexCredentials,
+    envVertexServiceAccountKey,
+    normalizeAwsRegion,
+    normalizeAzureEndpoint,
+    normalizeAzureFoundryEndpoint,
+    normalizeCustomBaseUrl,
+    normalizeVertexLocation,
+} from "../../lib/llm/cloudProviders";
 
 export type ApiKeyProvider =
     | "claude"
     | "gemini"
     | "openai"
+    | "mistral"
     | "openrouter"
     | "vercel"
     | "opencode-go"
+    | "bedrock"
+    | "azure"
+    | "azure-foundry"
+    | "vertex"
+    | "xai"
+    | "custom"
     | "courtlistener";
 export type ApiKeySource = "user" | "env" | null;
+/** Providers whose key is only usable together with a non-secret setting. */
+export type SettingsApiKeyProvider = keyof ProviderSettings;
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
     sources: Record<ApiKeyProvider, ApiKeySource>;
+    enabled: Partial<Record<ApiKeyProvider, boolean>>;
+    /**
+     * The settings saved with the user's own key. Deployment (env) settings
+     * are not echoed back: an operator's Azure resource is not the user's
+     * business.
+     */
+    settings: ProviderSettings;
 };
 
 type EncryptedKeyRow = {
@@ -22,17 +50,73 @@ type EncryptedKeyRow = {
     encrypted_key: string;
     iv: string;
     auth_tag: string;
+    settings?: unknown;
+    enabled?: boolean;
 };
 
 const PROVIDERS: ApiKeyProvider[] = [
     "claude",
     "gemini",
     "openai",
+    "mistral",
     "openrouter",
     "vercel",
     "opencode-go",
+    "bedrock",
+    "azure",
+    "azure-foundry",
+    "vertex",
+    "xai",
+    "custom",
     "courtlistener",
 ];
+
+const SETTINGS_PROVIDERS: readonly SettingsApiKeyProvider[] = [
+    "bedrock",
+    "azure",
+    "azure-foundry",
+    "vertex",
+    "custom",
+];
+
+export function isSettingsApiKeyProvider(
+    provider: ApiKeyProvider,
+): provider is SettingsApiKeyProvider {
+    return (SETTINGS_PROVIDERS as readonly string[]).includes(provider);
+}
+
+/**
+ * Validate the setting a key must be saved with ({ region }, { endpoint },
+ * { location } or { baseUrl }) and return it as a one-entry
+ * ProviderSettings, or null when the value is missing or malformed.
+ */
+export function normalizeProviderSettings(
+    provider: SettingsApiKeyProvider,
+    value: unknown,
+): ProviderSettings | null {
+    const record =
+        value && typeof value === "object"
+            ? (value as Record<string, unknown>)
+            : {};
+    if (provider === "bedrock") {
+        const region = normalizeAwsRegion(record.region);
+        return region ? { bedrock: { region } } : null;
+    }
+    if (provider === "azure") {
+        const endpoint = normalizeAzureEndpoint(record.endpoint);
+        return endpoint ? { azure: { endpoint } } : null;
+    }
+    if (provider === "azure-foundry") {
+        const endpoint = normalizeAzureFoundryEndpoint(record.endpoint);
+        return endpoint ? { "azure-foundry": { endpoint } } : null;
+    }
+    if (provider === "vertex") {
+        const location = normalizeVertexLocation(record.location);
+        return location ? { vertex: { location } } : null;
+    }
+    const baseUrl = normalizeCustomBaseUrl(record.baseUrl);
+    return baseUrl ? { custom: { baseUrl } } : null;
+}
 
 function envApiKey(provider: ApiKeyProvider): string | null {
     switch (provider) {
@@ -44,6 +128,8 @@ function envApiKey(provider: ApiKeyProvider): string | null {
             );
         case "gemini":
             return process.env.GEMINI_API_KEY?.trim() || null;
+        case "mistral":
+            return process.env.MISTRAL_API_KEY?.trim() || null;
         case "openai":
             return process.env.OPENAI_API_KEY?.trim() || null;
         case "openrouter":
@@ -56,6 +142,22 @@ function envApiKey(provider: ApiKeyProvider): string | null {
             );
         case "opencode-go":
             return process.env.OPENCODE_API_KEY?.trim() || null;
+        // A cloud key without its region/endpoint cannot be used, so the
+        // environment only counts as configured when both halves are set.
+        case "bedrock":
+            return envBedrockCredentials()?.apiKey ?? null;
+        case "azure":
+            return envAzureCredentials()?.apiKey ?? null;
+        case "azure-foundry":
+            return envAzureFoundryCredentials()?.apiKey ?? null;
+        case "vertex":
+            return envVertexCredentials() ? envVertexServiceAccountKey() : null;
+        case "xai":
+            return process.env.XAI_API_KEY?.trim() || null;
+        // A custom endpoint is always the user's own; deployments declare
+        // shared endpoints in MIKE_MODEL_CONFIG_JSON.
+        case "custom":
+            return null;
         case "courtlistener":
             return process.env.COURTLISTENER_API_TOKEN?.trim() || null;
         default:
@@ -138,19 +240,35 @@ export async function getUserApiKeyStatus(
         claude: false,
         gemini: false,
         openai: false,
+        mistral: false,
         openrouter: false,
         vercel: false,
         "opencode-go": false,
+        bedrock: false,
+        azure: false,
+        "azure-foundry": false,
+        vertex: false,
+        xai: false,
+        custom: false,
         courtlistener: false,
         sources: {
             claude: null,
             gemini: null,
             openai: null,
+            mistral: null,
             openrouter: null,
             vercel: null,
             "opencode-go": null,
+            bedrock: null,
+            azure: null,
+            "azure-foundry": null,
+            vertex: null,
+            xai: null,
+            custom: null,
             courtlistener: null,
         },
+        settings: {},
+        enabled: {},
     };
 
     for (const provider of PROVIDERS) {
@@ -162,16 +280,33 @@ export async function getUserApiKeyStatus(
 
     const { data, error } = await db
         .from("user_api_keys")
-        .select("provider")
+        .select("provider, settings, enabled")
         .eq("user_id", userId);
     if (error) throw error;
 
     for (const row of data ?? []) {
         const provider = normalizeApiKeyProvider(String(row.provider));
-        if (provider) {
-            status[provider] = true;
+        if (!provider) continue;
+        status.enabled[provider] = row.enabled !== false;
+        if (row.enabled === false) {
+            status[provider] = false;
             status.sources[provider] = "user";
         }
+        if (isSettingsApiKeyProvider(provider)) {
+            // A saved key without a valid setting cannot be used; report it
+            // as not configured rather than as a key that will fail later.
+            // Not as the environment's key either: getUserApiKeys does not
+            // fall back to it for this user (see unusableProviders).
+            const settings = normalizeProviderSettings(provider, row.settings);
+            if (!settings) {
+                status[provider] = false;
+                status.sources[provider] = null;
+                continue;
+            }
+            Object.assign(status.settings, settings);
+        }
+        status[provider] = row.enabled !== false;
+        status.sources[provider] = "user";
     }
 
     return status;
@@ -185,23 +320,70 @@ export async function getUserApiKeys(
         claude: envApiKey("claude"),
         gemini: envApiKey("gemini"),
         openai: envApiKey("openai"),
+        mistral: envApiKey("mistral"),
         openrouter: envApiKey("openrouter"),
         vercel: envApiKey("vercel"),
         "opencode-go": envApiKey("opencode-go"),
+        bedrock: envApiKey("bedrock"),
+        azure: envApiKey("azure"),
+        "azure-foundry": envApiKey("azure-foundry"),
+        vertex: envApiKey("vertex"),
+        xai: envApiKey("xai"),
+        custom: envApiKey("custom"),
         courtlistener: envApiKey("courtlistener"),
     };
+    const envBedrock = envBedrockCredentials();
+    const envAzure = envAzureCredentials();
+    const envAzureFoundry = envAzureFoundryCredentials();
+    const envVertex = envVertexCredentials();
+    const providerSettings: ProviderSettings = {
+        bedrock: envBedrock ? { region: envBedrock.region } : null,
+        azure: envAzure ? { endpoint: envAzure.endpoint } : null,
+        "azure-foundry": envAzureFoundry
+            ? { endpoint: envAzureFoundry.endpoint }
+            : null,
+        vertex: envVertex ? { location: envVertex.location } : null,
+        custom: null,
+    };
+    apiKeys.providerSettings = providerSettings;
 
     const { data, error } = await db
         .from("user_api_keys")
-        .select("provider, encrypted_key, iv, auth_tag")
+        .select("provider, encrypted_key, iv, auth_tag, settings, enabled")
         .eq("user_id", userId);
     if (error) throw error;
 
     for (const row of (data ?? []) as EncryptedKeyRow[]) {
         const provider = normalizeApiKeyProvider(row.provider);
         if (!provider) continue;
+        if (row.enabled === false) {
+            apiKeys[provider] = null;
+            apiKeys.disabledProviders = [...(apiKeys.disabledProviders ?? []), provider];
+            if (isSettingsApiKeyProvider(provider)) providerSettings[provider] = null;
+            continue;
+        }
         const userKey = decrypt(row)?.trim() || null;
-        if (userKey) apiKeys[provider] = userKey;
+        if (!userKey) continue;
+        if (isSettingsApiKeyProvider(provider)) {
+            // The user's key replaces the environment's key AND setting, so
+            // it never runs against the operator's region or resource.
+            const settings = normalizeProviderSettings(provider, row.settings);
+            if (!settings) {
+                // The saved key is unusable without its setting, and the
+                // environment's pair must not quietly take its place: drop
+                // both and mark the provider so cloudProviders.ts does not
+                // fall back to the deployment's credentials either.
+                apiKeys[provider] = null;
+                providerSettings[provider] = null;
+                apiKeys.unusableProviders = [
+                    ...(apiKeys.unusableProviders ?? []),
+                    provider,
+                ];
+                continue;
+            }
+            Object.assign(providerSettings, settings);
+        }
+        apiKeys[provider] = userKey;
     }
 
     return apiKeys;
@@ -212,6 +394,7 @@ export async function saveUserApiKey(
     provider: ApiKeyProvider,
     value: string | null,
     db: Db = createServerSupabase(),
+    settings: ProviderSettings = {},
 ): Promise<void> {
     const normalized = value?.trim() || null;
     if (!normalized) {
@@ -229,9 +412,58 @@ export async function saveUserApiKey(
             user_id: userId,
             provider,
             ...encrypt(normalized),
+            settings: isSettingsApiKeyProvider(provider)
+                ? (settings[provider] ?? null)
+                : null,
+            // A new key is a request to use it: without this, ON CONFLICT
+            // keeps a previous enabled=false and the provider stays off.
+            enabled: true,
             updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id,provider" },
     );
     if (error) throw error;
+}
+
+/**
+ * Change the setting saved with an existing key (a region, endpoint,
+ * location or base URL) without
+ * re-entering the key. Returns false when the user has no saved key for the
+ * provider.
+ */
+/**
+ * The raw settings column saved with a user's key, wrapped so "no key saved"
+ * (null) is distinguishable from "a key saved without valid settings".
+ */
+export async function getSavedApiKeySettings(
+    userId: string,
+    provider: SettingsApiKeyProvider,
+    db: Db = createServerSupabase(),
+): Promise<{ settings: unknown } | null> {
+    const { data, error } = await db
+        .from("user_api_keys")
+        .select("settings")
+        .eq("user_id", userId)
+        .eq("provider", provider)
+        .maybeSingle();
+    if (error) throw error;
+    return data ? { settings: (data as { settings?: unknown }).settings } : null;
+}
+
+export async function updateUserApiKeySettings(
+    userId: string,
+    provider: SettingsApiKeyProvider,
+    settings: ProviderSettings,
+    db: Db = createServerSupabase(),
+): Promise<boolean> {
+    const value = settings[provider];
+    if (!value) throw new Error(`Missing ${provider} settings`);
+    const { data, error } = await db
+        .from("user_api_keys")
+        .update({ settings: value, updated_at: new Date().toISOString() })
+        .eq("user_id", userId)
+        .eq("provider", provider)
+        .select("provider");
+    if (error) throw error;
+    return (data ?? []).length > 0;
 }

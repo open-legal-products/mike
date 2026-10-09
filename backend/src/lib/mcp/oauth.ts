@@ -275,46 +275,6 @@ export function mcpConnectorSetupInstructions(
     return provider.setupInstructions();
 }
 
-async function registerOAuthClient(
-    metadata: OAuthMetadata,
-    redirectUri: string,
-) {
-    if (!metadata.registrationEndpoint) return null;
-    const response = await guardedFetch(metadata.registrationEndpoint, {
-        method: "POST",
-        headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            client_name: "Mike",
-            redirect_uris: [redirectUri],
-            grant_types: ["authorization_code", "refresh_token"],
-            response_types: ["code"],
-            token_endpoint_auth_method: "client_secret_post",
-        }),
-    });
-    if (!response.ok) return null;
-    const parsed = (await response.json()) as Record<string, unknown>;
-    return typeof parsed.client_id === "string"
-        ? {
-              clientId: parsed.client_id,
-              clientSecret:
-                  typeof parsed.client_secret === "string"
-                      ? parsed.client_secret
-                      : undefined,
-          }
-        : null;
-}
-
-function scopeForOAuth(serverUrl: string, metadata: OAuthMetadata) {
-    const configured = oauthClientEnvFor(serverUrl).scope;
-    if (configured) return configured;
-    return metadata.scopesSupported?.length
-        ? metadata.scopesSupported.join(" ")
-        : undefined;
-}
-
 export async function loadOAuthToken(connectorId: string, db: Db) {
     const { data, error } = await db
         .from("user_mcp_oauth_tokens")
@@ -490,24 +450,6 @@ export async function refreshOAuthAccessToken(row: OAuthTokenRow, db: Db) {
     return updated;
 }
 
-async function oauthBearerToken(connector: ConnectorRow, db: Db) {
-    let token = await loadOAuthToken(connector.id, db);
-    if (!token?.encrypted_access_token) {
-        throw new McpOAuthRequiredError();
-    }
-    const expiresAt = token.expires_at ? Date.parse(token.expires_at) : null;
-    if (expiresAt && expiresAt < Date.now() + 60_000) {
-        token = await refreshOAuthAccessToken(token, db);
-    }
-    const accessToken = decryptString(
-        token.encrypted_access_token,
-        token.access_token_iv,
-        token.access_token_tag,
-    );
-    if (!accessToken) throw new McpOAuthRequiredError();
-    return accessToken;
-}
-
 export class DbMcpOAuthProvider implements OAuthClientProvider {
     public lastAuthorizeUrl: URL | null = null;
 
@@ -622,6 +564,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
             typeof tokens.expires_in === "number" ? tokens.expires_in : null;
         const row = {
             connector_id: this.connector.id,
+            ...(this.mode === "initiate" ? { grant_id: crypto.randomUUID() } : {}),
             ...tokenSecretPatch("access_token", tokens.access_token),
             ...tokenSecretPatch(
                 "refresh_token",

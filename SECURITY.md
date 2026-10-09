@@ -43,3 +43,39 @@ This project has a solo maintainer. You can expect an acknowledgment within
   prompts through model output, and similar.
 - Secrets accidentally committed to this repository's history are also worth
   a private report, even though CI runs a secret scanner.
+
+## Dependency updates
+
+Dependabot opens update suggestions as pull requests. The group name appears
+in each PR title and gives the review order:
+
+1. **priority-1-security-fixes:** advisory-driven fixes in every npm workspace
+   and GitHub Actions. Review critical/high severity and production exposure
+   first; do not wait for unrelated feature PRs.
+2. **priority-2-production:** grouped weekly updates to application dependencies.
+3. **priority-3-development / priority-3-actions:** grouped weekly updates to
+   test, build and workflow tooling.
+
+This is a review priority, not an automatic approval or merge. Each PR still
+runs CI. The security audit reports all four workspaces even when one fails;
+its high/critical gate is not weakened by these groups.
+
+A repository admin must enable **Dependabot alerts** and **Dependabot security
+updates** under Settings → Advanced Security. A committed `dependabot.yml`
+alone enables version-update scheduling, not advisory-driven security fixes.
+Security fixes do not wait for the weekly version-update schedule. The
+configuration takes effect once merged into the default branch.
+
+Verify setup in the repository's Security → Dependabot view and updater logs.
+An admin can also check `GET /repos/open-legal-products/mike/vulnerability-alerts`
+and `GET /repos/open-legal-products/mike/automated-security-fixes` (HTTP 204 means
+that setting is enabled). A 404 from a non-admin credential is inconclusive;
+check the settings as an admin. If the updater cannot produce a fix, inspect
+its error and open a focused manual dependency PR. Do not suppress a newly
+fixable advisory to make unrelated PRs green.
+
+For runtime packages held by an npm override, update the override's minimum
+and the matching lockfile together. For example, the sharp/librsvg advisory
+[GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w)
+requires sharp 0.35.5 or later. Validate native image decoding as well as the
+audit; a version-only assertion does not establish that the binary loads.

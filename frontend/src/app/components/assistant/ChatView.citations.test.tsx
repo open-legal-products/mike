@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Chat, Citation, Message } from "@/app/components/shared/types";
+import type { Chat, Citation, EditAnnotation, Message } from "@/app/components/shared/types";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import { ChatView } from "./ChatView";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
@@ -41,12 +41,12 @@ vi.mock("./AssistantWorkflowModal", () => ({
 }));
 vi.mock("./ChatAccessModal", () => ({ ChatAccessModal: () => null }));
 // Keep the tab helpers (ChatView computes tab ids with them) and stub only
-// the panel itself; rendering a real document viewer is DocPanel's business,
+// the panel itself; rendering a real document viewer is DocumentContent's business,
 // not this file's.
 vi.mock("./AssistantSidePanel", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./AssistantSidePanel")>()),
-    AssistantSidePanel: ({ tabs }: { tabs: { id: string }[] }) => (
-        <div data-testid="panel-tabs">{tabs.length}</div>
+    AssistantSidePanel: ({ tabs }: { tabs: { id: string; kind: string; document: { version_id: string | null } }[] }) => (
+        <div data-testid="panel-tabs" data-kind={tabs[0]?.kind} data-version={tabs[0]?.document.version_id}>{tabs.length}</div>
     ),
 }));
 
@@ -55,10 +55,14 @@ vi.mock("./AssistantSidePanel", async (importOriginal) => ({
 vi.mock("./AssistantMessage", () => ({
     AssistantMessage: ({
         citations,
+        activeCitation,
         onCitationClick,
         onOpenDocument,
+        onEditViewClick,
     }: {
+        onEditViewClick?: (edit: EditAnnotation, filename: string) => void;
         citations?: Citation[];
+        activeCitation?: Citation | null;
         onCitationClick?: (citation: Citation) => void;
         onOpenDocument?: (args: {
             documentId: string;
@@ -70,6 +74,7 @@ vi.mock("./AssistantMessage", () => ({
         <>
             <button
                 type="button"
+                aria-pressed={activeCitation === citations?.[0]}
                 onClick={() => citations?.[0] && onCitationClick?.(citations[0])}
             >
                 citation pill
@@ -86,6 +91,9 @@ vi.mock("./AssistantMessage", () => ({
                 }
             >
                 download card
+            </button>
+            <button type="button" onClick={() => onEditViewClick?.({ edit_id: "e1", document_id: "doc-1", version_id: "", version_number: 1, change_id: "c1", deleted_text: "old", inserted_text: "new", status: "pending" }, "agreement.docx")}>
+                legacy edit
             </button>
         </>
     ),
@@ -141,7 +149,7 @@ function renderView(overrides: Partial<Chat> = {}) {
                 isResponseLoading={false}
                 handleChat={vi.fn().mockResolvedValue("chat-1")}
                 cancel={vi.fn()}
-                detach={vi.fn()}
+                onNewChat={vi.fn()}
                 canSend
             />
         </PageChromeContext.Provider>,
@@ -260,7 +268,7 @@ describe("ChatView citation on a chat shared without its documents", () => {
         ).toBeInTheDocument();
     });
 
-    it("opens the citation normally when the versions are readable", async () => {
+    it.each([null, "project-1"])("toggles citations off and back on in chat with project %s", async (projectId) => {
         listDocumentVersions.mockResolvedValue({
             current_version_id: "v1",
             versions: [
@@ -273,11 +281,42 @@ describe("ChatView citation on a chat shared without its documents", () => {
                 },
             ],
         });
-        renderView();
+        renderView({ project_id: projectId });
 
         fireEvent.click(screen.getByRole("button", { name: "citation pill" }));
 
         expect(await screen.findByTestId("panel-tabs")).toHaveTextContent("1");
         expect(screen.queryByText("Document not shared")).not.toBeInTheDocument();
+        const pill = screen.getByRole("button", { name: "citation pill" });
+        expect(pill).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "citation");
+        fireEvent.click(pill);
+        expect(pill).toHaveAttribute("aria-pressed", "false");
+        expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "document");
+        expect(screen.getByTestId("panel-tabs")).toHaveTextContent("1");
+        expect(listDocumentVersions).toHaveBeenCalledTimes(1);
+        fireEvent.click(pill);
+        await waitFor(() => expect(pill).toHaveAttribute("aria-pressed", "true"));
+        expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "citation");
     });
+});
+
+
+it("resolves a legacy edit to its historical version", async () => {
+    listDocumentVersions.mockResolvedValue({ current_version_id: "v2", versions: [
+        { id: "v1", version_number: 1, filename: "agreement.docx" },
+        { id: "v2", version_number: 2, filename: "agreement.docx" },
+    ] });
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "legacy edit" }));
+    expect(await screen.findByTestId("panel-tabs")).toHaveAttribute("data-version", "v1");
+    expect(screen.getByTestId("panel-tabs")).toHaveAttribute("data-kind", "edit");
+});
+
+it("reports a missing legacy edit version without opening the current version", async () => {
+    listDocumentVersions.mockResolvedValue({ current_version_id: "v2", versions: [{ id: "v2", version_number: 2, filename: "agreement.docx" }] });
+    renderView();
+    fireEvent.click(screen.getByRole("button", { name: "legacy edit" }));
+    expect(await screen.findByText("This document could not be opened. Please try again.")).toBeVisible();
+    expect(screen.queryByTestId("panel-tabs")).toBeNull();
 });

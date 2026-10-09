@@ -12,10 +12,19 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    branches: [main]
+
+# Don't pile up runs on rapid pushes to the same PR: a new push cancels the
+# superseded run so it stops holding job slots (the org's concurrent-job cap is
+# shared by every workflow). Pushes to main each get their own group (keyed by
+# sha) and are never cancelled.
+concurrency:
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   backend:
@@ -60,6 +69,9 @@ jobs:
       - run: npm run typecheck:test
 
       - run: npm run typecheck:contracts
+
+      - name: Google Workspace approval database guarantees
+        run: bash scripts/test-google-workspace-db.sh
 
   frontend:
     name: Frontend build and tests

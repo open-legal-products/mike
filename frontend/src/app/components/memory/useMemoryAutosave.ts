@@ -202,9 +202,12 @@ export function useMemoryAutosave<Result>({
   useEffect(() => {
     mountedRef.current = true;
     return () => {
+      // An in-flight write counts as unsaved too: if the draft was reverted
+      // while it ran, it would otherwise land and overwrite the revert.
       const shouldFlush =
         flushOnUnmountRef.current &&
-        valueRef.current !== persistedValueRef.current;
+        (activeSaveRef.current ||
+          valueRef.current !== persistedValueRef.current);
       clearDebounce();
       clearSavedTimer();
       mountedRef.current = false;

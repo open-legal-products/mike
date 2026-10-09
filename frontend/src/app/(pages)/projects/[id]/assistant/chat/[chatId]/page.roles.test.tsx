@@ -51,6 +51,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push, replace: vi.fn() }),
+    usePathname: () => window.location.pathname,
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
@@ -104,7 +105,7 @@ vi.mock("@/app/components/shared/views/SpreadsheetView", () => ({
 vi.mock("@/app/components/shared/views/DocxView", () => ({
     DocxView: () => null,
 }));
-vi.mock("@/app/components/chat/mike-icon", () => ({ MikeIcon: () => null }));
+vi.mock("@/shared/ui/MikeIconUI", () => ({ MikeIcon: () => null }));
 
 // PageHeader renders its custom actions; HeaderActionsMenu is flattened to
 // plain buttons so the test can drive the page's handlers without Radix.
@@ -178,6 +179,7 @@ function chatDetail(userId = "creator") {
 // The page reads its route params with React's `use()`, which suspends until
 // the promise settles — so it needs a boundary and a first await.
 async function renderPage() {
+    window.history.replaceState(null, "", "/projects/p1/assistant/chat/c1");
     await act(async () => {
         render(
             <Suspense fallback={null}>

@@ -340,7 +340,7 @@ function QuickActionForm({
   error: string | null;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto pb-5">
+    <div data-modal-scroll="vertical" className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto pb-5">
       <div>
         <ModalFieldLabel htmlFor="quick-action-name">Name</ModalFieldLabel>
         <ModalTextInput

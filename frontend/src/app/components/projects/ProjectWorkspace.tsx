@@ -147,10 +147,6 @@ export function useProjectWorkspace() {
     return value;
 }
 
-export function useProjectWorkspaceOptional() {
-    return useContext(ProjectWorkspaceContext);
-}
-
 function activeSectionFromSegments(
     segments: string[],
 ): ProjectWorkspaceSection {
@@ -713,7 +709,7 @@ export function ProjectSectionToolbar({
             }}
             leading={
                 backAction ? (
-                    <TabPillButtonUI onClick={backAction}>
+                    <TabPillButtonUI onClick={backAction} className="pl-2">
                         <ChevronLeft className="h-3.5 w-3.5" />
                         Back
                     </TabPillButtonUI>

@@ -59,8 +59,8 @@ steps manually:
 
    When the backend uses local object storage, also set
    `R2_PUBLIC_ENDPOINT_URL=https://localhost:3200` in `backend/.env`. Signed
-   upload URLs then stay HTTPS in the Word task pane and webpack forwards the
-   the configured bucket path to `OBJECT_STORAGE_PROXY_TARGET` without changing
+   upload and download URLs then stay HTTPS in the Word task pane and webpack
+   forwards the configured bucket path to `OBJECT_STORAGE_PROXY_TARGET` without changing
    the signed host header.
 
 3. Install the trusted development certificate:
@@ -221,14 +221,20 @@ at the top of `e2e-live/anthropic-stub.mjs`.
 The task pane is independently bundled. When the web design system changes,
 compare:
 
-- `src/shared/styles/tokens.css` with `frontend/src/app/globals.css`;
-- `src/taskpane/lib/modelCatalog.ts` with the web model catalog; and
+- `src/shared/styles/tokens.css` with `frontend/src/app/globals.css`; and
 - `src/shared/chat/ChatInput.tsx` and the vendored UI primitives with their web
   counterparts, retaining narrow-pane adaptations.
 
+Design tokens are not compared by hand: both targets import
+`frontend/src/shared/ui/DesignTokensUI.css`, and `src/shared/styles/tokens.css`
+holds only the add-in's base layer.
+
 Files with no add-in-specific behavior are not vendored at all: they are
 aliased straight at the web source (`@mike/*` in `webpack.config.js` and
-`tsconfig.json`), so there is nothing to keep in sync.
+`tsconfig.json`), so there is nothing to keep in sync. The model catalog is one
+of them: `@mike/model-catalog` is `frontend/src/shared/lib/modelCatalog.ts`,
+and `src/taskpane/lib/modelCatalog.ts` only adapts the add-in's key-status
+shape to it.
 
 ## Troubleshooting
 

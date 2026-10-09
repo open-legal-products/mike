@@ -37,6 +37,26 @@ const scrubber = createEventScrubber({ install });
 /** `beforeSend` for every Sentry client in the web app (browser, server, edge). */
 export const scrubEvent = scrubber.scrubEvent;
 
+/**
+ * The scrubber's "already sent" registry is a closure, so it can answer the
+ * console bridge but not a caller. This mirror answers callers: a screen
+ * that catches an error the API client already reported (every 5xx, every
+ * transport failure) must not report it a second time under its own tags.
+ */
+const reportedHere = new WeakSet<object>();
+
+function markReported(error: unknown): void {
+    scrubber.markReported(error);
+    if (error && typeof error === "object") reportedHere.add(error);
+}
+
+/** Has this exact error object already been sent to Sentry with context? */
+export function isReported(error: unknown): boolean {
+    return (
+        error !== null && typeof error === "object" && reportedHere.has(error)
+    );
+}
+
 function applyContext(scope: Sentry.Scope, context: ReportContext): void {
     if (context.level) scope.setLevel(context.level);
     if (context.fingerprint) scope.setFingerprint(context.fingerprint);
@@ -56,12 +76,23 @@ export function reportError(
     error: unknown,
     context: ReportContext = {},
 ): string | null {
-    scrubber.markReported(error);
+    markReported(error);
     if (!Sentry.isEnabled()) return null;
     return Sentry.withScope((scope) => {
         applyContext(scope, context);
         return Sentry.captureException(error);
     });
+}
+
+/**
+ * An error that is deliberately NOT sent (another runtime already reported
+ * it), marked so the console bridge and the global handlers do not send it
+ * either when a screen logs or rethrows it.
+ */
+export function markErrorHandled(error: unknown): void {
+    // Same registry as a real report: `isReported` must also say yes, or a
+    // screen's notifyError would file the incident the server already filed.
+    markReported(error);
 }
 
 /**
@@ -83,7 +114,7 @@ export function reportApiFailure(failure: {
      */
     error?: unknown;
 }): string | null {
-    scrubber.markReported(failure.error);
+    markReported(failure.error);
     if (!Sentry.isEnabled()) return null;
     const route = normalizeApiPath(failure.path);
     const method = failure.method ?? "GET";
@@ -169,21 +200,56 @@ function pageIsBeingLeft(): boolean {
 }
 
 /**
+ * How long one "API unreachable" report stands for further unreachable
+ * failures on the same page. When the backend is down, every screen fires
+ * several requests at mount (profile, models, projects, chats…) and each
+ * one fails with the same bare TypeError in the same second (MIKE-FRONTEND
+ * -C and -G: /api/models/:id and /api/projects/:id failed 5 ms apart). Per
+ * route, that is five issues and five events for one outage, and none of
+ * them points at a route because no route is at fault: the server is.
+ *
+ * So the first unreachable failure reports, and the ones that follow within
+ * this window are only counted; the count rides on the next report (tag
+ * `network_failure_count`). One minute matches the scrubber's per-issue
+ * throttle window, so a sustained outage costs one event per page per
+ * minute instead of up to ten per route per minute.
+ */
+export const API_UNREACHABLE_WINDOW_MS = 60_000;
+let unreachableReportedAt: number | null = null;
+let unreachableSuppressed = 0;
+
+/** Test seam: forget the current outage window. */
+export function resetApiUnreachableWindow(): void {
+    unreachableReportedAt = null;
+    unreachableSuppressed = 0;
+}
+
+/**
  * Fetch failed without an HTTP response. Browser errors alone cannot tell
  * whether the request reached the server, or distinguish TLS, CORS, a dropped
- * connection, and a failed response read. It was previously reported only
- * through the console bridge as one undifferentiated "Failed to fetch"
- * issue with no endpoint. Warning level, grouped per endpoint.
+ * connection, and a failed response read.
  *
- * Not reported while the page is being left: those are cancellations of the
- * old page's requests, not failures anyone can act on. The error is still
- * marked so a screen's later console.error of it is not bridged either.
+ * The fetch spec rejects every network-level failure with a TypeError (the
+ * message differs per browser: "Failed to fetch", "Load failed",
+ * "NetworkError…"). That is reported as ONE "API unreachable" issue per
+ * outage window per page, not one per endpoint (API_UNREACHABLE_WINDOW_MS).
+ * It is sent without the exception's stack: the privacy boundary groups by
+ * the default (stack) hash plus the route tag, and the stack of a failed
+ * fetch is only whichever screen asked, so either would split one outage
+ * into an issue per caller. Anything else the request layer throws is a
+ * bug, not an outage, and keeps its per-route issue. Real HTTP 5xx
+ * responses go through reportApiFailure, per route, unaffected.
+ *
+ * Not reported while the page is being left (cancellations of the old
+ * page's requests) or while the browser says it is offline (the user's
+ * connection, not the server). The error is still marked so a screen's
+ * later console.error of it is not bridged either.
  */
 export function reportNetworkFailure(
     error: unknown,
     request: { method: string; url: string },
 ): string | null {
-    scrubber.markReported(error);
+    markReported(error);
     if (!Sentry.isEnabled() || pageIsBeingLeft()) return null;
     const route = normalizeApiPath(request.url);
     let networkState = "unknown";
@@ -198,6 +264,43 @@ export function reportNetworkFailure(
         }
     } catch {
         // Missing browser state or malformed URLs must not break reporting.
+    }
+    if (networkState === "offline") return null;
+    if (error instanceof TypeError) {
+        const now = Date.now();
+        if (
+            unreachableReportedAt !== null &&
+            now - unreachableReportedAt < API_UNREACHABLE_WINDOW_MS
+        ) {
+            unreachableSuppressed += 1;
+            return null;
+        }
+        // This failure plus every one folded into the previous window.
+        const failureCount = unreachableSuppressed + 1;
+        unreachableReportedAt = now;
+        unreachableSuppressed = 0;
+        return Sentry.withScope((scope) => {
+            applyContext(scope, {
+                level: "warning",
+                tags: {
+                    component: "mike-api",
+                    stage: "api-unreachable",
+                    network: true,
+                    network_state: networkState,
+                    request_origin: requestOrigin,
+                    network_failure_count: failureCount,
+                },
+                fingerprint: ["api-unreachable"],
+            });
+            // captureEvent, not captureException/captureMessage: neither the
+            // error's stack nor attachStacktrace's synthetic call-site stack
+            // may reach the grouping hash. The hint still carries the error
+            // so the scrubber derives failure_code (fetch_failed) from it.
+            return Sentry.captureEvent(
+                { message: "API unreachable", level: "warning" },
+                { originalException: error },
+            );
+        });
     }
     return Sentry.withScope((scope) => {
         applyContext(scope, {
@@ -253,7 +356,19 @@ export function browserSentryOptions(env: {
         tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
         // Session replay is deliberately NOT enabled: it would record
         // privileged document text on screen.
-        sendDefaultPii: false,
+        dataCollection: {
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        },
         attachStacktrace: true,
         integrations: [privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
         initialScope: {
@@ -286,7 +401,19 @@ export function serverSentryOptions(
         integrations: [privacyBoundaryIntegration()],
         release: releaseName(env.SENTRY_RELEASE, env.GIT_SHA),
         tracesSampleRate: parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
-        sendDefaultPii: false,
+        dataCollection: {
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        },
         attachStacktrace: true,
         initialScope: {
             tags: {

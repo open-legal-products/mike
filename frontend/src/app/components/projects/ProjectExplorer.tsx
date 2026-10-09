@@ -12,10 +12,8 @@ import {
 import {
     ChevronRight,
     ChevronDown,
-    FileText,
     Download,
     Loader2,
-    MessageSquarePlus,
     Pencil,
     Trash2,
 } from "lucide-react";
@@ -23,13 +21,17 @@ import type {
     Document,
     Folder as ProjectFolder,
 } from "@/app/components/shared/types";
+import { documentContextMenuItems } from "@/app/components/shared/DocumentTabActions";
 import { VersionChip } from "@/app/components/shared/VersionChip";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import {
     ProjectSvgIcon,
     SubfolderSvgIcon,
 } from "@/app/components/shared/FolderSvgIcon";
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import {
+    DropdownAtPoint,
+    DropdownItem,
+} from "@/shared/ui/dropdown";
 
 interface Props {
     projectName?: string | null;
@@ -97,7 +99,6 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
     const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
     const [dragOverRoot, setDragOverRoot] = useState(false);
     const newFolderInputRef = useRef<HTMLInputElement>(null);
-    const contextMenuRef = useRef<HTMLDivElement>(null);
     const contextDocument = contextMenu?.docId
         ? documents.find((document) => document.id === contextMenu.docId)
         : undefined;
@@ -111,18 +112,6 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
             setNewFolderName("");
         },
     }), []);
-
-    // Close context menu on outside click
-    useEffect(() => {
-        if (!contextMenu) return;
-        function handle(e: MouseEvent) {
-            if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-                setContextMenu(null);
-            }
-        }
-        document.addEventListener("mousedown", handle);
-        return () => document.removeEventListener("mousedown", handle);
-    }, [contextMenu]);
 
     // Clear all drag state when drag ends
     useEffect(() => {
@@ -479,66 +468,51 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                 folders.length === 0 &&
                 uploadingDocuments.length === 0 &&
                 creatingIn === undefined && (
-                    <li className="px-4 py-2 text-xs text-gray-400">
+                    <li className="px-2 py-2 text-xs text-gray-400">
                         No documents in this project.
                     </li>
                 )}
 
             {/* Context menu */}
             {contextMenu && (
-                <div
-                    ref={contextMenuRef}
-                    className={`fixed z-50 w-44 overflow-hidden rounded-lg text-xs ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
-                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                <DropdownAtPoint
+                    point={{ x: contextMenu.x, y: contextMenu.y }}
+                    onClose={() => setContextMenu(null)}
+                    className="w-44"
                 >
-                    {contextDocument && (
-                        <button
-                            type="button"
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
-                            onClick={() => {
-                                onDocClick(contextDocument);
-                                setContextMenu(null);
-                            }}
+                    {contextDocument && documentContextMenuItems({
+                        onOpen: () => onDocClick(contextDocument),
+                        onAddToChat: onAddToChat ? () => onAddToChat(contextDocument) : undefined,
+                        onDownload: onDownloadDoc ? () => onDownloadDoc(contextDocument) : undefined,
+                        onRename: onRenameDoc ? () => {
+                            setRenameValue(contextDocument.filename);
+                            setRenamingDocId(contextDocument.id);
+                        } : undefined,
+                        onDelete: onDeleteDoc ? () => onDeleteDoc(contextDocument.id) : undefined,
+                        addToChatDisabled, downloading,
+                    }).map(({ label, icon: Icon, onSelect, disabled, variant }) => (
+                        <DropdownItem
+                            key={label}
+                            disabled={disabled}
+                            variant={variant === "danger" ? "destructive" : "default"}
+                            onSelect={onSelect}
                         >
-                            <FileText aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-                            Open
-                        </button>
-                    )}
-                    {contextDocument && onAddToChat && (
-                        <button
-                            type="button"
-                            disabled={addToChatDisabled}
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40"
-                            onClick={() => {
-                                onAddToChat(contextDocument);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <MessageSquarePlus aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-                            Add to chat
-                        </button>
-                    )}
-                    {((contextDocument && onDownloadDoc) || (contextFolder && onDownloadFolder)) && (
-                        <button
-                            type="button"
+                            {Icon && <Icon aria-hidden="true" className="h-3.5 w-3.5" />}
+                            {label}
+                        </DropdownItem>
+                    ))}
+                    {contextFolder && onDownloadFolder && (
+                        <DropdownItem
                             disabled={downloading}
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40"
-                            onClick={() => {
-                                if (contextDocument) void onDownloadDoc?.(contextDocument);
-                                else if (contextFolder) void onDownloadFolder?.(contextFolder);
-                                setContextMenu(null);
-                            }}
+                            onSelect={() => void onDownloadFolder(contextFolder)}
                         >
-                            <Download aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                            <Download aria-hidden="true" className="h-3.5 w-3.5" />
                             Download
-                        </button>
+                        </DropdownItem>
                     )}
                     {onCreateFolder && !contextMenu.docId && (
-                        <button
-                            type="button"
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
-                            onClick={() => {
-                                setContextMenu(null);
+                        <DropdownItem
+                            onSelect={() => {
                                 if (contextMenu.parentId) {
                                     setExpandedIds((prev) =>
                                         new Set([...prev, contextMenu.parentId!]),
@@ -550,61 +524,29 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
                         >
                             <SubfolderSvgIcon className="h-3.5 w-3.5 shrink-0" />
                             New subfolder
-                        </button>
+                        </DropdownItem>
                     )}
                     {contextMenu.folderId && onRenameFolder && (
-                        <button
-                            type="button"
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700"
-                            onClick={() => {
+                        <DropdownItem
+                            onSelect={() => {
                                 setRenameValue(contextFolder?.name ?? "");
                                 setRenamingId(contextMenu.folderId!);
-                                setContextMenu(null);
                             }}
                         >
-                            <Pencil aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                            <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
                             Rename
-                        </button>
-                    )}
-                    {contextMenu.docId && onRenameDoc && (
-                        <button
-                            type="button"
-                            className="theme-dropdown-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700"
-                            onClick={() => {
-                                setRenameValue(contextDocument?.filename ?? "");
-                                setRenamingDocId(contextMenu.docId!);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <Pencil aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-                            Rename
-                        </button>
+                        </DropdownItem>
                     )}
                     {contextMenu.folderId && onDeleteFolder && (
-                        <button
-                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
-                            onClick={() => {
-                                onDeleteFolder(contextMenu.folderId!);
-                                setContextMenu(null);
-                            }}
+                        <DropdownItem
+                            variant="destructive"
+                            onSelect={() => onDeleteFolder(contextMenu.folderId!)}
                         >
-                            <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                            <Trash2 className="h-3.5 w-3.5" />
                             Delete folder
-                        </button>
+                        </DropdownItem>
                     )}
-                    {contextMenu.docId && onDeleteDoc && (
-                        <button
-                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-600 hover:bg-red-50"
-                            onClick={() => {
-                                void onDeleteDoc(contextMenu.docId!);
-                                setContextMenu(null);
-                            }}
-                        >
-                            <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                            Delete file
-                        </button>
-                    )}
-                </div>
+                </DropdownAtPoint>
             )}
         </ul>
     );

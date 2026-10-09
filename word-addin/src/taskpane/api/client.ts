@@ -11,6 +11,7 @@ import type {
 // parity tests) never pull this module, and its runtime imports, into
 // the web app's type-check graph.
 export type { ApiKeyStatus } from "../types";
+import type { RouterProfileLists } from "@mike/model-catalog";
 import { describeNetworkFailure } from "../lib/networkError";
 import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
@@ -177,7 +178,12 @@ async function toApiError(
     });
     const apiError = new MikeApiError({
       status: response.status,
-      message: text || `API error: ${response.status}`,
+      // A body that is not our JSON came from something in front of the
+      // API (a proxy's HTML error page, a load balancer's plain text). It
+      // is not written for users, so it never becomes the message; the
+      // devLog above keeps a preview for debugging. describeError turns
+      // this placeholder into the sentence for the status.
+      message: `API error: ${response.status}`,
     });
     if (response.status >= 500) {
       reportApiFailure({
@@ -268,7 +274,8 @@ export async function listProjects(pagination?: {
   return apiRequest<Project[]>(`/projects?${params.toString()}`);
 }
 
-interface UserProfile {
+/** GET /user/profile; each router's Model Selections may be absent on an older API. */
+interface UserProfile extends Partial<RouterProfileLists> {
   displayName: string | null;
   organisation: string | null;
   messageCreditsUsed: number;
@@ -281,9 +288,6 @@ interface UserProfile {
   lastSelectedReasoningLevel: ReasoningLevel;
   mfaOnLogin: boolean;
   legalResearchUs: boolean;
-  openRouterModels: string[];
-  vercelModels: string[];
-  openCodeGoModels: string[];
   apiKeyStatus: ApiKeyStatus;
 }
 
@@ -397,6 +401,18 @@ export async function getProjectDirectoryLevel(
   );
 }
 
+/**
+ * The task pane's IANA time zone (e.g. "Europe/London"), sent with chat
+ * requests so the assistant knows the user's local date and time.
+ */
+function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function streamWordChat(payload: {
   messages: {
     role: string;
@@ -425,7 +441,7 @@ export async function streamWordChat(payload: {
       Accept: "text/event-stream",
       ...authHeaders,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, time_zone: browserTimeZone() }),
     signal,
   });
 }
@@ -450,11 +466,66 @@ export async function postWordChatToolResult(payload: {
   });
 }
 
+/**
+ * Attach to a Word turn the server is generating (or has just finished):
+ * frames with a sequence number >= `from` are replayed, then the live ones
+ * follow until the turn ends. `from` is the last `id:` the pane applied plus
+ * one; 1 means everything.
+ */
+export async function streamWordChatTurn(payload: {
+  chatId: string;
+  turnId: string;
+  documentId: string;
+  from?: number;
+  signal?: AbortSignal;
+}): Promise<Response> {
+  const params = new URLSearchParams({
+    document_id: payload.documentId,
+    from: String(payload.from ?? 1),
+  });
+  return sendRequest(
+    apiUrl(
+      `/word-chat/${encodeURIComponent(payload.chatId)}/turn/` +
+        `${encodeURIComponent(payload.turnId)}/stream?${params}`,
+    ),
+    {
+      method: "GET",
+      headers: { Accept: "text/event-stream", ...(await getAuthHeaders()) },
+      signal: payload.signal,
+    },
+  );
+}
+
+/**
+ * The one way to cut a Word answer short. Closing the pane's stream only
+ * detaches it; the server keeps answering into the transcript.
+ */
+export async function stopWordChatTurn(payload: {
+  chatId: string;
+  turnId: string;
+  documentId: string;
+}): Promise<{ stopped: boolean; finished: boolean }> {
+  const params = new URLSearchParams({ document_id: payload.documentId });
+  return apiRequest<{ stopped: boolean; finished: boolean }>(
+    `/word-chat/${encodeURIComponent(payload.chatId)}/turn/` +
+      `${encodeURIComponent(payload.turnId)}/stop?${params}`,
+    { method: "POST" },
+  );
+}
+
 /** Parse SSE data frames until the terminal `[DONE]` marker. */
 export async function readSSE(
   response: Response,
   onEvent: (data: unknown) => void,
-  options?: { signal?: AbortSignal },
+  options?: {
+    signal?: AbortSignal;
+    /**
+     * The `id:` line preceding each record, before the record is handed to
+     * `onEvent`. A server-owned turn numbers its frames so a pane that
+     * reattaches can ask for the ones it has not seen (`from=<last id + 1>`).
+     */
+    onEventId?: (id: string) => void;
+  },
 ): Promise<{ done: boolean }> {
   if (!response.body) {
     throw new Error("Response body is null — streaming not supported");
@@ -474,11 +545,22 @@ export async function readSSE(
   };
   signal?.addEventListener("abort", onAbort);
 
+  // An `id:` line applies to the record that follows it.
+  let pendingId: string | null = null;
   const processLine = (line: string): boolean => {
     const trimmed = line.trim();
+    if (trimmed.startsWith("id:")) {
+      pendingId = trimmed.slice(3).trim() || null;
+      return false;
+    }
     if (!trimmed.startsWith("data:")) return false;
     const data = trimmed.slice(5).trim();
-    if (data === "[DONE]") return true;
+    const id = pendingId;
+    pendingId = null;
+    if (data === "[DONE]") {
+      if (id !== null) options?.onEventId?.(id);
+      return true;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(data);
@@ -486,6 +568,7 @@ export async function readSSE(
       // Ignore malformed transport noise rather than ending the stream.
       return false;
     }
+    if (id !== null) options?.onEventId?.(id);
     // Callback failures are application errors, not malformed SSE. Let
     // them propagate so callers cannot silently lose a valid event.
     onEvent(parsed);

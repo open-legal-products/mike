@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Document, Message } from "../shared/types";
 import { ChatInputPrompt } from "./ChatInputPrompt";
@@ -181,4 +181,48 @@ describe("chat input prompts", () => {
         ]);
         expect(attachment.project_id).toBeNull();
     });
+});
+
+
+it.each(["null", "reject"])("retains entered inputs after a %s submission failure and permits retry", async (failure) => {
+    let settle!: (value: string | null) => void;
+    let reject!: (error: Error) => void;
+    const onSubmit = vi.fn().mockImplementationOnce(() => new Promise<string | null>((resolve, fail) => { settle = resolve; reject = fail; })).mockResolvedValueOnce("project-chat-1");
+    const { rerender } = render(input({ onSubmit }));
+    fireEvent.change(screen.getByRole("textbox", { name: "What is the client name?" }), { target: { value: "Acme" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(onSubmit).toHaveBeenCalledOnce();
+    // The real hook appends this before it knows whether the request succeeded.
+    rerender(input({ onSubmit, messages: [messages[0], { ...messages[1], events: [askEvent, { type: "ask_inputs_response", assistant_message_id: "assistant-1", ask_event_id: "ask-1", responses: [] }] }] }));
+    await act(async () => { if (failure === "null") settle(null); else reject(new Error("offline")); });
+    expect(screen.getByRole("textbox", { name: "What is the client name?" })).toHaveValue("Acme");
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not send these inputs");
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByText("Regular composer")).toBeVisible());
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+});
+
+it("does not restore a failed prompt into a different chat", async () => {
+    let settle!: (value: null) => void;
+    const onSubmit = vi.fn(() => new Promise<null>((resolve) => { settle = resolve; }));
+    const { rerender } = render(input({ onSubmit }));
+    fireEvent.change(screen.getByRole("textbox", { name: "What is the client name?" }), { target: { value: "Acme" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    rerender(input({ chatKey: "other-chat", messages: [], onSubmit }));
+    await act(async () => settle(null));
+    expect(screen.getByText("Regular composer")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+});
+
+
+it("ignores a late success after leaving and returning to the same chat", async () => {
+    let settle!: (value: string) => void;
+    const onSubmit = vi.fn(() => new Promise<string>((resolve) => { settle = resolve; }));
+    const { rerender } = render(input({ onSubmit }));
+    fireEvent.change(screen.getByRole("textbox", { name: "What is the client name?" }), { target: { value: "Acme" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    rerender(input({ chatKey: "other-chat", messages: [], onSubmit }));
+    rerender(input({ onSubmit }));
+    await act(async () => settle("project-chat-1"));
+    expect(screen.getByRole("textbox", { name: "What is the client name?" })).toBeVisible();
 });

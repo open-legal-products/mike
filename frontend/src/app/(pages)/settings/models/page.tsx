@@ -3,34 +3,32 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import {
-  DropdownMenu,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-  LiquidDropdownContent,
-  LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+  DROPDOWN_ROWS_CLASS,
+  Dropdown,
+  DropdownContent,
+  DropdownItem,
+  DropdownLabel,
+  DropdownSeparator,
+  DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { type ApiKeyState } from "@/app/lib/mikeApi";
+import { mergeConfiguredModelOptions } from "@/app/components/assistant/ModelToggle";
 import {
   MODELS,
   SETTINGS_MODELS,
+  allRouterModelOptions,
   canonicalModelId,
-  mergeConfiguredModelOptions,
-  openCodeGoModelOptions,
-  openRouterModelOptions,
-  vercelModelOptions,
+  routerSelections,
   type ModelOption,
-} from "@/app/components/assistant/ModelToggle";
+} from "@/shared/lib/modelCatalog";
 import { orderedModelGroups } from "@/shared/ui/ModelToggleUI";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { SETTINGS_CONTROL_CLASS } from "@/app/components/settings/SettingsTextInput";
@@ -46,6 +44,8 @@ export default function ModelPreferencesPage() {
   const { profile, updateModelPreference } = useUserProfile();
   const ollamaModels = useOllamaModels();
   const configuredModels = useConfiguredModels();
+  const preferenceModelId = (id: string) =>
+    configuredModels.some((model) => model.id === id) ? id : canonicalModelId(id);
   const [savingField, setSavingField] = useState<ModelPreferenceField | null>(
     null,
   );
@@ -56,12 +56,8 @@ export default function ModelPreferencesPage() {
     Partial<Record<ModelPreferenceField, string>>
   >({});
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openRouterSelection = profile?.openRouterModels ?? [];
-  const vercelSelection = profile?.vercelModels ?? [];
-  const selectedOpenRouterOptions = openRouterModelOptions(openRouterSelection);
-  const selectedVercelOptions = vercelModelOptions(vercelSelection);
-  const selectedOpenCodeGoOptions = openCodeGoModelOptions(
-    profile?.openCodeGoModels ?? [],
+  const selectedRouterOptions = allRouterModelOptions(
+    profile ? routerSelections(profile) : {},
   );
 
   useEffect(() => {
@@ -95,7 +91,7 @@ export default function ModelPreferencesPage() {
     <div className="space-y-8">
       <section className="space-y-3">
         <SettingsHeading>Model Preferences</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow layout="stacked">
             <div className="space-y-1">
               <SettingsLabel>Chat title generation</SettingsLabel>
@@ -105,14 +101,12 @@ export default function ModelPreferencesPage() {
               </SettingsDescription>
             </div>
             <ModelPreferenceDropdown
-              value={canonicalModelId(
+              value={preferenceModelId(
                 optimisticValues.titleModel ?? profile?.titleModel ?? "",
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...SETTINGS_MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
               ])}
               apiKeys={profile?.apiKeys}
@@ -131,14 +125,12 @@ export default function ModelPreferencesPage() {
               </SettingsDescription>
             </div>
             <ModelPreferenceDropdown
-              value={canonicalModelId(
+              value={preferenceModelId(
                 optimisticValues.tabularModel ?? profile?.tabularModel ?? "",
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
               ])}
               apiKeys={profile?.apiKeys}
@@ -158,16 +150,14 @@ export default function ModelPreferencesPage() {
               </SettingsDescription>
             </div>
             <ModelPreferenceDropdown
-              value={canonicalModelId(
+              value={preferenceModelId(
                 optimisticValues.memoryCuratorModel ??
                   profile?.memoryCuratorModel ??
                   "",
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...SETTINGS_MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
               ])}
               apiKeys={profile?.apiKeys}
@@ -177,7 +167,7 @@ export default function ModelPreferencesPage() {
               onChange={(id) => handleModelChange("memoryCuratorModel", id)}
             />
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
     </div>
   );
@@ -220,8 +210,8 @@ function ModelPreferenceDropdown({
   }, new Map<string, number>());
 
   return (
-    <DropdownMenu onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
+    <Dropdown onOpenChange={setIsOpen}>
+      <DropdownTrigger asChild>
         <button
           type="button"
           disabled={isSaving}
@@ -244,30 +234,29 @@ function ModelPreferenceDropdown({
             />
           )}
         </button>
-      </DropdownMenuTrigger>
-      <LiquidDropdownContent
-        className="z-50"
+      </DropdownTrigger>
+      <DropdownContent
         style={{ width: "var(--radix-dropdown-menu-trigger-width)" }}
         align="start"
       >
-        <LiquidDropdownItem
+        <DropdownItem
           className="cursor-pointer"
           onSelect={() => onChange("")}
         >
           <span className="flex-1">{emptyOptionLabel}</span>
           {!value && <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />}
-        </LiquidDropdownItem>
-        {availableGroups.length > 0 && <DropdownMenuSeparator />}
+        </DropdownItem>
+        {availableGroups.length > 0 && <DropdownSeparator />}
         {availableGroups.map(({ group, items }, groupIndex) => {
           return (
-            <div key={group}>
-              {groupIndex > 0 && <DropdownMenuSeparator />}
-              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-gray-400">
+            <div key={group} className={DROPDOWN_ROWS_CLASS}>
+              {groupIndex > 0 && <DropdownSeparator />}
+              <DropdownLabel>
                 {group}
-              </DropdownMenuLabel>
+              </DropdownLabel>
               {items.map((m) => {
                 return (
-                  <LiquidDropdownItem
+                  <DropdownItem
                     key={m.id}
                     className="cursor-pointer"
                     onSelect={() => onChange(m.id)}
@@ -284,13 +273,13 @@ function ModelPreferenceDropdown({
                     {m.id === value && (
                       <Check className="h-3.5 w-3.5 text-gray-600 ml-1" />
                     )}
-                  </LiquidDropdownItem>
+                  </DropdownItem>
                 );
               })}
             </div>
           );
         })}
-      </LiquidDropdownContent>
-    </DropdownMenu>
+      </DropdownContent>
+    </Dropdown>
   );
 }

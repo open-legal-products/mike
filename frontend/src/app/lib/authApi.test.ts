@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describeError } from "@/shared/lib/userError";
 import {
     AuthApiError,
     challengeAndVerifyMfa,
@@ -39,6 +40,45 @@ describe("cookie auth client", () => {
 
     afterEach(() => {
         vi.unstubAllGlobals();
+    });
+
+    it("carries the request id off an auth failure, body first", async () => {
+        fetchMock.mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    code: "invalid_credentials",
+                    detail: "The email or password is incorrect.",
+                    request_id: "req-body",
+                }),
+                {
+                    status: 400,
+                    headers: {
+                        "Content-Type": "application/json",
+                        "x-request-id": "req-header",
+                    },
+                },
+            ),
+        );
+
+        const error = await login(user.email, "nope").catch((e) => e);
+        expect(error).toBeInstanceOf(AuthApiError);
+        expect((error as AuthApiError).requestId).toBe("req-body");
+        // Without this, support has nothing to search the logs for: the
+        // auth screens are the one place the API client is not used.
+        expect(describeError(error).requestId).toBe("req-body");
+    });
+
+    it("falls back to the x-request-id header", async () => {
+        fetchMock.mockResolvedValue(
+            new Response("gateway exploded", {
+                status: 500,
+                headers: { "x-request-id": "req-header" },
+            }),
+        );
+
+        const error = await login(user.email, "nope").catch((e) => e);
+        expect((error as AuthApiError).requestId).toBe("req-header");
+        expect(describeError(error).requestId).toBe("req-header");
     });
 
     it("logs in through the same-origin gateway without an Authorization header", async () => {

@@ -6,38 +6,13 @@ import { removeGrantsForEmail } from "../../lib/projectAccess";
 import { removeContentGrantsForEmail } from "../../lib/contentAccess";
 import { chunkArray } from "../../lib/arrays";
 import { ORG_CONTENT_TABLES } from "../../lib/orgs";
+import { throwIfError, uniqueStrings } from "./user.shared";
 
 const DELETE_BATCH_SIZE = 500;
-
-function uniqueStrings(values: Array<string | null | undefined>): string[] {
-    return [...new Set(values.filter((value): value is string => !!value))];
-}
-
-async function throwIfError<T extends { message?: string } | null>(
-    error: T,
-    context: string,
-) {
-    if (error) throw new Error(`${context}: ${error.message ?? "unknown error"}`);
-}
 
 async function deleteByIds(db: Db, table: string, ids: string[]) {
     for (const batch of chunkArray(ids, DELETE_BATCH_SIZE)) {
         const { error } = await (db as any).from(table).delete().in("id", batch);
-        await throwIfError(error, `Failed to delete ${table}`);
-    }
-}
-
-async function deleteWhereIn(
-    db: Db,
-    table: string,
-    column: string,
-    values: string[],
-) {
-    for (const batch of chunkArray(values, DELETE_BATCH_SIZE)) {
-        const { error } = await (db as any)
-            .from(table)
-            .delete()
-            .in(column, batch);
         await throwIfError(error, `Failed to delete ${table}`);
     }
 }

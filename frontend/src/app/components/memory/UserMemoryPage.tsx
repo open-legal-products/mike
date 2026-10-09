@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { MarkdownEditor } from "@/app/components/ui/markdown-editor";
@@ -131,7 +131,7 @@ export function UserMemoryPage() {
           Memory
         </SettingsHeading>
 
-        <SettingsCard>
+        <GlassCardUI>
           {loading ? (
             <div
               className="flex items-center justify-between gap-3 px-4 py-5"
@@ -183,7 +183,7 @@ export function UserMemoryPage() {
           )}
 
           <ProjectMemoryDefaultRow />
-        </SettingsCard>
+        </GlassCardUI>
 
         {error ? (
           <p className="text-sm text-red-600" role="alert">

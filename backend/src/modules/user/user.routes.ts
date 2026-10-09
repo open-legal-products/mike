@@ -1,16 +1,30 @@
+import { GoogleWorkspaceError, startWorkspaceOAuth, completeWorkspaceOAuth, cancelWorkspaceOAuth, disconnectWorkspace, updateWorkspaceSettings, setWorkspaceToolEnabled } from "../../lib/integrations/googleWorkspaceAuth";
+import { workspaceConnectorStatus, workspaceToolList } from "../../lib/integrations/googleWorkspace";
 // HTTP layer for the user module. Handlers parse params/query/body, call the
 // service functions behind user.service.ts, and map their typed results onto
 // status codes, headers, and JSON bodies. The MFA step-up guard
 // (requireMfaIfEnrolled) is applied here, per route — keep it on every
 // mutating /user route so the service layer never has to know about MFA.
 
+import { safeError } from "../../lib/safeError";
+import {
+    cancelGoogleDriveOAuth,
+    completeGoogleDriveOAuth,
+    disconnectGoogleDrive,
+    getGoogleDriveStatus,
+    setGoogleDriveToolEnabled,
+    startGoogleDriveOAuth,
+    updateGoogleDriveSettings,
+} from "../../lib/integrations/googleDrive";
+import { ConnectorSetupError } from "../../lib/mcp/errors";
+
 import crypto from "crypto";
 import { Router } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
-import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
+import { sendServiceFailure } from "../../lib/serviceResult";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { buildContentDisposition } from "../../lib/storage";
 import { normalizeApiKeyProvider } from "./user.apiKeyStore";
@@ -22,7 +36,6 @@ import {
     listMyInvitations,
 } from "../../lib/orgs";
 import { sendOrgFailure } from "../../lib/orgFailure";
-import { userExportFilename } from "./user.dataExport";
 import { configuredApiPublicUrl } from "../../lib/runtimeConfig";
 import {
     bootstrapUserProfile,
@@ -36,10 +49,9 @@ import {
     deleteUserProjectsData,
     deleteUserTabularReviews,
     errorMessage,
-    exportUserAccount,
-    exportUserChats,
-    exportUserTabularReviews,
     getApiKeyStatus,
+    getCustomInstructions,
+    getResponseStyle,
     getMcpConnector,
     getUserExportStatus,
     getUserProfile,
@@ -50,6 +62,7 @@ import {
     recordPasswordSet,
     refreshMcpConnectorTools,
     saveApiKey,
+    setApiKeyEnabled,
     setMcpToolEnabled,
     setMfaOnLogin,
     startMcpConnectorOAuth,
@@ -59,6 +72,10 @@ import {
     validateExportRequest,
     validateOnboardingPayload,
     validateProfilePayload,
+    validateCustomInstructionsPayload,
+    saveCustomInstructions,
+    validateResponseStylePayload,
+    saveResponseStyle,
 } from "./user.service";
 
 export const userRouter = Router();
@@ -98,10 +115,17 @@ function mcpOAuthPopupHtml(payload: {
 }, nonce: string) {
     const targetOrigin = new URL(frontendUrl()).origin;
     const targetUrl = frontendUrl();
+    // `detail` carries the attacker-controllable ?error= query value into this
+    // inline script. JSON.stringify does not escape "<", so a payload of
+    // "</script><script>…" would break out of the script element; escaping
+    // "<" as its \u003c form keeps the string inside the JS literal. The CSP
+    // nonce is the primary defense, but the popup now keeps a live
+    // window.opener (COOP is relaxed on this route), so this is the belt to
+    // that suspenders.
     const message = JSON.stringify({
         type: "mcp_oauth_result",
         ...payload,
-    });
+    }).replace(/</g, "\\u003c");
     return `<!doctype html>
 <html>
   <head>
@@ -136,15 +160,26 @@ function mcpOAuthPopupHtml(payload: {
 </html>`;
 }
 
-function mcpOAuthPopupCsp(nonce: string) {
-    return [
-        "default-src 'none'",
-        `script-src 'nonce-${nonce}'`,
-        "style-src 'unsafe-inline'",
-        "base-uri 'none'",
-        "form-action 'none'",
-        "frame-ancestors 'none'",
-    ].join("; ");
+function mcpOAuthPopupHeaders(nonce: string) {
+    return {
+        "Content-Security-Policy": [
+            "default-src 'none'",
+            `script-src 'nonce-${nonce}'`,
+            "style-src 'unsafe-inline'",
+            "base-uri 'none'",
+            "form-action 'none'",
+            "frame-ancestors 'none'",
+        ].join("; "),
+        // The whole popup hand-off hinges on window.opener surviving until
+        // this page has posted its result back to the app. Helmet's default
+        // Cross-Origin-Opener-Policy of same-origin would move this document
+        // into a fresh browsing-context group the moment the popup arrives
+        // here from the (cross-origin) consent page — severing window.opener
+        // and silently breaking the flow in every browser. This route opts
+        // out; the strict CSP above still leaves the page unable to do
+        // anything beyond its inline postMessage script.
+        "Cross-Origin-Opener-Policy": "unsafe-none",
+    };
 }
 
 // POST /user/profile
@@ -248,6 +283,56 @@ userRouter.patch("/profile", requireAuth, asyncRoute(async (req, res) => {
     res.json(result.body);
 }));
 
+// GET /user/custom-instructions
+userRouter.get("/custom-instructions", requireAuth, asyncRoute(async (_req, res) => {
+    const userId = res.locals.userId as string;
+    const result = await getCustomInstructions(createServerSupabase(), userId);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// PUT /user/custom-instructions
+userRouter.put("/custom-instructions", requireAuth, asyncRoute(async (req, res) => {
+    const parsed = validateCustomInstructionsPayload(req.body);
+    if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+
+    const userId = res.locals.userId as string;
+    const result = await saveCustomInstructions(
+        createServerSupabase(),
+        userId,
+        parsed.content,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// GET /user/response-style
+userRouter.get("/response-style", requireAuth, asyncRoute(async (_req, res) => {
+    const userId = res.locals.userId as string;
+    const result = await getResponseStyle(createServerSupabase(), userId);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// PUT /user/response-style
+userRouter.put("/response-style", requireAuth, asyncRoute(async (req, res) => {
+    const parsed = validateResponseStylePayload(req.body);
+    if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+
+    const userId = res.locals.userId as string;
+    const result = await saveResponseStyle(
+        createServerSupabase(),
+        userId,
+        parsed.update,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
 // POST /user/onboarding
 userRouter.post("/onboarding", requireAuth, asyncRoute(async (req, res) => {
     const parsed = validateOnboardingPayload(req.body);
@@ -319,12 +404,45 @@ userRouter.put(
 
         const apiKey =
             typeof req.body?.api_key === "string" ? req.body.api_key : null;
+        const settings =
+            req.body && typeof req.body === "object"
+                ? (req.body as { settings?: unknown }).settings
+                : undefined;
         const db = createServerSupabase();
-        const result = await saveApiKey(db, { userId, provider, apiKey });
+        const result = await saveApiKey(db, {
+            userId,
+            provider,
+            apiKey,
+            settings,
+        });
         if (!result.ok) {
-            return void sendInternalError(res, result.error);
+            if (result.kind === "save_failed") {
+                return void sendInternalError(res, result.error);
+            }
+            return void res.status(400).json({ detail: result.detail });
         }
         res.json(result.status);
+    }),
+);
+
+// PATCH /user/api-keys/:provider — retain the key while disabling its provider.
+userRouter.patch(
+    "/api-keys/:provider",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const provider = normalizeApiKeyProvider(req.params.provider);
+        if (!provider || provider === "courtlistener" || typeof req.body?.enabled !== "boolean") {
+            return void res.status(400).json({ detail: "A supported provider and boolean enabled value are required." });
+        }
+        const result = await setApiKeyEnabled(
+            createServerSupabase(),
+            res.locals.userId as string,
+            provider,
+            req.body.enabled,
+        );
+        if (!result.ok) return sendServiceFailure(res, result);
+        res.json(result.data);
     }),
 );
 
@@ -416,6 +534,8 @@ userRouter.patch(
         const userId = res.locals.userId as string;
         const db = createServerSupabase();
         const body = req.body ?? {};
+        if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
+            return void res.status(400).json({ detail: "readOnly must be a boolean." });
         const result = await updateMcpConnector(
             db,
             userId,
@@ -427,6 +547,10 @@ userRouter.patch(
                     : {}),
                 ...(typeof body.enabled === "boolean"
                     ? { enabled: body.enabled }
+                    : {}),
+                ...(typeof body.readOnly === "boolean" ? { readOnly: body.readOnly } : {}),
+                ...(typeof body.requireWriteApproval === "boolean"
+                    ? { requireWriteApproval: body.requireWriteApproval }
                     : {}),
                 ...("bearerToken" in body
                     ? {
@@ -518,7 +642,7 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
         if (!state || !code)
             throw new Error("OAuth callback is missing state or code.");
         const result = await completeUserMcpConnectorOAuth(state, code, db);
-        res.set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+        res.set(mcpOAuthPopupHeaders(nonce))
             .type("html")
             .send(
                 mcpOAuthPopupHtml(
@@ -548,7 +672,7 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
                     : undefined,
         });
         res.status(400)
-            .set("Content-Security-Policy", mcpOAuthPopupCsp(nonce))
+            .set(mcpOAuthPopupHeaders(nonce))
             .type("html")
             .send(
                 mcpOAuthPopupHtml(
@@ -562,6 +686,482 @@ userRouter.get("/mcp-connectors/oauth/callback", asyncRoute(async (req, res) => 
     }
 }));
 
+// ---------------------------------------------------------------------------
+// Native Google Drive integration (first-party, GA Drive REST API — no MCP
+// preview program required). One connection per user; the popup pages reuse
+// the MCP OAuth popup renderer.
+// ---------------------------------------------------------------------------
+
+// GET /user/integrations/google-drive
+userRouter.get("/integrations/google-drive", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    try {
+        // The card shows the exact redirect URI to register while the client
+        // is not configured yet, so the operator never has to guess it. In
+        // production backendPublicUrl throws without API_PUBLIC_URL; that is
+        // a deployment error to report as "unknown", not a status failure.
+        let redirectUri: string | null = null;
+        try {
+            redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
+        } catch {
+            redirectUri = null;
+        }
+        res.json({
+            ...(await getGoogleDriveStatus(userId, createServerSupabase())),
+            redirectUri,
+        });
+    } catch (err) {
+        console.error("[google-drive] status failed", {
+            userId,
+            error: safeError(err),
+        });
+        res.status(500).json({ detail: "Failed to load Google Drive status." });
+    }
+});
+
+// POST /user/integrations/google-drive/oauth/start
+userRouter.post(
+    "/integrations/google-drive/oauth/start",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (req, res) => {
+        const userId = res.locals.userId as string;
+        try {
+            const redirectUri = `${backendPublicUrl(req)}/user/integrations/google-drive/oauth/callback`;
+            const result = await startGoogleDriveOAuth(
+                userId,
+                redirectUri,
+                createServerSupabase(),
+            );
+            res.json(result);
+        } catch (err) {
+            console.error("[google-drive] oauth start failed", {
+                userId,
+                error: safeError(err),
+            });
+            // Same allowlist as the MCP start route: only the repo-authored
+            // setup instructions reach the browser verbatim. A DB or crypto
+            // failure here must not echo its message to the client.
+            if (err instanceof ConnectorSetupError) {
+                return void res
+                    .status(400)
+                    .json({ code: err.code, detail: err.message });
+            }
+            res.status(400).json({
+                detail: "Google Drive authorization could not be started.",
+            });
+        }
+    },
+);
+
+// Google may return to a separate API origin that cannot receive the web
+// session cookie. Relay only OAuth parameters to our fixed frontend gateway;
+// completion there requires the same authenticated Mike user who started it.
+for (const provider of ["google-drive", "gmail", "google-calendar"]) {
+    userRouter.get(`/integrations/${provider}/oauth/callback`, (req, res) => {
+        const finish = new URL(
+            frontendUrl(`/api/user/integrations/${provider}/oauth/finish`),
+        );
+        for (const key of ["state", "code", "error"]) {
+            if (typeof req.query[key] === "string")
+                finish.searchParams.set(key, req.query[key]);
+        }
+        res.set("Cache-Control", "no-store")
+            .set("Referrer-Policy", "no-referrer")
+            .redirect(303, finish.toString());
+    });
+    userRouter.use(`/integrations/${provider}/oauth/finish`, (_req, res, next) => {
+        res.set("Cache-Control", "no-store")
+            .set("Referrer-Policy", "no-referrer");
+        next();
+    });
+}
+
+// GET /user/integrations/google-drive/oauth/finish
+userRouter.get(
+    "/integrations/google-drive/oauth/finish",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (req, res) => {
+        const nonce = crypto.randomBytes(16).toString("base64");
+        const state =
+            typeof req.query.state === "string" ? req.query.state : "";
+        const code = typeof req.query.code === "string" ? req.query.code : "";
+        const error =
+            typeof req.query.error === "string" ? req.query.error : undefined;
+        try {
+            if (error) throw new Error(error);
+            if (!state || !code)
+                throw new Error("OAuth callback is missing state or code.");
+            await completeGoogleDriveOAuth(
+                res.locals.userId, state, code, createServerSupabase(),
+            );
+            res.set(mcpOAuthPopupHeaders(nonce))
+                .type("html")
+                .send(
+                    mcpOAuthPopupHtml(
+                        { success: true, connectorId: "google-drive" },
+                        nonce,
+                    ),
+                );
+        } catch (err) {
+            console.error("[google-drive] oauth callback failed", {
+                error: safeError(err),
+                hasCode: !!code,
+            });
+            res.status(400)
+                .set(mcpOAuthPopupHeaders(nonce))
+                .type("html")
+                .send(
+                    mcpOAuthPopupHtml(
+                        {
+                            success: false,
+                            detail: "Google Drive authorization could not be completed. Return to Mike and try again.",
+                        },
+                        nonce,
+                    ),
+                );
+        }
+    },
+);
+
+// DELETE /user/integrations/google-drive
+userRouter.delete(
+    "/integrations/google-drive",
+    requireAuth,
+    requireMfaIfEnrolled,
+    async (_req, res) => {
+        const userId = res.locals.userId as string;
+        try {
+            await disconnectGoogleDrive(userId, createServerSupabase());
+            res.status(204).end();
+        } catch (err) {
+            console.error("[google-drive] disconnect failed", {
+                userId,
+                error: safeError(err),
+            });
+            res.status(500).json({
+                detail: "Failed to disconnect Google Drive.",
+            });
+        }
+    },
+);
+
+// PATCH /user/integrations/google-drive — { enabled?, requireWriteApproval? }
+userRouter.patch(
+    "/integrations/google-drive",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const userId = res.locals.userId as string;
+        for (const key of ["enabled", "requireWriteApproval", "readOnly"]) {
+            if (req.body?.[key] !== undefined && typeof req.body[key] !== "boolean")
+                return void res.status(400).json({ detail: `${key} must be a boolean.` });
+        }
+        const db = createServerSupabase();
+        try {
+            await updateGoogleDriveSettings(
+                userId,
+                { enabled: req.body?.enabled, requireWriteApproval: req.body?.requireWriteApproval, readOnly: req.body?.readOnly },
+                db,
+            );
+            res.json(await getGoogleDriveStatus(userId, db));
+        } catch (err) {
+            console.error("[google-drive] settings update failed", {
+                userId,
+                error: safeError(err),
+            });
+            res.status(409).json({
+                detail: "Google Drive settings could not be saved. Reload and try again.",
+            });
+        }
+    }),
+);
+
+// PATCH /user/integrations/google-drive/tools/:toolName — { enabled }
+userRouter.patch(
+    "/integrations/google-drive/tools/:toolName",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const userId = res.locals.userId as string;
+        if (typeof req.body?.enabled !== "boolean")
+            return void res
+                .status(400)
+                .json({ detail: "enabled must be a boolean." });
+        const db = createServerSupabase();
+        try {
+            await setGoogleDriveToolEnabled(
+                userId,
+                String(req.params.toolName),
+                req.body.enabled,
+                db,
+            );
+            res.json(await getGoogleDriveStatus(userId, db));
+        } catch (err) {
+            console.error("[google-drive] tool update failed", {
+                userId,
+                error: safeError(err),
+            });
+            res.status(409).json({
+                detail: "Google Drive tool settings could not be saved. Reload and try again.",
+            });
+        }
+    }),
+);
+
+// Cancel only this user's pending attempt; never disconnect an existing grant.
+userRouter.post(
+    "/integrations/google-drive/oauth/cancel",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const state = req.body?.state;
+        if (typeof state !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(state)) {
+            return void res
+                .status(400)
+                .json({
+                    detail: "Invalid Google Drive authorization attempt.",
+                });
+        }
+        try {
+            await cancelGoogleDriveOAuth(
+                res.locals.userId as string,
+                state,
+                createServerSupabase(),
+            );
+            res.status(204).end();
+        } catch (error) {
+            console.error(
+                "[google-drive] cancellation failed",
+                safeError(error),
+            );
+            res.status(500).json({
+                detail: "Google Drive authorization could not be cancelled. Close the Google window and try again.",
+            });
+        }
+    }),
+);
+
+
+// Gmail and Calendar are explicit integrations, independent of sign-in.
+for (const provider of ["gmail", "google-calendar"] as const) {
+    const path = `/integrations/${provider}`;
+    const callback = (req: Parameters<typeof backendPublicUrl>[0]) =>
+        `${backendPublicUrl(req)}/user${path}/oauth/callback`;
+    const report = (error: unknown) => {
+        console.error("[google-workspace] request failed", safeError(error));
+        return error instanceof GoogleWorkspaceError
+            ? error.message
+            : "Google integration request failed. Please try again.";
+    };
+    userRouter.get(
+        path,
+        requireAuth,
+        asyncRoute(async (req, res) => {
+            let redirectUri: string | null = null;
+            try {
+                redirectUri = callback(req);
+            } catch {
+                /* deployment config absent */
+            }
+            try {
+                res.json({
+                    ...(await workspaceConnectorStatus(
+                        createServerSupabase(),
+                        res.locals.userId,
+                        provider,
+                    )),
+                    redirectUri,
+                });
+            } catch (error) {
+                res.status(500).json({ detail: report(error) });
+            }
+        }),
+    );
+    userRouter.post(
+        `${path}/oauth/start`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            try {
+                res.json(
+                    await startWorkspaceOAuth(
+                        createServerSupabase(),
+                        res.locals.userId,
+                        provider,
+                        callback(req),
+                    ),
+                );
+            } catch (error) {
+                // As for Slack and Drive: only repo-authored setup steps reach
+                // the browser verbatim, under their machine-readable code.
+                if (error instanceof ConnectorSetupError) {
+                    console.error("[google-workspace] setup required", {
+                        provider,
+                    });
+                    return void res
+                        .status(400)
+                        .json({ code: error.code, detail: error.message });
+                }
+                res.status(400).json({ detail: report(error) });
+            }
+        }),
+    );
+    userRouter.get(
+        `${path}/oauth/finish`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            const nonce = crypto.randomBytes(16).toString("base64");
+            res.set(mcpOAuthPopupHeaders(nonce)).type(
+                "html",
+            );
+            try {
+                if (
+                    req.query.error ||
+                    typeof req.query.state !== "string" ||
+                    typeof req.query.code !== "string"
+                )
+                    throw new GoogleWorkspaceError(
+                        "Google authorization was cancelled or incomplete.",
+                    );
+                await completeWorkspaceOAuth(
+                    createServerSupabase(),
+                    res.locals.userId,
+                    provider,
+                    req.query.state,
+                    req.query.code,
+                );
+                res.send(
+                    mcpOAuthPopupHtml(
+                        { success: true, connectorId: provider },
+                        nonce,
+                    ),
+                );
+            } catch (error) {
+                report(error);
+                res.status(400).send(
+                    mcpOAuthPopupHtml(
+                        {
+                            success: false,
+                            detail: "Google authorization could not be completed. Return to Mike and try again.",
+                        },
+                        nonce,
+                    ),
+                );
+            }
+        }),
+    );
+    userRouter.post(
+        `${path}/oauth/cancel`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            if (
+                typeof req.body?.state !== "string" ||
+                !/^[A-Za-z0-9_-]{32}$/.test(req.body.state)
+            )
+                return void res
+                    .status(400)
+                    .json({ detail: "Invalid authorization attempt." });
+            try {
+                await cancelWorkspaceOAuth(
+                    createServerSupabase(),
+                    res.locals.userId,
+                    provider,
+                    req.body.state,
+                );
+                res.status(204).end();
+            } catch (error) {
+                res.status(500).json({ detail: report(error) });
+            }
+        }),
+    );
+    // PATCH /user/integrations/:provider — { enabled?, requireWriteApproval? }
+    userRouter.patch(
+        path,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            const body = req.body ?? {};
+            for (const key of ["enabled", "requireWriteApproval", "readOnly"]) {
+                if (body[key] !== undefined && typeof body[key] !== "boolean")
+                    return void res
+                        .status(400)
+                        .json({ detail: `${key} must be a boolean.` });
+            }
+            const db = createServerSupabase();
+            try {
+                await updateWorkspaceSettings(db, res.locals.userId, provider, {
+                    enabled: body.enabled,
+                    requireWriteApproval: body.requireWriteApproval,
+                    readOnly: body.readOnly,
+                });
+                res.json(
+                    await workspaceConnectorStatus(
+                        db,
+                        res.locals.userId,
+                        provider,
+                    ),
+                );
+            } catch (error) {
+                res.status(409).json({ detail: report(error) });
+            }
+        }),
+    );
+    // PATCH /user/integrations/:provider/tools/:toolName — { enabled }
+    userRouter.patch(
+        `${path}/tools/:toolName`,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (req, res) => {
+            const toolName = String(req.params.toolName);
+            if (typeof req.body?.enabled !== "boolean")
+                return void res
+                    .status(400)
+                    .json({ detail: "enabled must be a boolean." });
+            if (!workspaceToolList(provider, null).some((t) => t.name === toolName))
+                return void res.status(404).json({ detail: "Unknown tool." });
+            const db = createServerSupabase();
+            try {
+                await setWorkspaceToolEnabled(
+                    db,
+                    res.locals.userId,
+                    provider,
+                    toolName,
+                    req.body.enabled,
+                );
+                res.json(
+                    await workspaceConnectorStatus(
+                        db,
+                        res.locals.userId,
+                        provider,
+                    ),
+                );
+            } catch (error) {
+                res.status(409).json({ detail: report(error) });
+            }
+        }),
+    );
+    userRouter.delete(
+        path,
+        requireAuth,
+        requireMfaIfEnrolled,
+        asyncRoute(async (_req, res) => {
+            try {
+                await disconnectWorkspace(
+                    createServerSupabase(),
+                    res.locals.userId,
+                    provider,
+                );
+                res.status(204).end();
+            } catch (error) {
+                res.status(500).json({ detail: report(error) });
+            }
+        }),
+    );
+}
 // POST /user/mcp-connectors/:connectorId/refresh-tools
 userRouter.post(
     "/mcp-connectors/:connectorId/refresh-tools",
@@ -704,90 +1304,11 @@ userRouter.delete(
     }),
 );
 
-// GET /user/export
-userRouter.get(
-    "/export",
-    requireAuth,
-    requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
-        const userId = res.locals.userId as string;
-        const userEmail = res.locals.userEmail as string | undefined;
-        const db = createServerSupabase();
-        const result = await exportUserAccount(db, userId, userEmail);
-        if (!result.ok) return void sendInternalError(res, result.error);
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${userExportFilename("account", userId)}"`,
-        );
-        void recordAudit(createServerSupabase(), {
-            userId,
-            userEmail: res.locals.userEmail as string | undefined,
-            action: "export.account",
-            surface: "account",
-        });
-        res.json(result.data);
-    }),
-);
-
-// GET /user/chats/export
-userRouter.get(
-    "/chats/export",
-    requireAuth,
-    requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
-        const userId = res.locals.userId as string;
-        const userEmail = res.locals.userEmail as string | undefined;
-        const db = createServerSupabase();
-        const result = await exportUserChats(db, userId, userEmail);
-        if (!result.ok) return void sendInternalError(res, result.error);
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${userExportFilename("chats", userId)}"`,
-        );
-        void recordAudit(createServerSupabase(), {
-            userId,
-            userEmail: res.locals.userEmail as string | undefined,
-            action: "export.chats",
-            surface: "account",
-        });
-        res.json(result.data);
-    }),
-);
-
-// GET /user/tabular-reviews/export
-userRouter.get(
-    "/tabular-reviews/export",
-    requireAuth,
-    requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
-        const userId = res.locals.userId as string;
-        const userEmail = res.locals.userEmail as string | undefined;
-        const db = createServerSupabase();
-        const result = await exportUserTabularReviews(db, userId, userEmail);
-        if (!result.ok) return void sendInternalError(res, result.error);
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${userExportFilename("tabular-reviews", userId)}"`,
-        );
-        void recordAudit(createServerSupabase(), {
-            userId,
-            userEmail: res.locals.userEmail as string | undefined,
-            action: "export.tabular",
-            surface: "account",
-        });
-        res.json(result.data);
-    }),
-);
-
 // ---------------------------------------------------------------------------
 // Async exports (durable): POST creates a DB-queue job that builds the
 // export off the request thread; GET polls it; the download endpoint streams
-// the finished artifact. The synchronous GET /user/*/export routes above
-// still work (curl users, older clients) — the frontend uses this flow so a
-// large export can neither time out the request nor die with a dropped tab.
+// the finished artifact, so a large export can neither time out the request
+// nor die with a dropped tab.
 // Artifacts expire after 24 hours (the runner's retention sweep deletes the
 // file and the job row).
 
@@ -813,8 +1334,9 @@ userRouter.post(
         // a receipt for work that cannot happen — and worse than useless: the
         // pending row holds the (user, type) dedupe key forever, so the user
         // could never successfully start that export again, even after an
-        // operator turns the runner back on. Refuse instead. The synchronous
-        // GET /user/*/export routes still work, which is the escape hatch.
+        // operator turns the runner back on. Refuse instead: exports answer
+        // 503 until the runner is enabled (production must keep it on; see
+        // docs/memory.md).
         if (!dbJobsEnabled())
             return void res.status(503).json({
                 detail: "Exports are temporarily unavailable. Please try again later.",

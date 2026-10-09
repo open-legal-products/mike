@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { rateLimitedBody } from "./lib/httpError";
 import { createHash, randomUUID } from "node:crypto";
 import express from "express";
 import cors from "cors";
@@ -17,7 +18,10 @@ import { quickActionsRouter } from "./modules/quick-actions/quickActions.routes"
 import { workflowAddonsRouter } from "./modules/workflows/workflowAddons.routes";
 import { userRouter } from "./modules/user/user.routes";
 import { modelsRouter } from "./modules/models/models.routes";
-import { downloadsRouter } from "./modules/downloads/downloads.routes";
+import {
+  blobUploadHandler,
+  downloadsRouter,
+} from "./modules/downloads/downloads.routes";
 import { sourceDocumentsRouter } from "./modules/source-documents/sourceDocuments.routes";
 import { auditRouter } from "./modules/audit/audit.routes";
 import { authRouter } from "./modules/auth/auth.routes";
@@ -66,9 +70,11 @@ function makeLimiter(options: {
     skip: (req) => req.method === "OPTIONS" || options.skip?.(req) === true,
     keyGenerator: options.keyGenerator,
     skipSuccessfulRequests: options.skipSuccessfulRequests,
-    message: {
-      detail: options.message ?? "Too many requests. Please try again later.",
-    },
+    // A machine code lets clients classify the failure without parsing
+    // prose; the detail stays specific to the lane that was exhausted.
+    message: rateLimitedBody(
+      options.message ?? "Too many requests. Please try again later.",
+    ),
   });
 }
 
@@ -78,6 +84,10 @@ function makeLimiter(options: {
 // tool-deadline stall per call inside a held SSE stream.
 const TOOL_RESULT_PATH = "/word-chat/tool-result";
 
+// Path prefix of the filesystem driver's signed blob PUT, used both to give it
+// its own rate-limit lane and to keep it out of the shared one.
+const BLOB_UPLOAD_PREFIX = "/download/signed/";
+
 const generalLimiter = makeLimiter({
   windowMs: minutes(envInt("RATE_LIMIT_GENERAL_WINDOW_MINUTES", 15)),
   max: envInt("RATE_LIMIT_GENERAL_MAX", 300),
@@ -86,7 +96,21 @@ const generalLimiter = makeLimiter({
   skip: (req) =>
     req.path === TOOL_RESULT_PATH ||
     req.path === "/upload-sessions" ||
-    req.path.startsWith("/upload-sessions/"),
+    req.path.startsWith("/upload-sessions/") ||
+    (req.method === "PUT" && req.path.startsWith(BLOB_UPLOAD_PREFIX)),
+});
+
+// The filesystem storage driver's signed PUT (see downloads.routes.ts) is the
+// local-mode stand-in for a direct browser upload to object storage — which,
+// on every other deployment, never reaches this process at all. Leaving it on
+// the shared 300-request budget would mean one 50-file drag-and-drop spending a
+// sixth of a user's whole quota, so it gets its own generous lane instead, the
+// same way the upload-session endpoints do. Still bounded: a stolen or replayed
+// token cannot be used to hammer the disk indefinitely.
+const blobUploadLimiter = makeLimiter({
+  windowMs: minutes(envInt("RATE_LIMIT_BLOB_UPLOAD_WINDOW_MINUTES", 15)),
+  max: envInt("RATE_LIMIT_BLOB_UPLOAD_MAX", 1000),
+  message: "Too many uploads. Please try again later.",
 });
 
 const toolResultLimiter = makeLimiter({
@@ -250,7 +274,6 @@ app.post("/projects/:projectId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/generate", chatLimiter);
 app.post("/chat/create", chatCreateLimiter);
-app.post("/chat/:chatId/generate-title", chatCreateLimiter);
 app.post("/workflow-addons/:addonId/import", workflowImportLimiter);
 const legacyUploadRemoved = (_req: express.Request, res: express.Response) => {
   res.status(410).json({
@@ -271,13 +294,9 @@ app.put(
 );
 app.post("/projects/:projectId/documents", legacyUploadRemoved);
 app.get("/projects/:projectId/export", exportLimiter);
-app.get("/user/export", exportLimiter);
-app.get("/user/chats/export", exportLimiter);
-app.get("/user/tabular-reviews/export", exportLimiter);
-app.get("/audit/export", exportLimiter);
-// Scheduling an async export costs exactly what the synchronous GETs above
-// cost — the same whole-corpus walk, just on a worker — so it shares their
-// budget. Deliberately POST-only: the /user/exports/:id poll and its download
+// Scheduling an async export costs what the synchronous project export above
+// costs — a whole-corpus walk, just on a worker — so it shares its budget.
+// Deliberately POST-only: the /user/exports/:id poll and its download
 // stay on the general limiter, because a client polls every couple of seconds
 // while an export builds and a 10/hour budget would lock the user out of an
 // export they legitimately scheduled.
@@ -286,6 +305,11 @@ app.delete("/user/account", dataDeleteLimiter);
 app.delete("/user/chats", dataDeleteLimiter);
 app.delete("/user/projects", dataDeleteLimiter);
 app.delete("/user/tabular-reviews", dataDeleteLimiter);
+
+// Registered ahead of the global JSON parser: the filesystem storage driver's
+// signed PUT streams its body straight to disk (see downloads.routes.ts), so
+// no body parser may consume it first — a .json upload otherwise would be.
+app.put("/download/signed/:token", blobUploadLimiter, blobUploadHandler);
 
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
@@ -309,7 +333,6 @@ app.use("/quick-actions", quickActionsRouter);
 app.use("/workflow-addons", workflowAddonsRouter);
 app.use("/user/memory", userMemoryRouter);
 app.use("/user", userRouter);
-app.use("/users", userRouter);
 app.use("/download", downloadsRouter);
 app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);

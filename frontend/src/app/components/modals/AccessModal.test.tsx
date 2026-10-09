@@ -176,7 +176,7 @@ describe("AccessModal — per-recipient roles", () => {
             roleToggle.compareDocumentPosition(addButton) &
                 Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
-        expect(roleToggle).toHaveAttribute("data-slot", "dropdown-menu-trigger");
+        expect(roleToggle).toHaveAttribute("aria-haspopup", "menu");
         expect(roleToggle).not.toHaveClass("border-l");
         expect(roleToggle).toHaveClass("bg-transparent", "text-violet-700");
         expect(roleToggle).not.toHaveClass("bg-violet-100");
@@ -204,7 +204,7 @@ describe("AccessModal — per-recipient roles", () => {
         expect(screen.getByRole("menu")).toHaveClass(
             "z-[250]",
             "w-32",
-            "space-y-1",
+            "gap-1",
         );
         expect(screen.getByRole("menu")).not.toHaveClass("w-36");
         const editorOption = screen.getByRole("menuitem", { name: "Editor" });
@@ -256,7 +256,7 @@ describe("AccessModal — per-recipient roles", () => {
         expect(screen.getByRole("menu")).toHaveClass(
             "z-[250]",
             "w-32",
-            "space-y-1",
+            "gap-1",
         );
         const viewerOption = screen.getByRole("menuitem", { name: "Viewer" });
         expect(viewerOption).toHaveAttribute("data-selected", "true");

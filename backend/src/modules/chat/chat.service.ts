@@ -1,8 +1,5 @@
 // Stable public API. Keep implementations in the topic files below.
 export {
-  type AccessibleChat,
-  validateAccessibleProjectId,
-  type ChatAccess,
   getAccessibleChat,
 } from "./chat.access";
 export { getChatMessages } from "./chat.messages";
@@ -19,8 +16,8 @@ export {
   revokeChatAccess,
 } from "./chat.sharing";
 export { updateChatSettings } from "./chat.settings";
-export { updateChatTitle, generateChatTitle } from "./chat.titles";
-export { type PreparedChatStream, prepareChatStream } from "./chat.prepare";
+export { updateChatTitle } from "./chat.titles";
+export { prepareChatStream } from "./chat.prepare";
 export {
   devLog,
   appendAssistantEventsToMessage,
@@ -28,6 +25,7 @@ export {
   assistantStreamErrorPayload,
   ASSISTANT_ERROR_MESSAGE,
   buildCancelledAssistantMessage,
+  buildStoppedAssistantMessage,
   extractCitations,
   isAbortError,
   runLLMStream,
@@ -42,11 +40,16 @@ export {
   parseOptionalReasoning,
   buildProjectDocContext,
   buildMessages,
+  loadUserMessageSentTimes,
+  userMessageStamper,
+  type MessageTimeContext,
   buildUserPersonalisationPrompt,
   buildWorkflowStore,
   attachPriorReasoning,
   enrichWithPriorEvents,
   appendAskInputsResponseToAssistantMessage,
+  runApprovedConnectorActions,
+  writeApprovedConnectorFrames,
   generateSpotlightNonce,
   spotlightFilename,
   type AskInputsResponseRequest,
@@ -58,6 +61,7 @@ export {
   parseOptionalDocumentContext,
   createReservedAssistantMessageUpdater,
   createWordClientToolsAdapter,
+  isClientToolCallPending,
   reserveAssistantMessage,
   submitClientToolResult,
   ACTIVE_WORD_DOCUMENT_ID,

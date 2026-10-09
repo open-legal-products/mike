@@ -46,6 +46,9 @@ function emptyDb() {
     }
     chain.then = (resolve: (value: unknown) => unknown) =>
         Promise.resolve({ data: [], error: null }).then(resolve);
+    // Native Google tool discovery checks each service's optional token row.
+    // An unconnected user has no row, not a database lookup failure.
+    chain.maybeSingle = vi.fn(async () => ({ data: null, error: null }));
     return chain;
 }
 

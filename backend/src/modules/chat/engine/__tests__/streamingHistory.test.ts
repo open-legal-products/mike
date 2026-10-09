@@ -39,7 +39,7 @@ describe("runLLMStream history", () => {
     // replays as content "". Anthropic rejects the whole request over one
     // such block ("text content blocks must be non-empty").
     await runLLMStream({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.8-flash",
       apiMessages: [
         { role: "system", content: "SYSTEM" },
         { role: "user", content: "first" },
@@ -65,7 +65,7 @@ describe("runLLMStream history", () => {
 
   it("carries attached reasoning on assistant turns through to the model call", async () => {
     await runLLMStream({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.8-flash",
       apiMessages: [
         { role: "system", content: "SYSTEM" },
         { role: "user", content: "first" },
@@ -94,7 +94,7 @@ type ReasoningCallbacks = {
 };
 
 const streamArgs = () => ({
-  model: "gemini-3-flash-preview",
+  model: "gemini-3.8-flash",
   apiMessages: [
     { role: "system", content: "SYSTEM" },
     { role: "user", content: "question" },
@@ -121,7 +121,7 @@ describe("runLLMStream reasoning provenance", () => {
     expect(events).toContainEqual({
       type: "reasoning",
       text: "Thinking.",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.8-flash",
     });
   });
 
@@ -136,7 +136,7 @@ describe("runLLMStream reasoning provenance", () => {
     expect((failure as { events?: unknown[] }).events).toContainEqual({
       type: "reasoning",
       text: "Half a thought",
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.8-flash",
     });
   });
 });

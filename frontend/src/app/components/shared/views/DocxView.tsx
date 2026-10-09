@@ -1,503 +1,244 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useFetchDocxBytes } from "@/app/hooks/useFetchDocxBytes";
-import { API_BASE } from "@/app/lib/mikeApi";
-import { authenticatedFetch } from "@/app/lib/authEvents";
-import {
-    clearDocxQuoteHighlights,
-    highlightDocxQuote,
-} from "./highlightDocxQuote";
+import { useDocxAutosave } from "@/app/hooks/useDocxAutosave";
+import { DocxRenderBoundary } from "./DocxRenderBoundary";
+import { DocxSaveErrorPopup } from "./DocxSaveErrorPopup";
+import { downloadBlob } from "@/app/lib/downloadDocument";
+import type { DocxCloseGuard, DocxMode, DocxSaveState, DocxSurface } from "./DocxRenderer.types";
 import type { CitationQuote } from "../types";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
+import { viewRoundingClass, type ViewRounding } from "./viewRounding";
+
+const DocxRenderer = lazy(() => import("./EigenpalDocxRenderer"));
+const RENDER_ERROR = "This document could not be displayed. Please download it to view it.";
+const bufferIds = new WeakMap<ArrayBuffer, number>();
+let nextBufferId = 0;
+
+// Keep the mounted renderer during a refresh; replace it only when new bytes arrive.
+function bufferId(bytes: ArrayBuffer) {
+    let id = bufferIds.get(bytes);
+    if (id === undefined) {
+        id = ++nextBufferId;
+        bufferIds.set(bytes, id);
+    }
+    return id;
+}
 
 interface Props {
     documentId: string;
+    /** Initial mode for each document; the reader can change it in the viewer. */
+    defaultMode?: DocxMode;
+    canEdit?: boolean;
+    toolbarVisible?: boolean;
+    filename?: string;
+    /** Explicit author for standalone previews; app viewers use the signed-in profile. */
+    author?: string;
     versionId?: string | null;
     displayUrl?: string | null;
-    /**
-     * Called once the document has been rendered to the DOM. Handy for
-     * scrolling to a particular tracked change after a re-render.
-     */
     onReady?: () => void;
-    /**
-     * Tracked-change to scroll to + briefly flash after each render. The
-     * `key` is used to re-trigger scrolling when the same edit is clicked
-     * twice in a row.
-     */
+    onCloseGuardReady?: (guard: DocxCloseGuard | null) => void;
+    onDownloadReady?: (download: (() => Promise<void>) | null) => void;
+    onSaveStateChange?: (documentId: string, state: DocxSaveState | null) => void;
     highlightEdit?: {
         key: string;
         inserted_text?: string;
         deleted_text?: string;
-        /**
-         * Numeric w:id values of the <w:ins>/<w:del> wrappers in
-         * document.xml. Preferred over text matching — uniquely identifies
-         * the right DOM element even when multiple edits share identical
-         * inserted/deleted text. `docx-preview` drops these during parsing,
-         * so we re-tag each rendered <ins>/<del> with data-w-id after load.
-         */
         ins_w_id?: string | null;
         del_w_id?: string | null;
     } | null;
-    /**
-     * Forces a byte re-fetch when it changes, even if documentId/versionId
-     * are stable. Used after accept/reject: the backend overwrites bytes at
-     * the same storage path (no new version row), so the hook has no other
-     * signal that the file changed.
-     */
     refetchKey?: number | string;
-    /** Open workspace tabs retain bytes in the viewer instead of the shared cache. */
     cacheBytes?: boolean;
-    /**
-     * Citation quotes to highlight in the rendered output. The first match
-     * is scrolled into view. Page numbers are ignored — DOCX has no explicit
-     * pagination the renderer can match against.
-     */
     quotes?: CitationQuote[];
-    /** Changes when the parent wants the current quote re-focused. */
     quoteFocusKey?: string | number;
-    /**
-     * Warning banner copy rendered in the top-left of the viewer. Used
-     * for non-blocking errors (e.g. "Accept failed — reverted").
-     */
     warning?: string | null;
-    /**
-     * Called when the user dismisses the warning banner.
-     */
     onWarningDismiss?: () => void;
-    /**
-     * Scroll position to restore after the first render — used by parents
-     * that track per-tab scroll and want to re-enter at the same spot.
-     * Null/undefined means "no override" (preserve the pre-render scroll).
-     */
     initialScrollTop?: number | null;
-    /**
-     * Fires on scroll (throttled by rAF) so the parent can persist the
-     * current scrollTop against its tab state.
-     */
     onScrollChange?: (scrollTop: number) => void;
-    rounded?: boolean;
+    rounded?: ViewRounding;
 }
 
-function findEditElement(
-    root: HTMLElement,
-    tag: "ins" | "del",
-    opts: { w_id?: string | null; text?: string },
-): HTMLElement | null {
-    if (opts.w_id) {
-        const byId = root.querySelector(
-            `${tag}[data-w-id="${CSS.escape(opts.w_id)}"]`,
-        ) as HTMLElement | null;
-        if (byId) return byId;
+function focusHighlights(surface: DocxSurface, props: Props): boolean {
+    const edit = props.highlightEdit;
+    if (edit && (edit.ins_w_id != null || edit.del_w_id != null)
+        && surface.activateRevision?.({ ins: edit.ins_w_id, del: edit.del_w_id })) return true;
+    surface.clearRevisionHighlight?.();
+    const text = edit?.inserted_text || edit?.deleted_text;
+    if (text && surface.selectText?.(text)) return true;
+    // Native selection holds one contiguous range. Select the first matching
+    // quote segment, including when its page has not been painted yet.
+    for (const quote of props.quotes ?? []) {
+        for (const segment of quote.quote.split(/\[\[PAGE_BREAK\]\]|\.{3}|…/)) {
+            const text = segment.trim();
+            if (text && surface.selectText?.(text)) return true;
+        }
     }
-    const text = opts.text ?? "";
-    const normalize = (s: string) => s.replace(/\s+/g, " ").trim();
-    const target = normalize(text);
-    if (!target) return null;
-    const candidates = Array.from(root.querySelectorAll(tag)) as HTMLElement[];
-    return (
-        candidates.find((el) => normalize(el.textContent ?? "") === target) ??
-        candidates.find((el) =>
-            normalize(el.textContent ?? "").includes(target),
-        ) ??
-        null
-    );
+    surface.clearTextSelection?.();
+    return false;
 }
 
-function scrollToHighlight(
-    container: HTMLElement,
-    scrollEl: HTMLElement,
-    edit: {
-        inserted_text?: string;
-        deleted_text?: string;
-        ins_w_id?: string | null;
-        del_w_id?: string | null;
-    },
-) {
-    const insEl = findEditElement(container, "ins", {
-        w_id: edit.ins_w_id,
-        text: edit.inserted_text,
+/** DOCX view/edit surface shared by the assistant panel and project IDE. */
+export function DocxView(props: Props) {
+    // A different document/version must never briefly display the previous file.
+    return <DocxViewContent key={JSON.stringify([props.documentId, props.versionId, props.displayUrl])} {...props} />;
+}
+
+function DocxViewContent(props: Props) {
+    const {
+        documentId, versionId, displayUrl, refetchKey, cacheBytes = true,
+        warning, onWarningDismiss, onDownloadReady, onSaveStateChange, rounded = true,
+    } = props;
+    const [initialMode] = useState<DocxMode>(props.defaultMode ?? "view");
+    const [downloading, setDownloading] = useState(false);
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+    const fetched = useFetchDocxBytes(documentId, versionId, refetchKey, displayUrl, cacheBytes);
+    // Metadata refreshes after an autosave must not remount the editor, lose
+    // its undo stack, or discard edits typed while the upload was in flight.
+    const [editedBytes, setEditedBytes] = useState<ArrayBuffer | null>(null);
+    const bytes = editedBytes ?? fetched.bytes;
+    const { loading } = fetched;
+    const error = editedBytes ? null : fetched.error;
+    const renderKey = bytes ? String(bufferId(bytes)) : null;
+    const [readyKey, setReadyKey] = useState<string | null>(null);
+    const [failedKey, setFailedKey] = useState<string | null>(null);
+    const surfaceRef = useRef<DocxSurface | null>(null);
+    const autosave = useDocxAutosave({
+        documentId, versionId, filename: props.filename, bytes,
+        enabled: props.canEdit !== false && !displayUrl,
+        exportDocx: () => surfaceRef.current?.exportDocx?.(),
     });
-    const delEl = findEditElement(container, "del", {
-        w_id: edit.del_w_id,
-        text: edit.deleted_text,
-    });
-    const anchor = insEl ?? delEl;
-    if (!anchor) return;
-
-    const scrollRect = scrollEl.getBoundingClientRect();
-    const targetRect = anchor.getBoundingClientRect();
-    const offset = targetRect.top - scrollRect.top + scrollEl.scrollTop - 80;
-    scrollEl.scrollTo({ top: Math.max(0, offset), behavior: "smooth" });
-
-    const flashed = [insEl, delEl].filter((el): el is HTMLElement => !!el);
-    flashed.forEach((el) => el.classList.add("docx-edit-flash"));
-    window.setTimeout(() => {
-        flashed.forEach((el) => el.classList.remove("docx-edit-flash"));
-    }, 2000);
-}
-
-/**
- * Fetch the ordered list of w:ids for every w:ins/w:del in the current
- * version and tag each rendered <ins>/<del> with data-w-id. The backend
- * returns ids in document order, and docx-preview emits <ins>/<del>
- * in the same order, so we can align by index.
- */
-async function tagWIdsOnRenderedDom(
-    container: HTMLElement,
-    documentId: string,
-    versionId: string | null | undefined,
-): Promise<void> {
-    try {
-        const qs = versionId
-            ? `?version_id=${encodeURIComponent(versionId)}`
-            : "";
-        const resp = await authenticatedFetch(
-            `${API_BASE}/single-documents/${documentId}/tracked-change-ids${qs}`,
-        );
-        if (!resp.ok) {
-            console.warn(
-                "[DocxView] tracked-change-ids fetch failed",
-                resp.status,
-            );
-            return;
-        }
-        const data = (await resp.json()) as {
-            ids: { kind: "ins" | "del"; w_id: string }[];
-        };
-        const domEls = Array.from(
-            container.querySelectorAll("ins, del"),
-        ) as HTMLElement[];
-        const ids = data.ids ?? [];
-        for (let i = 0; i < Math.min(domEls.length, ids.length); i++) {
-            const el = domEls[i];
-            const info = ids[i];
-            if (el.tagName.toLowerCase() !== info.kind) {
-                continue;
-            }
-            el.setAttribute("data-w-id", info.w_id);
-        }
-    } catch (e) {
-        console.warn("[DocxView] tagWIdsOnRenderedDom failed", e);
-    }
-}
-
-/**
- * Renders a .docx in the browser using `docx-preview`. Tracked changes
- * (`w:ins` / `w:del`) show up automatically with coloured strike/underline
- * styling. Scroll position is preserved across re-renders so Accept/Reject
- * doesn't jump the user back to the top.
- */
-export function DocxView({
-    documentId,
-    versionId,
-    displayUrl,
-    onReady,
-    highlightEdit,
-    refetchKey,
-    cacheBytes = true,
-    quotes,
-    quoteFocusKey,
-    warning,
-    onWarningDismiss,
-    initialScrollTop,
-    onScrollChange,
-    rounded = true,
-}: Props) {
-    const scrollRef = useRef<HTMLDivElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
-    const lastScrollTopRef = useRef(0);
-    const renderKeyRef = useRef(0);
-    // Ref-stabilize onReady and highlightEdit so the render effect only
-    // re-fires when `bytes` actually change. Without this, any parent
-    // re-render (e.g. clicking a new highlight) creates a new onReady
-    // identity, triggers a full re-render, and snaps scroll back to top.
-    const onReadyRef = useRef(onReady);
-    onReadyRef.current = onReady;
-    const highlightEditRef = useRef(highlightEdit);
-    highlightEditRef.current = highlightEdit;
-    const quotesRef = useRef(quotes);
-    quotesRef.current = quotes;
-    const initialScrollTopRef = useRef(initialScrollTop ?? null);
-    initialScrollTopRef.current = initialScrollTop ?? null;
-    const onScrollChangeRef = useRef(onScrollChange);
-    onScrollChangeRef.current = onScrollChange;
-
-    // Stable key for the quote list so the re-highlight effect re-fires
-    // only when the actual text/order of quotes changes.
-    const quoteKey = useMemo(
-        () => (quotes ?? []).map((q) => q.quote).join("||"),
-        [quotes],
-    );
-
-    const { bytes, loading, error } = useFetchDocxBytes(
-        documentId,
-        versionId,
-        refetchKey,
-        displayUrl,
-        cacheBytes,
-    );
-
-    /**
-     * Highlight every quote in `list` inside the rendered DOM and scroll
-     * the first match into view. Returns true if any match was found.
-     */
-    const applyQuoteHighlights = (
-        containerEl: HTMLElement,
-        scrollEl: HTMLElement,
-        list: CitationQuote[] | undefined,
-    ): boolean => {
-        clearDocxQuoteHighlights(containerEl);
-        if (!list || list.length === 0) return false;
-
-        let firstMatch: HTMLElement | null = null;
-        for (const q of list) {
-            const match = highlightDocxQuote(containerEl, q.quote);
-            if (match && !firstMatch) firstMatch = match;
-        }
-        if (!firstMatch) return false;
-
-        const scrollRect = scrollEl.getBoundingClientRect();
-        const targetRect = firstMatch.getBoundingClientRect();
-        const offset =
-            targetRect.top -
-            scrollRect.top +
-            scrollEl.scrollTop -
-            scrollEl.clientHeight / 2 +
-            targetRect.height / 2;
-        scrollEl.scrollTo({
-            top: Math.max(0, offset),
-            behavior: "instant" as ScrollBehavior,
-        });
-        return true;
-    };
-
-    /**
-     * docx-preview renders pages at their natural Word page width (e.g.
-     * ~816px for US Letter). When the side-panel is narrower than that,
-     * the page overflows horizontally. Apply CSS `zoom` on each
-     * section.docx so the document shrinks to fit — `zoom` (unlike
-     * `transform: scale`) also shrinks the layout box, so the scroll
-     * container's scrollHeight adapts. We zoom each page rather than the
-     * wrapper because docx-preview injects flex styles on `.docx-wrapper`
-     * that can interfere with wrapper-level zoom.
-     */
-    const applyDocxScale = () => {
-        const containerEl = containerRef.current;
-        const scrollEl = scrollRef.current;
-        if (!containerEl || !scrollEl) return;
-        const wrapper = containerEl.querySelector<HTMLElement>(".docx-wrapper");
-        if (!wrapper) return;
-        const sections = Array.from(
-            wrapper.querySelectorAll<HTMLElement>("section.docx"),
-        );
-        if (sections.length === 0) return;
-        // Reset zoom on every page before measuring so offsetWidth reports
-        // each page's natural width (pages can have different widths — e.g.
-        // mixed portrait/landscape sections).
-        sections.forEach((s) => {
-            s.style.zoom = "1";
-        });
-        // Use the scroll container's content box (clientWidth - padding)
-        // as the available width.
-        const styles = window.getComputedStyle(scrollEl);
-        const padX =
-            (parseFloat(styles.paddingLeft) || 0) +
-            (parseFloat(styles.paddingRight) || 0);
-        const available = scrollEl.clientWidth - padX;
-        if (available <= 0) return;
-        // Scale each page independently against its own natural width so
-        // landscape/custom-size pages still fit without distorting the
-        // page dividers.
-        sections.forEach((s) => {
-            const w = s.offsetWidth;
-            if (!w) return;
-            const scale = Math.min(1, available / w);
-            s.style.zoom = String(scale);
-        });
-    };
-
-    // Observe the scroll container (which tracks the side panel's width)
-    // and re-scale whenever it resizes. Also observe the docx container so
-    // we re-scale once docx-preview finishes inserting pages.
+    const { markChanged, adoptSnapshot, captureSnapshotRevision } = autosave;
+    const fetchRevision = useRef(0);
     useEffect(() => {
-        const scrollEl = scrollRef.current;
-        const containerEl = containerRef.current;
-        if (!scrollEl || !containerEl) return;
-        let raf = 0;
-        const schedule = () => {
-            if (raf) cancelAnimationFrame(raf);
-            raf = requestAnimationFrame(() => applyDocxScale());
-        };
-        const ro = new ResizeObserver(schedule);
-        ro.observe(scrollEl);
-        ro.observe(containerEl);
-        return () => {
-            if (raf) cancelAnimationFrame(raf);
-            ro.disconnect();
-        };
+        // Match the fetch hook's request identity. A read that spans a local
+        // change/save cannot replace the editor with an earlier server snapshot.
+        fetchRevision.current = captureSnapshotRevision();
+    }, [documentId, versionId, refetchKey, displayUrl, cacheBytes, captureSnapshotRevision]);
+    const seenFetchedBytes = useRef(fetched.bytes);
+    useEffect(() => {
+        if (seenFetchedBytes.current === fetched.bytes) return;
+        seenFetchedBytes.current = fetched.bytes;
+        if (editedBytes && fetched.bytes && adoptSnapshot(fetched.bytes, fetchRevision.current)) {
+            // Reset the save baseline and replace the clean editor together.
+            setEditedBytes(fetched.bytes);
+        }
+    }, [fetched.bytes, editedBytes, adoptSnapshot]);
+    const { dirty, status, error: saveError, hasUnsavedChanges, prepareClose, discard } = autosave;
+    useEffect(() => {
+        props.onCloseGuardReady?.({ hasUnsavedChanges, prepareClose, discard });
+        return () => props.onCloseGuardReady?.(null);
+    }, [props.onCloseGuardReady, hasUnsavedChanges, prepareClose, discard]);
+    const saveReady = !!bytes && !error && !displayUrl && readyKey === renderKey && failedKey !== renderKey;
+    useEffect(() => {
+        onSaveStateChange?.(documentId, { ready: saveReady, dirty, status, error: saveError });
+    }, [onSaveStateChange, documentId, saveReady, dirty, status, saveError]);
+    useEffect(() => () => onSaveStateChange?.(documentId, null), [onSaveStateChange, documentId]);
+    const lastScrollTop = useRef(props.initialScrollTop ?? 0);
+    const propsRef = useRef(props);
+    const scrollFrame = useRef(0);
+
+    useEffect(() => { propsRef.current = props; });
+    useEffect(() => () => {
+        cancelAnimationFrame(scrollFrame.current);
     }, []);
 
+    const focusSurface = useCallback((surface: DocxSurface) =>
+        focusHighlights(surface, propsRef.current), []);
+
+    const onReady = useCallback((surface: DocxSurface) => {
+        const firstMount = surfaceRef.current?.content !== surface.content
+            || surfaceRef.current?.scroll !== surface.scroll;
+        surfaceRef.current = surface;
+        setReadyKey(renderKey);
+        setFailedKey(null);
+        // Repeated ready notifications must not move the caret viewport
+        // back to an earlier citation after an edit.
+        if (!firstMount) return;
+        if (!focusSurface(surface)) {
+            surface.scroll.scrollTop = lastScrollTop.current;
+        }
+        propsRef.current.onReady?.();
+    }, [renderKey, focusSurface]);
+    const onError = useCallback(() => setFailedKey(renderKey), [renderKey]);
+    const onChange = useCallback(() => {
+        if (props.canEdit === false || !surfaceRef.current?.content.isConnected) return;
+        setEditedBytes(bytes);
+        markChanged();
+    }, [bytes, markChanged, props.canEdit]);
+    const download = useCallback(async (providedBytes?: ArrayBuffer) => {
+        const surface = surfaceRef.current;
+        if (!surface?.exportDocx || downloading) return;
+        setDownloading(true);
+        setDownloadError(null);
+        try {
+            const buffer = providedBytes ?? await surface.exportDocx();
+            const name = propsRef.current.filename || "document.docx";
+            downloadBlob(new Blob([buffer], {
+                type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }), /\.docx$/i.test(name) ? name : `${name}.docx`);
+        } catch {
+            setDownloadError("This document could not be downloaded. Your edits are still open; please try again.");
+        } finally {
+            setDownloading(false);
+        }
+    }, [downloading]);
     useEffect(() => {
-        let cancelled = false;
-        if (!bytes || !containerRef.current || !scrollRef.current) return;
-
-        const scrollEl = scrollRef.current;
-        const containerEl = containerRef.current;
-
-        // Remember scroll position across re-renders so Accept/Reject stays put.
-        lastScrollTopRef.current = scrollEl.scrollTop;
-        const thisRender = ++renderKeyRef.current;
-
-        (async () => {
-            try {
-                const { renderAsync } = await import("docx-preview");
-                if (cancelled) return;
-                containerEl.innerHTML = "";
-                await renderAsync(bytes, containerEl, undefined, {
-                    inWrapper: true,
-                    ignoreWidth: false,
-                    ignoreHeight: false,
-                    renderChanges: true,
-                    experimental: true,
-                });
-                if (cancelled) return;
-                await tagWIdsOnRenderedDom(
-                    containerEl,
-                    documentId,
-                    versionId ?? null,
-                );
-                if (cancelled) return;
-                // Scale to fit before scrolling so offsets are computed
-                // against the post-zoom layout.
-                applyDocxScale();
-                requestAnimationFrame(() => {
-                    if (
-                        !scrollRef.current ||
-                        thisRender !== renderKeyRef.current
-                    )
-                        return;
-                    const pendingHighlight = highlightEditRef.current;
-                    const pendingQuotes = quotesRef.current;
-                    const pendingInitialScroll = initialScrollTopRef.current;
-                    if (pendingHighlight) {
-                        scrollToHighlight(
-                            containerEl,
-                            scrollRef.current,
-                            pendingHighlight,
-                        );
-                        // Highlight quotes too, but don't override the edit scroll
-                        if (pendingQuotes?.length) {
-                            for (const q of pendingQuotes)
-                                highlightDocxQuote(containerEl, q.quote);
-                        }
-                    } else if (
-                        pendingQuotes &&
-                        applyQuoteHighlights(
-                            containerEl,
-                            scrollRef.current,
-                            pendingQuotes,
-                        )
-                    ) {
-                        // scrolled inside applyQuoteHighlights
-                    } else if (typeof pendingInitialScroll === "number") {
-                        scrollRef.current.scrollTop = pendingInitialScroll;
-                    } else {
-                        scrollRef.current.scrollTop = lastScrollTopRef.current;
-                    }
-                    onReadyRef.current?.();
-                });
-            } catch (e) {
-                console.error("docx-preview render failed", e);
-            }
-        })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [bytes]);
-
-    // Re-scroll/highlight if the target edit changes without a re-render
-    // (e.g. same doc, different edit clicked).
+        if (readyKey !== renderKey || failedKey === renderKey) return;
+        onDownloadReady?.(download);
+        return () => onDownloadReady?.(null);
+    }, [onDownloadReady, readyKey, renderKey, failedKey, download]);
+    const quoteKey = JSON.stringify(props.quotes ?? []);
     useEffect(() => {
-        if (!highlightEdit || !containerRef.current || !scrollRef.current)
-            return;
-        scrollToHighlight(
-            containerRef.current,
-            scrollRef.current,
-            highlightEdit,
-        );
-    }, [highlightEdit?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (surfaceRef.current && readyKey === renderKey && bytes) {
+            focusSurface(surfaceRef.current);
+        }
+    }, [bytes, readyKey, renderKey, quoteKey, props.quoteFocusKey, props.highlightEdit?.key, focusSurface]);
 
-    // Re-apply quote highlights when the quote list changes without a full
-    // re-render (e.g. clicking a different citation on the same doc).
-    useEffect(() => {
-        if (!containerRef.current || !scrollRef.current) return;
-        applyQuoteHighlights(
-            containerRef.current,
-            scrollRef.current,
-            quotesRef.current,
-        );
-    }, [quoteKey, quoteFocusKey]);
-
-    // Fire onScrollChange (rAF-throttled) so parents can persist scroll
-    // per-tab. We still maintain lastScrollTopRef locally for same-mount
-    // re-renders (Accept/Reject preserving scroll within one view).
-    useEffect(() => {
-        const el = scrollRef.current;
-        if (!el) return;
-        let scheduled = false;
-        const onScroll = () => {
-            lastScrollTopRef.current = el.scrollTop;
-            if (scheduled) return;
-            scheduled = true;
-            requestAnimationFrame(() => {
-                scheduled = false;
-                onScrollChangeRef.current?.(el.scrollTop);
-            });
-        };
-        el.addEventListener("scroll", onScroll, { passive: true });
-        return () => el.removeEventListener("scroll", onScroll);
-    }, []);
-
+    const renderError = bytes && failedKey === renderKey ? RENDER_ERROR : null;
+    const message = error || renderError;
+    const pending = !message && (loading && !bytes || bytes && readyKey !== renderKey);
     return (
-        <div
-            className={`document-canvas relative flex flex-col flex-1 overflow-hidden ${rounded ? "rounded-lg" : ""}`}
-        >
-            {warning && (
-                <div className="absolute top-2 left-2 z-10 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800 shadow-sm">
-                    <span>{warning}</span>
-                    <button
-                        type="button"
-                        onClick={() => onWarningDismiss?.()}
-                        className="text-amber-600 hover:text-amber-900"
-                        aria-label="Dismiss warning"
-                    >
-                        ×
-                    </button>
-                </div>
-            )}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <WarningPopup open={!!downloadError} title="Download failed" message={downloadError} onClose={() => setDownloadError(null)} />
             <div
-                ref={scrollRef}
-                className="flex-1 overflow-auto px-5 pt-5 pb-3 docx-view-scroll"
+                className={`document-canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${viewRoundingClass(rounded)}`}
                 data-document-id={documentId}
                 data-version-id={versionId ?? ""}
+                onScrollCapture={(event) => {
+                    const surface = surfaceRef.current;
+                    if (!surface || event.target !== surface.scroll) return;
+                    lastScrollTop.current = surface.scroll.scrollTop;
+                    cancelAnimationFrame(scrollFrame.current);
+                    scrollFrame.current = requestAnimationFrame(() => {
+                        propsRef.current.onScrollChange?.(lastScrollTop.current);
+                    });
+                }}
             >
-                {loading && !bytes && (
-                    <div className="flex h-full items-center justify-center">
-                        <Loader2 className="h-7 w-7 animate-spin text-gray-400" />
+                {warning && (
+                    <div className="absolute left-2 top-2 z-20 flex items-center gap-2 rounded-md bg-app-floating px-2 py-1 text-xs text-foreground shadow-sm">
+                        <span>{warning}</span>
+                        <button type="button" onClick={onWarningDismiss} aria-label="Dismiss warning"
+                            className="rounded px-1 focus-visible:outline-2 focus-visible:outline-blue-500/40">×</button>
                     </div>
                 )}
-                {error && (
-                    <div className="flex h-full items-center justify-center">
-                        <p className="text-sm text-red-500">{error}</p>
+                {pending && (
+                    <div role="status" aria-label="Loading document" className="absolute inset-0 z-10 flex items-center justify-center bg-app-surface">
+                        <Loader2 aria-hidden="true" className="h-7 w-7 animate-spin text-muted-foreground" />
                     </div>
                 )}
-                <div
-                    ref={containerRef}
-                    className="docx-view-container"
-                    hidden={!!error}
-                />
+                {message && <div role="alert" className="flex h-full items-center justify-center p-5 text-sm text-destructive">{message}</div>}
+                {!onSaveStateChange && <DocxSaveErrorPopup error={saveError} />}
+                <div className="docx-view-container min-h-0 flex-1" hidden={!!message}>
+                    {bytes && (
+                        <DocxRenderBoundary key={renderKey} onError={onError}>
+                            <Suspense fallback={null}>
+                                <DocxRenderer bytes={bytes} mode={initialMode} toolbarVisible={props.canEdit === false ? false : props.toolbarVisible} filename={props.filename} author={props.author} onChange={onChange} onSave={displayUrl ? download : autosave.save} onReady={onReady} onError={onError} />
+                            </Suspense>
+                        </DocxRenderBoundary>
+                    )}
+                </div>
             </div>
         </div>
     );

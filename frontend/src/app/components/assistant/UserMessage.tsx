@@ -56,7 +56,7 @@ export function UserMessage({
                         {hasFiles &&
                             files.map((f, i) => {
                                 const className =
-                                    `inline-flex items-center gap-1 rounded-[10px] py-0.5 pl-2 pr-2.5 text-xs text-gray-800 ${LIQUID_GLASS_FLAT_CLASS} backdrop-blur-xl`;
+                                    `inline-flex items-center gap-1 rounded-[10px] py-0.5 pl-2 pr-2.5 text-xs text-gray-800 ${LIQUID_GLASS_FLAT_CLASS}`;
                                 const fileContent = (
                                     <>
                                         <FileTypeIcon

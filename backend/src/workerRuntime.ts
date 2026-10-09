@@ -21,7 +21,7 @@ import {
     MCP_TOKEN_REFRESH_WINDOW_MS,
 } from "./jobs/registry";
 import { enqueueDbJob } from "./lib/dbq/enqueue";
-import { runStaleWorkSweep } from "./jobs/staleWork";
+import { runStaleWorkSweep } from "./jobs/maintenance";
 import { startUploadProcessingWorkers } from "./modules/uploads/uploads.service";
 import { uploadProcessingConfiguration } from "./lib/runtimeConfig";
 import { createServerSupabase } from "./lib/supabase";

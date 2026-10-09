@@ -11,27 +11,34 @@ import {
   type SetStateAction,
 } from "react";
 import { useRouter } from "next/navigation";
-import { streamChat, streamProjectChat } from "@/app/lib/mikeApi";
+import { stopChatTurn, streamChat, streamProjectChat } from "@/app/lib/mikeApi";
+import {
+  createTurnCursor,
+  createTurnEventSink,
+  isAbortError,
+  readAssistantTurn,
+} from "@/app/lib/assistantTurnStream";
 import {
   beginAssistantTurn,
   cancelAssistantTurn,
   getAssistantTurn,
   hasAssistantTurn,
+  loadAssistantChat,
   subscribeAssistantTurns,
   withLiveTurn,
   type AssistantTurnHandle,
   type LiveAssistantTurn,
 } from "@/app/lib/assistantTurns";
 import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
-import { readSseFrames } from "@/app/lib/sse";
 import { reportError } from "@/app/lib/errorReporting";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
-import { isPanelDocument } from "@/app/components/shared/types";
-import type {
-  AssistantEvent,
-  Citation,
-  Message,
-} from "@/app/components/shared/types";
+import {
+  UserVisibleError,
+  describeError,
+  notifyError,
+  notifyInfo,
+} from "@/app/lib/userFacingError";
+import type { AssistantEvent, Message } from "@/app/components/shared/types";
 
 interface UseAssistantChatOptions {
   initialMessages?: Message[];
@@ -41,194 +48,6 @@ interface UseAssistantChatOptions {
   onChatCreated?: (chatId: string) => void;
 }
 
-function readableStreamError(value: unknown, safeToDisplay: boolean): string {
-  if (safeToDisplay && typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return "Sorry, something went wrong.";
-}
-
-function parseCourtlistenerEventCases(value: unknown) {
-  if (!Array.isArray(value)) return undefined;
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return null;
-      }
-      const row = item as Record<string, unknown>;
-      return {
-        cluster_id: typeof row.cluster_id === "number" ? row.cluster_id : 0,
-        case_name: typeof row.case_name === "string" ? row.case_name : null,
-        citation: typeof row.citation === "string" ? row.citation : null,
-        dateFiled: typeof row.dateFiled === "string" ? row.dateFiled : null,
-        url: typeof row.url === "string" ? row.url : null,
-      };
-    })
-    .filter(
-      (item): item is NonNullable<typeof item> => !!item && item.cluster_id > 0,
-    );
-}
-
-function parseCourtlistenerCaseSearches(value: unknown) {
-  if (!Array.isArray(value)) return undefined;
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return null;
-      }
-      const row = item as Record<string, unknown>;
-      return {
-        cluster_id: typeof row.cluster_id === "number" ? row.cluster_id : null,
-        query: typeof row.query === "string" ? row.query : "",
-        total_matches:
-          typeof row.total_matches === "number" ? row.total_matches : 0,
-        case_name: typeof row.case_name === "string" ? row.case_name : null,
-        citation: typeof row.citation === "string" ? row.citation : null,
-        error: typeof row.error === "string" ? row.error : undefined,
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => !!item);
-}
-
-/**
- * Builds one turn's assistant message from its stream.
- *
- * Everything here writes to the turn record, never to a hook's state. The
- * hook that sent the request may have moved to another thread or unmounted
- * by the time a frame arrives, and a hook that has come back to the thread
- * renders the same record — so the record is the one place the answer lives
- * while it streams.
- */
-function createTurnEventSink(
-  turn: AssistantTurnHandle,
-  initialEvents: AssistantEvent[],
-) {
-  const eventsRef = { current: initialEvents };
-  const publish = () => {
-    const snapshot = [...eventsRef.current];
-    turn.update((message) => ({ ...message, events: snapshot }));
-  };
-
-  /**
-   * Finalize any in-flight streaming content event so the next
-   * content_delta starts a fresh block. Called
-   * before any non-content event is appended, so interleaved content /
-   * reasoning / tool events stay in chronological order — without the
-   * later content block inheriting the earlier block's accumulated text.
-   */
-  const finalizeStreamingContent = () => {
-    const events = eventsRef.current;
-    const last = events[events.length - 1];
-    if (last?.type === "content" && last.isStreaming) {
-      eventsRef.current = [
-        ...events.slice(0, -1),
-        { type: "content", text: last.text },
-      ];
-      publish();
-    }
-  };
-
-  // If the model transitions from reasoning into content/tool without a
-  // reasoning_block_end (or the events arrive out of order), the prior
-  // reasoning event would otherwise stay flagged isStreaming forever.
-  const finalizeStreamingReasoning = () => {
-    const events = eventsRef.current;
-    const last = events[events.length - 1];
-    if (last?.type !== "reasoning" || !last.isStreaming) return;
-    eventsRef.current = [
-      ...events.slice(0, -1),
-      { type: "reasoning", text: last.text },
-    ];
-    publish();
-  };
-
-  // Transient placeholder events (tool_call_start, thinking) fill the
-  // latency gap between real SSE events so the wrapper doesn't look stuck.
-  // Anytime a real event arrives, drop any streaming placeholder first.
-  const isStreamingPlaceholder = (e: AssistantEvent) =>
-    (e.type === "tool_call_start" || e.type === "thinking") && !!e.isStreaming;
-
-  const cancelStreamingEvents = (events: AssistantEvent[]) =>
-    events
-      .filter((event) => !isStreamingPlaceholder(event))
-      .map((event) => {
-        if (!("isStreaming" in event) || !event.isStreaming) return event;
-        const rest = { ...event };
-        delete (rest as { isStreaming?: boolean }).isStreaming;
-        return rest as AssistantEvent;
-      });
-
-  // Stop may reach the record twice: from the control itself and from the
-  // aborted request unwinding. The label goes on once.
-  let cancelled = false;
-  const appendCancellation = () => {
-    if (cancelled) return;
-    cancelled = true;
-    eventsRef.current = [
-      ...cancelStreamingEvents(eventsRef.current),
-      { type: "content" as const, text: "Cancelled by user." },
-    ];
-    publish();
-  };
-
-  const clearStreamingPlaceholders = () => {
-    const before = eventsRef.current;
-    const after = before.filter((e) => !isStreamingPlaceholder(e));
-    if (after.length === before.length) return;
-    eventsRef.current = after;
-    publish();
-  };
-
-  const pushThinkingPlaceholder = () => {
-    const events = eventsRef.current;
-    const last = events[events.length - 1];
-    // Don't stack placeholders back-to-back; one "Thinking…" line is plenty.
-    if (last && isStreamingPlaceholder(last)) return;
-    eventsRef.current = [
-      ...events,
-      { type: "thinking" as const, isStreaming: true },
-    ];
-    publish();
-  };
-
-  const pushEvent = (event: AssistantEvent) => {
-    finalizeStreamingContent();
-    finalizeStreamingReasoning();
-    // A real event, or a more specific placeholder such as
-    // tool_call_start, should replace any generic "Thinking..." line.
-    const next = eventsRef.current.filter((e) => !isStreamingPlaceholder(e));
-    eventsRef.current = [...next, event];
-    publish();
-  };
-
-  const updateMatchingEvent = (
-    predicate: (e: AssistantEvent) => boolean,
-    updater: (e: AssistantEvent) => AssistantEvent,
-  ) => {
-    const events = eventsRef.current;
-    const idx = [...events]
-      .map((_, i) => i)
-      .reverse()
-      .find((i) => predicate(events[i]));
-    if (idx === undefined) return false;
-    const newEvents = [...events];
-    newEvents[idx] = updater(events[idx]);
-    eventsRef.current = newEvents;
-    publish();
-    return true;
-  };
-
-  return {
-    eventsRef,
-    finalizeStreamingContent,
-    finalizeStreamingReasoning,
-    clearStreamingPlaceholders,
-    pushThinkingPlaceholder,
-    pushEvent,
-    updateMatchingEvent,
-    appendCancellation,
-  };
-}
 
 export function useAssistantChat({
   initialMessages = [],
@@ -247,6 +66,12 @@ export function useAssistantChat({
   } = useChatHistoryContext();
 
   const [messages, setRawMessages] = useState<Message[]>(initialMessages);
+  // Mirrors `messages` for the async send path: a turn started from a toast
+  // Retry runs long after the render that raised it.
+  const messagesRef = useRef<Message[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [isResponseLoading, setIsResponseLoading] = useState(false);
   // An object, not a bare model id: an ask-inputs response submits without a
   // model, and a null id has to still open the popup — the id only decides
@@ -256,8 +81,14 @@ export function useAssistantChat({
   } | null>(null);
   const [isLoadingCitations, setIsLoadingCitations] = useState(false);
   const [chatId, setChatId] = useState<string | undefined>(initialChatId);
+  // Mirrors `chatId` for the async send path. A turn started from a toast
+  // Retry runs long after the render that raised it, and the state value
+  // captured by that render is the one from *before* the stream assigned the
+  // chat its id — sending it would create a second chat for the same turn.
+  const chatIdRef = useRef<string | undefined>(initialChatId);
 
   useEffect(() => {
+    chatIdRef.current = initialChatId;
     setChatId(initialChatId);
   }, [initialChatId]);
 
@@ -390,29 +221,180 @@ export function useAssistantChat({
     cancelAssistantTurn(viewedChatId);
   };
 
+  type ChatTurnOptions = {
+    displayedDoc?: { filename: string; documentId: string } | null;
+    askInputsResponse?: Extract<
+      AssistantEvent,
+      { type: "ask_inputs_response" }
+    >;
+  };
+
+  /**
+   * Everything a re-send needs, captured when the turn is sent. An error
+   * toast with actions never auto-dismisses, so its Retry can fire minutes
+   * later — by then the hook may be showing a different thread, a newer turn
+   * may own the stream, and the chat may have been given an id. The snapshot
+   * (not the raising render's closure, and not a mutable "last turn") is what
+   * the retry replays, and it is validated against the live hook first.
+   */
+  type TurnSnapshot = {
+    /** The request generation this turn owned; a newer one supersedes it. */
+    turnId: number;
+    /** Project + chat the turn was sent from; updated when the id arrives. */
+    threadKey: string;
+    /** The chat id the turn ended up in, once the stream assigns one. */
+    chatId: string | undefined;
+    message: Message;
+    opts?: ChatTurnOptions;
+    /** Messages on screen when the turn was sent, minus its own answer. */
+    transcriptLength: number;
+    /**
+     * The user bubble this turn answers: normally the message itself, or —
+     * for an ask-inputs continuation, whose answer is rendered as an event
+     * rather than a bubble — the question already on screen.
+     */
+    anchorContent: string;
+    /**
+     * Set when the connection broke after the server had named the turn.
+     * The server owns that run: it is still generating, or has stored the
+     * answer. Retry re-reads the thread rather than re-sending the question,
+     * which would store it twice (and, while the run is alive, be refused
+     * with 409 turn_in_progress after that insert).
+     */
+    recoveryChatId?: string;
+  };
+
+  const threadKeyFor = (id: string | undefined) =>
+    `${projectId ?? ""}:${id ?? "new"}`;
+
+  const lastUserMessage = (transcript: Message[]): Message | undefined => {
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      if (transcript[i].role === "user") return transcript[i];
+    }
+    return undefined;
+  };
+
+  /**
+   * Re-send one specific turn. Refuses — visibly, but without touching the
+   * transcript or an in-flight stream — when the hook has moved on from the
+   * turn the toast was raised for.
+   */
+  const retryTurn = async (turn: TurnSnapshot): Promise<string | null> => {
+    if (!mountedRef.current) {
+      notifyInfo("Open this chat and wait for its current answer before retrying.");
+      return null;
+    }
+    const transcript = messagesRef.current;
+    const anchor = lastUserMessage(transcript);
+    // The host swaps threads by writing straight through the setters, so the
+    // hook can be showing another chat entirely by the time this fires.
+    if (turn.threadKey !== threadKeyFor(chatIdRef.current)) {
+      notifyInfo(
+        "This chat has changed. Send the message again from the chat it belongs to.",
+      );
+      return null;
+    }
+    if (turn.turnId !== requestGenerationRef.current) {
+      // A newer turn owns the thread. Re-sending would abort a healthy
+      // stream and answer a question the user has already moved past.
+      notifyInfo(
+        "A newer message has replaced this one. Send it again if you still need an answer.",
+      );
+      return null;
+    }
+    if (
+      transcript.length < turn.transcriptLength ||
+      !anchor ||
+      anchor.content !== turn.anchorContent
+    ) {
+      // Same chat id, different transcript: the thread was reloaded or
+      // rewritten under the toast.
+      notifyInfo(
+        "This chat has changed. Send the message again from the chat it belongs to.",
+      );
+      return null;
+    }
+    if (hasAssistantTurn(chatIdRef.current)) {
+      notifyInfo("Wait for this chat's current answer before retrying.");
+      return null;
+    }
+    if (turn.recoveryChatId) return recoverServerTurn(turn, turn.recoveryChatId);
+    // Drop the failed assistant bubble before re-sending, or the retry would
+    // stack a second empty turn under it and repeat the user's question in
+    // the request. `messagesRef` is updated here too so `handleChat` reads
+    // the trimmed list without waiting for a React commit. The finished turn
+    // record is detached first, or `setMessages` would lay the failed answer
+    // back over the trimmed list.
+    const trimmed = [...transcript];
+    while (
+      trimmed.length > 0 &&
+      trimmed[trimmed.length - 1].role === "assistant"
+    ) {
+      trimmed.pop();
+    }
+    attachToTurn(null);
+    messagesRef.current = trimmed;
+    setMessages(trimmed);
+    return handleChat(turn.message, turn.opts);
+  };
+
+  /**
+   * Retry for a turn the server already owns: show the server's copy of the
+   * thread. `loadAssistantChat` re-attaches to the run if it is still
+   * generating (the hook then mirrors it like any resumed turn) and otherwise
+   * returns the stored answer. Reading is idempotent, so a second click
+   * cannot double anything.
+   */
+  const recoverServerTurn = async (
+    turn: TurnSnapshot,
+    serverChatId: string,
+  ): Promise<string | null> => {
+    attachToTurn(null);
+    try {
+      const loaded = await loadAssistantChat(serverChatId);
+      // Same staleness rules as a re-send: never repaint a thread the user
+      // has since left or sent into.
+      if (
+        !mountedRef.current ||
+        turn.turnId !== requestGenerationRef.current ||
+        chatIdRef.current !== serverChatId
+      ) {
+        return null;
+      }
+      setMessages(loaded.messages);
+      return serverChatId;
+    } catch (error) {
+      notifyError(error, {
+        action: "load this chat",
+        dedupeKey: "assistant-chat",
+          support: true,
+        onRetry: async () => {
+          await retryTurn(turn);
+        },
+      });
+      return null;
+    }
+  };
+
   const handleChat = async (
     message: Message,
-    opts?: {
-      displayedDoc?: { filename: string; documentId: string } | null;
-      askInputsResponse?: Extract<
-        AssistantEvent,
-        { type: "ask_inputs_response" }
-      >;
-    },
+    opts?: ChatTurnOptions,
   ): Promise<string | null> => {
-    if (!message.content.trim() || hasAssistantTurn(chatId)) return null;
+    if (!message.content.trim() || hasAssistantTurn(chatIdRef.current)) return null;
 
     setIsResponseLoading(true);
 
-    const lastMessage = messages[messages.length - 1];
+    // The committed list, or the one a retry just trimmed.
+    const currentMessages = messagesRef.current;
+    const lastMessage = currentMessages[currentMessages.length - 1];
     const isMessageAlreadyAdded =
       lastMessage &&
       lastMessage.role === "user" &&
       lastMessage.content === message.content;
 
     const apiMessagesForTurn: Message[] = isMessageAlreadyAdded
-      ? messages
-      : [...messages, message];
+      ? currentMessages
+      : [...currentMessages, message];
     const askInputsResponseEvent = opts?.askInputsResponse ?? null;
     const optimisticResponseEvent = askInputsResponseEvent;
     const userInputThinkingEvent = optimisticResponseEvent
@@ -423,7 +405,7 @@ export function useAssistantChat({
       : null;
     const displayMessages: Message[] = optimisticResponseEvent
       ? (() => {
-          const updated = messages.map((item) => ({
+          const updated = currentMessages.map((item) => ({
             ...item,
             events: item.events ? [...item.events] : item.events,
           }));
@@ -463,20 +445,45 @@ export function useAssistantChat({
         : [...displayMessages, assistantPlaceholder],
     );
 
-    let streamedChatId: string | null = null;
-
     const generation = ++requestGenerationRef.current;
+    const retrySnapshot: TurnSnapshot = {
+      turnId: generation,
+      threadKey: threadKeyFor(chatIdRef.current),
+      chatId: chatIdRef.current,
+      message,
+      opts,
+      transcriptLength: optimisticResponseEvent
+        ? displayMessages.length
+        : apiMessagesForTurn.length,
+      anchorContent:
+        lastUserMessage(
+          optimisticResponseEvent ? displayMessages : apiMessagesForTurn,
+        )?.content ?? message.content,
+    };
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const isCurrentRequest = () =>
       mountedRef.current && requestGenerationRef.current === generation;
+    // The live id, never the render-time state this closure captured: a turn
+    // re-sent from a toast must land in the chat the first attempt created,
+    // not open a second one.
+    const sendChatId = chatIdRef.current;
+    const cursor = createTurnCursor(sendChatId);
     // From here the turn record owns the assistant message; this hook, like
     // any hook that comes back to the thread, renders it by attaching.
-    const turn = beginAssistantTurn(chatId, {
+    const turn = beginAssistantTurn(sendChatId, {
       userMessage: optimisticResponseEvent ? null : message,
       assistant: assistantPlaceholder,
       cancel: () => {
+        // The server keeps generating until it is told otherwise: closing
+        // this connection only detaches. Name the turn to the Stop endpoint
+        // first, then stop reading. Before the first frame the turn has no
+        // name yet; the server then finishes the answer on its own and
+        // stores it whole, which a reload shows.
+        if (cursor.chatId && cursor.turnId) {
+          void stopChatTurn(cursor.chatId, cursor.turnId).catch(() => {});
+        }
         controller.abort();
         sink.appendCancellation();
         turn.finish();
@@ -487,18 +494,9 @@ export function useAssistantChat({
       },
     });
     const sink = createTurnEventSink(turn, assistantPlaceholder.events ?? []);
-    const {
-      eventsRef,
-      finalizeStreamingContent,
-      finalizeStreamingReasoning,
-      clearStreamingPlaceholders,
-      pushThinkingPlaceholder,
-      pushEvent,
-      updateMatchingEvent,
-    } = sink;
-    const updateLatestAssistantMessage = turn.update;
     registeredTurnRef.current = turn;
     attachToTurn(turn.turn);
+    let streamedChatId: string | null = null;
 
     try {
       const apiMessages = apiMessagesForTurn.map((currentMessage) => ({
@@ -528,972 +526,106 @@ export function useAssistantChat({
         document_id: f.document_id as string,
       }));
 
-      const response = await (projectId
-        ? streamProjectChat({
-            projectId,
-            messages: apiMessages,
-            chat_id: chatId,
-            model,
-            reasoning,
-            displayed_doc: displayedDoc
-              ? {
-                  filename: displayedDoc.filename,
-                  document_id: displayedDoc.documentId,
-                }
-              : undefined,
-            attached_documents:
-              attachedDocs.length > 0 ? attachedDocs : undefined,
-            ask_inputs_response: opts?.askInputsResponse,
-            signal: controller.signal,
-          })
-        : streamChat({
-            messages: apiMessages,
-            chat_id: chatId,
-            model,
-            reasoning,
-            ask_inputs_response: opts?.askInputsResponse,
-            signal: controller.signal,
-          }));
-
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
-        throw new Error(`Chat request failed with status ${response.status}`);
-      }
-
-      // One shared reader (lib/sse.ts) owns the wire format: CRLF, the
-      // decoder flush for a body that closes without a trailing newline, and
-      // [DONE]. Every frame is applied to the turn record whether or not this
-      // hook still renders the thread: the answer belongs to the thread, and
-      // whoever views it next attaches to the record. Only the hook's own
-      // state and navigation are gated on `isCurrentRequest()`.
-      //
-      // Leaving this loop early cancels the underlying reader; the backend
-      // reads the closed socket as a user cancellation (`res.on("close")` in
-      // the streaming route) and persists whatever text had arrived,
-      // labelled "Cancelled by user." So a detached turn keeps reading to
-      // the end. Stop is the one exit that still aborts: readSseFrames
-      // throws on its signal, and the socket is already closing.
-      for await (const frame of readSseFrames(response, {
-        signal: controller.signal,
-      })) {
-        const data = frame as Record<string, unknown>;
-
-        try {
-            if (data.type === "chat_id") {
-              const streamed = data.chatId as string;
-              const isNewChatId =
-                streamed !== chatId && streamed !== streamedChatId;
-              streamedChatId = streamed;
-              turn.identify(
-                streamed,
-                typeof data.assistantMessageId === "string"
-                  ? data.assistantMessageId
+      // The frames go to the turn record (lib/assistantTurnStream), which
+      // every hook viewing the thread mirrors. Only this hook's own state
+      // and navigation are gated on the request still being its own; a
+      // dropped connection is resumed from the server's copy of the turn.
+      await readAssistantTurn({
+        open: () =>
+          projectId
+            ? streamProjectChat({
+                projectId,
+                messages: apiMessages,
+                chat_id: sendChatId,
+                model,
+                reasoning,
+                displayed_doc: displayedDoc
+                  ? {
+                      filename: displayedDoc.filename,
+                      document_id: displayedDoc.documentId,
+                    }
                   : undefined,
-              );
-              if (!isCurrentRequest()) continue;
-              setChatId(streamed);
-              setCurrentChatId(streamed);
-              if (isNewChatId && onChatCreated) {
-                adoptedThreadKeyRef.current = `${projectId ?? ""}:${streamed}`;
-                onChatCreated(streamed);
-              }
-              continue;
+                attached_documents:
+                  attachedDocs.length > 0 ? attachedDocs : undefined,
+                ask_inputs_response: opts?.askInputsResponse,
+                signal: controller.signal,
+              })
+            : streamChat({
+                messages: apiMessages,
+                chat_id: sendChatId,
+                model,
+                reasoning,
+                ask_inputs_response: opts?.askInputsResponse,
+                signal: controller.signal,
+              }),
+        turn,
+        sink,
+        cursor,
+        signal: controller.signal,
+        hooks: {
+          onChatId: (streamed) => {
+            const isNewChatId =
+              streamed !== sendChatId && streamed !== streamedChatId;
+            streamedChatId = streamed;
+            if (!isCurrentRequest()) return;
+            chatIdRef.current = streamed;
+            // Keep this turn's snapshot on the chat it actually landed in,
+            // so its Retry re-sends into that chat instead of creating one.
+            retrySnapshot.chatId = streamed;
+            retrySnapshot.threadKey = threadKeyFor(streamed);
+            setChatId(streamed);
+            setCurrentChatId(streamed);
+            if (isNewChatId && onChatCreated) {
+              adoptedThreadKeyRef.current = `${projectId ?? ""}:${streamed}`;
+              onChatCreated(streamed);
             }
-
-            if (
-              data.type === "chat_title" &&
-              typeof data.chatId === "string" &&
-              typeof data.title === "string"
-            ) {
-              updateChatTitle(data.chatId, data.title);
-              continue;
-            }
-
-            if (data.type === "content_done") {
-              turn.setLoadingCitations(true);
-              continue;
-            }
-
-            if (data.type === "error") {
-              const safeToDisplay = data.safe_to_display === true;
-              const message = readableStreamError(
-                data.message,
-                safeToDisplay,
-              );
-              // A rejected key cannot be fixed by retrying, so raise it as a
-              // signal the surface can turn into "go fix your key" rather than
-              // leaving it as one more line of failed-response text.
-              if (data.code === "invalid_api_key" && isCurrentRequest()) {
-                setRejectedApiKey({ model: model ?? null });
-              }
-              clearStreamingPlaceholders();
-              finalizeStreamingContent();
-              finalizeStreamingReasoning();
-              eventsRef.current = [
-                ...eventsRef.current,
-                {
-                  type: "error",
-                  message,
-                  ...(safeToDisplay ? { safe_to_display: true } : {}),
-                  ...(data.code === "invalid_api_key"
-                    ? { code: "invalid_api_key" as const }
-                    : {}),
+          },
+          onChatTitle: (id, title) => updateChatTitle(id, title),
+          // A rejected key cannot be fixed by retrying, so raise it as a
+          // signal the surface can turn into "go fix your key" rather than
+          // leaving it as one more line of failed-response text.
+          onRejectedApiKey: () => {
+            if (isCurrentRequest()) setRejectedApiKey({ model: model ?? null });
+          },
+          onErrorFrame: ({ message: frameMessage, safeToDisplay }) => {
+            // The bubble records that this turn failed; the toast is where
+            // the user gets a way back. A server-side failure is one the
+            // user cannot fix, so Contact support rides along with Retry.
+            //
+            // A `safe_to_display` frame is a configuration refusal (no API
+            // key, a model this deployment disallows): re-sending it would
+            // fail identically, so it gets support without a Retry.
+            notifyError(
+              new UserVisibleError(
+                safeToDisplay
+                  ? frameMessage
+                  : "Mike couldn't finish this answer. Try again.",
+                { kind: "server", retryable: !safeToDisplay },
+              ),
+              {
+                action: "get a response",
+                dedupeKey: "assistant-chat",
+          support: true,
+                onRetry: async () => {
+                  await retryTurn(retrySnapshot);
                 },
-              ];
-              const snapshot = [...eventsRef.current];
-              updateLatestAssistantMessage((assistantMessage) => ({
-                ...assistantMessage,
-                events: snapshot,
-                error: message,
-              }));
-              turn.setLoadingCitations(false);
-              if (isCurrentRequest()) setIsResponseLoading(false);
-              continue;
-            }
+              },
+            );
+            if (isCurrentRequest()) setIsResponseLoading(false);
+          },
+        },
+      });
 
-            if (data.type === "content_delta") {
-              const text = data.text as string;
-
-              // Real content is streaming — retire any
-              // "Thinking…" / "Running…" placeholders, and
-              // finalize any in-flight reasoning block so it
-              // doesn't get stuck rendering as streaming.
-              clearStreamingPlaceholders();
-              finalizeStreamingReasoning();
-
-              // Ensure a streaming content event exists. If
-              // the last event isn't already a streaming
-              // content block, start a fresh one so interleaved
-              // tool/reasoning events split content naturally.
-              const events = eventsRef.current;
-              const lastEvent = events[events.length - 1];
-              if (lastEvent?.type !== "content" || !lastEvent.isStreaming) {
-                eventsRef.current = [
-                  ...events,
-                  {
-                    type: "content" as const,
-                    text,
-                    isStreaming: true,
-                  },
-                ];
-                const snapshot = [...eventsRef.current];
-                updateLatestAssistantMessage((message) => ({
-                  ...message,
-                  events: snapshot,
-                }));
-              } else {
-                const nextEvents = [...events];
-                nextEvents[nextEvents.length - 1] = {
-                  type: "content" as const,
-                  text: `${lastEvent.text}${text}`,
-                  isStreaming: true,
-                };
-                eventsRef.current = nextEvents;
-                const snapshot = [...nextEvents];
-                updateLatestAssistantMessage((message) => ({
-                  ...message,
-                  events: snapshot,
-                }));
-              }
-              continue;
-            }
-
-            if (data.type === "reasoning_delta") {
-              const text = data.text as string;
-              let events = eventsRef.current;
-              const last = events[events.length - 1];
-              if (last?.type === "reasoning" && last.isStreaming) {
-                eventsRef.current = [
-                  ...events.slice(0, -1),
-                  {
-                    type: "reasoning" as const,
-                    text: last.text + text,
-                    isStreaming: true,
-                  },
-                ];
-              } else {
-                // New reasoning block — finalize any in-flight
-                // content event first so the next content_delta
-                // starts a fresh block at the correct position.
-                finalizeStreamingContent();
-                clearStreamingPlaceholders();
-                events = eventsRef.current;
-                eventsRef.current = [
-                  ...events,
-                  {
-                    type: "reasoning" as const,
-                    text,
-                    isStreaming: true,
-                  },
-                ];
-              }
-              const snapshot = [...eventsRef.current];
-              updateLatestAssistantMessage((message) => ({
-                ...message,
-                events: snapshot,
-              }));
-              continue;
-            }
-
-            if (data.type === "reasoning_block_end") {
-              const events = eventsRef.current;
-              const last = events[events.length - 1];
-              if (last?.type === "reasoning" && last.isStreaming) {
-                eventsRef.current = [
-                  ...events.slice(0, -1),
-                  {
-                    type: "reasoning" as const,
-                    text: last.text,
-                  },
-                ];
-              }
-              const snapshot = [...eventsRef.current];
-              updateLatestAssistantMessage((message) => ({
-                ...message,
-                events: snapshot,
-              }));
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "tool_call_start") {
-              // Transient placeholder so the client immediately
-              // shows activity after Claude ends a turn with
-              // tool_use. Replaced by the real tool event
-              // (doc_edited_start, doc_read_start, …) if one
-              // arrives; otherwise it lingers as a "Working…"
-              // indicator until the next iteration streams.
-              pushEvent({
-                type: "tool_call_start",
-                name: (data.name as string) ?? "",
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "workflow_applied") {
-              pushEvent({
-                type: "workflow_applied",
-                workflow_id: data.workflow_id as string,
-                title: data.title as string,
-              });
-              continue;
-            }
-
-            if (data.type === "case_citation") {
-              pushEvent({
-                type: "case_citation",
-                cluster_id:
-                  typeof data.cluster_id === "number"
-                    ? (data.cluster_id as number)
-                    : null,
-                case_name:
-                  typeof data.case_name === "string"
-                    ? (data.case_name as string)
-                    : null,
-                citation:
-                  typeof data.citation === "string"
-                    ? (data.citation as string)
-                    : null,
-                url: data.url as string,
-                pdfUrl:
-                  typeof data.pdfUrl === "string"
-                    ? (data.pdfUrl as string)
-                    : null,
-                dateFiled:
-                  typeof data.dateFiled === "string"
-                    ? (data.dateFiled as string)
-                    : null,
-                document: isPanelDocument(data.document)
-                    ? data.document
-                    : undefined,
-              });
-              continue;
-            }
-
-            if (data.type === "case_opinions") {
-              pushEvent({
-                type: "case_opinions",
-                cluster_id:
-                  typeof data.cluster_id === "number"
-                    ? (data.cluster_id as number)
-                    : 0,
-                document: isPanelDocument(data.document)
-                    ? data.document
-                    : undefined,
-              });
-              continue;
-            }
-
-            if (data.type === "mcp_tool_start") {
-              pushEvent({
-                type: "mcp_tool_call",
-                connector_id: "",
-                connector_name: "",
-                tool_name: (data.name as string) ?? "",
-                openai_tool_name: (data.name as string) ?? "",
-                status: "ok",
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "mcp_tool_result") {
-              const openaiToolName = (data.name as string) ?? "";
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "mcp_tool_call" &&
-                  e.openai_tool_name === openaiToolName &&
-                  !!e.isStreaming,
-                () => ({
-                  type: "mcp_tool_call",
-                  connector_id: "",
-                  connector_name:
-                    typeof data.connector_name === "string"
-                      ? (data.connector_name as string)
-                      : "",
-                  tool_name:
-                    typeof data.tool_name === "string"
-                      ? (data.tool_name as string)
-                      : openaiToolName,
-                  openai_tool_name: openaiToolName,
-                  status: data.status === "error" ? "error" : "ok",
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "courtlistener_search_case_law_start") {
-              pushEvent({
-                type: "courtlistener_search_case_law",
-                query: (data.query as string) ?? "",
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "courtlistener_search_case_law") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "courtlistener_search_case_law" &&
-                  e.query === (data.query as string) &&
-                  !!e.isStreaming,
-                () => ({
-                  type: "courtlistener_search_case_law",
-                  query: (data.query as string) ?? "",
-                  result_count:
-                    typeof data.result_count === "number"
-                      ? (data.result_count as number)
-                      : 0,
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "courtlistener_get_cases_start") {
-              pushEvent({
-                type: "courtlistener_get_cases",
-                cluster_ids: Array.isArray(data.cluster_ids)
-                  ? (data.cluster_ids as unknown[]).filter(
-                      (value: unknown): value is number =>
-                        typeof value === "number",
-                    )
-                  : [],
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "courtlistener_get_cases") {
-              updateMatchingEvent(
-                (e) => e.type === "courtlistener_get_cases" && !!e.isStreaming,
-                () => ({
-                  type: "courtlistener_get_cases",
-                  cluster_ids: Array.isArray(data.cluster_ids)
-                    ? (data.cluster_ids as unknown[]).filter(
-                        (value: unknown): value is number =>
-                          typeof value === "number",
-                      )
-                    : [],
-                  case_count:
-                    typeof data.case_count === "number"
-                      ? (data.case_count as number)
-                      : 0,
-                  opinion_count:
-                    typeof data.opinion_count === "number"
-                      ? (data.opinion_count as number)
-                      : 0,
-                  cases: parseCourtlistenerEventCases(data.cases),
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "courtlistener_find_in_case_start") {
-              const searches = parseCourtlistenerCaseSearches(data.searches);
-              pushEvent({
-                type: "courtlistener_find_in_case",
-                cluster_id: searches?.length
-                  ? null
-                  : typeof data.cluster_id === "number"
-                    ? (data.cluster_id as number)
-                    : null,
-                query: searches?.length ? "" : ((data.query as string) ?? ""),
-                searches,
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "courtlistener_find_in_case") {
-              const searches = parseCourtlistenerCaseSearches(data.searches);
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "courtlistener_find_in_case" &&
-                  (searches?.length
-                    ? Array.isArray(e.searches)
-                    : e.cluster_id ===
-                        (typeof data.cluster_id === "number"
-                          ? (data.cluster_id as number)
-                          : null) && e.query === (data.query as string)) &&
-                  !!e.isStreaming,
-                () => ({
-                  type: "courtlistener_find_in_case",
-                  cluster_id: searches?.length
-                    ? null
-                    : typeof data.cluster_id === "number"
-                      ? (data.cluster_id as number)
-                      : null,
-                  query: searches?.length ? "" : ((data.query as string) ?? ""),
-                  total_matches:
-                    typeof data.total_matches === "number"
-                      ? (data.total_matches as number)
-                      : 0,
-                  searches,
-                  case_name:
-                    typeof data.case_name === "string"
-                      ? (data.case_name as string)
-                      : null,
-                  citation:
-                    typeof data.citation === "string"
-                      ? (data.citation as string)
-                      : null,
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "courtlistener_read_case_start") {
-              pushEvent({
-                type: "courtlistener_read_case",
-                cluster_id:
-                  typeof data.cluster_id === "number"
-                    ? (data.cluster_id as number)
-                    : null,
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "courtlistener_read_case") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "courtlistener_read_case" &&
-                  e.cluster_id ===
-                    (typeof data.cluster_id === "number"
-                      ? (data.cluster_id as number)
-                      : null) &&
-                  !!e.isStreaming,
-                () => ({
-                  type: "courtlistener_read_case",
-                  cluster_id:
-                    typeof data.cluster_id === "number"
-                      ? (data.cluster_id as number)
-                      : null,
-                  case_name:
-                    typeof data.case_name === "string"
-                      ? (data.case_name as string)
-                      : null,
-                  citation:
-                    typeof data.citation === "string"
-                      ? (data.citation as string)
-                      : null,
-                  opinion_count:
-                    typeof data.opinion_count === "number"
-                      ? (data.opinion_count as number)
-                      : 0,
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "courtlistener_verify_citations_start") {
-              pushEvent({
-                type: "courtlistener_verify_citations",
-                citation_count:
-                  typeof data.citation_count === "number"
-                    ? (data.citation_count as number)
-                    : 0,
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "courtlistener_verify_citations") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "courtlistener_verify_citations" &&
-                  !!e.isStreaming,
-                () => ({
-                  type: "courtlistener_verify_citations",
-                  citation_count:
-                    typeof data.citation_count === "number"
-                      ? (data.citation_count as number)
-                      : 0,
-                  match_count:
-                    typeof data.match_count === "number"
-                      ? (data.match_count as number)
-                      : 0,
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "doc_read_start") {
-              pushEvent({
-                type: "doc_read",
-                filename: data.filename as string,
-                document_id:
-                  typeof data.document_id === "string"
-                    ? (data.document_id as string)
-                    : undefined,
-                version_id:
-                  typeof data.version_id === "string"
-                    ? (data.version_id as string)
-                    : null,
-                version_number:
-                  typeof data.version_number === "number"
-                    ? (data.version_number as number)
-                    : null,
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "ask_inputs") {
-              const eventId =
-                typeof data.event_id === "string" ? data.event_id.trim() : "";
-              const rawItems = Array.isArray(data.items)
-                ? (data.items as unknown[])
-                : [];
-              const items = rawItems.reduce<
-                Extract<AssistantEvent, { type: "ask_inputs" }>["items"]
-              >((acc, item, index) => {
-                if (!item || typeof item !== "object") return acc;
-                const row = item as Record<string, unknown>;
-                const id =
-                  typeof row.id === "string" && row.id.trim()
-                    ? row.id.trim()
-                    : `input-${index + 1}`;
-                if (
-                  row.kind === "choice" ||
-                  row.kind === "multi_choice"
-                ) {
-                  const options = Array.isArray(row.options)
-                    ? (row.options as unknown[]).flatMap((option) => {
-                        if (!option || typeof option !== "object") return [];
-                        const optionRow = option as Record<string, unknown>;
-                        const value =
-                          typeof optionRow.value === "string"
-                            ? optionRow.value
-                            : typeof optionRow.label === "string"
-                              ? optionRow.label
-                              : "";
-                        if (!value.trim()) return [];
-                        return [
-                          {
-                            value,
-                          },
-                        ];
-                      })
-                    : [];
-                  acc.push({
-                    id,
-                    kind: row.kind,
-                    question:
-                      typeof row.question === "string"
-                        ? row.question
-                        : row.kind === "multi_choice"
-                          ? "Please choose one or more options."
-                          : "Please choose an option.",
-                    options,
-                    allow_other: row.allow_other !== false,
-                    other_label:
-                      typeof row.other_label === "string"
-                        ? row.other_label
-                        : "Other",
-                    response_prefix:
-                      typeof row.response_prefix === "string"
-                        ? row.response_prefix
-                        : undefined,
-                  });
-                  return acc;
-                }
-                if (row.kind === "text") {
-                  acc.push({
-                    id,
-                    kind: "text" as const,
-                    question:
-                      typeof row.question === "string"
-                        ? row.question
-                        : "Please provide the requested information.",
-                    response_prefix:
-                      typeof row.response_prefix === "string"
-                        ? row.response_prefix
-                        : undefined,
-                  });
-                  return acc;
-                }
-                if (row.kind === "documents") {
-                  const documentTypes = Array.isArray(row.document_types)
-                    ? (row.document_types as unknown[])
-                        .filter(
-                          (type): type is string => typeof type === "string",
-                        )
-                        .map((type) => type.trim())
-                        .filter(Boolean)
-                    : [];
-                  acc.push({
-                    id,
-                    kind: "documents" as const,
-                    document_types: documentTypes,
-                    response_prefix:
-                      typeof row.response_prefix === "string"
-                        ? row.response_prefix
-                        : undefined,
-                  });
-                  return acc;
-                }
-                return acc;
-              }, []);
-              if (eventId && items.length > 0) {
-                pushEvent({ type: "ask_inputs", event_id: eventId, items });
-              }
-              continue;
-            }
-
-            if (data.type === "doc_read") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "doc_read" &&
-                  e.filename === data.filename &&
-                  !!e.isStreaming,
-                (e) => {
-                  const event = e as Extract<
-                    AssistantEvent,
-                    { type: "doc_read" }
-                  >;
-                  return {
-                    ...event,
-                    document_id:
-                      typeof data.document_id === "string"
-                        ? (data.document_id as string)
-                        : event.document_id,
-                    version_id:
-                      typeof data.version_id === "string"
-                        ? (data.version_id as string)
-                        : event.version_id,
-                    version_number:
-                      typeof data.version_number === "number"
-                        ? (data.version_number as number)
-                        : event.version_number,
-                    isStreaming: false,
-                  };
-                },
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "doc_find_start") {
-              pushEvent({
-                type: "doc_find",
-                filename: data.filename as string,
-                document_id:
-                  typeof data.document_id === "string"
-                    ? (data.document_id as string)
-                    : undefined,
-                version_id:
-                  typeof data.version_id === "string"
-                    ? (data.version_id as string)
-                    : null,
-                version_number:
-                  typeof data.version_number === "number"
-                    ? (data.version_number as number)
-                    : null,
-                query: (data.query as string) ?? "",
-                total_matches: 0,
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "doc_find") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "doc_find" &&
-                  e.filename === data.filename &&
-                  e.query === (data.query as string) &&
-                  !!e.isStreaming,
-                (e) => {
-                  const event = e as Extract<
-                    AssistantEvent,
-                    { type: "doc_find" }
-                  >;
-                  return {
-                    ...event,
-                    document_id:
-                      typeof data.document_id === "string"
-                        ? (data.document_id as string)
-                        : event.document_id,
-                    version_id:
-                      typeof data.version_id === "string"
-                        ? (data.version_id as string)
-                        : event.version_id,
-                    version_number:
-                      typeof data.version_number === "number"
-                        ? (data.version_number as number)
-                        : event.version_number,
-                    isStreaming: false,
-                    total_matches:
-                      typeof data.total_matches === "number"
-                        ? (data.total_matches as number)
-                        : event.total_matches,
-                  };
-                },
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "doc_created_start") {
-              pushEvent({
-                type: "doc_created",
-                filename: data.filename as string,
-                download_url: "",
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "doc_download") {
-              pushEvent({
-                type: "doc_download",
-                filename: data.filename as string,
-                download_url: data.download_url as string,
-              });
-              continue;
-            }
-
-            if (data.type === "doc_created") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "doc_created" &&
-                  e.filename === data.filename &&
-                  !!e.isStreaming,
-                (e) => {
-                  const next: Extract<AssistantEvent, { type: "doc_created" }> =
-                    {
-                      type: "doc_created",
-                      filename: (e as { filename: string }).filename,
-                      download_url: data.download_url as string,
-                      isStreaming: false,
-                    };
-                  if (typeof data.document_id === "string") {
-                    next.document_id = data.document_id as string;
-                  }
-                  if (typeof data.version_id === "string") {
-                    next.version_id = data.version_id as string;
-                  }
-                  if (typeof data.version_number === "number") {
-                    next.version_number = data.version_number as number;
-                  }
-                  return next;
-                },
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "doc_replicate_start") {
-              pushEvent({
-                type: "doc_replicated",
-                filename: data.filename as string,
-                count:
-                  typeof data.count === "number" ? (data.count as number) : 1,
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "doc_replicated") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "doc_replicated" &&
-                  e.filename === data.filename &&
-                  !!e.isStreaming,
-                () => ({
-                  type: "doc_replicated",
-                  filename: data.filename as string,
-                  count:
-                    typeof data.count === "number"
-                      ? (data.count as number)
-                      : Array.isArray(data.copies)
-                        ? (data.copies as unknown[]).length
-                        : 1,
-                  copies: Array.isArray(data.copies)
-                    ? (data.copies as {
-                        new_filename: string;
-                        document_id: string;
-                        version_id: string;
-                      }[])
-                    : undefined,
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "doc_edited_start") {
-              pushEvent({
-                type: "doc_edited",
-                filename: data.filename as string,
-                document_id: "",
-                version_id: "",
-                download_url: "",
-                annotations: [],
-                isStreaming: true,
-              });
-              continue;
-            }
-
-            if (data.type === "doc_edited") {
-              updateMatchingEvent(
-                (e) =>
-                  e.type === "doc_edited" &&
-                  e.filename === data.filename &&
-                  !!e.isStreaming,
-                () => ({
-                  type: "doc_edited",
-                  filename: data.filename as string,
-                  document_id: (data.document_id as string) ?? "",
-                  version_id: (data.version_id as string) ?? "",
-                  version_number:
-                    typeof data.version_number === "number"
-                      ? (data.version_number as number)
-                      : null,
-                  download_url: (data.download_url as string) ?? "",
-                  annotations: Array.isArray(data.annotations)
-                    ? (data.annotations as import("@/app/components/shared/types").EditAnnotation[])
-                    : [],
-                  error:
-                    typeof data.error === "string"
-                      ? (data.error as string)
-                      : undefined,
-                  isStreaming: false,
-                }),
-              );
-              pushThinkingPlaceholder();
-              continue;
-            }
-
-            if (data.type === "citations") {
-              const status =
-                data.status === "started" ||
-                data.status === "partial" ||
-                data.status === "final"
-                  ? data.status
-                  : "final";
-              const incoming = (data.citations ?? []) as Citation[];
-              if (status === "started" || status === "partial") {
-                updateLatestAssistantMessage((message) => ({
-                  ...message,
-                  citations: incoming,
-                  citationStatus: status,
-                }));
-                continue;
-              }
-              // End-of-stream signal — scrub any lingering
-              // placeholders so they don't persist into the
-              // finalised message. First finalize content so adding
-              // citations cannot re-render the markdown/citation view
-              // against a streaming block.
-              finalizeStreamingContent();
-              clearStreamingPlaceholders();
-              updateLatestAssistantMessage((message) => ({
-                ...message,
-                citations: incoming,
-                citationStatus: incoming.length ? "final" : undefined,
-              }));
-              continue;
-            }
-        } catch (e) {
-          console.warn("[useAssistantChat] failed to handle SSE event:", data, e);
-        }
-      }
-
-      finalizeStreamingReasoning();
       if (!isCurrentRequest()) return null;
 
       setIsResponseLoading(false);
       setIsLoadingCitations(false);
 
-      const finalChatId = streamedChatId || chatId || null;
-      if (finalChatId && finalChatId !== chatId) {
-        if (chatId) {
+      const finalChatId = streamedChatId || sendChatId || null;
+      if (finalChatId && finalChatId !== sendChatId) {
+        if (sendChatId) {
           replaceChatId(
-            chatId,
+            sendChatId,
             finalChatId,
             message.content.trim().slice(0, 120) || "New Chat",
           );
@@ -1514,9 +646,9 @@ export function useAssistantChat({
       // The record learns of the failure even when this hook no longer
       // renders the thread: a reader attached to the turn must see the
       // error, not a spinner.
-      finalizeStreamingContent();
-      if (error instanceof Error && error.name === "AbortError") {
-        finalizeStreamingReasoning();
+      sink.finalizeStreamingContent();
+      if (controller.signal.aborted || isAbortError(error)) {
+        sink.finalizeStreamingReasoning();
         sink.appendCancellation();
       } else {
         // The stream broke for a reason other than the user stopping it:
@@ -1524,10 +656,45 @@ export function useAssistantChat({
         reportError(error, {
           tags: { component: "assistant-chat", project: Boolean(projectId) },
         });
-        updateLatestAssistantMessage((message) => ({
-          ...message,
-          error: "Sorry, something went wrong.",
+        sink.endStreamingAfterFailure();
+        if (cursor.chatId && cursor.turnId) {
+          retrySnapshot.recoveryChatId = cursor.chatId;
+        }
+        const described = describeError(error, {
+          action: "get a response",
+          fallback: "Mike couldn't finish this answer. Try again.",
+        });
+        // A lost response is not proof the POST failed. Until a turn is
+        // named, only an explicit 4xx refusal permits a new send.
+        const uncertain = !retrySnapshot.recoveryChatId &&
+          (described.status === null || described.status >= 500);
+        const failure = uncertain
+          ? new UserVisibleError(
+              "The answer may still be running. Check chat history before sending the question again.",
+              { cause: error },
+            )
+          : error;
+        if (uncertain && retrySnapshot.chatId) {
+          retrySnapshot.recoveryChatId = retrySnapshot.chatId;
+        }
+        turn.update((assistantMessage) => ({
+          ...assistantMessage,
+          error: uncertain ? (failure as UserVisibleError).message : described.message,
         }));
+        notifyError(failure, {
+          action: "get a response",
+          fallback: "Mike couldn't finish this answer. Try again.",
+          dedupeKey: "assistant-chat",
+          support: true,
+          onRetry: uncertain ? undefined : async () => { await retryTurn(retrySnapshot); },
+          actions: uncertain ? [{
+            label: retrySnapshot.chatId ? "Check chat" : "Refresh history",
+            onClick: async () => {
+              if (retrySnapshot.chatId) await retryTurn(retrySnapshot);
+              else await loadChats();
+            },
+          }] : undefined,
+        });
       }
 
       if (!isCurrentRequest()) return null;
@@ -1554,6 +721,7 @@ export function useAssistantChat({
 
     const newChatId = await saveChat(projectId);
     if (newChatId) {
+      chatIdRef.current = newChatId;
       setChatId(newChatId);
       setCurrentChatId(newChatId);
     }
@@ -1580,6 +748,7 @@ export function useAssistantChat({
     detach,
     resetChat: () => {
       detach();
+      chatIdRef.current = undefined;
       setChatId(undefined);
       setCurrentChatId(null);
       setRawMessages([]);

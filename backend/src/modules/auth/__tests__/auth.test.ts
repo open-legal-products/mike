@@ -65,6 +65,7 @@ vi.mock("../../../middleware/auth", () => ({
 }));
 
 import { authRouter } from "../auth.routes";
+import { signupSchema } from "../auth.service";
 
 const app = express();
 app.use(express.json());
@@ -310,6 +311,151 @@ describe("auth routes", () => {
       expect(response.status).toBe(500);
       expect(response.text).not.toContain("private diagnostics");
     }
+  });
+
+  it("translates a provider login failure into our own sentence", async () => {
+    authClient.auth.signInWithPassword.mockResolvedValue({
+      data: { user: null, session: null },
+      error: {
+        status: 400,
+        code: "invalid_credentials",
+        message: "Invalid login credentials (gotrue internal id 42)",
+      },
+    });
+
+    const response = await request(app)
+      .post("/auth/login")
+      .set("Origin", origin)
+      .send({ email: user.email, password: "wrong horse" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "invalid_credentials",
+      detail: "The email or password is incorrect.",
+    });
+    expect(response.text).not.toContain("gotrue internal");
+  });
+
+  it("rejects an over-long password with a specific message before calling the provider", async () => {
+    const response = await request(app)
+      .post("/auth/signup")
+      .set("Origin", origin)
+      .send({ email: user.email, password: "x".repeat(73) });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_long",
+      detail: "Password must be at most 72 UTF-8 bytes. Accented characters and emoji can use more than one byte.",
+    });
+    expect(authClient.auth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("counts bcrypt's 72-byte limit in bytes, not characters", async () => {
+    // 36 two-byte characters: 36 long by String.length, 72 bytes to bcrypt,
+    // so this one is legal. A `.max(72)` on characters would instead let
+    // its 37-character sibling through for GoTrue to reject.
+    const atTheLimit = "é".repeat(36);
+    const overTheLimit = "é".repeat(37);
+    expect(atTheLimit.length).toBe(36);
+    expect(signupSchema.safeParse({ email: user.email, password: atTheLimit }).success).toBe(true);
+
+    const response = await request(app)
+      .post("/auth/signup")
+      .set("Origin", origin)
+      .send({ email: user.email, password: overTheLimit });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_long",
+      detail: "Password must be at most 72 UTF-8 bytes. Accented characters and emoji can use more than one byte.",
+    });
+    expect(authClient.auth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("enforces the sign-up minimum length on the API, not only in the form", async () => {
+    const response = await request(app)
+      .post("/auth/signup")
+      .set("Origin", origin)
+      .send({ email: user.email, password: "eightch8" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_short",
+      detail: "Password must be at least 10 characters.",
+    });
+    expect(authClient.auth.signUp).not.toHaveBeenCalled();
+  });
+
+  it("names a too-short password on password update", async () => {
+    const response = await request(app)
+      .patch("/auth/password")
+      .set("Origin", origin)
+      .send({ password: "short" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: "password_too_short",
+      detail: "Password must be at least 10 characters.",
+    });
+  });
+
+  // Sign-in must accept any password the account might already have: one
+  // set under main's old 8-character rule, one set before GoTrue began
+  // refusing >72 bytes (bcrypt compared only the first 72), or one created
+  // through the Supabase dashboard/admin API, which skip our forms. The
+  // provider is the only judge of whether it matches.
+  it.each([
+    ["an 8-character password set under the old rule", "eightch8"],
+    ["a 1-character password created by an admin", "x"],
+    ["an 80-byte ASCII password set before the 72-byte cap", "a".repeat(80)],
+    ["a 19-emoji (76-byte) password", "\u{1F600}".repeat(19)],
+  ])("lets sign-in through with %s", async (_label, password) => {
+    authClient.auth.signInWithPassword.mockResolvedValue({
+      data: { user, session },
+      error: null,
+    });
+
+    const response = await request(app)
+      .post("/auth/login")
+      .set("Origin", origin)
+      .send({ email: user.email, password });
+
+    expect(response.status).toBe(200);
+    expect(authClient.auth.signInWithPassword).toHaveBeenCalledWith(
+      expect.objectContaining({ password }),
+    );
+  });
+
+  // bcrypt counts bytes. Each row is exactly 72 bytes (legal) and its
+  // one-more sibling (illegal), across 1-, 2-, 3- and 4-byte UTF-8.
+  it.each([
+    ["ASCII", "a", 72],
+    ["2-byte Latin (é)", "é", 36],
+    ["3-byte CJK (密)", "密", 24],
+    ["4-byte emoji (😀), 2 UTF-16 units each", "\u{1F600}", 18],
+  ])("puts the sign-up byte boundary at 72 for %s", (_label, unit, count) => {
+    const atLimit = unit.repeat(count);
+    const overLimit = unit.repeat(count + 1);
+    expect(Buffer.byteLength(atLimit, "utf8")).toBe(72);
+    expect(
+      signupSchema.safeParse({ email: user.email, password: atLimit }).success,
+    ).toBe(true);
+    const over = signupSchema.safeParse({ email: user.email, password: overLimit });
+    expect(over.success).toBe(false);
+    expect(over.error?.issues[0]?.code).toBe("too_big");
+  });
+
+  it("counts a decomposed accent (e + U+0301) as the 3 bytes it is", () => {
+    // Looks like 24 "é" but is 24 × (1 + 2) = 72 bytes; one more is 75.
+    const decomposed = "é";
+    expect(
+      signupSchema.safeParse({ email: user.email, password: decomposed.repeat(24) })
+        .success,
+    ).toBe(true);
+    expect(
+      signupSchema.safeParse({ email: user.email, password: decomposed.repeat(25) })
+        .success,
+    ).toBe(false);
   });
 
   it("does not reveal whether a password-reset email exists", async () => {

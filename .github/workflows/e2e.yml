@@ -7,35 +7,25 @@
 # this job "e2e / playwright" as a required status check in branch protection —
 # see docs/e2e-ci.md ("Make it merge-blocking").
 #
-# The suite is green with NO secret: of the 31 specs, the 4 LLM-dependent ones
-# (chat + critical path) skip themselves when ANTHROPIC_API_KEY is absent (see
-# e2e/llm.ts), so a keyless run passes the other 27 specs. Mike supports local
-# Ollama models without a provider key, but this job does not provision Ollama;
-# the gate is not caused by the best-effort title-generation call. To run and
-# enforce those 4, set the ANTHROPIC_API_KEY repository secret; exact steps, the
-# fork-PR caveat (fork `pull_request` runs never receive secrets, so they
-# always take the skip path), cost, and how to verify the specs ran are in
-# docs/e2e-ci.md ("Enable the LLM specs").
+# Every browser flow runs without a paid provider key. A local Anthropic-protocol
+# fixture supplies deterministic completions while requests still cross the real
+# web gateway, backend, auth, database, storage and assistant streaming layers.
+# This verifies application flows, not the quality/availability of a live model.
 #
-# The e2e user (e2e@mike.local) is bootstrapped in-job by e2e/auth.setup.ts against
-# the local Supabase admin API, so no E2E_PASSWORD secret is needed — the defaults
-# baked into auth.setup.ts are the single source of truth.
+# Each worker creates its own account through e2e/fixtures.ts and e2e/users.ts.
+# auth.setup.ts creates only the isolated logout account. No login secret is needed.
 name: e2e
 
 on:
   workflow_dispatch:
+  # Include stacked PRs whose base is another feature branch.
   pull_request:
-    # `main` is the destination upstream; `upstream-main` is the fork's mirror of
-    # it, so the suite is exercised on the fork PR and stays correct once merged.
-    branches: [main, upstream-main]
   # Nightly run against the default branch, so drift that lands BETWEEN pull
   # requests (a dependency bump, a Supabase CLI change, an upstream UI tweak
   # breaking a selector) is caught within a day instead of surfacing on the next
   # unrelated PR. 03:47 UTC is a quiet hour for GitHub's cron pool (on-the-hour
-  # slots are congested and can be delayed or dropped). Scheduled runs exercise
-  # the 4 LLM-gated specs only when the ANTHROPIC_API_KEY repository secret is
-  # configured — without it they self-skip (e2e/llm.ts) and the run still
-  # covers the other specs.
+  # slots are congested and can be delayed or dropped). Scheduled runs use the
+  # same deterministic provider and exercise every flow.
   schedule:
     - cron: "47 3 * * *"
 
@@ -44,20 +34,120 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
+# Development stress (the `next dev` renderer) is 3-4x slower than the
+# production suite — ~25-35 min against ~7 — and was the last check to finish
+# on every slow PR. It runs nightly, on manual dispatch, and on any PR carrying
+# the `stress` label; ordinary PR pushes run only the production suite. Add the
+# label to PRs that touch streaming, render loops or effect dependencies; it
+# takes effect on the next push (or close + reopen the PR). There is deliberately
+# no `labeled` trigger: a run started by an unrelated label would report every
+# check as skipped, and a skipped check counts as passing — masking a red run.
+
 jobs:
-  playwright:
-    timeout-minutes: 30
+  synthetic:
+    # The Playwright `synthetic` project (assistant-streaming and
+    # tabular-chat-lifecycle) mocks every /api call inside the browser, so it
+    # needs only the web app: no Supabase, backend or account. Running it here
+    # keeps the full-stack job short. The streaming tests are slow by design
+    # (4x CPU throttling, hundreds of SSE chunks; up to ~2 min each), and share
+    # nothing. Four of them on one 4-vCPU runner slowed each other ~2.5x
+    # (120 s -> 300 s), so they are split across runners by chat scope: the
+    # assistant and project pairs (~2-3 min each) get a runner each, and
+    # `rest` takes every other synthetic test, so a new test is never dropped.
+    # The production renderer runs on every PR; the development renderer,
+    # which alone surfaces React's passive-update-depth warning, is a stress
+    # job (see above).
+    name: Assistant streaming (${{ matrix.renderer }}, ${{ matrix.group }})
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        renderer: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'stress')) && '["production","development"]' || '["production"]') }}
+        group: [assistant, project, rest]
     runs-on: ubuntu-latest
     env:
-      # Defaults match e2e/auth.setup.ts; overriding the password here would break
-      # the valid-login specs, so only the base URL is pinned.
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+      SENTRY_DISABLED: "true"
+      NEXT_PUBLIC_SENTRY_DISABLED: "true"
+      E2E_WORKERS: "2"
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix frontend
+      - name: Ensure lightningcss native binary
+        run: npm install --no-save lightningcss --prefix frontend
+      - run: npx playwright install --with-deps chromium
+      - name: Build web (production)
+        if: matrix.renderer == 'production'
+        run: npm run build --prefix frontend
+      - name: Test paced streaming
+        run: |
+          if [ "${{ matrix.renderer }}" = "development" ]; then
+            npm run dev --prefix frontend -- --hostname 127.0.0.1 > /tmp/assistant-streaming-next.log 2>&1 &
+          else
+            npm run start --prefix frontend -- --hostname 127.0.0.1 > /tmp/assistant-streaming-next.log 2>&1 &
+          fi
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --max-time 10 "$PLAYWRIGHT_BASE_URL/assistant/chat/streaming-regression" > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            cat /tmp/assistant-streaming-next.log
+            exit 1
+          fi
+          # Development stress keeps zero retries so an intermittent loop
+          # cannot pass on a retry; production uses the config's CI retries.
+          case "${{ matrix.group }}" in
+            assistant) filter=(--grep "long assistant conversations") ;;
+            project) filter=(--grep "long project conversations") ;;
+            rest) filter=(--grep-invert "long (assistant|project) conversations") ;;
+          esac
+          npx playwright test --project=synthetic "${filter[@]}" \
+            ${{ matrix.renderer == 'development' && '--retries=0 --trace=retain-on-failure' || '' }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: assistant-streaming-${{ matrix.renderer }}-${{ matrix.group }}
+          path: |
+            playwright-report/
+            test-results/
+            /tmp/assistant-streaming-next.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+  playwright:
+    name: ${{ matrix.renderer == 'production' && 'playwright' || 'Playwright (development stress)' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # The development leg only exists when stress is opted in (see above).
+        renderer: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'stress')) && '["production","development"]' || '["production"]') }}
+    runs-on: ubuntu-latest
+    env:
+      # Login credentials come from e2e/users.ts; pin only the browser origin.
       PLAYWRIGHT_BASE_URL: http://localhost:3000
-      # Exposed to the Playwright process (not just backend/.env) so the LLM-gated
-      # specs can skip themselves when no key is present — see e2e/llm.ts. When the
-      # secret is set they run and are enforced; when absent they skip, so a keyless
-      # run (e.g. a fork PR, which never receives this secret) is still green on
-      # the other 27 of the 31 specs. Setup: docs/e2e-ci.md, "Enable the LLM specs".
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      REACT_STRESS: ${{ matrix.renderer == 'development' && '1' || '0' }}
+      # Parallel Playwright workers, each with its own account (e2e/users.ts).
+      # The runner has 4 vCPUs shared with Postgres, the API and Next.
+      E2E_WORKERS: "3"
+      # Dummy key enables model selection; the SDK's existing endpoint override
+      # sends every Anthropic request to the loopback fixture, never a provider.
+      ANTHROPIC_API_KEY: e2e-local-key
+      ANTHROPIC_BASE_URL: http://127.0.0.1:4141/v1
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -82,8 +172,27 @@ jobs:
       - name: Ensure lightningcss native binary
         run: npm install --no-save lightningcss --prefix frontend
 
+      # Playwright transpiles TypeScript without typechecking. Keep missing
+      # helpers and stale fixture signatures from hiding in gated browser flows.
+      - name: Typecheck browser specs
+        run: >-
+          npx tsc --ignoreConfig --noEmit --module nodenext
+          --moduleResolution nodenext --target es2022 --skipLibCheck
+          --esModuleInterop --types node e2e/*.ts playwright.config.ts
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+
+      - name: Verify and start deterministic model provider
+        run: |
+          node --test e2e/anthropic-stub.check.mjs
+          node e2e/anthropic-stub.mjs > /tmp/e2e-model.log 2>&1 &
+          for i in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:4141/health; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/e2e-model.log
+          exit 1
 
       # Object storage. Three specs upload a document (tabular-review row,
       # project-folder fixture) and assert the result renders; those uploads go
@@ -138,6 +247,10 @@ jobs:
       # `supabase init` purely to boot the CLI's local stack, then load the
       # repository's own fresh-database schema — exactly what the README tells a
       # human to run on a new database (backend/schema.sql).
+      # Kept serial on purpose: booting it in the background alongside the
+      # installs and builds saved ~1.7 min but hung at "Starting database..."
+      # past 10 min in 1 of ~6 runs (the serial step never exceeded 2.5 min
+      # across 82 runs), which a merge gate can't afford.
       - name: Start local Supabase
         uses: supabase/setup-cli@v3
         with:
@@ -149,9 +262,15 @@ jobs:
           supabase init --force --with-vscode-settings=false || supabase init --force
           # E2E uses Auth, Postgres, PostgREST, and Kong only. Document storage
           # is provided by RustFS above, and no spec reads local email. Excluding
-          # the unused services also avoids Inbucket claiming host port 54324,
+          # the unused services also avoids Mailpit claiming host port 54324,
           # which can collide with runner processes before Playwright starts.
-          supabase start -x studio,imgproxy,inbucket,analytics,vector,realtime,storage,edge-runtime,functions,meta
+          # Supabase defaults overlap Linux's ephemeral port range. Dedicated
+          # low ports avoid intermittent collisions with runner outbound traffic.
+          sed -i 's/54320/21320/g; s/54321/21321/g; s/54322/21322/g' supabase/config.toml
+          # setup-cli pins GHCR, disabling the CLI's ECR/GHCR/Docker Hub fallback.
+          # Allow the pinned CLI to recover when one public registry is throttled.
+          env -u SUPABASE_INTERNAL_IMAGE_REGISTRY supabase start \
+            -x studio,imgproxy,mailpit,logflare,vector,realtime,storage-api,edge-runtime,postgres-meta,supavisor
           DB_URL=$(supabase status -o json | jq -r '.DB_URL')
           # A fresh database runs the current schema exactly once. Historical
           # migrations only upgrade older deployments; replaying them on top of
@@ -162,6 +281,27 @@ jobs:
           # PostgREST cached its schema when `supabase start` booted it (before
           # the DDL above). Tell it to reload so the new tables/grants are visible.
           psql "$DB_URL" -v ON_ERROR_STOP=1 -c "NOTIFY pgrst, 'reload schema';"
+
+      # The web client talks to its own /api gateway. Only the Next server
+      # needs the upstream backend origin. Written before the build because
+      # Next inlines NEXT_PUBLIC_* values at build time.
+      - name: Write web env
+        run: |
+          {
+            echo "API_BASE_URL=http://localhost:3001"
+            echo "SENTRY_DISABLED=true"
+            echo "NEXT_PUBLIC_SENTRY_DISABLED=true"
+          } > frontend/.env.local
+
+      - name: Build backend
+        run: npm run build --prefix backend
+
+      # Keep release-build coverage alongside development diagnostics. The dev
+      # job warms routes below so on-demand compilation does not consume UI
+      # assertion budgets; its error overlay deliberately remains observable.
+      - name: Build web (production)
+        if: matrix.renderer == 'production'
+        run: npm run build --prefix frontend
 
       - name: Wire env from Supabase
         run: |
@@ -208,57 +348,69 @@ jobs:
             # Keep the release-job fixture reproducible even when the source
             # repository's main branch changes independently of this PR.
             echo "MIKE_WORKFLOWS_REF=ce62e6a2d3f47e1d3567a4f2edc61898cfe9e78a"
-            echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}"
+            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+            echo "ANTHROPIC_BASE_URL=$ANTHROPIC_BASE_URL"
             # Error reporting is on by default; CI runs must not report.
             echo "SENTRY_DISABLED=true"
           } >> backend/.env
-          # The web client talks to its own /api gateway. Only the Next server
-          # needs the upstream backend origin.
-          {
-            echo "API_BASE_URL=http://localhost:3001"
-            echo "SENTRY_DISABLED=true"
-            echo "NEXT_PUBLIC_SENTRY_DISABLED=true"
-          } > frontend/.env.local
 
       # Production runs this as a release job after migrations and before the
       # backend starts. E2E must exercise the same ordering so defaults exist.
       - name: Sync Mike workflow catalog
-        run: |
-          npm run build --prefix backend
-          npm run sync:workflows --prefix backend
-
-      # Serve a PRODUCTION build, not `next dev`. Two reasons the dev server makes
-      # this suite flaky: (1) its on-demand route compilation makes the first hit
-      # of each page arbitrarily slow (20s waitForResponse assertions time out),
-      # and (2) its hydration-error overlay injects DOM (nextjs__container_errors…)
-      # that pollutes text locators — e.g. getByText('All') matched the overlay's
-      # "Call Stack"/"…fallback" text and failed strict mode. A production build has
-      # neither: no overlay, no JIT compile. Verified locally — flipping dev→start
-      # took the suite from intermittent overlay/timeout failures to green.
-      - name: Build web (production)
-        run: npm run build --prefix frontend
+        run: npm run sync:workflows --prefix backend
 
       - name: Start backend API
         run: npm run dev --prefix backend &
-      - name: Start web (production server)
-        run: npm run start --prefix frontend &
+      - name: Start web
+        run: |
+          if [ "${{ matrix.renderer }}" = "development" ]; then
+            npm run dev --prefix frontend > /tmp/e2e-next.log 2>&1 &
+          else
+            npm run start --prefix frontend > /tmp/e2e-next.log 2>&1 &
+          fi
 
       - name: Wait for servers
         run: npx wait-on http://localhost:3001/health http://localhost:3000 --timeout 120000
 
+      # Precompile static routes so cold Turbopack work does not consume UI
+      # assertion budgets. Development overlays remain visible to the tests.
+      # Onboarding and dynamic routes are warmed too: with parallel workers on
+      # a throttled CPU, a route's first `next dev` compile overran a 15 s
+      # navigation wait (/projects/[id] in one run; /onboarding/profile while
+      # three workers signed in at once in another), and stress runs have zero
+      # retries. A placeholder id is enough to compile a dynamic route; its
+      # status code doesn't matter here.
+      - name: Warm development routes
+        if: matrix.renderer == 'development'
+        run: |
+          for route in login onboarding/profile onboarding/practice assistant projects tabular-reviews workflows settings; do
+            curl --fail --silent --max-time 120 "http://localhost:3000/$route" > /dev/null
+          done
+          for route in assistant/chat/warm projects/warm projects/warm/assistant/chat/warm \
+            projects/warm/folders/warm projects/warm/tabular-reviews/warm tabular-reviews/warm \
+            workflows/assistant/warm workflows/tabular-review/warm; do
+            curl --silent --max-time 180 --output /dev/null "http://localhost:3000/$route" &
+          done
+          wait
+
       # playwright.config.ts sets webServer to undefined when CI=true, so the job
       # is responsible for the servers above; Playwright just drives them.
+      # `chromium` is every full-stack spec (plus its `setup` dependency); the
+      # mocked-API specs run in the `synthetic` job above. E2E_WORKERS (job env)
+      # sets the parallel workers, each signed in as its own user.
       - name: Run Playwright
-        run: npx playwright test
+        run: npx playwright test --project=chromium
 
       # always() (not !cancelled()) so the report still uploads when the job is
       # cancelled by the timeout — that's exactly when you most need the traces.
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.renderer }}
           path: |
             playwright-report/
             test-results/
+            /tmp/e2e-next.log
+            /tmp/e2e-model.log
           retention-days: 14
           if-no-files-found: ignore

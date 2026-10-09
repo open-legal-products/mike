@@ -650,3 +650,49 @@ describe("startUserMcpConnectorOAuth", () => {
         expect(updates).toHaveLength(0);
     });
 });
+
+describe("OAuth approval grant identity", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it.each(["initiate", "use"] as const)(
+        "%s mode preserves or replaces the grant appropriately",
+        async (mode) => {
+            vi.stubEnv(
+                "MCP_CONNECTORS_ENCRYPTION_SECRET",
+                "test-only-oauth-grant-secret",
+            );
+            const token: Record<string, unknown> = {
+                grant_id: "original-grant",
+                client_id: "client-1",
+            };
+            const chain = {
+                select: () => chain,
+                eq: () => chain,
+                maybeSingle: async () => ({ data: { ...token }, error: null }),
+                upsert: async (patch: Record<string, unknown>) => {
+                    Object.assign(token, patch);
+                    return { error: null };
+                },
+                update: () => chain,
+                then: (resolve: (result: { error: null }) => unknown) =>
+                    Promise.resolve({ error: null }).then(resolve),
+            };
+            const db = { from: () => chain } as unknown as Db;
+            const provider = new DbMcpOAuthProvider(
+                db,
+                makeConnector("https://mcp.example.com/mcp"),
+                "user-1",
+                mode,
+                "https://app.test/callback",
+            );
+            await provider.saveTokens({
+                access_token: "replacement-access",
+                token_type: "Bearer",
+                refresh_token: "refresh",
+                expires_in: 3600,
+            });
+            if (mode === "use") expect(token.grant_id).toBe("original-grant");
+            else expect(token.grant_id).toMatch(/^[0-9a-f-]{36}$/);
+        },
+    );
+});

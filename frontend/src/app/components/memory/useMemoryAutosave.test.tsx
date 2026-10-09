@@ -173,4 +173,41 @@ describe("useMemoryAutosave", () => {
     expect(save).toHaveBeenCalledTimes(2);
     expect(save).toHaveBeenLastCalledWith("draft");
   });
+
+  it("saves a draft reverted during an in-flight save when it unmounts", async () => {
+    // Revert to the last saved text while "draft" is still being written,
+    // then leave. Without a final flush the in-flight write lands and the
+    // stored value ends up as "draft", not what the user left on screen.
+    vi.useFakeTimers();
+    let finishFirst: (value: Saved) => void = () => {};
+    const save = vi
+      .fn<(value: string) => Promise<Saved>>()
+      .mockImplementationOnce(
+        () => new Promise<Saved>((resolve) => (finishFirst = resolve)),
+      )
+      .mockImplementation(async (content) => ({ content }));
+    const { rerender, unmount } = renderHook(
+      ({ value }) =>
+        useMemoryAutosave({ ...options(value, save), flushOnUnmount: true }),
+      { initialProps: { value: "saved" } },
+    );
+
+    rerender({ value: "draft" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    expect(save).toHaveBeenCalledWith("draft");
+
+    rerender({ value: "saved" });
+    unmount();
+    await act(async () => {
+      finishFirst({ content: "draft" });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith("saved");
+  });
 });

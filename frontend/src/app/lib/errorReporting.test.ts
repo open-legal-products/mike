@@ -16,6 +16,7 @@ vi.mock("@sentry/nextjs", () => ({
     isEnabled: () => state.enabled,
     captureException: vi.fn(() => "exc-1"),
     captureMessage: vi.fn(() => "msg-1"),
+    captureEvent: vi.fn(() => "evt-1"),
     setUser: vi.fn(),
     captureConsoleIntegration: vi.fn((opts: unknown) => ({
         name: "CaptureConsole",
@@ -36,17 +37,23 @@ vi.mock("@sentry/nextjs", () => ({
 import * as Sentry from "@sentry/nextjs";
 import {
     browserSentryOptions,
+    isReported,
     reportApiFailure,
     reportError,
     scrubEvent,
     serverSentryOptions,
     setReportingUser,
+    API_UNREACHABLE_WINDOW_MS,
+    markErrorHandled,
     reportNetworkFailure,
+    resetApiUnreachableWindow,
     trackPendingRequest,
 } from "./errorReporting";
 import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
+import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
 
 afterEach(() => {
+    resetApiUnreachableWindow();
     state.enabled = false;
     state.scopes.length = 0;
     vi.clearAllMocks();
@@ -54,6 +61,19 @@ afterEach(() => {
 });
 
 describe("reportError", () => {
+    it("lets notification callers recognize an already-reported error by identity", () => {
+        const error = new Error("same failure");
+        expect(isReported(error)).toBe(false);
+        for (const value of [null, undefined, "same failure", 0]) {
+            expect(isReported(value)).toBe(false);
+        }
+
+        reportError(error);
+
+        expect(isReported(error)).toBe(true);
+        expect(isReported(new Error("same failure"))).toBe(false);
+    });
+
     it("is a no-op without a DSN but still marks the error for the console bridge", () => {
         const error = new Error("x");
         expect(reportError(error, { tags: { a: "b" } })).toBeNull();
@@ -93,6 +113,28 @@ describe("reportError", () => {
         reportError(new Error("bare"));
         expect(state.scopes[0].setLevel).not.toHaveBeenCalled();
         expect(state.scopes[0].setFingerprint).not.toHaveBeenCalled();
+    });
+});
+
+describe("markErrorHandled", () => {
+    it("sends nothing but stops the console bridge from filing the error later", () => {
+        state.enabled = true;
+        const error = new Error("already reported by the backend");
+        markErrorHandled(error);
+        expect(Sentry.captureException).not.toHaveBeenCalled();
+        expect(Sentry.captureMessage).not.toHaveBeenCalled();
+        expect(
+            scrubEvent(
+                { logger: "console", exception: { values: [{ mechanism: { type: "auto.core.capture_console" } }] } },
+                { originalException: error },
+            ),
+        ).toBeNull();
+    });
+
+    it("counts as reported for notification callers, so they do not file it again", () => {
+        const error = new Error("schema_out_of_date, filed by the backend");
+        markErrorHandled(error);
+        expect(isReported(error)).toBe(true);
     });
 });
 
@@ -179,7 +221,19 @@ describe("browserSentryOptions", () => {
         expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
         expect(options.environment).toBe("self-hosted");
         expect(options.release).toBeUndefined();
-        expect(options.sendDefaultPii).toBe(false);
+        expect(options.dataCollection).toEqual({
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        });
         expect(options.tracesSampleRate).toBe(0);
         expect(options.beforeSend).toBe(scrubEvent);
         expect(options).not.toHaveProperty("replaysOnErrorSampleRate");
@@ -294,7 +348,7 @@ describe("reportNetworkFailure", () => {
         expect(
             reportNetworkFailure(failure, { method: "GET", url: "/api/user/profile" }),
         ).toBeNull();
-        expect(Sentry.captureException).not.toHaveBeenCalled();
+        expect(Sentry.captureEvent).not.toHaveBeenCalled();
         expect(
             scrubEvent(
                 {
@@ -308,15 +362,16 @@ describe("reportNetworkFailure", () => {
         ).toBeNull();
     });
 
-    it("reports a warning grouped per endpoint, not one issue for every fetch failure", () => {
+    it("keeps a per-route issue for a request-layer throw that is not a network TypeError", () => {
         state.enabled = true;
-        const failure = new TypeError("Failed to fetch");
+        const failure = new Error("unexpected");
 
         reportNetworkFailure(failure, {
             method: "POST",
             url: "/api/projects/8f1c2a3e-1234-4bcd-9e0f-1234567890ab/documents",
         });
 
+        expect(Sentry.captureEvent).not.toHaveBeenCalled();
         expect(Sentry.captureException).toHaveBeenCalledWith(failure);
         const scope = state.scopes[0];
         expect(scope.setLevel).toHaveBeenCalledWith("warning");
@@ -330,6 +385,96 @@ describe("reportNetworkFailure", () => {
     });
 });
 
+// MIKE-FRONTEND-C/G/D/E/B: one unreachable backend produced one warning PER
+// ENDPOINT per page (C and G landed 5 ms apart), i.e. five issues for one
+// outage. It is one "API unreachable" issue, reported once per window.
+describe("reportNetworkFailure when the API is unreachable", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const failAt = (url: string) =>
+        reportNetworkFailure(new TypeError("Failed to fetch"), { method: "GET", url });
+
+    /** What the SDK would send for scope N, after beforeSend and the privacy boundary. */
+    function sentEvent(index: number) {
+        const scope = state.scopes[index];
+        const tags = Object.fromEntries(scope.setTag.mock.calls);
+        const eventCall = vi.mocked(Sentry.captureEvent).mock.calls[index];
+        const exceptionCall = vi.mocked(Sentry.captureException).mock.calls[index];
+        const original = eventCall ? eventCall[1]?.originalException : exceptionCall?.[0];
+        const event = eventCall
+            ? { ...(eventCall[0] as object), tags }
+            : {
+                  level: "warning",
+                  tags,
+                  exception: {
+                      values: [{ type: "TypeError", value: "Failed to fetch", mechanism: { type: "generic", handled: true } }],
+                  },
+              };
+        const scrubbed = scrubEvent(event, { originalException: original });
+        return diagnosticEvent(scrubbed);
+    }
+
+    it("files the mount-time fan-out of one outage as ONE issue, not one per route", () => {
+        vi.useFakeTimers();
+        state.enabled = true;
+        const routes = ["/api/models/configured", "/api/projects/8f1c2a3e-1234-4bcd-9e0f-1234567890ab", "/api/chat", "/api/projects", "/api/user/profile"];
+        routes.forEach(failAt);
+
+        expect(state.scopes).toHaveLength(1);
+        expect(Sentry.captureException).not.toHaveBeenCalled();
+        expect(Sentry.captureEvent).toHaveBeenCalledOnce();
+        const scope = state.scopes[0];
+        expect(scope.setLevel).toHaveBeenCalledWith("warning");
+        expect(scope.setTag).toHaveBeenCalledWith("network", true);
+        expect(scope.setTag).not.toHaveBeenCalledWith("http_route", expect.anything());
+        expect(scope.setFingerprint).toHaveBeenCalledWith(["api-unreachable"]);
+
+        // The next window reports again and carries the four failures it absorbed.
+        vi.advanceTimersByTime(API_UNREACHABLE_WINDOW_MS);
+        failAt("/api/chat");
+        expect(state.scopes).toHaveLength(2);
+        expect(state.scopes[1].setTag).toHaveBeenCalledWith("network_failure_count", 5);
+        expect(state.scopes[0].setTag).toHaveBeenCalledWith("network_failure_count", 1);
+    });
+
+    it("groups two outages that hit different routes into the same issue after the privacy boundary", () => {
+        vi.useFakeTimers();
+        state.enabled = true;
+        failAt("/api/models/configured");
+        vi.advanceTimersByTime(API_UNREACHABLE_WINDOW_MS);
+        failAt("/api/projects/8f1c2a3e-1234-4bcd-9e0f-1234567890ab");
+
+        const [first, second] = [sentEvent(0), sentEvent(1)];
+        expect(first.fingerprint).toEqual(second.fingerprint);
+        expect(first.message).toEqual(second.message);
+        expect(first.exception).toBeUndefined();
+        expect(first.stacktrace).toBeUndefined();
+        expect(first.level).toBe("warning");
+        expect(first.tags).toMatchObject({ component: "mike-api", network: true, failure_code: "fetch_failed" });
+    });
+
+    it("does not report while the browser is offline, and does not open a window", () => {
+        state.enabled = true;
+        vi.stubGlobal("navigator", { onLine: false });
+        const failure = new TypeError("Failed to fetch");
+        expect(reportNetworkFailure(failure, { method: "GET", url: "/api/chat" })).toBeNull();
+        expect(Sentry.captureEvent).not.toHaveBeenCalled();
+        expect(Sentry.captureException).not.toHaveBeenCalled();
+        // Still marked, so the screen's console.error copy is not bridged.
+        expect(
+            scrubEvent(
+                { logger: "console", exception: { values: [{ mechanism: { type: "auto.core.capture_console" } }] } },
+                { originalException: failure },
+            ),
+        ).toBeNull();
+
+        vi.stubGlobal("navigator", { onLine: true });
+        failAt("/api/chat");
+        expect(Sentry.captureEvent).toHaveBeenCalledOnce();
+    });
+});
 
 it('labels opt-in pipeline test failures separately from application incidents', () => {
     state.enabled = true;
@@ -338,16 +483,18 @@ it('labels opt-in pipeline test failures separately from application incidents',
 });
 
 
-it.each([true, false])('reports only bounded browser network state (online=%s)', online => {
+it('reports only bounded browser network state', () => {
     state.enabled = true;
-    vi.stubGlobal('navigator', { onLine: online });
+    vi.stubGlobal('navigator', { onLine: true });
     vi.stubGlobal('window', { location: { href: 'https://private.example/documents/private', origin: 'https://private.example' } });
     reportNetworkFailure(new TypeError('Failed to fetch'), { method: 'GET', url: '/api/models/configured?key=private' });
-    expect(state.scopes[0].setTag).toHaveBeenCalledWith('network_state', online ? 'online' : 'offline');
+    expect(state.scopes[0].setTag).toHaveBeenCalledWith('network_state', 'online');
     expect(state.scopes[0].setTag).toHaveBeenCalledWith('request_origin', 'same-origin');
+    resetApiUnreachableWindow();
     reportNetworkFailure(new TypeError('Failed to fetch'), { method: 'GET', url: 'https://other-private.example/api/chat' });
     expect(state.scopes[1].setTag).toHaveBeenCalledWith('request_origin', 'cross-origin');
     expect(JSON.stringify(state.scopes.flatMap(scope => scope.setTag.mock.calls))).not.toContain('private');
+    expect(JSON.stringify(vi.mocked(Sentry.captureEvent).mock.calls.map(call => call[0]))).not.toContain('private');
 });
 
 it('tolerates unavailable browser network state', () => {
@@ -384,7 +531,7 @@ describe("reportNetworkFailure while the page is being left", () => {
                 reportNetworkFailure(failure, { method: "GET", url: "/api/chat" }),
             ).toBeNull();
 
-            expect(Sentry.captureException).not.toHaveBeenCalled();
+            expect(Sentry.captureEvent).not.toHaveBeenCalled();
             expect(
                 scrubEvent(
                     {
@@ -409,7 +556,7 @@ describe("reportNetworkFailure while the page is being left", () => {
             url: "/api/chat",
         });
 
-        expect(Sentry.captureException).toHaveBeenCalledOnce();
+        expect(Sentry.captureEvent).toHaveBeenCalledOnce();
     });
 
     // Firefox will not put a page with a beforeunload listener into its
@@ -421,7 +568,9 @@ describe("reportNetworkFailure while the page is being left", () => {
             method: "GET",
             url: "/api/chat",
         });
-        expect(Sentry.captureException).toHaveBeenCalledOnce();
+        expect(Sentry.captureEvent).toHaveBeenCalledOnce();
+        // Close the outage window so only the beforeunload rule can drop the next one.
+        resetApiUnreachableWindow();
 
         const releaseA = trackPendingRequest();
         const releaseB = trackPendingRequest();
@@ -465,6 +614,6 @@ describe("reportNetworkFailure while the page is being left", () => {
             url: "/api/chat",
         });
 
-        expect(Sentry.captureException).toHaveBeenCalledOnce();
+        expect(Sentry.captureEvent).toHaveBeenCalledOnce();
     });
 });

@@ -38,7 +38,7 @@ describe("WorkflowPickerContent row labels", () => {
         ).toHaveClass("liquid-glass-modal-row-hover");
         expect(
             document.querySelector('[data-slot="workflow-picker-list"]'),
-        ).toHaveClass("overflow-x-hidden", "px-1");
+        ).toHaveClass("overflow-x-hidden");
         expect(screen.getByText("Commercial")).toBeInTheDocument();
         expect(screen.queryByText("System")).not.toBeInTheDocument();
         expect(screen.queryByText("Custom")).not.toBeInTheDocument();

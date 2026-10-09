@@ -304,3 +304,34 @@ describe("normalizeRouterModels", () => {
         ).toEqual(["glm-5.3", "qwen3.8-max", "minimax-m3"]);
     });
 });
+
+// PR #608 regression: these ids are interpolated into provider URLs (Vertex
+// puts the model id straight into the request path), so a saved selection
+// must never contain path-traversal segments. The full grammar is covered by
+// byokValidationCases.test.ts; this pins each provider's save-time wiring.
+describe("normalizeRouterModels for account-specific providers", () => {
+    it("drops a path-traversal id, bare or prefixed, and keeps a real one", () => {
+        const traversal =
+            "claude/../../../../v1/projects/victim/locations/us-central1/endpoints/123:rawPredict?x=";
+        const legit = {
+            bedrock: "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6",
+            azure: "gpt-6.1-sol",
+            "azure-foundry": "claude-opus-5-5",
+            vertex: "meta/llama-4-maverick-maas",
+            xai: "grok-4.3",
+            custom: "org/model:tag",
+        } as const;
+        for (const [provider, id] of Object.entries(legit) as [
+            keyof typeof legit,
+            string,
+        ][]) {
+            expect(
+                normalizeRouterModels(
+                    [traversal, `${provider}/${traversal}`, id],
+                    provider,
+                ),
+                provider,
+            ).toEqual([id]);
+        }
+    });
+});

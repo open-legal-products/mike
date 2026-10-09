@@ -14,7 +14,6 @@
 // share it.
 
 export {
-  INVITATION_TTL_DAYS,
   listMyOrgs,
   createOrg,
   getOrg,
@@ -28,9 +27,4 @@ export {
   listInvitations,
   cancelInvitation,
   resendInvitation,
-  listMyInvitations,
-  acceptInvitation,
-  declineInvitation,
 } from "../../lib/orgs";
-
-export type { InvitationStatus, OrgResult } from "../../lib/orgs";

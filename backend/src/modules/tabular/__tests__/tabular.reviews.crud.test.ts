@@ -59,7 +59,13 @@ const { fetchSourceDocuments, loadReviewRows } = vi.hoisted(() => ({
     fetchSourceDocuments: vi.fn(),
     loadReviewRows: vi.fn(),
 }));
-vi.mock("../tabular.rows", () => ({ fetchSourceDocuments, loadReviewRows }));
+// Partial: filterReadableReviewRows is pure policy over the (mocked)
+// filterAccessibleDocumentIds verdict and stays real.
+vi.mock("../tabular.rows", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../tabular.rows")>()),
+    fetchSourceDocuments,
+    loadReviewRows,
+}));
 
 const validateSelectedModel = vi.hoisted(() => vi.fn());
 vi.mock("../tabular.shared", async (importOriginal) => ({
@@ -334,6 +340,9 @@ describe("getTabularReviewDetail", () => {
     });
 
     it("parses each cell's stored content", async () => {
+        loadReviewRows.mockResolvedValue([
+            { id: "row-1", label: "Doc", source_document_ids: [] },
+        ]);
         const { db } = makeFakeDb({
             tables: {
                 tabular_reviews: {
@@ -344,6 +353,7 @@ describe("getTabularReviewDetail", () => {
                     data: [
                         {
                             id: "c1",
+                            row_id: "row-1",
                             content: '{"summary":"yes","flag":"green"}',
                         },
                     ],
@@ -359,6 +369,60 @@ describe("getTabularReviewDetail", () => {
             summary: "yes",
             flag: "green",
         });
+    });
+});
+
+describe("getTabularReviewDetail document visibility", () => {
+    // Review access is not document access: a review in project Y can be
+    // built from project X's documents, and a Y member without X access must
+    // not read X's filenames or extracted cell text through the review.
+    it("drops rows, cells, and documents the caller cannot read", async () => {
+        loadReviewRows.mockResolvedValue([
+            { id: "row-ok", label: "Mine.docx", source_document_ids: ["d-ok"] },
+            {
+                id: "row-hidden",
+                label: "Their secret.docx",
+                source_document_ids: ["d-hidden"],
+            },
+            {
+                id: "row-mixed",
+                label: "Folder",
+                source_document_ids: ["d-ok", "d-hidden"],
+            },
+        ]);
+        filterAccessibleDocumentIds.mockResolvedValue(["d-ok"]);
+        const { db, calls } = makeFakeDb({
+            tables: {
+                tabular_reviews: {
+                    data: { id: "rev-1", document_ids: ["d-ok", "d-hidden"] },
+                    error: null,
+                },
+                tabular_cells: {
+                    data: [
+                        { id: "c-ok", row_id: "row-ok", content: "visible" },
+                        { id: "c-hidden", row_id: "row-hidden", content: "secret" },
+                        { id: "c-mixed", row_id: "row-mixed", content: "secret" },
+                    ],
+                    error: null,
+                },
+                documents: { data: [{ id: "d-ok" }], error: null },
+            },
+        });
+        const result = await getTabularReviewDetail(db, {
+            reviewId: "rev-1",
+            ...WHO,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.data.rows.map((row) => row.id)).toEqual(["row-ok"]);
+        expect(result.data.cells.map((cell) => cell.id)).toEqual(["c-ok"]);
+        expect(filterAccessibleDocumentIds).toHaveBeenCalledWith(
+            expect.arrayContaining(["d-ok", "d-hidden"]),
+            WHO.userId,
+            WHO.userEmail,
+            db,
+        );
+        expect(callTo(calls, "documents")?.filters.id).toEqual(["d-ok"]);
     });
 });
 
@@ -812,6 +876,56 @@ describe("updateTabularReview", () => {
             detail: "Target project not found",
         });
     });
+
+    it("403s a move into a project where the caller is only a viewer", async () => {
+        // A move contributes the review to the destination exactly as
+        // creating it there would, so it needs the same content.edit gate.
+        checkProjectAccess.mockResolvedValue({
+            ok: true,
+            isCreator: false,
+            orgRole: null,
+            projectRole: "viewer",
+            project: { id: "proj-9" },
+        });
+        const { db, calls } = seeded();
+        const result = await updateTabularReview(db, {
+            reviewId: "rev-1",
+            ...WHO,
+            body: { project_id: "proj-9" },
+        });
+        expect(result).toMatchObject({
+            ok: false,
+            kind: "forbidden",
+            detail: "You do not have permission to write in this project.",
+        });
+        expect(calls.some((call) => call.op === "update")).toBe(false);
+    });
+
+    it.each([["proj-9"], [null]])(
+        "403s a creator downgraded to viewer on the source moving to %s",
+        async (destination) => {
+            // Authorship is not standing: a creator reduced to Viewer must not
+            // pull the review out of the matter it lives in.
+            ensureReviewAccess.mockResolvedValue({
+                ok: true,
+                isCreator: true,
+                orgRole: null,
+                projectRole: "viewer",
+            });
+            const { db, calls } = seeded();
+            const result = await updateTabularReview(db, {
+                reviewId: "rev-1",
+                ...WHO,
+                body: { project_id: destination },
+            });
+            expect(result).toMatchObject({
+                ok: false,
+                kind: "forbidden",
+                detail: "You do not have permission to move this review.",
+            });
+            expect(calls.some((call) => call.op === "update")).toBe(false);
+        },
+    );
 
     it("stamps updated_at and returns the updated row", async () => {
         const { db, calls } = seeded();

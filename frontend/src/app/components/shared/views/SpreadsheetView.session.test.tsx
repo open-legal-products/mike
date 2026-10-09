@@ -15,16 +15,19 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WorkbookInstance } from "@fortune-sheet/react";
 import type { Sheet } from "@fortune-sheet/core";
-import type { DocResult } from "@/app/hooks/useFetchSingleDoc";
 import { SpreadsheetView } from "./SpreadsheetView";
 
 const state = vi.hoisted(() => ({
-    result: null as DocResult,
+    bytes: null as ArrayBuffer | null,
+    fetch: vi.fn(),
     parse: vi.fn(),
     mounts: vi.fn(),
 }));
-vi.mock("@/app/hooks/useFetchSingleDoc", () => ({
-    useFetchSingleDoc: () => ({ result: state.result, error: null }),
+vi.mock("@/app/hooks/useFetchDocxBytes", () => ({
+    useFetchDocxBytes: (...args: unknown[]) => {
+        state.fetch(...args);
+        return { bytes: state.bytes, loading: false, error: null };
+    },
 }));
 vi.mock("luckyexcel", () => ({
     default: { transformExcelToLucky: state.parse },
@@ -56,6 +59,7 @@ vi.mock("@fortune-sheet/react", () => ({
                     getAllSheets: () => [{ ...data[0], zoomRatio: zoom }],
                     getSelection: () => [{ row: [2, 2], column: [3, 3] }],
                     setSelection: vi.fn(),
+                    activateSheet: vi.fn(),
                     scroll: ({
                         scrollLeft,
                         scrollTop,
@@ -99,7 +103,7 @@ vi.mock("@fortune-sheet/react", () => ({
 
 beforeEach(() => {
     vi.clearAllMocks();
-    state.result = { type: "spreadsheet", buffer: new ArrayBuffer(3) };
+    state.bytes = new ArrayBuffer(3);
     state.parse.mockImplementation((_file, done) =>
         done({
             sheets: [
@@ -109,6 +113,37 @@ beforeEach(() => {
     );
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("loads the raw workbook from /file, uncached, rather than the PDF display route", async () => {
+    render(<SpreadsheetView documentId="sheet" versionId="v2" refetchKey={3} />);
+    await screen.findByText("Zoom 1");
+    // No source URL means the hook reads /file for this document version.
+    expect(state.fetch).toHaveBeenCalledWith("sheet", "v2", 3, undefined, false);
+});
+
+it("scrolls a cited cell into the available canvas without remounting the workbook", async () => {
+    const highlights = [{ sheet: "Budget", cell: "B21" }];
+    const view = (selected = false) => (
+        <SpreadsheetView documentId="sheet" highlightCells={selected ? highlights : undefined} />
+    );
+    const { rerender } = render(view());
+    await screen.findByText("Zoom 1");
+    const x = screen.getByTestId("x");
+    const y = screen.getByTestId("y");
+    Object.defineProperty(x, "clientWidth", {
+        configurable: true,
+        value: 1000,
+    });
+    Object.defineProperty(y, "clientHeight", {
+        configurable: true,
+        value: 300,
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 220)));
+    expect(y.scrollTop).toBe(0);
+    rerender(view(true));
+    await waitFor(() => expect(y.scrollTop).toBe(240));
+    expect(state.mounts).toHaveBeenCalledOnce();
+});
 
 it("retains parsed data and viewport, and removes global workbook input handlers while inactive", async () => {
     const { rerender } = render(<SpreadsheetView documentId="sheet" />);
@@ -137,7 +172,7 @@ it("retains parsed data and viewport, and removes global workbook input handlers
     expect(state.parse).toHaveBeenCalledTimes(1);
     expect(state.mounts).toHaveBeenCalledTimes(2);
     // Fresh bytes must not restore an old workbook snapshot.
-    state.result = { type: "spreadsheet", buffer: new ArrayBuffer(4) };
+    state.bytes = new ArrayBuffer(4);
     await act(async () =>
         rerender(
             <SpreadsheetView documentId="sheet" refetchKey="new-version" />,

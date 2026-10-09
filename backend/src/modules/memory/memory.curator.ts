@@ -655,6 +655,52 @@ const defaultCuratorScopeServices: CuratorScopeServices = {
  * already-authorized memory row; its schema contains no scope, owner, project,
  * object path, revision, or operation fields the model could redirect.
  */
+const SAFE_DIAGNOSTIC_CODE = /^[A-Za-z0-9_]{2,40}$/;
+
+/**
+ * The classification of a scope failure — and nothing else.
+ *
+ * Every curator failure surfaces as the fixed text "Memory curator scope
+ * failed": provider and storage errors can echo the prompt, credentials or
+ * the transcript, and the message is persisted as the job's last_error. But
+ * with the original error dropped entirely, the Sentry event could never say
+ * WHY (MIKE-BACKEND-F: eight memory.consolidate warnings with no
+ * failure_code, provider_error or dependency_status). The privacy boundary
+ * only ever reads `name`, `code` and an HTTP status from an error's cause
+ * chain, so the cause carries exactly those, copied by allowlist shape —
+ * never the message, never the raw object (which would print its text in
+ * the operator log through console.error's cause rendering).
+ */
+export function memoryScopeFailureCause(
+  error: unknown,
+): { name?: string; code?: string; statusCode?: number } | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current && typeof current === "object"; depth++) {
+    const raw = current as Record<string, unknown>;
+    const diagnostics: { name?: string; code?: string; statusCode?: number } = {};
+    if (typeof raw.name === "string" && raw.name !== "Error" && SAFE_DIAGNOSTIC_CODE.test(raw.name)) {
+      diagnostics.name = raw.name;
+    }
+    if (typeof raw.code === "string" && SAFE_DIAGNOSTIC_CODE.test(raw.code)) {
+      diagnostics.code = raw.code;
+    }
+    const status = raw.statusCode ?? raw.status;
+    if (Number.isInteger(status) && Number(status) >= 400 && Number(status) <= 599) {
+      diagnostics.statusCode = Number(status);
+    }
+    if (Object.keys(diagnostics).length > 0) return diagnostics;
+    current = raw.cause;
+  }
+  return undefined;
+}
+
+/** The fixed-text scope failure, with the original's classification as its cause. */
+export function memoryScopeFailure(error: unknown): Error {
+  return new Error("Memory curator scope failed", {
+    cause: memoryScopeFailureCause(error),
+  });
+}
+
 export async function runMemoryCuratorScope(
   args: {
     db: Db;
@@ -853,13 +899,12 @@ export async function runMemoryCuratorScope(
     if (writeFailure instanceof MemoryConversationNotQuietError) {
       throw writeFailure;
     }
-    void error;
-    throw new Error("Memory curator scope failed");
+    throw memoryScopeFailure(error);
   }
   if (writeFailure instanceof MemoryConversationNotQuietError) {
     throw writeFailure;
   }
-  if (writeFailure) throw new Error("Memory curator scope failed");
+  if (writeFailure) throw memoryScopeFailure(writeFailure);
   if (invalidCalls > 0 && !written && !terminalReason) {
     throw new Error("Memory curator scope failed");
   }
@@ -1301,6 +1346,7 @@ export async function handleMemoryConsolidation(
   });
 
   let scopeFailures = 0;
+  let firstScopeFailure: unknown;
   for (const candidate of files) {
     const prior = await recordedResult(db, job.id, candidate.file.id);
     if (prior) {
@@ -1374,14 +1420,17 @@ export async function handleMemoryConsolidation(
       }
       // Keep the app and project processes failure-isolated. A successful
       // scope records an idempotency result and will be skipped on retry.
+      // The first failure's classification is what the job-level report
+      // carries; later scopes usually fail for the same reason.
       scopeFailures += 1;
+      firstScopeFailure ??= error;
       outcomes[candidate.file.scope] = "failed";
     }
   }
 
   if (scopeFailures > 0) {
     await refreshJobFileStatuses({ db, job, state, status: "scheduled" });
-    throw new Error("Memory curator scope failed");
+    throw memoryScopeFailure(firstScopeFailure);
   }
 
   const finalized = await setStatus({
