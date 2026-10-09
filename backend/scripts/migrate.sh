@@ -207,19 +207,27 @@ record_unrun_sql() {
   values $values on conflict (filename) do nothing;"
 }
 
+# Whether migration file $1 opts out of the transaction with a line reading
+# exactly `-- migrate:no-transaction`.
+has_no_transaction_marker() {
+  grep -Eq '^-- migrate:no-transaction[[:space:]]*$' "$1"
+}
+
 # Whether migration file $1 runs inside one transaction with its ledger row,
-# so a failure leaves nothing half applied. Files opt out when they cannot:
-# with a line reading exactly `-- migrate:no-transaction`, by managing their
-# own transaction (a begin/commit/rollback/start transaction statement on a
-# line of its own), or by using CONCURRENTLY, which PostgreSQL refuses inside
-# a transaction block. The last two are detected so that shipped migrations,
-# which must not be edited, need no marker.
+# so a failure leaves nothing half applied. Files run without one when they
+# carry the marker, manage their own transaction (a statement starting a line
+# with begin, commit, rollback, abort or start transaction, in any form such
+# as `begin isolation level ...;` or `commit and chain;`), or use
+# CONCURRENTLY, which PostgreSQL refuses inside a transaction block. The last
+# two are detected so that shipped migrations, which must not be edited, need
+# no marker. `end;` is not matched: it closes every plpgsql body. A false
+# match only means running unwrapped, as every file did before this check.
 runs_in_transaction() {
-  ! grep -Eiq \
-    -e '^-- migrate:no-transaction[[:space:]]*$' \
-    -e '^[[:space:]]*(begin|commit|rollback|start[[:space:]]+transaction)([[:space:]]+(transaction|work))?[[:space:]]*;' \
-    -e 'concurrently' \
-    "$1"
+  ! has_no_transaction_marker "$1" &&
+    ! grep -Eiq \
+      -e '^[[:space:]]*(begin|commit|rollback|abort|start[[:space:]]+transaction)([[:space:]][^;]*)?;' \
+      -e 'concurrently' \
+      "$1"
 }
 
 cmd_status() {
@@ -255,8 +263,11 @@ cmd_up() {
   # against the ledger again under it: a run that waited skips whatever the
   # run it waited for applied. ON_ERROR_STOP ends the session at the first
   # failure, rolling back that file's transaction (if it has one) and
-  # releasing the lock. RESET ALL gives each file the session settings a
-  # fresh connection would have.
+  # releasing the lock. The role is reset before the ledger insert, which
+  # must run as the connecting user even if the file switched role. Files
+  # share the session, so after each one it is put back as a new connection
+  # would find it: settings, temp tables, prepared statements and LISTENs.
+  # (DISCARD ALL would do it in one statement but also releases the lock.)
   while read -r name; do
     path="$MIGRATIONS_DIR/$name"
     if runs_in_transaction "$path"; then
@@ -272,10 +283,12 @@ select exists (select 1 from public.schema_migrations where filename = '$name') 
 \echo 'Applying $name$note'
 $begin
 \i $name
+reset session authorization; reset role;
 insert into public.schema_migrations (filename, checksum)
-  values ('$name', '$(sha256 "$path")');
+  values ('$name', '$(sha256 "$path")')
+  on conflict (filename) do nothing;
 $commit
-reset all;
+reset all; discard temp; deallocate all; unlisten *;
 \endif
 SQL
   done < "$tmp/pending" > "$tmp/up.sql"

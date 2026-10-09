@@ -62,18 +62,31 @@ describe("schema.sql migration ledger", () => {
 // these tests source it rather than restate it.
 describe("migrate.sh transaction detection", () => {
     const script = path.join(repoRoot, "backend/scripts/migrate.sh");
-    const runsInTransaction = (file: string) => {
+    // Calls a predicate function from the script on one file. Exit 1 is the
+    // predicate's "no"; anything else is rethrown so it cannot pass as a "no".
+    // A script that fails to source also exits 1, hence the explicit 99.
+    const ask = (fn: string, file: string) => {
         try {
             execFileSync(
                 "bash",
-                ["-c", 'source "$1" && runs_in_transaction "$2"', "test", script, file],
+                [
+                    "-c",
+                    'source "$1" || exit 99; "$2" "$3"',
+                    "test",
+                    script,
+                    fn,
+                    file,
+                ],
                 { stdio: "pipe" },
             );
             return true;
-        } catch {
-            return false;
+        } catch (error) {
+            if ((error as { status?: number }).status === 1) return false;
+            throw error;
         }
     };
+    const runsInTransaction = (file: string) =>
+        ask("runs_in_transaction", file);
 
     it.each([
         ["plain DDL", "create table t (id int);\n", true],
@@ -85,6 +98,18 @@ describe("migrate.sh transaction detection", () => {
         ["the opt-out marker", "-- migrate:no-transaction\nselect 1;\n", false],
         ["its own begin/commit", "BEGIN;\nselect 1;\nCOMMIT;\n", false],
         ["start transaction", "start transaction;\nselect 1;\ncommit work;\n", false],
+        [
+            "begin with options",
+            "begin isolation level serializable;\nselect 1;\n",
+            false,
+        ],
+        ["commit and chain", "select 1;\ncommit and chain;\n", false],
+        ["abort", "select 1;\nabort;\n", false],
+        [
+            "a marker that is not alone on its line",
+            "-- migrate:no-transaction please\nselect 1;\n",
+            true,
+        ],
         ["create index concurrently", "create index concurrently i on t (id);\n", false],
     ])("%s -> %s", (_label, sql, expected) => {
         const dir = mkdtempSync(path.join(os.tmpdir(), "migrate-tx-"));
@@ -118,8 +143,9 @@ describe("migrate.sh transaction detection", () => {
         );
         const unmarked = outside.filter(
             (file) =>
-                !/^-- migrate:no-transaction\s*$/m.test(
-                    read(`backend/migrations/${file}`),
+                !ask(
+                    "has_no_transaction_marker",
+                    path.join(repoRoot, "backend/migrations", file),
                 ),
         );
         expect(
