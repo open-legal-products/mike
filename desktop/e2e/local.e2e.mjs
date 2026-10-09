@@ -127,11 +127,14 @@ const connectApp = async () => {
 const quitApp = async (proc) => {
   proc.kill("SIGTERM");
   await new Promise((resolve) => {
-    if (proc.exitCode !== null) return resolve();
+    if (proc.exitCode !== null || proc.signalCode !== null) return resolve();
     proc.once("exit", resolve);
     setTimeout(resolve, 30_000);
   });
-  if (proc.exitCode === null) throw new Error("app did not exit within 30s of SIGTERM");
+  if (proc.exitCode === null && proc.signalCode === null) {
+    proc.kill("SIGKILL");
+    throw new Error("app did not exit within 30s of SIGTERM");
+  }
 };
 
 let app = launchApp();

@@ -60,7 +60,7 @@ const API_URL = (process.env.MIKE_E2E_API ?? "http://localhost:3001").replace(
   /\/$/,
   "",
 );
-const CDP_PORT = 9224; // distinct from app.e2e.mjs so both suites can coexist
+const CDP_PORT = 9225; // distinct from app.e2e.mjs and local.e2e.mjs
 const RUN_ID = Date.now().toString(36);
 const EMAIL = `desktop-flows-${RUN_ID}@example.com`;
 // Must clear the product's minimum (MIN_PASSWORD_LENGTH = 10, see

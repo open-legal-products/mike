@@ -174,3 +174,15 @@ describe("PUT /download/signed/:token (filesystem driver)", () => {
     expect(Buffer.from(stored!).toString()).toBe(body.toString());
   });
 });
+
+
+it("rejects a short signed upload without replacing existing bytes", async () => {
+  const { app, storage, tokens } = await loadApp();
+  const key = "uploads/s1/existing.pdf";
+  await storage.uploadFile(key, new TextEncoder().encode("original").buffer as ArrayBuffer, "application/pdf");
+  const token = tokens.signBlobUploadToken(key, "application/pdf", 8, 900);
+  const response = await request(app).put(`/download/signed/${token}`).set("Content-Type", "application/pdf").send(Buffer.from("short"));
+  expect(response.status).toBe(400);
+  expect(Buffer.from((await storage.downloadFile(key))!).toString()).toBe("original");
+  expect(await fs.readdir(path.join(root, "uploads/s1"))).toEqual(["existing.pdf"]);
+});

@@ -9,7 +9,6 @@ import type { Db } from "../../lib/supabase";
 import type { Readable } from "node:stream";
 import {
     BlobUploadSizeError,
-    discardBlob,
     downloadFile,
     writeBlobFromStream,
 } from "../../lib/storage";
@@ -75,11 +74,7 @@ export async function storeBlobUpload(args: {
         return failure("validation", "Upload content type does not match the link");
     }
     try {
-        const written = await writeBlobFromStream(info.path, args.body, info.sizeBytes);
-        if (written !== info.sizeBytes) {
-            await discardBlob(info.path);
-            return failure("validation", "Upload size does not match the link");
-        }
+        await writeBlobFromStream(info.path, args.body, info.sizeBytes);
     } catch (error) {
         // writeBlobFromStream commits only on success, so a failed upload
         // leaves no partial file and any existing blob at the key intact.

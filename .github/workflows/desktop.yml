@@ -65,6 +65,7 @@ jobs:
           # upgrade.test.js reads the baseline schema straight out of git
           # (`git show <BASELINE_REF>:backend/schema.sql`), like schema-drift.yml.
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@v7.0.0
         with:
@@ -100,6 +101,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v7.0.0
         with:

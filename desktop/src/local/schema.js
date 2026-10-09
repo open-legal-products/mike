@@ -99,23 +99,22 @@ async function applySchema(withPg, backendDir, status = () => {}) {
     (await pgValue(withPg, "select to_regclass('public.user_profiles') is null;")) === "true";
   if (fresh) {
     status("Setting up the product schema…");
+    const values = migrations.map((m) => `('${m.replace(/'/g, "''")}')`).join(",");
+    const baseline = values
+      ? `insert into public.mike_schema_migrations (name) values ${values} on conflict do nothing;`
+      : "";
     await pgExecFile(withPg,
-      fs.readFileSync(path.join(backendDir, "schema.sql"), "utf8"), "schema.sql");
-    const values = migrations.map((m) => `('${m}')`).join(",");
-    if (values) {
-      await pgExec(withPg,
-        `insert into public.mike_schema_migrations (name) values ${values} on conflict do nothing;`,
-        "migration baseline");
-    }
+      `${fs.readFileSync(path.join(backendDir, "schema.sql"), "utf8")}\n${baseline}`,
+      "schema.sql");
   } else {
     for (const m of migrations) {
       if (applied.has(m)) continue;
       status(`Applying update ${m}…`);
+      // Record a transactional file in its own transaction; for files that
+      // require autocommit, runSqlFile keeps this insert after every statement.
+      const ledger = `insert into public.mike_schema_migrations (name) values ('${m.replace(/'/g, "''")}') on conflict do nothing;`;
       await pgExecFile(withPg,
-        fs.readFileSync(path.join(backendDir, "migrations", m), "utf8"), m);
-      await pgExec(withPg,
-        `insert into public.mike_schema_migrations (name) values ('${m}') on conflict do nothing;`,
-        "migration ledger insert");
+        `${fs.readFileSync(path.join(backendDir, "migrations", m), "utf8")}\n${ledger}`, m);
     }
   }
 
@@ -123,6 +122,17 @@ async function applySchema(withPg, backendDir, status = () => {}) {
     grant usage on schema public to service_role;
     grant all privileges on all tables in schema public to service_role;
     grant all privileges on all sequences in schema public to service_role;
+    -- Migration bookkeeping belongs to the database owner, not the API.
+    alter table public.mike_schema_migrations enable row level security;
+    revoke all on public.mike_schema_migrations from anon, authenticated, service_role;
+    do $$ begin
+      if to_regclass('public.schema_migrations') is not null then
+        -- Adopt only migrations the desktop runner has actually recorded.
+        insert into public.schema_migrations (filename)
+          select name from public.mike_schema_migrations on conflict do nothing;
+        revoke all on public.schema_migrations from anon, authenticated, service_role;
+      end if;
+    end $$;
   `, "service_role grants");
 }
 

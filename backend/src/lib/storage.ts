@@ -686,6 +686,7 @@ export async function writeBlobFromStream(
     const completed = pipeline(bounded, sink);
     body.pipe(bounded);
     await completed;
+    if (written !== maxBytes) throw new BlobUploadSizeError();
     await fs.rename(temp, target);
     committed = true;
   } finally {
