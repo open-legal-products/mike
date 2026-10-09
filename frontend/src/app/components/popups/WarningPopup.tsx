@@ -2,11 +2,22 @@
 
 import { createPortal } from "react-dom";
 import { useEffect, type ReactNode } from "react";
-import { AlertCircle, X } from "lucide-react";
-import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { cn } from "@/app/lib/utils";
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import { NoticeCardUI } from "@/shared/ui/NoticeCardUI";
+
+/**
+ * A single warning that the calling component opens and closes itself.
+ *
+ * Its card is `NoticeCardUI`, the same card the toast stack draws, so a
+ * popup and a toast always look alike. This wrapper adds only what a popup
+ * needs on top: the `open` prop, a portal to the top centre of the page, and
+ * closing on Escape.
+ *
+ * Use a WarningPopup when the message is about something the user just did
+ * on this screen and should stay until they close it. Use `notifyError` /
+ * `showToast` when the message comes from background work or from code that
+ * has no component of its own. docs/design-system.md has the full rule.
+ */
 
 interface WarningPopupAction {
     label: ReactNode;
@@ -46,66 +57,34 @@ export function WarningPopup({
 
     if (!open) return null;
 
-    const warningIcon = icon ?? (
-        <AlertCircle className="h-3 w-3 shrink-0 text-red-600" />
-    );
-
     return createPortal(
         <div className="pointer-events-none fixed left-1/2 top-5 z-[220] w-[min(92vw,520px)] -translate-x-1/2 px-4">
-            <div
+            <NoticeCardUI
+                tone="error"
                 role="alert"
                 aria-live="assertive"
                 aria-atomic="true"
-                className={cn(
-                    `pointer-events-auto relative flex rounded-2xl px-3 py-3 text-xs ${LIQUID_GLASS_FLOAT_CLASS}`,
-                    className,
-                )}
-            >
-                <div className="min-w-0 flex-1 text-red-600">
-                    {title && (
-                        <div className="mb-1 flex items-center gap-1.5 text-sm font-medium">
-                            {warningIcon}
-                            {title}
-                        </div>
-                    )}
-                    {message && (
-                        <div
-                            className={cn(
-                                "text-black",
-                                title
-                                    ? "pl-[18px]"
-                                    : "flex items-start gap-1.5",
-                            )}
+                title={title}
+                message={message}
+                icon={icon}
+                onDismiss={onClose}
+                dismissLabel="Dismiss warning"
+                className={className}
+                actions={
+                    primaryAction ? (
+                        <PillButtonUI
+                            tone="black"
+                            size="sm"
+                            onClick={primaryAction.onClick}
+                            disabled={primaryAction.disabled}
                         >
-                            {!title && warningIcon}
-                            {/* Setup steps carry long redirect URIs; wrap them. */}
-                            <span className="min-w-0 [overflow-wrap:anywhere]">
-                                {message}
-                            </span>
-                        </div>
-                    )}
-                    {children}
-                    {primaryAction && (
-                        <div className="mt-2 flex items-center justify-end">
-                            <PillButtonUI
-                                tone="black"
-                                size="sm"
-                                onClick={primaryAction.onClick}
-                                disabled={primaryAction.disabled}
-                            >
-                                {primaryAction.label}
-                            </PillButtonUI>
-                        </div>
-                    )}
-                </div>
-                <GlassIconButtonUI
-                    onClick={onClose}
-                    className="absolute right-1.5 top-1.5 h-5 w-5"
-                    aria-label="Dismiss warning"
-                >
-                    <X className="h-3 w-3" />
-                </GlassIconButtonUI>
-            </div>
+                            {primaryAction.label}
+                        </PillButtonUI>
+                    ) : undefined
+                }
+            >
+                {children}
+            </NoticeCardUI>
         </div>,
         document.body,
     );

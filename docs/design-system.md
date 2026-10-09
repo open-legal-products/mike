@@ -303,6 +303,8 @@ keep their own spacing and should not receive this attribute.
 | `CitationPillUI` | `shared/ui` | Canonical numbered citation control for web, tabular review, and Word. Uses neutral gray by default, red for verification errors, and blue for the selected state. |
 | `InputUI` | `shared/ui` | Canonical shadcn input for the web app and Word add-in. |
 | `form-field` | `components/ui` | `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
+| `NoticeCardUI` | `shared/ui` | The one card every notice is drawn with: glass surface, tone icon (error/success/info), title, message, action row, close button. Do not use it directly in a screen; use one of the two wrappers below. |
+| `WarningPopup` | `components/popups` | One `NoticeCardUI` that a component opens and closes with `open` / `onClose`. |
 | `search-bar` | `components/ui` | Search input with clear button. Pass `label` for a meaningful accessible name. |
 | `dropdown` | `shared/ui` | The one dropdown for the web app and the Word add-in: Radix menu behaviour with the liquid-glass look. See "Dropdowns" below. |
 | `liquid-surface` | `components/ui` | Web-only shared surface class constants. |
@@ -374,6 +376,29 @@ These are the rules the primitives already follow. Match them in new work.
   clear it against white; `bg-gray-100` does not.
 - **Decorative elements are hidden.** Icons inside a labelled control get
   `aria-hidden`.
+
+## Notices: toast or WarningPopup
+
+Both show the same card, `NoticeCardUI`, so they always look alike. A
+change to how a notice looks goes in `NoticeCardUI.tsx`, never in one of the
+wrappers; `WarningPopup.test.tsx` fails if a popup and an error toast stop
+rendering the same card. What differs is who controls the card:
+
+| | Toast (`notifyError`, `showToast`) | `WarningPopup` |
+| --- | --- | --- |
+| Who opens it | Any code, including code with no React component (API client, offline listener) | The component on screen, through its own `open` state |
+| How many | Up to three, stacked at the bottom; repeats collapse | One, at the top centre |
+| Closes | On a timer (paused on hover or focus); errors with actions stay until dismissed | Only when the user closes it or presses Escape |
+| Tones | error, success, info | error |
+| Word add-in | Yes | No (web only) |
+
+Use a **`WarningPopup`** when the message is about something the user just
+did on this screen and they need to read it before moving on: a rejected
+upload, a failed save from a form, a permission refusal.
+
+Use a **toast** when the failure comes from background work, from shared code
+with no component of its own, or when it is a short confirmation ("Changes
+saved"). Do not add a new `WarningPopup` just to report a background failure.
 
 ## Component catalog
 
