@@ -456,7 +456,7 @@ export async function prepareProjectChatStream(
         };
 
         const historyMessages = replaysReasoning(selectedModel)
-            ? await attachPriorReasoning(messages, chatId, selectedModel, db)
+            ? await attachPriorReasoning(messages, chatId, db)
             : messages;
         const timeZone = resolveRequestTimeZone(args.requestedTimeZone);
         const enrichedMessages = await enrichWithPriorEvents(

@@ -274,11 +274,10 @@ export const MAX_REPLAYED_REASONING_TOTAL_CHARS = 36_000;
 
 /**
  * Attaches each earlier assistant turn's stored reasoning to the matching
- * message in `messages`, for models that need their own thinking replayed
- * (see ConfiguredModel.replayReasoning). Only reasoning events stamped with
- * `model` are used, so a model never receives another model's thinking and
- * turns stored before stamping are never replayed. The client sends history
- * as text only, so a message is matched to a stored row by its visible text
+ * message in `messages`, for models that opt into reasoning replay
+ * (see ConfiguredModel.replayReasoning). Reasoning is replayed regardless of
+ * which model produced it, including events without model metadata. The
+ * client sends history as text only, so a message is matched by its visible text
  * — the row's `content` events joined, exactly as the frontend rebuilds it.
  * An unmatched or ambiguous message is left as is. Run this before
  * enrichWithPriorEvents, which appends to the last assistant message's text.
@@ -286,7 +285,6 @@ export const MAX_REPLAYED_REASONING_TOTAL_CHARS = 36_000;
 export async function attachPriorReasoning(
   messages: ChatMessage[],
   chatId: string | null | undefined,
-  model: string,
   db: Db,
   messageTable = "chat_messages",
 ): Promise<ChatMessage[]> {
@@ -305,18 +303,13 @@ export async function attachPriorReasoning(
 
   const turns = (rows as { content?: unknown }[]).map((row) => {
     const events = Array.isArray(row.content)
-      ? (row.content as { type?: unknown; text?: unknown; model?: unknown }[])
+      ? (row.content as { type?: unknown; text?: unknown }[])
       : [];
-    const textOf = (type: string, producedBy?: string) =>
+    const textOf = (type: string) =>
       events
-        .filter(
-          (ev) =>
-            ev?.type === type &&
-            typeof ev.text === "string" &&
-            (producedBy === undefined || ev.model === producedBy),
-        )
+        .filter((ev) => ev?.type === type && typeof ev.text === "string")
         .map((ev) => ev.text as string);
-    const reasoning = textOf("reasoning", model).join("\n\n").trim();
+    const reasoning = textOf("reasoning").join("\n\n").trim();
     return {
       text: textOf("content").join("").trim(),
       reasoning:

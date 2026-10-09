@@ -106,8 +106,8 @@ const streamArgs = () => ({
   write: vi.fn(),
 });
 
-describe("runLLMStream reasoning provenance", () => {
-  it("stamps stored reasoning with the model that produced it", async () => {
+describe("runLLMStream reasoning persistence", () => {
+  it("stores completed reasoning without model metadata", async () => {
     streamChatWithTools.mockImplementationOnce(async (params) => {
       const callbacks = params.callbacks as ReasoningCallbacks;
       callbacks.onReasoningDelta("Thinking.");
@@ -121,11 +121,10 @@ describe("runLLMStream reasoning provenance", () => {
     expect(events).toContainEqual({
       type: "reasoning",
       text: "Thinking.",
-      model: "gemini-3.8-flash",
     });
   });
 
-  it("stamps reasoning flushed from a turn that failed mid-thought", async () => {
+  it("stores reasoning flushed from a failed turn without model metadata", async () => {
     streamChatWithTools.mockImplementationOnce(async (params) => {
       (params.callbacks as ReasoningCallbacks).onReasoningDelta("Half a thought");
       throw new Error("upstream dropped");
@@ -136,7 +135,6 @@ describe("runLLMStream reasoning provenance", () => {
     expect((failure as { events?: unknown[] }).events).toContainEqual({
       type: "reasoning",
       text: "Half a thought",
-      model: "gemini-3.8-flash",
     });
   });
 });

@@ -71,7 +71,7 @@ describe("attachPriorReasoning", () => {
       { role: "user", content: "q3" },
     ];
 
-    const result = await attachPriorReasoning(messages, "chat-1", MODEL, db);
+    const result = await attachPriorReasoning(messages, "chat-1", db);
 
     expect(calls.table).toBe("chat_messages");
     expect(calls.filters).toMatchObject({ chat_id: "chat-1", role: "assistant" });
@@ -86,28 +86,35 @@ describe("attachPriorReasoning", () => {
     expect(result.map((m) => m.content)).toEqual(messages.map((m) => m.content));
   });
 
-  it("never replays another model's reasoning, or reasoning stored without a model", async () => {
-    const { db } = makeDb([
-      turn(thought("From another model.", "other-model"), said("One.")),
-      turn(thought("Stored before stamping.", null), said("Two.")),
-      turn(
-        thought("Mine.", MODEL),
-        thought("Theirs.", "other-model"),
-        said("Three."),
-      ),
-    ]);
-    const result = await attachPriorReasoning(
-      [
-        { role: "assistant", content: "One." },
-        { role: "assistant", content: "Two." },
-        { role: "assistant", content: "Three." },
-      ],
-      "chat-1",
-      MODEL,
-      db,
-    );
-    expect(result.map((m) => m.reasoning)).toEqual([undefined, undefined, "Mine."]);
-  });
+  it.each(["chat_messages", "word_chat_messages"])(
+    "replays reasoning from every model and legacy events in %s",
+    async (messageTable) => {
+      const { db } = makeDb([
+        turn(thought("From another model.", "other-model"), said("One.")),
+        turn(thought("Stored before stamping.", null), said("Two.")),
+        turn(
+          thought("Mine.", MODEL),
+          thought("Theirs.", "other-model"),
+          said("Three."),
+        ),
+      ]);
+      const result = await attachPriorReasoning(
+        [
+          { role: "assistant", content: "One." },
+          { role: "assistant", content: "Two." },
+          { role: "assistant", content: "Three." },
+        ],
+        "chat-1",
+        db,
+        messageTable,
+      );
+      expect(result.map((m) => m.reasoning)).toEqual([
+        "From another model.",
+        "Stored before stamping.",
+        "Mine.\n\nTheirs.",
+      ]);
+    },
+  );
 
   it("pairs repeated replies in order when every copy is present", async () => {
     const { db } = makeDb([
@@ -120,7 +127,6 @@ describe("attachPriorReasoning", () => {
         { role: "assistant", content: "Done." },
       ],
       "chat-1",
-      MODEL,
       db,
     );
     expect(result.map((m) => m.reasoning)).toEqual(["r1", "r2"]);
@@ -138,7 +144,6 @@ describe("attachPriorReasoning", () => {
         { role: "assistant", content: "Done." },
       ],
       "chat-1",
-      MODEL,
       db,
     );
     // "Done." is stored twice but sent once, so it could be either turn.
@@ -153,7 +158,6 @@ describe("attachPriorReasoning", () => {
     const [message] = await attachPriorReasoning(
       [{ role: "assistant", content: "First." }],
       "chat-1",
-      MODEL,
       db,
     );
     expect(message.reasoning).toBe("r1");
@@ -164,17 +168,16 @@ describe("attachPriorReasoning", () => {
     const messages: ChatMessage[] = [
       { role: "assistant", content: "Edited by the client." },
     ];
-    const result = await attachPriorReasoning(messages, "chat-1", MODEL, db);
+    const result = await attachPriorReasoning(messages, "chat-1", db);
     expect(result[0].reasoning).toBeUndefined();
   });
 
   it("keeps only the tail of very long reasoning", async () => {
     const long = `${"a".repeat(MAX_REPLAYED_REASONING_CHARS)}END`;
-    const { db } = makeDb([turn(thought(long), said("Answer."))]);
+    const { db } = makeDb([turn(thought(long, "other-model"), said("Answer."))]);
     const [message] = await attachPriorReasoning(
       [{ role: "assistant", content: "Answer." }],
       "chat-1",
-      MODEL,
       db,
     );
     expect(message.reasoning).toHaveLength(MAX_REPLAYED_REASONING_CHARS);
@@ -187,7 +190,10 @@ describe("attachPriorReasoning", () => {
     const count = fits + 2;
     const { db } = makeDb(
       Array.from({ length: count }, (_, i) =>
-        turn(thought(String(i).padEnd(perTurn, ".")), said(`Answer ${i}.`)),
+        turn(
+          thought(String(i).padEnd(perTurn, "."), i % 2 ? "other-model" : null),
+          said(`Answer ${i}.`),
+        ),
       ),
     );
     const result = await attachPriorReasoning(
@@ -196,7 +202,6 @@ describe("attachPriorReasoning", () => {
         content: `Answer ${i}.`,
       })),
       "chat-1",
-      MODEL,
       db,
     );
     const replayed = result.map((m) => m.reasoning !== undefined);
@@ -223,7 +228,6 @@ describe("attachPriorReasoning", () => {
         content: `Answer ${i}.`,
       })),
       "chat-1",
-      MODEL,
       db,
     );
     // The 5,000-character turn does not fit the remaining 1,000, so it and the
@@ -242,7 +246,6 @@ describe("attachPriorReasoning", () => {
     await attachPriorReasoning(
       [{ role: "assistant", content: "x" }],
       "chat-1",
-      MODEL,
       db,
       "word_chat_messages",
     );
@@ -254,7 +257,7 @@ describe("attachPriorReasoning", () => {
     const stored = [turn(thought("r"), said("Answer."))];
 
     const noChat = makeDb(stored);
-    expect(await attachPriorReasoning(messages, null, MODEL, noChat.db)).toBe(
+    expect(await attachPriorReasoning(messages, null, noChat.db)).toBe(
       messages,
     );
     expect(noChat.calls.table).toBeUndefined();
@@ -262,12 +265,12 @@ describe("attachPriorReasoning", () => {
     const userOnly: ChatMessage[] = [{ role: "user", content: "hi" }];
     const noAssistant = makeDb(stored);
     expect(
-      await attachPriorReasoning(userOnly, "chat-1", MODEL, noAssistant.db),
+      await attachPriorReasoning(userOnly, "chat-1", noAssistant.db),
     ).toBe(userOnly);
     expect(noAssistant.calls.table).toBeUndefined();
 
     const failing = makeDb(stored, { message: "boom" });
-    expect(await attachPriorReasoning(messages, "chat-1", MODEL, failing.db)).toBe(
+    expect(await attachPriorReasoning(messages, "chat-1", failing.db)).toBe(
       messages,
     );
   });

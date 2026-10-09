@@ -373,16 +373,6 @@ export async function runLLMStream(params: {
   let iterText = "";
   let iterVisibleText = "";
   let iterReasoning = "";
-  // Stamped on stored reasoning events so replay can tell which model
-  // produced them. Unset until the requested model has been resolved.
-  let reasoningModel: string | undefined;
-  const pushReasoning = (text: string) => {
-    events.push(
-      reasoningModel
-        ? { type: "reasoning", text, model: reasoningModel }
-        : { type: "reasoning", text },
-    );
-  };
   let visibleTailBuffer = "";
   let citationsOpenSeen = false;
   let streamingCitationsBuffer = "";
@@ -487,7 +477,7 @@ export async function runLLMStream(params: {
   const flushPartialTurn = (opts: { emit?: boolean } = {}) => {
     flushText(opts);
     if (iterReasoning) {
-      pushReasoning(iterReasoning);
+      events.push({ type: "reasoning", text: iterReasoning });
       iterReasoning = "";
     }
   };
@@ -522,7 +512,6 @@ export async function runLLMStream(params: {
       db,
       "throw",
     );
-    reasoningModel = selectedModel;
     await streamChatWithTools({
       model: selectedModel,
       systemPrompt,
@@ -551,7 +540,7 @@ export async function runLLMStream(params: {
         },
         onReasoningBlockEnd: () => {
           if (!iterReasoning) return;
-          pushReasoning(iterReasoning);
+          events.push({ type: "reasoning", text: iterReasoning });
           write(`data: ${JSON.stringify({ type: "reasoning_block_end" })}\n\n`);
           iterReasoning = "";
         },

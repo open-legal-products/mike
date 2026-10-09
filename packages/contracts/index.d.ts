@@ -293,15 +293,7 @@ export type McpToolEvent = {
 };
 
 export type AssistantEvent =
-  | {
-      type: "reasoning";
-      text: string;
-      /**
-       * Model that produced this reasoning. Reasoning replay only returns a
-       * model its own thinking; events stored without it are never replayed.
-       */
-      model?: string;
-    }
+  | { type: "reasoning"; text: string }
   | AskInputsEvent
   | {
       type: "ask_inputs_response";
