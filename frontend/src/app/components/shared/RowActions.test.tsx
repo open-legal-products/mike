@@ -9,6 +9,16 @@ import {
 import { RowActionMenuItems, RowActions } from "./RowActions";
 
 describe("RowActions", () => {
+    it("still closes ordinary add actions without progress feedback", async () => {
+        const user = userEvent.setup();
+        const onAdd = vi.fn();
+        render(<RowActions onAdd={onAdd} addLabel="Import" />);
+        await user.click(screen.getByRole("button", { name: "Open row actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Import" }));
+        expect(onAdd).toHaveBeenCalledOnce();
+        expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    });
+
     it("offers and runs the view action from the row button menu", async () => {
         const user = userEvent.setup();
         const onView = vi.fn();

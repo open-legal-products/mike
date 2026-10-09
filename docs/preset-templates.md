@@ -16,7 +16,7 @@ header. It opens a Presets page that lists the catalog in the same document
 table as the rest of the library: each publisher's library is a folder, with
 the publisher's package directories nested inside. Users can search by name,
 open a file in the read-only document side panel, download an original, or
-choose **Add to templates** for one file, a selection, or a whole folder to
+choose **Import** for one file, a selection, or a whole folder to
 save personal copies in the Templates folder they came from. Keep the
 publishers' original files and directory structure intact, including agreement
 variants and formation-package instructions. The initial catalog has 81
@@ -36,10 +36,12 @@ because the existing document pipeline does not support that format.
   collection `templates` and the current folder. The existing upload-session
   API owns authentication, folder access, storage, processing, and document
   version creation. No new backend endpoint or database migration is needed.
-- Update the loaded Templates collection after an import. Show progress,
-  success, and recoverable failure states, and ignore further add requests
-  while one is running. A later deliberate import creates another independent
-  copy and never overwrites an existing template.
+- Update the loaded Templates collection after an import. Keep the dropdown
+  open with a spinner and **Import…**, then a green tick and **Imported**.
+  Track completed files while the Presets page is open, disable duplicate
+  requests, and show failures in a warning popup. Retrying a partially imported
+  selection or folder skips its completed files. Revisiting the page allows a
+  new independent copy and never overwrites an existing template.
 - Preserve source/license notices and distinguish Bonterms' per-document license
   exceptions. Catalog updates never replace users' imported copies.
 
