@@ -232,7 +232,7 @@ export function createS3StorageAdapter(): StorageAdapter {
         Key: key,
         ResponseContentDisposition: responseContentDisposition,
       }) as any;
-      return awsGetSignedUrl(client(), command, { expiresIn });
+      return awsGetSignedUrl(browserSigningClient(), command, { expiresIn });
     },
   };
 }

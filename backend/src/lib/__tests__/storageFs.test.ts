@@ -286,9 +286,10 @@ describe("filesystem storage driver", () => {
         // (its S3 branch does the same), deleteFile propagates anything that
         // isn't a benign missing-file.
         await expect(storage.downloadFile(key)).resolves.toBeNull();
-        await expect(storage.deleteFile(key)).rejects.toThrow(
-          /escapes STORAGE_FS_ROOT/,
-        );
+        await expect(storage.deleteFile(key)).rejects.toMatchObject({
+          operation: "delete",
+          cause: expect.objectContaining({ message: expect.stringMatching(/escapes STORAGE_FS_ROOT/) }),
+        });
       });
     }
 
