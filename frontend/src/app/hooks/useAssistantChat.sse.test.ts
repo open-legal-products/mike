@@ -559,7 +559,7 @@ describe("useAssistantChat SSE parsing", () => {
         const assistant = result.current.messages.findLast(
             (m) => m.role === "assistant",
         );
-        expect(assistant?.error).toBe("Sorry, something went wrong.");
+        expect(assistant?.error).toBe("Too many requests. Wait a moment and try again.");
         expect(result.current.isResponseLoading).toBe(false);
     });
 
@@ -599,7 +599,7 @@ describe("useAssistantChat SSE parsing", () => {
         const assistant = result.current.messages.findLast(
             (m) => m.role === "assistant",
         );
-        expect(assistant?.error).toBe("Sorry, something went wrong.");
+        expect(assistant?.error).toBe("The answer may still be running. Check chat history before sending the question again.");
         expect(assistant?.events).toContainEqual(
             expect.objectContaining({ type: "mcp_tool_call", status: "ok" }),
         );

@@ -17,7 +17,7 @@ describe("NoticeCardUI", () => {
         );
 
         const card = screen.getByRole("alert");
-        expect(card).toHaveClass("liquid-glass-float", "backdrop-blur-2xl");
+        expect(card).toHaveClass("liquid-glass-float");
         expect(card).toHaveAttribute("data-tone", "error");
         // The tone colours the title; the message overrides it to black.
         expect(screen.getByText("Couldn't save").parentElement).toHaveClass(
