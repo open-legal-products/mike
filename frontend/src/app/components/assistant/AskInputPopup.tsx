@@ -29,6 +29,7 @@ type ApprovalDecision = "approve" | "reject";
 type PendingDecision = { id: string; decision: ApprovalDecision };
 
 const OPEN_TEXT_MAX_LENGTH = 5_000;
+const MAX_CHOICE_LENGTH = 1_000;
 
 export function AskInputPopup({
     event,
@@ -42,7 +43,7 @@ export function AskInputPopup({
         response: AskInputsResponse,
         content: string,
         files: MessageFile[],
-    ) => void;
+    ) => void | string | null | Promise<void | string | null>;
     onDismiss?: () => void;
 }) {
     const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -57,6 +58,8 @@ export function AskInputPopup({
     const [skipped, setSkipped] = useState<Set<string>>(() => new Set());
     const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set());
     const [submitted, setSubmitted] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [submitFailed, setSubmitFailed] = useState(false);
     const [dismissed, setDismissed] = useState(false);
     const [docSelectorTarget, setDocSelectorTarget] = useState<{
         inputId: string;
@@ -377,7 +380,23 @@ export function AskInputPopup({
         if (submitted || !onSubmit) return;
         const response = buildResponse(pendingSkipId, pendingDecision);
         setSubmitted(true);
-        onSubmit(response, buildContent(response), responseFiles(response));
+        setIsSubmitting(true);
+        setSubmitFailed(false);
+        const restore = () => {
+            setSubmitted(false);
+            setConfirmed(new Set());
+            setSubmitFailed(true);
+        };
+        void (async () => {
+            try {
+                const result = await onSubmit(response, buildContent(response), responseFiles(response));
+                if (result === null) restore();
+            } catch {
+                restore();
+            } finally {
+                setIsSubmitting(false);
+            }
+        })();
     };
 
     const decide = (id: string, decision: ApprovalDecision) => {
@@ -410,6 +429,7 @@ export function AskInputPopup({
 
     return (
         <>
+            {submitFailed && <p role="alert" className="px-3 py-2 text-sm text-red-600">Could not send these inputs. Please try again.</p>}
             <div
                 className={`w-full overflow-hidden rounded-[18px] pb-3 font-serif md:rounded-[22px] ${LIQUID_GLASS_TRANSLUCENT_CLASS}`}
             >
@@ -417,7 +437,7 @@ export function AskInputPopup({
                     <div className="flex min-w-0 items-center">
                         <div className="text-sm text-gray-500">
                             {submitted ? (
-                                "Inputs sent"
+                                isSubmitting ? "Sending inputs…" : "Inputs sent"
                             ) : (
                                 <div className="flex flex-wrap gap-x-1.5 gap-y-1">
                                     {event.items.map((item) => {
@@ -862,6 +882,9 @@ function OptionInput({
                             <span className="min-w-0 flex-1 flex items-start gap-2">
                                 <textarea
                                     name={`other-${item.id}`}
+                                    aria-label={item.other_label || "Other"}
+                                    aria-describedby={`other-${item.id}-limit`}
+                                    maxLength={MAX_CHOICE_LENGTH}
                                     rows={1}
                                     autoFocus
                                     value={otherValue}
@@ -873,13 +896,16 @@ function OptionInput({
                                         e.target.style.height = `${e.target.scrollHeight}px`;
                                     }}
                                     onChange={(e) => {
-                                        onOtherValue(e.target.value);
+                                        onOtherValue(e.target.value.slice(0, MAX_CHOICE_LENGTH));
                                         e.target.style.height = "auto";
                                         e.target.style.height = `${e.target.scrollHeight}px`;
                                     }}
                                     placeholder="Type your answer..."
                                     className="flex-1 resize-none overflow-hidden bg-transparent text-sm leading-5 text-gray-600 outline-none placeholder:text-gray-400"
                                 />
+                                <span id={`other-${item.id}-limit`} className="mt-0.5 shrink-0 font-sans text-[10px] text-gray-400">
+                                    {otherValue.length.toLocaleString()} / {MAX_CHOICE_LENGTH.toLocaleString()}
+                                </span>
                             </span>
                         ) : (
                             <span className="min-w-0 flex-1 text-sm text-gray-700">

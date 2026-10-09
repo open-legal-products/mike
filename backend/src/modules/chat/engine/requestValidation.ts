@@ -1,5 +1,6 @@
 import { parseAskInputsResponsePayload } from "./contextBuilders";
 import {
+  MAX_ASK_INPUT_CHOICE_LENGTH,
   MAX_ASK_INPUT_TEXT_LENGTH,
   type AskInputsResponseRequest,
   type ChatMessage,
@@ -380,7 +381,7 @@ export function parseOptionalAskInputsResponse(
             `${field}.answers[${answerIndex}] must be a non-empty string`,
           );
           if (!parsedAnswer.ok) return parsedAnswer;
-          if (answer.length > 1_000) {
+          if (parsedAnswer.value.length > MAX_ASK_INPUT_CHOICE_LENGTH) {
             return {
               ok: false,
               detail: `${field}.answers[${answerIndex}] must be at most 1000 characters`,
@@ -410,14 +411,16 @@ export function parseOptionalAskInputsResponse(
           detail: `${field}.answer must be a non-empty string unless skipped`,
         };
       }
+      const maxAnswerLength = response.kind === "text"
+        ? MAX_ASK_INPUT_TEXT_LENGTH
+        : MAX_ASK_INPUT_CHOICE_LENGTH;
       if (
-        response.kind === "text" &&
         typeof response.answer === "string" &&
-        response.answer.length > MAX_ASK_INPUT_TEXT_LENGTH
+        response.answer.trim().length > maxAnswerLength
       ) {
         return {
           ok: false,
-          detail: `${field}.answer must be at most ${MAX_ASK_INPUT_TEXT_LENGTH} characters`,
+          detail: `${field}.answer must be at most ${maxAnswerLength} characters`,
         };
       }
       continue;

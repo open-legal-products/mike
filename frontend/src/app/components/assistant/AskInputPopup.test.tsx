@@ -281,3 +281,17 @@ describe("AskInputPopup", () => {
         ]);
     });
 });
+
+
+it("caps Other choice answers at the backend limit", () => {
+    const onSubmit = vi.fn();
+    render(<AskInputPopup assistantMessageId="assistant-1" event={{ type: "ask_inputs", event_id: "ask-1", items: [{ id: "a", kind: "choice", question: "Which option?", options: [{ value: "Option A" }], allow_other: true, other_label: "Other" }] }} onSubmit={onSubmit} />);
+    fireEvent.click(screen.getByText("Other"));
+    const input = screen.getByRole("textbox", { name: "Other" });
+    expect(input).toHaveAttribute("maxlength", "1000");
+    fireEvent.change(input, { target: { value: "x".repeat(1001) } });
+    expect(input).toHaveValue("x".repeat(1000));
+    expect(screen.getByText("1,000 / 1,000")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(onSubmit.mock.calls[0][0].responses[0].answer).toHaveLength(1000);
+});

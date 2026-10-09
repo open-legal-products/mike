@@ -400,3 +400,19 @@ describe("chat request validation", () => {
         });
     });
 });
+
+
+describe("recovered ask-input limits", () => {
+    it.each(["choice", "multi_choice", "text"] as const)("caps trimmed %s answers at the persistence boundary", (kind) => {
+        const limit = kind === "text" ? 5000 : 1000;
+        const payload = (answer: string) => ({
+            assistant_message_id: "assistant-1",
+            ask_event_id: "ask-1",
+            responses: [{ id: "a", kind, question: "Question?", ...(kind === "multi_choice" ? { answers: [answer] } : { answer }) }],
+        });
+        expect(parseOptionalAskInputsResponse(payload("x".repeat(limit + 1))).ok).toBe(false);
+        const accepted = parseOptionalAskInputsResponse(payload(`  ${"x".repeat(limit)}\n`));
+        expect(accepted.ok).toBe(true);
+        if (accepted.ok) expect(JSON.stringify(accepted.value)).toContain("x".repeat(limit));
+    });
+});

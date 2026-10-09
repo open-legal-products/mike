@@ -11,6 +11,7 @@ import {
   type AskInputItem,
   type AskInputsResponseRequest,
   type AskInputResponseItem,
+  MAX_ASK_INPUT_CHOICE_LENGTH,
   MAX_ASK_INPUT_TEXT_LENGTH,
   devLog,
 } from "./types";
@@ -770,7 +771,7 @@ export function parseAskInputsResponsePayload(
             : "";
         const answers = (Array.isArray(current.answers) ? current.answers : [])
           .filter((answer): answer is string => typeof answer === "string")
-          .map((answer) => answer.trim().slice(0, 1_000))
+          .map((answer) => answer.trim().slice(0, MAX_ASK_INPUT_CHOICE_LENGTH))
           .filter(Boolean)
           .slice(0, 9);
         if (!question || (answers.length === 0 && !skipped)) return null;
@@ -791,7 +792,7 @@ export function parseAskInputsResponsePayload(
           typeof current.answer === "string"
             ? current.answer
                 .trim()
-                .slice(0, kind === "text" ? MAX_ASK_INPUT_TEXT_LENGTH : 1_000)
+                .slice(0, kind === "text" ? MAX_ASK_INPUT_TEXT_LENGTH : MAX_ASK_INPUT_CHOICE_LENGTH)
             : "";
         if (!question || (!answer && !skipped)) return null;
         return {
