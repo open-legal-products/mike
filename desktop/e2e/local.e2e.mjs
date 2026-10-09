@@ -248,7 +248,7 @@ try {
   const before = readDownloadLog().length;
   await menuBtn.click();
   await page
-    .getByRole("button", { name: "Download", exact: true })
+    .getByRole("menuitem", { name: "Download", exact: true })
     .first()
     .click({ timeout: 10_000 });
   let entry = null;
