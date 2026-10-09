@@ -55,7 +55,10 @@ import type { OwnerGate } from "@/app/components/projects/ProjectWorkspace";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { UploadOverlay } from "@/app/components/assistant/UploadOverlay";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    UserVisibleError,
+    notifyError,
+} from "@/app/lib/userFacingError";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
 import {
@@ -529,7 +532,12 @@ export function DocTable({
                 return next;
             });
         } catch (e) {
-            console.error("listDocumentVersions failed", e);
+            notifyError(e, {
+                action: "load the version history",
+                onRetry: () => {
+                    void loadDocumentVersions(docId, { force: true });
+                },
+            });
         } finally {
             setLoadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -564,7 +572,13 @@ export function DocTable({
             a.download = resolved.filename || filename;
             a.click();
         } catch (e) {
-            console.error("downloadDocVersion failed", e);
+            notifyError(e, {
+                action: "download this version",
+                supportNote: `Document ${docId}, version ${versionId}`,
+                onRetry: () => {
+                    void downloadDocVersion(docId, versionId, filename);
+                },
+            });
         }
     }
 
@@ -644,10 +658,34 @@ export function DocTable({
             return;
         try {
             await uploadDocumentVersion(doc.id, file, filename);
-            await refreshDocumentVersionState(doc.id);
         } catch (e) {
-            console.error("uploadDocumentVersion failed", e);
-            setDocumentUploadWarning("Version upload failed. Please try again.");
+            notifyError(e, {
+                action: "upload the new version",
+                supportNote: `Document ${doc.filename}`,
+                onRetry: () => {
+                    void submitNewVersion(doc, file, filename);
+                },
+            });
+            return;
+        }
+        await refreshVersionsAfterChange(doc.id);
+    }
+
+    /**
+     * Re-read the table and the version list after a version has landed.
+     * Kept apart from the upload on purpose: when only this re-read fails,
+     * its Retry must re-read, not re-upload. A Retry that re-ran the whole
+     * upload stored the same file as a second version.
+     */
+    async function refreshVersionsAfterChange(docId: string): Promise<void> {
+        try {
+            await refreshDocumentVersionState(docId);
+        } catch (e) {
+            notifyError(e, {
+                action: "refresh the version history",
+                dedupeKey: `doc-versions-refresh:${docId}`,
+                onRetry: () => refreshVersionsAfterChange(docId),
+            });
         }
     }
 
@@ -713,7 +751,12 @@ export function DocTable({
                 return next;
             });
         } catch (e) {
-            console.error("renameDocumentVersion failed", e);
+            notifyError(e, {
+                action: "rename the version",
+                onRetry: () => {
+                    void handleRenameVersion(docId, versionId, filename);
+                },
+            });
         }
     }
 
@@ -737,8 +780,12 @@ export function DocTable({
                     : null,
             );
         } catch (e) {
-            console.error("deleteDocumentVersion failed", e);
-            setDocumentRenameWarning("Could not delete this version.");
+            notifyError(e, {
+                action: "delete this version",
+                onRetry: () => {
+                    void handleDeleteVersion(docId, versionId);
+                },
+            });
         }
     }
 
@@ -788,7 +835,6 @@ export function DocTable({
     const [deletingDocIds, setDeletingDocIds] = useState<Set<string>>(() => new Set());
     const [documentUploadWarning, setDocumentUploadWarning] = useState<string | null>(null);
     const [documentRenameWarning, setDocumentRenameWarning] = useState<string | null>(null);
-    const [collectionActionWarning, setCollectionActionWarning] = useState<string | null>(null);
     const [pendingVersionDrop, setPendingVersionDrop] = useState<{
         targetDoc: Document;
         sourceDoc: Document;
@@ -970,7 +1016,11 @@ export function DocTable({
                         );
                     })
                     .catch(() => {
-                        // Transient fetch failure — keep polling
+                        // Deliberately silent: this 3s status poll retries by
+                        // itself on the next tick and the user asked for
+                        // nothing here, so a toast would report a failure that
+                        // has already healed. A conversion that really fails
+                        // arrives as an "error" status on the row.
                     });
             }
         }, 3000);
@@ -998,7 +1048,12 @@ export function DocTable({
         try {
             await onExpandFolder(folderId);
         } catch (e) {
-            console.error("expand folder failed", e);
+            notifyError(e, {
+                action: "open this folder",
+                onRetry: () => {
+                    void expandFolderChildren(folderId);
+                },
+            });
         } finally {
             setLoadingChildFolderIds((prev) => {
                 const next = new Set(prev);
@@ -1202,7 +1257,13 @@ export function DocTable({
                 ),
             );
             setPendingDeleteFolderStatus("idle");
-            setCollectionActionWarning("Folder could not be deleted. Please try again.");
+            // The confirm dialog stays open on failure, so the button itself
+            // is the retry; a Retry action here would race it.
+            notifyError(err, {
+                action: "delete the folder",
+                fallback: "This folder could not be deleted. Please try again.",
+                supportNote: `Folder ${pending.folder.name}`,
+            });
         }
     }
 
@@ -1310,11 +1371,15 @@ export function DocTable({
                         : document,
                 ),
             );
-        } catch {
-            setCollectionActionWarning(
-                "The document could not be removed from its folder. Please try again.",
-            );
+        } catch (error) {
+            // The row already jumped out of its folder optimistically, so a
+            // silent failure leaves it looking moved. Re-read the collection
+            // so the tree matches the server, then say what happened.
             await operations.refreshCollection().catch(() => undefined);
+            notifyError(error, {
+                action: "remove the document from its folder",
+                onRetry: () => void handleRemoveDocFromFolder(docId),
+            });
         }
     }
 
@@ -1357,18 +1422,25 @@ export function DocTable({
             const updated = await operations.renameDocument(docId, trimmed);
             setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, ...updated } : d)));
         } catch (e) {
-            console.error("renameDocument failed", e);
             setDocuments((prev) => (previous ? prev.map((d) => (d.id === docId ? previous : d)) : prev));
             // The backend refuses to rename a document that has no file yet
             // (nothing to carry the name); say so instead of snapping back
             // silently. Anything else gets the generic fallback.
-            setCollectionActionWarning(
+            notifyError(
                 e instanceof MikeApiError && e.status === 404
-                    ? "This document has no file yet, so it can't be renamed."
-                    : userFacingApiError(
-                          e,
-                          "This document could not be renamed. Please try again.",
-                      ),
+                    ? new UserVisibleError(
+                          "This document has no file yet, so it can't be renamed.",
+                          { kind: "not_found", cause: e },
+                      )
+                    : e,
+                // No Retry: the row has snapped back to its old name and the
+                // rename input is closed, so re-running this would resubmit a
+                // value the user can no longer see.
+                {
+                    action: "rename the document",
+                    fallback:
+                        "This document could not be renamed. Please try again.",
+                },
             );
         }
     }
@@ -1414,13 +1486,17 @@ export function DocTable({
             // instead of letting the rethrow become an unhandled rejection and
             // the row reappear with no explanation.
             void handleRemoveDoc(doc.id).catch((error) => {
-                console.error("delete document failed", error);
-                setCollectionActionWarning(
-                    userFacingApiError(
-                        error,
+                notifyError(error, {
+                    action: "delete the document",
+                    fallback:
                         "This file could not be deleted. Please try again.",
-                    ),
-                );
+                    supportNote: `Document ${doc.filename}`,
+                    onRetry: () => {
+                        void handleRemoveDoc(doc.id).catch(() => {
+                            // Reported by the toast raised on the retry itself.
+                        });
+                    },
+                });
             });
             return;
         }
@@ -1440,8 +1516,13 @@ export function DocTable({
                 setPendingDeleteStatus("idle");
             }, 650);
         } catch (err) {
-            console.error("delete document failed", err);
             setPendingDeleteStatus("idle");
+            // The confirm dialog stays open, so its own button is the retry.
+            notifyError(err, {
+                action: "delete the document",
+                fallback: "This file could not be deleted. Please try again.",
+                supportNote: `Document ${pending.filename}`,
+            });
         }
     }
 
@@ -1564,8 +1645,12 @@ export function DocTable({
         if (
             supportedEntries.length > MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD
         ) {
-            setCollectionActionWarning(
-                `You can upload up to ${MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD} supported documents at a time. Nothing was uploaded.`,
+            notifyError(
+                new UserVisibleError(
+                    `You can upload up to ${MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD} supported documents at a time. Nothing was uploaded.`,
+                    { kind: "validation" },
+                ),
+                { action: "upload these files" },
             );
             return;
         }
@@ -1763,22 +1848,85 @@ export function DocTable({
             handleDocsSelected(uploaded);
             const failedCount = supportedEntries.length - uploaded.length;
             if (failedCount > 0) {
-                setCollectionActionWarning(
-                    failedUploadMessage([
+                const failedClientIds = new Set(
+                    [
                         ...folderFailureOutcomes,
                         ...(batchOutcomes ?? []),
-                    ]),
+                    ]
+                        .filter((outcome) => outcome.status !== "completed")
+                        .map((outcome) => outcome.clientId),
+                );
+                const failedEntries = progressFiles
+                    .filter((progress) => failedClientIds.has(progress.clientId))
+                    .map((progress) => progress.entry);
+                notifyError(
+                    new UserVisibleError(
+                        failedUploadMessage([
+                            ...folderFailureOutcomes,
+                            ...(batchOutcomes ?? []),
+                        ]),
+                        { kind: "unknown", retryable: failedEntries.length > 0 },
+                    ),
+                    {
+                        action: "upload every file",
+                        // Retry re-uploads only the files that failed, so the
+                        // ones already stored are not duplicated.
+                        onRetry:
+                            failedEntries.length > 0
+                                ? () => {
+                                      void handleCollectionUploadEntries(
+                                          failedEntries,
+                                          baseFolderId,
+                                      );
+                                  }
+                                : undefined,
+                    },
                 );
             }
         } catch (err) {
-            console.error("Document drop upload failed", err);
-            setCollectionActionWarning(
+            // Retry only what did not land. An UploadBatchError carries the
+            // per-file outcomes, so the files already stored are left alone;
+            // a throw from the folder-resolution phase means nothing was
+            // uploaded, so the whole batch is safe to run again.
+            const retryEntries =
                 err instanceof UploadBatchError
-                    ? failedUploadMessage(err.outcomes)
-                    : userFacingApiError(
-                          err,
-                          "This folder could not be uploaded. Please try again.",
-                      ),
+                    ? (() => {
+                          const failedClientIds = new Set(
+                              err.outcomes
+                                  .filter(
+                                      (outcome) => outcome.status !== "completed",
+                                  )
+                                  .map((outcome) => outcome.clientId),
+                          );
+                          return progressFiles
+                              .filter((progress) =>
+                                  failedClientIds.has(progress.clientId),
+                              )
+                              .map((progress) => progress.entry);
+                      })()
+                    : supportedEntries;
+            notifyError(
+                err instanceof UploadBatchError
+                    ? new UserVisibleError(failedUploadMessage(err.outcomes), {
+                          kind: "unknown",
+                          retryable: retryEntries.length > 0,
+                          cause: err,
+                      })
+                    : err,
+                {
+                    action: "upload these files",
+                    fallback:
+                        "This folder could not be uploaded. Please try again.",
+                    onRetry:
+                        retryEntries.length > 0
+                            ? () => {
+                                  void handleCollectionUploadEntries(
+                                      retryEntries,
+                                      baseFolderId,
+                                  );
+                              }
+                            : undefined,
+                },
             );
         } finally {
             setCollectionUploadProgress((current) =>
@@ -1806,9 +1954,12 @@ export function DocTable({
                 await collectDroppedDocumentUploadEntries(dataTransfer);
             await handleCollectionUploadEntries(entries, baseFolderId);
         } catch (error) {
-            console.error("Folder drop traversal failed", error);
-            setCollectionActionWarning(
-                "This folder could not be read. Please try selecting it with Upload folder.",
+            notifyError(
+                new UserVisibleError(
+                    "This folder could not be read. Try selecting it with Upload folder instead.",
+                    { kind: "unknown", cause: error },
+                ),
+                { action: "read the dropped folder" },
             );
         }
     }
@@ -1876,13 +2027,27 @@ export function DocTable({
 
         setUploadingVersionDocIds((prev) => new Set([...prev, doc.id]));
         try {
-            for (const file of supported) {
-                await uploadDocumentVersion(doc.id, file, file.name);
+            // Counted so a Retry re-sends only the files that did not land:
+            // each upload is its own new version, so re-sending one that
+            // succeeded would store it twice.
+            let landed = 0;
+            try {
+                for (const file of supported) {
+                    await uploadDocumentVersion(doc.id, file, file.name);
+                    landed += 1;
+                }
+            } catch (err) {
+                const remaining = supported.slice(landed);
+                notifyError(err, {
+                    action: "upload the new version",
+                    fallback: "This version could not be uploaded. Try again.",
+                    supportNote: `Document ${doc.filename}`,
+                    onRetry: () => {
+                        void handleDropDocumentVersions(doc, remaining);
+                    },
+                });
             }
-            await refreshDocumentVersionState(doc.id);
-        } catch (err) {
-            console.error("Document version drop upload failed", err);
-            setDocumentUploadWarning("Version upload failed. Please try again.");
+            if (landed > 0) await refreshVersionsAfterChange(doc.id);
         } finally {
             setUploadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -1909,17 +2074,26 @@ export function DocTable({
         setUploadingVersionDocIds((prev) => new Set([...prev, targetDoc.id]));
         removeDocumentFromLocalState(sourceDoc.id);
         try {
-            await copyDocumentVersionFromDocument(targetDoc.id, sourceDoc.id, sourceDoc.filename);
-            await refreshDocumentVersionState(targetDoc.id);
-        } catch (err) {
-            console.error("Existing document version drop failed", err);
-            restoreDocumentToLocalState(sourceDoc, sourceSnapshot);
-            setCollectionActionWarning(
-                userFacingApiError(
-                    err,
-                    "Could not save this document as a new version.",
-                ),
-            );
+            try {
+                await copyDocumentVersionFromDocument(targetDoc.id, sourceDoc.id, sourceDoc.filename);
+            } catch (err) {
+                restoreDocumentToLocalState(sourceDoc, sourceSnapshot);
+                notifyError(err, {
+                    action: "save this document as a new version",
+                    fallback:
+                        "This document could not be saved as a new version.",
+                    supportNote: `${sourceDoc.filename} onto ${targetDoc.filename}`,
+                    onRetry: () => {
+                        void saveExistingDocumentAsNewVersion(targetDoc, sourceDoc);
+                    },
+                });
+                return;
+            }
+            // The copy landed and the server deleted the source document, so
+            // its row stays gone. If only the re-read fails, Retry re-reads;
+            // re-running the copy would point at a source that no longer
+            // exists.
+            await refreshVersionsAfterChange(targetDoc.id);
         } finally {
             setUploadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -2025,9 +2199,40 @@ export function DocTable({
             );
             const failedCount = results.length - updatedById.size;
             if (failedCount > 0) {
+                // The refresh above puts the failed rows back where they
+                // really are, so the optimistic move is already undone.
                 await operations.refreshCollection();
-                setCollectionActionWarning(
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be moved. Please try again.`,
+                const failedIds = movingIds.filter(
+                    (id) => !updatedById.has(id),
+                );
+                const failedNames = documents
+                    .filter((document) => failedIds.includes(document.id))
+                    .map((document) => document.filename);
+                notifyError(
+                    new UserVisibleError(
+                        `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be moved${
+                            failedNames.length > 0
+                                ? `: ${failedNames.join(", ")}`
+                                : ""
+                        }.`,
+                        { kind: "unknown", retryable: true },
+                    ),
+                    {
+                        action: `move ${failedCount === 1 ? "the document" : "those documents"}`,
+                        onRetry: () => {
+                            void Promise.all(
+                                failedIds.map((id) =>
+                                    operations.moveDocument(id, targetFolderId),
+                                ),
+                            )
+                                .then(() => operations.refreshCollection())
+                                .catch((error) => {
+                                    notifyError(error, {
+                                        action: "move those documents",
+                                    });
+                                });
+                        },
+                    },
                 );
             }
         } else if (subFolderId && subFolderId !== targetFolderId) {
@@ -3202,25 +3407,25 @@ export function DocTable({
             a.click();
             URL.revokeObjectURL(a.href);
         } catch (error) {
-            setCollectionActionWarning(
-                userFacingApiError(
-                    error,
+            notifyError(error, {
+                action: "download the selected files",
+                fallback:
                     "The selected files and folders could not be downloaded.",
-                ),
-            );
+                onRetry: () => {
+                    void handleDownloadSelectedDocs();
+                },
+            });
         }
     }, [downloadDoc, selectedFolderRootIds, selectedStandaloneDocIds]);
 
-    const handleRemoveSelectedFromFolder = useCallback(async () => {
-        if (
-            !requireCapability("docs.organize", "move documents", "editor")
-        )
-            return;
-        const ids = selectedStandaloneDocIds.filter(
-            (id) => docs.find((d) => d.id === id)?.folder_id != null,
-        );
+    // Takes the ids explicitly so a "Retry" can re-run exactly the rows that
+    // failed. Reading the selection again would resend the whole original
+    // batch: the toast's closure is frozen, and `setSelectedDocIds` below
+    // cannot reach it.
+    const removeDocsFromFolder = useCallback(async (ids: string[]) => {
         if (ids.length === 0) return;
         setSelectedFolderIds(new Set());
+        const snapshot = docs;
         setDocuments((prev) =>
             prev.map((document) =>
                 ids.includes(document.id)
@@ -3231,36 +3436,72 @@ export function DocTable({
         const results = await Promise.allSettled(
             ids.map((id) => operations.moveDocument(id, null)),
         );
+        // Rows the server did move carry its version of the record. A move
+        // that resolves without one (a 204, say) still counts as moved, so
+        // read the id defensively rather than failing the whole batch on it.
         const updatedById = new Map(
             results.flatMap((result) =>
-                result.status === "fulfilled"
+                result.status === "fulfilled" && result.value?.id
                     ? [[result.value.id, result.value] as const]
                     : [],
             ),
         );
-        setDocuments((prev) =>
-            prev.map((document) =>
-                updatedById.has(document.id)
-                    ? { ...document, ...updatedById.get(document.id)! }
-                    : document,
-            ),
+        const failedIds = ids.filter(
+            (_, index) => results[index].status === "rejected",
         );
-        const failedCount = results.length - updatedById.size;
-        if (failedCount > 0) {
-            setCollectionActionWarning(
-                failedCount === 1
-                    ? "A document could not be removed from its folder. Please try again."
-                    : `${failedCount} documents could not be removed from their folders. Please try again.`,
-            );
-            await operations.refreshCollection().catch(() => undefined);
-        }
+        // Put the rows that did not move back in their folders instead of
+        // leaving them at the root where they never arrived.
+        setDocuments((prev) =>
+            prev.map((document) => {
+                if (updatedById.has(document.id)) {
+                    return { ...document, ...updatedById.get(document.id)! };
+                }
+                if (!failedIds.includes(document.id)) return document;
+                return {
+                    ...document,
+                    folder_id:
+                        snapshot.find((doc) => doc.id === document.id)
+                            ?.folder_id ?? document.folder_id,
+                };
+            }),
+        );
+        if (failedIds.length === 0) return;
+        await operations.refreshCollection().catch(() => undefined);
+        const failedNames = snapshot
+            .filter((doc) => failedIds.includes(doc.id))
+            .map((doc) => doc.filename);
+        notifyError(
+            new UserVisibleError(
+                `${failedIds.length} ${failedIds.length === 1 ? "document" : "documents"} could not be moved out of ${failedIds.length === 1 ? "its folder" : "their folders"}${
+                    failedNames.length > 0 ? `: ${failedNames.join(", ")}` : ""
+                }.`,
+                { kind: "unknown", retryable: true },
+            ),
+            {
+                action: `move ${failedIds.length === 1 ? "the document" : "those documents"} out of ${failedIds.length === 1 ? "its folder" : "their folders"}`,
+                onRetry: () => {
+                    setSelectedDocIds(failedIds);
+                    void removeDocsFromFolder(failedIds);
+                },
+            },
+        );
     }, [
         docs,
         operations,
-        requireCapability,
-        selectedStandaloneDocIds,
         setDocuments,
+        setSelectedDocIds,
+        setSelectedFolderIds,
     ]);
+
+    const handleRemoveSelectedFromFolder = useCallback(async () => {
+        if (!requireCapability("docs.organize", "move documents", "editor"))
+            return;
+        await removeDocsFromFolder(
+            selectedStandaloneDocIds.filter(
+                (id) => docs.find((d) => d.id === id)?.folder_id != null,
+            ),
+        );
+    }, [docs, removeDocsFromFolder, requireCapability, selectedStandaloneDocIds]);
 
     const deleteDocumentIds = useCallback(async (ids: string[]) => {
         const owned = ids.filter((id) => {
@@ -3287,6 +3528,8 @@ export function DocTable({
                 const result = await operations.bulkDeleteDocuments(owned);
                 deletedIds = result.deletedIds;
             } catch {
+                // Report the aggregate failure below, where the rows are
+                // restored and the names are known.
                 deletedIds = [];
             }
         } else {
@@ -3330,13 +3573,27 @@ export function DocTable({
             });
         }
         if (failedCount > 0) {
-            setCollectionActionWarning((current) =>
-                [
-                    current,
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted. Please try again.`,
-                ]
-                    .filter(Boolean)
-                    .join(" "),
+            const failedNames = snapshot
+                .filter((doc) => failedIds.includes(doc.id))
+                .map((doc) => doc.filename);
+            notifyError(
+                new UserVisibleError(
+                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted${
+                        failedNames.length > 0
+                            ? `: ${failedNames.join(", ")}`
+                            : ""
+                    }. They are still in the list.`,
+                    { kind: "unknown", retryable: true },
+                ),
+                {
+                    action: `delete ${failedCount === 1 ? "the document" : "those documents"}`,
+                    // Only the rows that survived, so a retry cannot delete
+                    // anything twice.
+                    dedupeKey: "bulk-delete-documents",
+                    onRetry: () => {
+                        void deleteDocumentIds(failedIds);
+                    },
+                },
             );
         }
         if (blocked > 0) {
@@ -3420,8 +3677,25 @@ export function DocTable({
                 ),
             );
             setSelectedFolderIds(new Set(failedFolderRootIds));
-            setCollectionActionWarning(
-                `${failedFolderRootIds.length} ${failedFolderRootIds.length === 1 ? "folder" : "folders"} could not be deleted. Please try again.`,
+            const failedFolderNames = folderSnapshot
+                .filter((folder) => failedFolderRootIds.includes(folder.id))
+                .map((folder) => folder.name);
+            notifyError(
+                new UserVisibleError(
+                    `${failedFolderRootIds.length} ${failedFolderRootIds.length === 1 ? "folder" : "folders"} could not be deleted${
+                        failedFolderNames.length > 0
+                            ? `: ${failedFolderNames.join(", ")}`
+                            : ""
+                    }. ${failedFolderRootIds.length === 1 ? "It is" : "They are"} still in the list and stay selected.`,
+                    { kind: "unknown", retryable: true },
+                ),
+                {
+                    action: `delete ${failedFolderRootIds.length === 1 ? "the folder" : "those folders"}`,
+                    dedupeKey: "bulk-delete-folders",
+                    // Retrying is the Delete button on the still-selected rows;
+                    // re-running this handler here would also re-delete the
+                    // documents that were removed successfully.
+                },
             );
         }
 
@@ -3796,13 +4070,14 @@ export function DocTable({
             setSelectedFolderIds(new Set(selectAllFolderIds));
             setSelectionCameFromSelectAll(true);
         } catch (error) {
-            console.error("Select all matching documents failed", error);
-            setCollectionActionWarning(
-                userFacingApiError(
-                    error,
+            notifyError(error, {
+                action: "select every matching file",
+                fallback:
                     "All matching files could not be selected. Please try again.",
-                ),
-            );
+                // Through the ref: the search, filter and sort this reads
+                // may have changed while the request was in flight.
+                onRetry: () => retryToggleAllDocumentsRef.current(),
+            });
         } finally {
             setSelectingAllDocuments(false);
         }
@@ -3818,6 +4093,15 @@ export function DocTable({
         typeFilter,
         viewedFolderTreeIds,
     ]);
+
+    // "Retry" must re-enter the newest callback: the one the toast captured
+    // was built from the search, filter and selection as they were when the
+    // request failed.
+    const retryToggleAllDocumentsRef = useRef(() => {});
+    useEffect(() => {
+        retryToggleAllDocumentsRef.current = () =>
+            void handleToggleAllDocuments();
+    }, [handleToggleAllDocuments]);
 
     const selectedItemCount =
         selectedFolderIds.size + selectedStandaloneDocIds.length;
@@ -4111,11 +4395,6 @@ export function DocTable({
                 open={!!documentRenameWarning}
                 onClose={() => setDocumentRenameWarning(null)}
                 message={documentRenameWarning}
-            />
-            <WarningPopup
-                open={!!collectionActionWarning}
-                onClose={() => setCollectionActionWarning(null)}
-                message={collectionActionWarning}
             />
             <ConfirmPopup
                 open={!!folderUploadConflict}

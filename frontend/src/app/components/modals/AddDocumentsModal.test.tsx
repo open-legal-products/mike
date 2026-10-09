@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { addDocumentToProject, getProject } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 const apiMocks = vi.hoisted(() => ({
     uploadStandaloneDocuments: vi.fn(),
@@ -15,7 +17,22 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
 }));
 
 vi.mock("./Modal", () => ({
-    Modal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    Modal: ({
+        children,
+        primaryAction,
+    }: {
+        children: React.ReactNode;
+        primaryAction?: { label: string; onClick: () => void };
+    }) => (
+        <div>
+            {primaryAction && (
+                <button type="button" onClick={primaryAction.onClick}>
+                    {primaryAction.label}
+                </button>
+            )}
+            {children}
+        </div>
+    ),
 }));
 
 vi.mock("../shared/FileDirectory", () => ({
@@ -255,5 +272,139 @@ describe("AddDocumentsModal upload progress", () => {
         expect(screen.getByTestId("loading-files")).toHaveTextContent(
             "renamed.pdf",
         );
+    });
+});
+
+describe("AddDocumentsModal project assignment", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        clearToasts();
+    });
+    afterEach(() => clearToasts());
+
+    it("keeps the picker open and names the file when the assignment fails", async () => {
+        vi.mocked(addDocumentToProject).mockRejectedValue(
+            Object.assign(new Error("API error: 500"), { status: 500 }),
+        );
+        const onClose = vi.fn();
+        const onSelect = vi.fn();
+
+        render(
+            <>
+                <AddDocumentsModal
+                    open
+                    projectId="project-1"
+                    onClose={onClose}
+                    onSelect={onSelect}
+                    breadcrumb={["Documents"]}
+                    initialSelectedDocuments={[
+                        document("doc-1", "Brief.docx") as never,
+                    ]}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(
+            "Couldn't add Brief.docx to this project",
+        );
+        expect(alert).not.toHaveTextContent("API error: 500");
+        expect(onSelect).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("retries only the documents that failed", async () => {
+        vi.mocked(addDocumentToProject).mockImplementation(
+            async (projectId: string, documentId: string) => {
+                if (documentId === "doc-2") {
+                    throw new TypeError("Failed to fetch");
+                }
+                return {
+                    ...document(documentId, "Ok.pdf"),
+                    project_id: projectId,
+                } as never;
+            },
+        );
+        const onClose = vi.fn();
+        const onSelect = vi.fn();
+
+        render(
+            <>
+                <AddDocumentsModal
+                    open
+                    projectId="project-1"
+                    onClose={onClose}
+                    onSelect={onSelect}
+                    breadcrumb={["Documents"]}
+                    initialSelectedDocuments={[
+                        document("doc-1", "Ok.pdf") as never,
+                        document("doc-2", "Broken.pdf") as never,
+                    ]}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(
+            "Couldn't add Broken.pdf to this project",
+        );
+
+        vi.mocked(addDocumentToProject).mockResolvedValue(
+            document("doc-2", "Broken.pdf") as never,
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+        await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+        expect(vi.mocked(addDocumentToProject).mock.calls.at(-1)).toEqual([
+            "project-1",
+            "doc-2",
+        ]);
+        // The document that already made it is carried into the retry.
+        expect(onSelect.mock.calls[0][0]).toHaveLength(2);
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("AddDocumentsModal directory loading", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        clearToasts();
+    });
+    afterEach(() => clearToasts());
+
+    it("says the project's files could not be loaded instead of showing an empty picker", async () => {
+        vi.mocked(getProject).mockRejectedValue(
+            new TypeError("Failed to fetch"),
+        );
+
+        render(
+            <>
+                <AddDocumentsModal
+                    open
+                    projectDocumentsOnly
+                    projectId="project-1"
+                    onClose={vi.fn()}
+                    onSelect={vi.fn()}
+                    breadcrumb={["Documents"]}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't load this project's files");
+
+        vi.mocked(getProject).mockResolvedValue({
+            documents: [],
+            folders: [],
+        } as never);
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+        await waitFor(() => expect(getProject).toHaveBeenCalledTimes(2));
     });
 });

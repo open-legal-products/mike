@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reportNetworkFailure = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/errorReporting", () => ({
+    isReported: () => false,
+    reportError: vi.fn(),
     trackPendingRequest: () => () => {},
     reportApiFailure: vi.fn(),
     reportNetworkFailure,

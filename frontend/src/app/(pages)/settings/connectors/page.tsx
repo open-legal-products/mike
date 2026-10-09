@@ -51,13 +51,42 @@ import {
   startMcpConnectorOAuth,
   updateMcpConnector,
 } from "@/app/lib/mikeApi";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { describeError } from "@/app/lib/userFacingError";
 import { SettingsDescription } from "@/app/components/settings/SettingsText";
 import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
+
+/** What the user was doing, for "Couldn't ..." and honest retry text. */
+const CONNECTOR_ACTION_LABELS = {
+  create: "add this connector",
+  save: "save this connector",
+  "clear-token": "clear the stored token",
+  delete: "delete this connector",
+  refresh: "refresh this connector",
+  "connector-enabled": "change this connector",
+  "tool-enabled": "change this tool",
+  "google-add": "add this connector",
+  "google-update": "update this connector",
+  "write-approval": "change write approval for this connector",
+  "read-only": "change this connector's read-only setting",
+} as const;
+
+/**
+ * The one place connector failures become words. Never echoes a raw error.
+ * No per-code table: a connector 4xx `detail` (setup steps, "needs to be
+ * authorized again") is written for users by the backend and passes through
+ * `describeError` untouched, and `oauth_required` from Refresh is handled
+ * by re-running the authorization, never shown.
+ */
+function connectorMessage(error: unknown, action: string): string {
+  return describeError(error, {
+    action,
+    fallback: `Mike couldn't ${action}. Try again.`,
+  }).message;
+}
 
 type PendingMfaAction =
   | { type: "create"; draft: AddDraft; surface: CreateSurface }
@@ -145,6 +174,8 @@ function isGoogleMcpConnector(connector: McpConnectorSummary) {
       hostname === "googleapis.com" || hostname.endsWith(".googleapis.com")
     );
   } catch {
+    // A URL we cannot parse is simply not Google's. Nothing the user asked
+    // for fails here, so there is nothing to report.
     return false;
   }
 }
@@ -412,7 +443,7 @@ export default function ConnectorsPage() {
     try {
       setConnectors(await listMcpConnectors());
     } catch (err) {
-      setError(userFacingApiError(err, "Failed to load connectors."));
+      setError(connectorMessage(err, "load your connectors"));
     } finally {
       setLoading(false);
     }
@@ -511,9 +542,7 @@ export default function ConnectorsPage() {
         current && current.id !== connectorId ? current : fresh,
       );
     } catch (err) {
-      setDetailError(
-        userFacingApiError(err, "Failed to load connector details."),
-      );
+      setDetailError(connectorMessage(err, "load this connector"));
     } finally {
       setLoadingConnectorId((current) =>
         current === connectorId ? null : current,
@@ -547,15 +576,10 @@ export default function ConnectorsPage() {
         // Refresh from the details modal on a Slack/Google connector
         // whose OAuth client is not configured on this server: show
         // the operator guidance where the user is looking.
-        setDetailSetupNotice(err.message);
+        setDetailSetupNotice(connectorMessage(err, CONNECTOR_ACTION_LABELS[action.type]));
         return;
       }
-      const message = userFacingApiError(
-        err,
-        action.type === "google-add"
-          ? "Failed to add connector."
-          : "Action failed.",
-      );
+      const message = connectorMessage(err, CONNECTOR_ACTION_LABELS[action.type]);
       if (action.type === "google-add") {
         setAddErrorGuideUrl(
           isConnectorSetupError(err)
@@ -913,7 +937,7 @@ export default function ConnectorsPage() {
           // the incomplete connector from Installed is immediately actionable.
           await loadConnectors();
         }
-        const message = userFacingApiError(err, "Failed to add connector.");
+        const message = connectorMessage(err, "add this connector");
         const discarded = await discardCreatedConnector();
         setAddErrorGuideUrl(
           isConnectorSetupError(err)

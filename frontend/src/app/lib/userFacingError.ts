@@ -47,7 +47,7 @@ export function knownErrorCodeMessage(
 
 import {
     buildSupportMailto,
-    describeError,
+    describeError as describeSharedError,
     type DescribeErrorOptions,
     type UserFacingError,
 } from "@/shared/lib/userError";
@@ -57,7 +57,6 @@ import { isReported, reportError } from "@/app/lib/errorReporting";
 export {
     SUPPORT_EMAIL,
     UserVisibleError,
-    describeError,
     isAbortError,
     isNetworkError,
     type UserErrorKind,
@@ -152,7 +151,7 @@ function reportRealFault(
  * too, so the error copy for them has a single source. A call site's own
  * `codeMessages` entry still wins.
  */
-function withReportedUpstreamMessage(error: unknown, options: NotifyErrorOptions): NotifyErrorOptions {
+function withReportedUpstreamMessage<T extends DescribeErrorOptions>(error: unknown, options: T): T {
     // Duck-typed like describeError: the code is read off any error shape,
     // and mikeApi's table is consulted only when there is a code to look up.
     const raw = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
@@ -160,6 +159,19 @@ function withReportedUpstreamMessage(error: unknown, options: NotifyErrorOptions
     const upstream = code ? reportedUpstreamMessage(code) : null;
     if (!code || !upstream) return options;
     return { ...options, codeMessages: { [code]: upstream, ...options.codeMessages } };
+}
+
+/**
+ * The web app's `describeError`: the shared classifier plus mikeApi's fixed
+ * sentences for server-reported 5xx codes. Web code imports it from here so
+ * an inline message and a toast for the same failure read the same words;
+ * calling the shared one directly drops those sentences.
+ */
+export function describeError(
+    error: unknown,
+    options: DescribeErrorOptions = {},
+): UserFacingError {
+    return describeSharedError(error, withReportedUpstreamMessage(error, options));
 }
 
 /**
@@ -171,7 +183,7 @@ export function notifyError(
     error: unknown,
     options: NotifyErrorOptions = {},
 ): UserFacingError | null {
-    const described = describeError(error, withReportedUpstreamMessage(error, options));
+    const described = describeError(error, options);
     if (described.kind === "aborted") return null;
 
     reportRealFault(error, described, options.action);

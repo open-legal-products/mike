@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MikeApiError } from "@/app/lib/mikeApi";
 import SettingsPage from "./page";
+import { deleteAccount } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 const state = vi.hoisted(() => ({
     push: vi.fn(),
@@ -206,7 +208,7 @@ describe("SettingsPage Google email changes", () => {
                 message: detail,
             }),
         );
-        render(<SettingsPage />);
+        render(<><SettingsPage /><ToastViewportUI /></>);
 
         await user.click(
             screen.getByRole("button", { name: "Delete account" }),
@@ -217,7 +219,7 @@ describe("SettingsPage Google email changes", () => {
         // delete account" would leave the user with no way to unblock it.
         expect(await screen.findByText(detail)).toBeInTheDocument();
         expect(
-            screen.getByText("Account deletion failed"),
+            screen.getByText("Couldn't delete your account"),
         ).toBeInTheDocument();
         expect(state.signOut).not.toHaveBeenCalled();
         expect(state.push).not.toHaveBeenCalled();
@@ -237,23 +239,104 @@ describe("SettingsPage Google email changes", () => {
         expect(screen.queryByText("Name is required.")).not.toBeInTheDocument();
     });
 
-    it("shows a warning popup when account deletion fails", async () => {
-        state.deleteAccount.mockRejectedValue(new Error("delete failed"));
+    async function submitEmailChange(rejection: unknown) {
+        state.passwordSet = true;
+        state.updateEmail.mockRejectedValue(rejection);
         const user = userEvent.setup();
         render(<SettingsPage />);
+
+        const email = screen.getByPlaceholderText("Enter your email");
+        await user.clear(email);
+        await user.type(email, "new@example.com");
+        const emailSection = screen.getByRole("heading", { name: "Email" })
+            .parentElement!;
+        await user.click(
+            emailSection.querySelector<HTMLButtonElement>("button")!,
+        );
+    }
+
+    it("recognises a taken address by its code, not by its wording", async () => {
+        // GoTrue reworded this message once already; the code is the contract.
+        await submitEmailChange(
+            Object.assign(new Error("Email address already in use"), {
+                status: 422,
+                code: "email_exists",
+            }),
+        );
+
+        expect(
+            await screen.findByText("An account with this email already exists."),
+        ).toBeInTheDocument();
+    });
+
+    it("says the connection failed rather than blaming the address", async () => {
+        await submitEmailChange(new TypeError("Failed to fetch"));
+
+        expect(
+            await screen.findByText(
+                "Mike couldn't reach the server. Check your connection and try again.",
+            ),
+        ).toBeInTheDocument();
+    });
+
+    it("reports a refused account deletion in a toast, not an alert", async () => {
+        const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
+        vi.mocked(deleteAccount).mockRejectedValue(
+            Object.assign(new Error("boom"), { status: 500 }),
+        );
+        const user = userEvent.setup();
+        render(
+            <>
+                <SettingsPage />
+                <ToastViewportUI />
+            </>,
+        );
 
         await user.click(
             screen.getByRole("button", { name: "Delete account" }),
         );
         await user.click(screen.getByRole("button", { name: "Delete" }));
 
-        expect(
-            await screen.findByText("Account deletion failed"),
-        ).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "Your account could not be deleted. Please try again.",
-            ),
-        ).toBeInTheDocument();
+        const toast = await screen.findByRole("alert");
+        expect(toast).toHaveTextContent("Couldn't delete your account");
+        expect(toast).toHaveTextContent(
+            "Something went wrong on our side. Try again.",
+        );
+        expect(alertSpy).not.toHaveBeenCalled();
+        expect(state.push).not.toHaveBeenCalled();
+        clearToasts();
+    });
+
+    it("re-asks for confirmation when Retry follows a failed deletion", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
+        vi.mocked(deleteAccount).mockRejectedValue(
+            Object.assign(new Error("boom"), { status: 500 }),
+        );
+        const user = userEvent.setup();
+        render(
+            <>
+                <SettingsPage />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(
+            screen.getByRole("button", { name: "Delete account" }),
+        );
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+        expect(deleteAccount).toHaveBeenCalledTimes(1);
+
+        await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+        // Retry re-opens the confirmation instead of deleting outright.
+        expect(deleteAccount).toHaveBeenCalledTimes(1);
+        expect(await screen.findByText("Delete account?")).toBeInTheDocument();
+
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+        expect(deleteAccount).toHaveBeenCalledTimes(2);
+        clearToasts();
     });
 });
