@@ -1,4 +1,5 @@
 import { responseLanguageName } from "../../../lib/responseLanguages";
+import { deadlineMessage, type StreamStopReason } from "../../../lib/streamRuns";
 import crypto from "crypto";
 import type { Db } from "../../../lib/supabase";
 import { ensureDocAccess } from "../../../lib/access";
@@ -1069,6 +1070,25 @@ export function buildCancelledAssistantMessage(args: {
     events,
     citations: args.buildCitations(args.fullText, events),
   };
+}
+
+/** Preserve partial output while distinguishing a deadline from an explicit Stop. */
+export function buildStoppedAssistantMessage(
+  args: Parameters<typeof buildCancelledAssistantMessage>[0] & {
+    stopReason?: StreamStopReason | null;
+  },
+) {
+  if (!args.stopReason || args.stopReason === "user")
+    return buildCancelledAssistantMessage(args);
+  const events: AssistantEvent[] = [
+    ...stripTransientAssistantEvents(args.events),
+    {
+      type: "error",
+      message: deadlineMessage(args.stopReason),
+      safe_to_display: true,
+    },
+  ];
+  return { events, citations: args.buildCitations(args.fullText, events) };
 }
 
 // ---------------------------------------------------------------------------

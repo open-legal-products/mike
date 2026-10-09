@@ -52,12 +52,11 @@ export function streamErrorMessage(error: unknown, label: string): string {
   return `${label} stream failed.`;
 }
 
-// The AI SDK's own silence limits (`timeout.firstChunkMs` / `chunkMs`) abort
-// the step with a TimeoutError whose message names the limit.
+// Provider deadline middleware uses the SDK-compatible TimeoutError wording.
 const STALL_PATTERN = /\b(?:first chunk|chunk) timeout of \d+ms exceeded/i;
 
 /**
- * A user-facing error when `reason` is the SDK's chunk timeout (the provider
+ * A user-facing error when `reason` is a provider chunk timeout (the provider
  * stopped sending), else null. It must not read as a user cancel: the caller's
  * signal is not aborted, the model simply went quiet.
  */

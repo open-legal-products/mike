@@ -56,6 +56,8 @@ export type NormalizedToolResult = {
 };
 
 export type StreamCallbacks = {
+    /** Meaningful provider output, even when the consumer buffers it. */
+    onActivity?: () => void;
     onReasoningDelta?: (text: string) => void;
     onReasoningBlockEnd?: () => void;
     onContentDelta?: (text: string) => void;

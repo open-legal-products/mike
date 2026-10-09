@@ -11,6 +11,7 @@ const {
   releaseMemoryConversationTurn,
   scheduleMemoryConsolidation,
   dbInserts,
+  dbUpdates,
 } = vi.hoisted(() => ({
     runLLMStream: vi.fn(),
     checkProjectAccess: vi.fn(),
@@ -26,6 +27,7 @@ const {
     generation: 1,
   }),
   dbInserts: [] as { table: string; value: unknown }[],
+  dbUpdates: [] as { table: string; value: unknown }[],
 }));
 
 function makeQuery(table: string) {
@@ -55,6 +57,10 @@ function makeQuery(table: string) {
     "contains",
     ];
     for (const m of chain) q[m] = vi.fn(() => q);
+  q.update = vi.fn((value: unknown) => {
+    dbUpdates.push({ table, value });
+    return q;
+  });
   q.insert = vi.fn((value: unknown) => {
     dbInserts.push({ table, value });
     return q;
@@ -184,7 +190,7 @@ vi.mock("../../lib/access", () => ({
 }));
 
 import { app } from "../../app";
-import { resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
+import { getActiveAssistantTurn, resetAssistantTurnRunsForTests } from "../../lib/assistantTurnRuns";
 import { spotlight } from "../../modules/chat/engine/index";
 import { createServerSupabase } from "../../lib/supabase";
 
@@ -198,6 +204,7 @@ describe("POST /projects/:projectId/chat", () => {
         resetAssistantTurnRunsForTests();
         vi.clearAllMocks();
     dbInserts.length = 0;
+    dbUpdates.length = 0;
         buildMessages.mockReturnValue([]);
         buildProjectDocContext.mockResolvedValue({
             docIndex: {},
@@ -237,6 +244,64 @@ describe("POST /projects/:projectId/chat", () => {
         // The guard fires before any LLM stream.
         expect(runLLMStream).not.toHaveBeenCalled();
     });
+
+    it.each(["user", "idle", "max_lifetime"] as const)(
+        "saves %s promptly while the title is still pending",
+        async (reason) => {
+            const { generateAssistantChatTitle } =
+                await import("../../modules/chat/chat.title.js");
+            const { AssistantStreamAbortError } =
+                await import("../../modules/chat/engine/index.js");
+            const { getAssistantTurnRun } =
+                await import("../../lib/assistantTurnRuns.js");
+            let releaseTitle!: (title: string) => void;
+            vi.mocked(generateAssistantChatTitle).mockImplementationOnce(
+                () =>
+                    new Promise((resolve) => {
+                        releaseTitle = resolve;
+                    }),
+            );
+            const started = new Promise<void>((resolve) => {
+                runLLMStream.mockImplementation(
+                    async (params: { signal: AbortSignal }) => {
+                        resolve();
+                        await new Promise<void>((done) =>
+                            params.signal.addEventListener("abort", () => done(), {
+                                once: true,
+                            }),
+                        );
+                        throw new AssistantStreamAbortError("Partial", [
+                            { type: "content", text: "Partial" },
+                        ]);
+                    },
+                );
+            });
+            const response = request(app)
+                .post("/projects/p1/chat")
+                .set("Authorization", "Bearer test")
+                .send(VALID_BODY)
+                .then((res) => res);
+            await started;
+            getAssistantTurnRun(getActiveAssistantTurn("chat-1")!.id)!.stop(reason);
+            const terminal = await response;
+            expect(terminal.text).toContain(
+                reason === "user" ? '\"type\":\"cancelled\"' : '\"type\":\"error\"',
+            );
+            expect(
+                dbInserts.find(({ table, value }) => table === "chat_messages" && (value as { role?: string }).role === "assistant")?.value,
+            ).toMatchObject({
+                content: [
+                    { type: "content", text: "Partial" },
+                    reason === "user"
+                        ? { type: "content", text: "Cancelled by user." }
+                        : { type: "error", safe_to_display: true },
+                ],
+            });
+            releaseTitle("Late title");
+            await Promise.resolve();
+            expect(dbUpdates.some(({ table }) => table === "chats")).toBe(false);
+        },
+    );
 
     it("streams SSE on the happy path with project access granted", async () => {
         const res = await request(app)

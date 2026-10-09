@@ -97,8 +97,8 @@ export function uploadJobWallClockMs(
 /**
  * Deadlines for one server-owned SSE run (chat, project chat, Word chat,
  * tabular generation). `idleMs` aborts a run that has produced no output for
- * that long (a hung provider or tool); it re-arms on every frame, so a long
- * agentic run that keeps working is unaffected. `maxMs` is a wall-clock
+ * that long (a hung provider or tool). Model progress and data frames re-arm
+ * it, but transport keep-alives do not. `maxMs` is a wall-clock
  * backstop for a run that never stops emitting.
  */
 export function streamRunDeadlines(env: NodeJS.ProcessEnv = process.env): {
@@ -120,12 +120,11 @@ export function streamRunDeadlines(env: NodeJS.ProcessEnv = process.env): {
 }
 
 /**
- * Silence limits on the MODEL's response stream, handed to the AI SDK's
- * `streamText({ timeout })`. `firstChunkMs` bounds the wait for the first
- * output of each step (a reasoning model may think silently for a while, so it
- * is generous); `chunkMs` bounds the gap between chunks once output is
- * flowing, and re-arms on every chunk. They catch a stalled provider at the
- * source; `streamRunDeadlines` stays as the run-level backstop.
+ * Silence limits applied to each raw provider response by providerDeadlines.
+ * `firstChunkMs` includes waiting for headers and the first output of a step.
+ * `chunkMs` bounds gaps after text, reasoning, tool input or a tool call.
+ * Provider clocks end with the provider step, excluding local tool execution;
+ * `streamRunDeadlines` stays as the run-level backstop.
  */
 export function streamChunkTimeouts(env: NodeJS.ProcessEnv = process.env): {
   firstChunkMs: number;

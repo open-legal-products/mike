@@ -581,6 +581,7 @@ export async function streamTabularGenerateSync(args: {
     generationId: string;
     abortSignal: AbortSignal;
     onError?: (error: unknown) => void;
+    onActivity?: () => void;
 }): Promise<boolean> {
     const {
         write,
@@ -631,6 +632,7 @@ export async function streamTabularGenerateSync(args: {
             generationId,
             abortSignal,
             sink: {
+                activity: args.onActivity,
                 generating: (rowId, columnIndex) =>
                     cellFrame(rowId, columnIndex, null, "generating"),
                 done: (rowId, columnIndex, result) =>

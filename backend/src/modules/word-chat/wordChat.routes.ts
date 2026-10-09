@@ -23,7 +23,7 @@ import { createServerSupabase } from "../../lib/supabase";
 import {
   AssistantStreamError,
   assistantStreamErrorPayload,
-  buildCancelledAssistantMessage,
+  buildStoppedAssistantMessage,
   extractCitations,
   isAbortError,
   parseChatMessages,
@@ -821,6 +821,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       })}\n\n`,
     );
     const { events, citations } = await runLLMStream({
+      onActivity: run?.touch,
       apiMessages,
       docStore,
       docIndex,
@@ -939,12 +940,13 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
           surface: "word",
           title: chatTitle ?? activeDocumentName ?? null,
           model: selectedModel,
-          status: "cancelled",
+          status: run?.stopReason && run.stopReason !== "user" ? "failed" : "cancelled",
         },
         null,
       );
       if (error instanceof AssistantStreamError) {
-        const partial = buildCancelledAssistantMessage({
+        const partial = buildStoppedAssistantMessage({
+          stopReason: run?.stopReason,
           fullText: error.fullText,
           events: error.events,
           buildCitations: (fullText) =>

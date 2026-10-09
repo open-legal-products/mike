@@ -35,7 +35,7 @@ import {
     AssistantStreamError,
     assistantStreamErrorPayload,
     ASSISTANT_ERROR_MESSAGE,
-    buildCancelledAssistantMessage,
+    buildStoppedAssistantMessage,
     isAbortError,
     runLLMStream,
     stripTransientAssistantEvents,
@@ -577,6 +577,7 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
 
         let sentGenerationError = false;
         const completed = await streamTabularGenerateSync({
+            onActivity: run.touch,
             write,
             db,
             reviewId,
@@ -1022,6 +1023,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
 
     try {
         const { fullText, events } = await runLLMStream({
+            onActivity: run?.touch,
             apiMessages,
             docStore: new Map(),
             docIndex: {},
@@ -1110,7 +1112,8 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
         if (isAbortError(err)) {
             console.log("[tabular/chat] turn stopped", { chatId });
             if (chatId && err instanceof AssistantStreamError) {
-                const partial = buildCancelledAssistantMessage({
+                const partial = buildStoppedAssistantMessage({
+                    stopReason: run?.stopReason,
                     fullText: err.fullText,
                     events: err.events,
                     buildCitations: (fullText) =>
@@ -1133,7 +1136,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             }
             // Readers still attached (Stop came from another tab, or this one
             // is only watching) learn the outcome the same way a reload
-            // would: the stored row now ends "Cancelled by user."
+            // would: persistence uses the same stop reason.
             write(stopOutcomeFrame(run));
             write("data: [DONE]\n\n");
             return;

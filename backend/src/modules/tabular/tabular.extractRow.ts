@@ -35,6 +35,7 @@ import { type CellResult, type Column, type Db } from "./tabular.shared";
  * DB writes this module performs around them.
  */
 export interface CellSink {
+    activity?: () => void;
     generating(rowId: string, columnIndex: number): void | Promise<void>;
     done(
         rowId: string,
@@ -212,6 +213,7 @@ export async function extractRowColumns(args: {
             },
             apiKeys,
             abortSignal,
+            sink.activity,
         );
     } catch (err) {
         error = err;
