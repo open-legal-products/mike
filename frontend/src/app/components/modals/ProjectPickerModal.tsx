@@ -60,7 +60,7 @@ export function ProjectPickerModal({
                     autoFocus
                 />
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+            <div data-modal-scroll="vertical" className="min-h-0 flex-1 overflow-y-auto pb-2">
                 {loading ? (
                     <div className="space-y-px">
                         <div className="flex items-center rounded-md px-2 py-2">

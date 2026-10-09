@@ -125,7 +125,8 @@ export function WorkflowPickerContent({
 
                 <div
                     data-slot="workflow-picker-list"
-                    className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto rounded-sm px-1 pt-2"
+                    data-modal-scroll="vertical"
+                    className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto rounded-sm pt-2"
                 >
                     {loading ? (
                         <div className="space-y-px">

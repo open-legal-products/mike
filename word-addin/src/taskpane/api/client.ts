@@ -284,6 +284,13 @@ interface UserProfile {
   openRouterModels: string[];
   vercelModels: string[];
   openCodeGoModels: string[];
+  // Absent from a backend that predates these providers.
+  bedrockModels?: string[];
+  azureModels?: string[];
+  azureFoundryModels?: string[];
+  vertexModels?: string[];
+  xaiModels?: string[];
+  customModels?: string[];
   apiKeyStatus: ApiKeyStatus;
 }
 

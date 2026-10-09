@@ -9,11 +9,10 @@ import { getOllamaModels, type ApiKeyStatus } from "../../api/mikeApi";
 import {
   isModelAvailable,
   modelDisplayName,
-  openCodeGoModelOptions,
-  openRouterModelOptions,
-  vercelModelOptions,
+  routerModelOptions,
   STATIC_MODELS,
   type ModelOption,
+  type RouterModelSelections,
 } from "../../lib/modelCatalog";
 
 export function ModelToggle({
@@ -21,9 +20,7 @@ export function ModelToggle({
   onChange,
   keyStatus,
   keyStatusLoading = false,
-  openRouterModels,
-  vercelModels,
-  openCodeGoModels,
+  routerModels,
   compact = false,
   onNoModelsClick,
   reasoningLevel,
@@ -35,9 +32,8 @@ export function ModelToggle({
   /** True while the key-status preflight is in flight: render a neutral
    *  disabled trigger instead of flashing "No Models". */
   keyStatusLoading?: boolean;
-  openRouterModels: string[];
-  vercelModels: string[];
-  openCodeGoModels: string[];
+  /** The user's saved models, per router. */
+  routerModels: RouterModelSelections;
   compact?: boolean;
   onNoModelsClick?: () => void;
   reasoningLevel?: ReasoningLevel;
@@ -58,9 +54,6 @@ export function ModelToggle({
   }, []);
 
   const models = useMemo(() => {
-    const openRouterOptions = openRouterModelOptions(openRouterModels);
-    const vercelOptions = vercelModelOptions(vercelModels);
-    const openCodeGoOptions = openCodeGoModelOptions(openCodeGoModels);
     const localOptions = ollamaModels.map((model) => ({
       ...model,
       label: modelDisplayName(model.id),
@@ -68,9 +61,7 @@ export function ModelToggle({
     }));
     return [
       ...STATIC_MODELS,
-      ...openRouterOptions,
-      ...vercelOptions,
-      ...openCodeGoOptions,
+      ...routerModelOptions(routerModels),
       ...localOptions,
     ].filter(
       (model) =>
@@ -79,9 +70,7 @@ export function ModelToggle({
   }, [
     keyStatus,
     ollamaModels,
-    openRouterModels,
-    vercelModels,
-    openCodeGoModels,
+    routerModels,
   ]);
   const selected = models.find((model) => model.id === value);
   const supportedReasoningLevels = reasoningLevelsForModel(value);

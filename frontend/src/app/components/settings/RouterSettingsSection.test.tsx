@@ -4,21 +4,42 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
     getOpenRouterModels,
     getOpenCodeGoModels,
+    getBedrockModels,
+    getXaiModels,
+    getCustomEndpointModels,
     updateOpenRouterModels,
     updateOpenCodeGoModels,
+    updateBedrockModels,
+    updateXaiModels,
+    updateCustomModels,
+    updateVertexModels,
     openCodeGoConfigured,
+    bedrockConfigured,
+    newProvidersConfigured,
 } = vi.hoisted(() => ({
+    getXaiModels: vi.fn(),
+    getCustomEndpointModels: vi.fn(),
+    updateXaiModels: vi.fn(),
+    updateCustomModels: vi.fn(),
+    updateVertexModels: vi.fn(),
+    newProvidersConfigured: { value: false },
     getOpenRouterModels: vi.fn(),
     getOpenCodeGoModels: vi.fn(),
+    getBedrockModels: vi.fn(),
     updateOpenRouterModels: vi.fn(),
     updateOpenCodeGoModels: vi.fn(),
+    updateBedrockModels: vi.fn(),
     openCodeGoConfigured: { value: false },
+    bedrockConfigured: { value: false },
 }));
 
 vi.mock("@/app/lib/mikeApi", () => ({
     getOpenRouterModels,
     getVercelModels: vi.fn().mockResolvedValue([]),
+    getBedrockModels,
     getOpenCodeGoModels,
+    getXaiModels,
+    getCustomEndpointModels,
 }));
 
 vi.mock("@/app/contexts/UserProfileContext", () => ({
@@ -31,14 +52,39 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
                     configured: openCodeGoConfigured.value,
                     source: openCodeGoConfigured.value ? "user" : null,
                 },
+                bedrock: {
+                    configured: bedrockConfigured.value,
+                    source: bedrockConfigured.value ? "user" : null,
+                },
+                azure: { configured: false, source: null },
+                "azure-foundry": { configured: false, source: null },
+                vertex: { configured: newProvidersConfigured.value, source: null },
+                xai: { configured: newProvidersConfigured.value, source: null },
+                custom: { configured: newProvidersConfigured.value, source: null },
             },
+            apiKeySettings: { custom: { baseUrl: "https://llm.example.com/v1" } },
             openRouterModels: ["anthropic/claude-sonnet-4.5"],
             vercelModels: [],
             openCodeGoModels: [],
+            bedrockModels: [],
+            azureModels: [],
+            azureFoundryModels: [],
+            vertexModels: [],
+            xaiModels: [],
+            customModels: [],
         },
-        updateOpenRouterModels,
-        updateVercelModels: vi.fn(),
-        updateOpenCodeGoModels,
+        // One save callback keyed by router; each test asserts on its own.
+        updateRouterModels: (router: string, models: string[]) => {
+            const save: Record<string, (models: string[]) => unknown> = {
+                openrouter: updateOpenRouterModels,
+                "opencode-go": updateOpenCodeGoModels,
+                bedrock: updateBedrockModels,
+                vertex: updateVertexModels,
+                xai: updateXaiModels,
+                custom: updateCustomModels,
+            };
+            return save[router]?.(models) ?? Promise.resolve(true);
+        },
     }),
 }));
 
@@ -258,7 +304,9 @@ describe("RouterSettingsSection", () => {
             name: "Remove anthropic/claude-sonnet-4.5",
         });
         expect(pill).toHaveAttribute("data-slot", "option-pill");
-        expect(pill).toHaveClass("rounded-full", "text-xs");
+        expect(pill).toHaveClass("rounded-full", "text-xs", "liquid-glass-flat");
+        expect(pill).not.toHaveClass("liquid-glass-subtle");
+        expect(screen.getByText("Model Selections", { exact: true })).toBeVisible();
     });
 });
 
@@ -337,5 +385,141 @@ describe("RouterSettingsSection with OpenCode Go configured", () => {
         expect(normalizeTypedModelId("glm-5", "opencode-go")).toBe("glm-5");
         expect(normalizeTypedModelId("glm-5", "openrouter")).toBeNull();
         expect(normalizeTypedModelId("not a model", "opencode-go")).toBeNull();
+    });
+});
+
+describe("RouterSettingsSection with Amazon Bedrock configured", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        bedrockConfigured.value = true;
+        getBedrockModels.mockResolvedValue([{ id: "us.test-chat", label: "Test Chat" }]);
+        getOpenRouterModels.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        bedrockConfigured.value = false;
+    });
+
+    it("keeps manual IDs available alongside the catalog", async () => {
+        updateBedrockModels.mockResolvedValue(true);
+        render(<RouterSettingsSection />);
+        const input = screen.getByPlaceholderText(
+            "e.g. us.anthropic.claude-opus-5-5",
+        );
+
+        expect(input).toHaveAttribute("role", "combobox");
+        await waitFor(() => expect(screen.getByRole("button", { name: "Choose Amazon Bedrock model" })).toBeEnabled());
+
+        fireEvent.change(input, {
+            target: {
+                value: "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5",
+            },
+        });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await waitFor(() =>
+            expect(updateBedrockModels).toHaveBeenCalledWith([
+                "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5",
+            ]),
+        );
+    });
+
+    it("adds a discovered inference profile", async () => {
+        updateBedrockModels.mockResolvedValue(true);
+        render(<RouterSettingsSection />);
+        const choose = screen.getByRole("button", { name: "Choose Amazon Bedrock model" });
+        await waitFor(() => expect(choose).toBeEnabled());
+        fireEvent.click(choose);
+        fireEvent.click(screen.getByRole("option", { name: /Test Chat/ }));
+        await waitFor(() => expect(updateBedrockModels).toHaveBeenCalledWith(["us.test-chat"]));
+    });
+
+    it("keeps manual entry when discovery fails", async () => {
+        getBedrockModels.mockRejectedValue(new Error("provider failure"));
+        updateBedrockModels.mockResolvedValue(true);
+        render(<RouterSettingsSection />);
+        await screen.findByText(/Amazon Bedrock's model list could not be loaded/);
+        const input = screen.getByRole("combobox", { name: "Amazon Bedrock models" });
+        fireEvent.change(input, { target: { value: "custom-profile" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() => expect(updateBedrockModels).toHaveBeenCalledWith(["custom-profile"]));
+    });
+
+    it("limits a provider modal to that provider's models and catalog", async () => {
+        render(<RouterSettingsSection provider="bedrock" />);
+        await waitFor(() => expect(getBedrockModels).toHaveBeenCalled());
+        expect(screen.queryByRole("combobox", { name: "OpenRouter models" })).not.toBeInTheDocument();
+        expect(getOpenRouterModels).not.toHaveBeenCalled();
+        expect(screen.getByRole("combobox", { name: "Amazon Bedrock models" })).toBeVisible();
+    });
+
+    it("validates Bedrock and Azure ids as space-free strings", () => {
+        expect(
+            normalizeTypedModelId("bedrock/us.anthropic.claude-opus-5-5", "bedrock"),
+        ).toBe("us.anthropic.claude-opus-5-5");
+        expect(normalizeTypedModelId("my-gpt-deployment", "azure")).toBe(
+            "my-gpt-deployment",
+        );
+        expect(normalizeTypedModelId("my deployment", "azure")).toBeNull();
+    });
+});
+
+describe("RouterSettingsSection with Vertex AI, xAI and a custom endpoint configured", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        newProvidersConfigured.value = true;
+        getOpenRouterModels.mockResolvedValue([]);
+        getXaiModels.mockResolvedValue([{ id: "grok-4.3", label: "grok-4.3" }]);
+        getCustomEndpointModels.mockRejectedValue(new Error("no /models"));
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+        newProvidersConfigured.value = false;
+    });
+
+    it("adds an xAI model from the live catalog", async () => {
+        updateXaiModels.mockResolvedValue(true);
+        render(<RouterSettingsSection provider="xai" />);
+        const choose = screen.getByRole("button", { name: "Choose xAI model" });
+        await waitFor(() => expect(choose).toBeEnabled());
+        fireEvent.click(choose);
+        fireEvent.click(screen.getByRole("option", { name: /grok-4.3/ }));
+        await waitFor(() =>
+            expect(updateXaiModels).toHaveBeenCalledWith(["grok-4.3"]),
+        );
+    });
+
+    it("takes typed Vertex model IDs, which have no catalog", async () => {
+        updateVertexModels.mockResolvedValue(true);
+        render(<RouterSettingsSection provider="vertex" />);
+        const input = screen.getByPlaceholderText("e.g. gemini-3.1-pro-preview");
+        expect(input).not.toHaveAttribute("role", "combobox");
+        fireEvent.change(input, {
+            target: { value: "meta/llama-4-maverick-maas" },
+        });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() =>
+            expect(updateVertexModels).toHaveBeenCalledWith([
+                "meta/llama-4-maverick-maas",
+            ]),
+        );
+    });
+
+    it("still takes typed IDs when a custom endpoint has no model list", async () => {
+        updateCustomModels.mockResolvedValue(true);
+        render(<RouterSettingsSection provider="custom" />);
+        expect(
+            await screen.findByText(
+                "OpenAI-compatible endpoint's model list could not be loaded. You can still type a model ID.",
+            ),
+        ).toBeVisible();
+        const input = screen.getByPlaceholderText("e.g. my-model");
+        fireEvent.change(input, { target: { value: "llama-4-70b" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await waitFor(() =>
+            expect(updateCustomModels).toHaveBeenCalledWith(["llama-4-70b"]),
+        );
     });
 });

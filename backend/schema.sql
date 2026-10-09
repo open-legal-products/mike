@@ -468,10 +468,17 @@ alter table public.org_invitations enable row level security;
 create table if not exists public.user_api_keys (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'courtlistener')),
+  provider text not null check (provider in ('claude', 'gemini', 'openai', 'mistral', 'openrouter', 'vercel', 'opencode-go', 'bedrock', 'azure', 'azure-foundry', 'vertex', 'xai', 'custom', 'courtlistener')),
   encrypted_key text not null,
   iv text not null,
   auth_tag text not null,
+  enabled boolean not null default true,
+  -- Non-secret companion to the key: {"region": ...} for Bedrock,
+  -- {"endpoint": ...} for Azure OpenAI and Azure AI Foundry,
+  -- {"location": ...} for Vertex AI, {"baseUrl": ...} for a custom
+  -- OpenAI-compatible endpoint. Null for single-value keys.
+  settings jsonb constraint user_api_keys_settings_check
+    check (settings is null or jsonb_typeof(settings) = 'object'),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique(user_id, provider)
@@ -7547,3 +7554,139 @@ $$;
 
 revoke all on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) from public, anon, authenticated;
 grant execute on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Migration ledger (backend/migrations/20261009_03_schema_migrations.sql)
+-- ---------------------------------------------------------------------------
+-- One row per file in backend/migrations/ that this database has applied;
+-- backend/scripts/migrate.sh reads it to find pending migrations. A fresh
+-- install already contains every migration below, so it records them all,
+-- without checksums because none was run as a file.
+--
+-- Adding a migration? Add its filename to this list in the same change:
+-- backend/src/__tests__/migrationLedger.test.ts fails until you do, and a
+-- missing name makes every fresh install re-run that migration on its first
+-- `migrate.sh up`.
+create table if not exists public.schema_migrations (
+  filename text primary key,
+  checksum text,
+  applied_at timestamptz not null default now()
+);
+
+alter table public.schema_migrations enable row level security;
+revoke all on public.schema_migrations from anon, authenticated, service_role;
+
+insert into public.schema_migrations (filename) values
+  ('20260419_tabular_chat_jsonb.sql'),
+  ('20260421_01_docx_editing.sql'),
+  ('20260421_02_user_api_keys.sql'),
+  ('20260423_01_docx_editing_wids.sql'),
+  ('20260423_02_docx_version_number.sql'),
+  ('20260424_01_docx_version_display_name.sql'),
+  ('20260424_02_docx_version_number_upload.sql'),
+  ('20260427_01_move_storage_to_versions.sql'),
+  ('20260427_02_tabular_review_shared_with.sql'),
+  ('20260427_03_user_profile_organisation.sql'),
+  ('20260428_workflow_shares_unique.sql'),
+  ('20260502_secure_user_api_keys.sql'),
+  ('20260508_01_revoke_client_grants_backend_tables.sql'),
+  ('20260508_02_revoke_client_grants_user_profiles.sql'),
+  ('20260509_add_openai_user_api_key_provider.sql'),
+  ('20260511_contact_messages.sql'),
+  ('20260513_projects_shared_with_jsonb.sql'),
+  ('20260517_tabular_review_document_ids.sql'),
+  ('20260523_courtlistener_bulk_indexes.sql'),
+  ('20260528_01_add_courtlistener_user_api_key_provider.sql'),
+  ('20260528_02_add_openrouter_user_api_key_provider.sql'),
+  ('20260528_03_user_profile_model_preferences.sql'),
+  ('20260602_01_add_document_version_file_metadata.sql'),
+  ('20260602_02_add_document_version_filename_temp.sql'),
+  ('20260602_03_drop_documents_file_metadata.sql'),
+  ('20260602_04_drop_documents_filename.sql'),
+  ('20260603_drop_structure_tree.sql'),
+  ('20260606_oss_schema_diff.sql'),
+  ('20260610_01_soft_deleted_document_versions.sql'),
+  ('20260610_02_user_profile_mfa_on_login.sql'),
+  ('20260611_user_profile_legal_research_us.sql'),
+  ('20260613_01_chats_overview_rpc.sql'),
+  ('20260613_02_projects_overview_rpc.sql'),
+  ('20260613_03_tabular_reviews_overview_rpc.sql'),
+  ('20260613_04_user_mcp_connectors.sql'),
+  ('20260613_05_workflows_overview_rpc.sql'),
+  ('20260615_01_mcp_connector_oauth.sql'),
+  ('20260625_01_workflow_metadata.sql'),
+  ('20260629_01_workflow_open_source_submissions.sql'),
+  ('20260703_01_user_profile_email.sql'),
+  ('20260703_02_project_practice.sql'),
+  ('20260704_01_chat_message_citations.sql'),
+  ('20260710_01_library_documents.sql'),
+  ('20260716_01_chat_messages_workflow.sql'),
+  ('20260724_02_tabular_folder_rows.sql'),
+  ('20260726_01_tabular_reviews_pagination.sql'),
+  ('20260727_01_tabular_review_ids_overview.sql'),
+  ('20260728_audit_events.sql'),
+  ('20260731_01_document_version_content_sha256.sql'),
+  ('20260805_01_narrow_service_role_grants.sql'),
+  ('20260807_01_projects_and_workflows_overview_pagination.sql'),
+  ('20260809_01_word_addin_chats.sql'),
+  ('20260811_01_workflow_restructure.sql'),
+  ('20260811_02_workflow_addon_pack_folders.sql'),
+  ('20260812_01_collection_pagination_queries.sql'),
+  ('20260813_01_user_id_foreign_keys.sql'),
+  ('20260813_02_user_dark_mode.sql'),
+  ('20260814_01_normalize_project_sharing_emails.sql'),
+  ('20260814_02_assistant_quick_actions.sql'),
+  ('20260818_01_user_router_models.sql'),
+  ('20260818_02_add_vercel_user_api_key_provider.sql'),
+  ('20260819_01_auth_email_confirmation.sql'),
+  ('20260819_01_harden_replace_user_router_models.sql'),
+  ('20260819_02_quick_action_surfaces.sql'),
+  ('20260820_01_add_opencode_go_user_api_key_provider.sql'),
+  ('20260820_02_word_document_edits.sql'),
+  ('20260821_01_google_oauth_profiles.sql'),
+  ('20260821_02_password_capability.sql'),
+  ('20260822_01_resolve_folder_upload_paths.sql'),
+  ('20260822_01_tabular_generation_lease.sql'),
+  ('20260823_01_unified_workflow_catalog.sql'),
+  ('20260825_01_auth_handoff_tickets.sql'),
+  ('20260826_01_task_model_selection.sql'),
+  ('20260826_02_rename_last_selected_chat_model.sql'),
+  ('20260826_03_chat_reasoning_selection.sql'),
+  ('20260827_01_tabular_chat_model_reasoning.sql'),
+  ('20260827_02_reasoning_max.sql'),
+  ('20260827_03_remove_minimal_reasoning.sql'),
+  ('20260828_02_upload_sessions.sql'),
+  ('20260829_01_db_jobs.sql'),
+  ('20260901_01_transparent_tables.sql'),
+  ('20260901_02_project_visibility_scopes.sql'),
+  ('20260901_03_workflow_assets_as_documents.sql'),
+  ('20260904_01_organization_access.sql'),
+  ('20260904_02_migrate_legacy_sharing.sql'),
+  ('20260905_01_scoped_memory_files.sql'),
+  ('20260908_01_remove_transparent_tables.sql'),
+  ('20260909_01_memory_safety_boundaries.sql'),
+  ('20260914_01_document_lifecycle.sql'),
+  ('20260915_01_cleanup_drain_and_rollout.sql'),
+  ('20260916_01_upload_document_row_created.sql'),
+  ('20260917_01_organization_access_followup.sql'),
+  ('20260917_02_memory_followup.sql'),
+  ('20260921_01_chat_activity.sql'),
+  ('20260921_02_google_drive_integration.sql'),
+  ('20260922_01_google_workspace.sql'),
+  ('20260930_01_workflow_metadata_access.sql'),
+  ('20261001_01_connector_write_access.sql'),
+  ('20261002_01_google_drive_writes.sql'),
+  ('20261002_02_google_drive_account_email.sql'),
+  ('20261002_03_connector_read_only.sql'),
+  ('20261002_04_remove_user_time_zone.sql'),
+  ('20261002_05_mcp_oauth_grants.sql'),
+  ('20261002_06_user_custom_instructions.sql'),
+  ('20261006_01_user_response_style.sql'),
+  ('20261007_01_add_mistral_user_api_key_provider.sql'),
+  ('20261008_01_email_change_moves_grants.sql'),
+  ('20261008_02_document_version_textless_pages.sql'),
+  ('20261008_03_bedrock_azure_user_api_keys.sql'),
+  ('20261009_01_vertex_foundry_xai_custom_user_api_keys.sql'),
+  ('20261009_02_user_api_key_enabled.sql'),
+  ('20261009_03_schema_migrations.sql')
+on conflict (filename) do nothing;

@@ -7,19 +7,23 @@ import {
   DropdownSurface,
 } from "@/shared/ui/dropdown";
 import { OptionPill } from "@/app/components/ui/option-pill";
-import { SETTINGS_CONTROL_CLASS } from "@/app/components/settings/SettingsTextInput";
+import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import {
   getOpenCodeGoModels,
+  getBedrockModels,
+  getCustomEndpointModels,
+  getXaiModels,
   getOpenRouterModels,
   getVercelModels,
   type RouterCatalogModel,
 } from "@/app/lib/mikeApi";
-import type { RouterSlug } from "@/app/components/assistant/ModelToggle";
-import { GlassCardUI } from "@/shared/ui/GlassCardUI";
-import { SettingsHeading } from "./SettingsHeading";
-import { SettingsRow } from "./SettingsRow";
-import { SettingsDescription, SettingsLabel } from "./SettingsText";
+import {
+  ROUTER_SLUGS,
+  routerModelsFromProfile,
+  type RouterSlug,
+} from "@/app/lib/routerModels";
+import { SettingsDescription } from "./SettingsText";
 
 const COST_FORMATTER = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -60,7 +64,7 @@ const CATALOG_MODEL_ID_RE = /^[^\s/]+\/[^\s]+$/;
  */
 const ROUTER_MODEL_ID: Record<
   RouterSlug,
-  { pattern: RegExp; shape: string; example: string }
+  { pattern: RegExp; shape: string; example: string; hint?: string }
 > = {
   openrouter: {
     pattern: CATALOG_MODEL_ID_RE,
@@ -76,6 +80,38 @@ const ROUTER_MODEL_ID: Record<
     pattern: /^[^\s]+$/,
     shape: "a model name with no spaces",
     example: "glm-5",
+  },
+  bedrock: {
+    pattern: /^[^\s]+$/,
+    shape: "a Bedrock model or inference-profile ID with no spaces",
+    example: "us.anthropic.claude-opus-5-5",
+  },
+  azure: {
+    pattern: /^[^\s]+$/,
+    shape: "a deployment name with no spaces",
+    example: "gpt-6.1-sol",
+  },
+  "azure-foundry": {
+    pattern: /^[^\s]+$/,
+    shape: "a deployment name with no spaces",
+    example: "claude-opus-5-5",
+    hint: "Claude deployments are recognised by name. If a deployment is named differently, add it as anthropic:<name>, or openai:<name> for any other model.",
+  },
+  vertex: {
+    pattern: /^[^\s]+$/,
+    shape: "a Vertex AI model ID with no spaces",
+    example: "gemini-3.1-pro-preview",
+    hint: "Claude and publisher/model IDs are recognised by name. For other partner models add openai:<id>; anthropic:<id> and gemini:<id> also work.",
+  },
+  xai: {
+    pattern: /^[^\s]+$/,
+    shape: "a model name with no spaces",
+    example: "grok-4.3",
+  },
+  custom: {
+    pattern: /^[^\s]+$/,
+    shape: "a model name with no spaces",
+    example: "my-model",
   },
 };
 
@@ -118,58 +154,60 @@ function catalogModelMatches(model: RouterCatalogModel, query: string) {
   );
 }
 
-export function RouterSettingsSection() {
-  const {
-    profile,
-    updateOpenRouterModels,
-    updateVercelModels,
-    updateOpenCodeGoModels,
-  } = useUserProfile();
-  const openRouterConfigured = profile?.apiKeys.openrouter.configured === true;
-  const vercelConfigured = profile?.apiKeys.vercel.configured === true;
-  const openCodeGoConfigured =
-    profile?.apiKeys["opencode-go"].configured === true;
+/** How each router's models are listed, where it publishes a catalog. */
+const ROUTER_SETTINGS: Record<
+  RouterSlug,
+  { label: string; loadCatalog?: () => Promise<RouterCatalogModel[]> }
+> = {
+  openrouter: { label: "OpenRouter", loadCatalog: getOpenRouterModels },
+  vercel: { label: "Vercel AI Gateway", loadCatalog: getVercelModels },
+  "opencode-go": { label: "OpenCode Go", loadCatalog: getOpenCodeGoModels },
+  bedrock: { label: "Amazon Bedrock", loadCatalog: getBedrockModels },
+  azure: { label: "Azure OpenAI" },
+  "azure-foundry": { label: "Azure AI Foundry" },
+  vertex: { label: "Google Vertex AI" },
+  xai: { label: "xAI", loadCatalog: getXaiModels },
+  custom: {
+    label: "OpenAI-compatible endpoint",
+    loadCatalog: getCustomEndpointModels,
+  },
+};
 
-  if (!openRouterConfigured && !vercelConfigured && !openCodeGoConfigured) {
-    return null;
-  }
+export function RouterSettingsSection({ provider }: { provider?: RouterSlug } = {}) {
+  const { profile, updateRouterModels } = useUserProfile();
+  const selections = routerModelsFromProfile(profile);
+  const routers = ROUTER_SLUGS.filter(
+    (slug) =>
+      (!provider || provider === slug) &&
+      profile?.apiKeys[slug]?.configured === true,
+  );
+  if (routers.length === 0) return null;
+
+  // A catalog belongs to one account, region or endpoint: remount the
+  // setting when that changes so the list is read again.
+  const catalogScope: Partial<Record<RouterSlug, string>> = {
+    bedrock: profile?.apiKeySettings?.bedrock?.region ?? "",
+    custom: profile?.apiKeySettings?.custom?.baseUrl ?? "",
+  };
 
   return (
     <section id="routers" className="scroll-mt-6 space-y-3">
-      <SettingsHeading>Routers</SettingsHeading>
+      <FieldLabel as="p">Model Selections</FieldLabel>
       <SettingsDescription>
-        Choose models from each router&apos;s catalog or enter a model ID. Saved
-        models appear in model selectors.
+        Add the models you want to use. Saved models appear in model selectors.
       </SettingsDescription>
-      <GlassCardUI>
-        {openRouterConfigured && (
+      <div className="space-y-4">
+        {routers.map((slug) => (
           <RouterModelsSetting
-            provider="openrouter"
-            label="OpenRouter"
-            selection={profile?.openRouterModels ?? []}
-            loadCatalog={getOpenRouterModels}
-            onSave={updateOpenRouterModels}
+            key={`${slug}:${catalogScope[slug] ?? ""}`}
+            provider={slug}
+            label={ROUTER_SETTINGS[slug].label}
+            selection={selections[slug]}
+            loadCatalog={ROUTER_SETTINGS[slug].loadCatalog}
+            onSave={(models) => updateRouterModels(slug, models)}
           />
-        )}
-        {vercelConfigured && (
-          <RouterModelsSetting
-            provider="vercel"
-            label="Vercel AI Gateway"
-            selection={profile?.vercelModels ?? []}
-            loadCatalog={getVercelModels}
-            onSave={updateVercelModels}
-          />
-        )}
-        {openCodeGoConfigured && (
-          <RouterModelsSetting
-            provider="opencode-go"
-            label="OpenCode Go"
-            selection={profile?.openCodeGoModels ?? []}
-            loadCatalog={getOpenCodeGoModels}
-            onSave={updateOpenCodeGoModels}
-          />
-        )}
-      </GlassCardUI>
+        ))}
+      </div>
     </section>
   );
 }
@@ -184,7 +222,8 @@ function RouterModelsSetting({
   provider: RouterSlug;
   label: string;
   selection: string[];
-  loadCatalog: () => Promise<RouterCatalogModel[]>;
+  /** Omitted for providers with no listable catalog: IDs are typed only. */
+  loadCatalog?: () => Promise<RouterCatalogModel[]>;
   onSave: (models: string[]) => Promise<boolean>;
 }) {
   const [catalog, setCatalog] = useState<RouterCatalogModel[]>([]);
@@ -198,6 +237,7 @@ function RouterModelsSetting({
   const catalogId = `${provider}-model-catalog`;
 
   useEffect(() => {
+    if (!loadCatalog) return;
     let cancelled = false;
     loadCatalog()
       .then((models) => {
@@ -306,15 +346,10 @@ function RouterModelsSetting({
   };
 
   return (
-    <SettingsRow layout="stacked">
-      <div className="flex items-center gap-2">
-        <div>
-          <SettingsLabel>{label} models</SettingsLabel>
-        </div>
-        {saving && (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
-        )}
-      </div>
+    <div className="min-w-0 space-y-3">
+      {saving && (
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
+      )}
       <div
         ref={typeaheadRef}
         className="relative"
@@ -390,26 +425,29 @@ function RouterModelsSetting({
             )}
           </DropdownSurface>
         )}
-        <div
-          className={`flex h-9 min-w-0 flex-1 items-center px-0 focus-within:border-gray-200 focus-within:ring-2 focus-within:ring-gray-300/45 ${SETTINGS_CONTROL_CLASS}`}
-        >
-          <input
+        <div className="relative min-w-0">
+          <FormTextInput
+            id={`${provider}-model-input`}
             ref={inputRef}
             type="text"
-            role="combobox"
             aria-label={`${label} models`}
-            aria-autocomplete="list"
-            aria-controls={catalogId}
-            aria-expanded={catalogOpen}
-            aria-activedescendant={
-              catalogOpen && activeCatalogIndex >= 0
-                ? `${catalogId}-option-${activeCatalogIndex}`
-                : undefined
-            }
+            // Without a catalog there is no list to control: a plain textbox.
+            {...(loadCatalog
+              ? {
+                  role: "combobox",
+                  "aria-autocomplete": "list" as const,
+                  "aria-controls": catalogId,
+                  "aria-expanded": catalogOpen,
+                  "aria-activedescendant":
+                    catalogOpen && activeCatalogIndex >= 0
+                      ? `${catalogId}-option-${activeCatalogIndex}`
+                      : undefined,
+                }
+              : {})}
             value={input}
             disabled={saving}
             placeholder={`e.g. ${ROUTER_MODEL_ID[provider].example}`}
-            className="h-full min-w-0 flex-1 bg-transparent text-sm text-gray-900 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed"
+            className={loadCatalog ? "pr-9" : undefined}
             onChange={(event) => {
               setInput(event.target.value);
               // Typing never claims a highlight: Enter must add
@@ -451,29 +489,31 @@ function RouterModelsSetting({
               }
             }}
           />
-          <button
-            type="button"
-            disabled={saving || catalog.length === 0}
-            aria-label={`Choose ${label} model`}
-            aria-controls={catalogId}
-            aria-expanded={catalogOpen}
-            aria-haspopup="listbox"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              const nextOpen = !catalogOpen;
-              setCatalogOpen(nextOpen);
-              // Highlight only ever follows an explicit arrow
-              // key or pointer hover — opening the list doesn't
-              // pre-claim a row for Enter.
-              setActiveCatalogIndex(-1);
-              if (nextOpen) inputRef.current?.focus();
-            }}
-            className="flex h-full shrink-0 items-center justify-end text-gray-400 transition-colors hover:text-gray-700 disabled:cursor-default disabled:opacity-40"
-          >
-            <ChevronDown
-              className={`h-3.5 w-3.5 transition-transform duration-200 ${catalogOpen ? "rotate-180" : ""}`}
-            />
-          </button>
+          {loadCatalog && (
+            <button
+              type="button"
+              disabled={saving || catalog.length === 0}
+              aria-label={`Choose ${label} model`}
+              aria-controls={catalogId}
+              aria-expanded={catalogOpen}
+              aria-haspopup="listbox"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                const nextOpen = !catalogOpen;
+                setCatalogOpen(nextOpen);
+                // Highlight only ever follows an explicit arrow
+                // key or pointer hover — opening the list doesn't
+                // pre-claim a row for Enter.
+                setActiveCatalogIndex(-1);
+                if (nextOpen) inputRef.current?.focus();
+              }}
+              className="absolute inset-y-0 right-3 flex items-center text-gray-400 transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-default disabled:opacity-40"
+            >
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform duration-200 ${catalogOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+          )}
         </div>
       </div>
       {selection.length > 0 && (
@@ -481,6 +521,7 @@ function RouterModelsSetting({
           {selection.map((model) => (
             <OptionPill
               key={model}
+              surface="flat"
               disabled={saving}
               aria-label={`Remove ${model}`}
               title={`Remove ${model}`}
@@ -494,7 +535,12 @@ function RouterModelsSetting({
           ))}
         </div>
       )}
+      {ROUTER_MODEL_ID[provider].hint && (
+        <p className="text-xs text-gray-500">
+          {ROUTER_MODEL_ID[provider].hint}
+        </p>
+      )}
       {error && <p className="text-xs text-red-600">{error}</p>}
-    </SettingsRow>
+    </div>
   );
 }

@@ -5,9 +5,10 @@ import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsLabel } from "./SettingsText";
 
 /**
- * One connector tile, shared by Installed and Discover so both lists have the
- * same size and layout: icon, name, and a single trailing control (the on/off
- * switch or the Add button). With `onOpen` the tile opens the Manage dialog.
+ * One settings tile, shared by the connector lists (Installed and Discover)
+ * and the model provider lists so they all have the same size and layout:
+ * icon, name, and a single trailing control (the on/off switch or the Add
+ * button). With `onOpen` the tile opens the Manage dialog.
  */
 export function ConnectorCard({
   name,
@@ -15,8 +16,11 @@ export function ConnectorCard({
   placeholderClassName,
   onOpen,
   action,
+  kind = "connector",
 }: {
   name: string;
+  /** What the tile holds, for its accessible name ("Slack connector"). */
+  kind?: string;
   /** Brand icon; without one a small coloured shape is shown. */
   icon?: ReactNode;
   placeholderClassName?: string;
@@ -39,18 +43,23 @@ export function ConnectorCard({
           <SettingsLabel>{name}</SettingsLabel>
         </div>
       </div>
-      {/* The control is its own target; it never opens the Manage dialog. */}
-      <div
-        className="ml-auto flex h-9 shrink-0 items-center"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-      >
-        {action}
+      {/* The control is its own target; it never opens the Manage dialog.
+          Only the control swallows the click, so the space around it still
+          opens the tile. Key presses pass through: the tile ignores keys
+          that did not start on itself, and Escape must still reach a dialog
+          the control just opened. */}
+      <div className="ml-auto flex h-9 shrink-0 items-center">
+        <div
+          className="flex"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {action}
+        </div>
       </div>
     </div>
   );
   return (
-    <section aria-label={`${name} connector`} className="min-w-0">
+    <section aria-label={`${name} ${kind}`} className="min-w-0">
       <GlassCardUI>
         {onOpen ? (
           <div

@@ -879,7 +879,8 @@ export function AddDocumentsModal({
       <div className="my-3 flex items-center justify-between gap-2">
         <div
           data-testid="document-tabs-scroll"
-          className="-mx-2 -my-2 flex min-w-0 items-center gap-1 overflow-x-auto px-2 py-2"
+          data-modal-scroll="horizontal"
+          className="flex min-w-0 items-center gap-1 overflow-x-auto"
         >
           {TABS.map((tab) => (
             <TabPillButtonUI
@@ -900,7 +901,7 @@ export function AddDocumentsModal({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+        <div data-modal-scroll="vertical" className="min-h-0 flex-1 overflow-y-auto pb-3">
           {loading ? (
             <div className="flex h-full items-center justify-center">
               <Spinner label="Loading documents…" />

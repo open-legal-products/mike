@@ -194,7 +194,8 @@ export function QuickActionsModal({
           </div>
           <div
             data-slot="quick-actions-list"
-            className="mt-2 min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-1 pt-1"
+            data-modal-scroll="vertical"
+            className="mt-2 min-h-0 flex-1 overflow-x-hidden overflow-y-auto pt-1"
           >
             {error && (
               <p className="px-3 py-2 text-xs text-red-600" role="alert">

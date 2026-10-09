@@ -281,6 +281,14 @@ per component; an `overflow-auto` container needs no extra class. The
 spreadsheet (`.fortune-container`) and DOCX editor (`.docx-editor`) are
 excluded because they size and style their own scrollbars.
 
+For modal body scroll areas, add `data-modal-scroll="vertical"` to the scrolling
+element. `ModalUI` supplies matching 8px horizontal negative margins and padding
+to leave room for shadows and focus rings while keeping content aligned. Use
+`data-modal-scroll="horizontal"` for scrolling tab strips; these also get 8px
+vertical margins and padding. Keep this spacing in the shared modal rather than
+adding margin/padding workarounds in its children. Nested menus and inset panels
+keep their own spacing and should not receive this attribute.
+
 ## UI primitives
 
 | Primitive | Location | Use it for |

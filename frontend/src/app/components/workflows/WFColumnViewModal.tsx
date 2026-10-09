@@ -32,7 +32,7 @@ export function WFColumnViewModal({ col, onClose }: Props) {
             }}
             cancelAction={false}
         >
-            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+            <div data-modal-scroll="vertical" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
                 <div>
                     <FieldLabel as="p">Column Title</FieldLabel>
                     <p className="text-sm text-gray-800">{col.name}</p>

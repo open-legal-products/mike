@@ -212,7 +212,7 @@ export function AddColumnModal({
                 onSubmit={handleSubmit}
                 className="flex min-h-0 flex-1 flex-col"
             >
-                <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3">
+                <div data-modal-scroll="vertical" className="min-h-0 flex-1 space-y-5 overflow-y-auto">
                         {columns.map((column, index) => (
                             <div
                                 key={index}

@@ -113,7 +113,6 @@ export default function FeaturesPage() {
           {courtListenerEnabled && (
             <ApiKeyField
               label="CourtListener API Key"
-              placeholder="Token..."
               hasSavedKey={profile?.apiKeys.courtlistener.source === "user"}
               onSave={(value) =>
                 updateApiKey("courtlistener", value.trim() || null)

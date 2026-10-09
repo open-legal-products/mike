@@ -21,6 +21,10 @@ import {
     isSupportedOpenCodeGoModel,
     normalizeReasoningLevelForModel,
     reasoningLevelsForModel,
+    isAzureFoundryClaudeDeployment,
+    azureFoundryDeploymentName,
+    vertexModelId,
+    vertexModelProtocol,
 } from "../llm/models";
 
 // ---------------------------------------------------------------------------
@@ -28,6 +32,44 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("providerForModel", () => {
+    it("routes bedrock/ and azure/ ids to the cloud platforms", () => {
+        expect(providerForModel("bedrock/us.anthropic.claude-opus-5-5")).toBe(
+            "bedrock",
+        );
+        expect(providerForModel("bedrock/meta.llama4-maverick-v1:0")).toBe(
+            "bedrock",
+        );
+        expect(providerForModel("azure/gpt-6.1-sol")).toBe("azure");
+    });
+
+    it("routes the Foundry, Vertex, xAI and custom-endpoint prefixes", () => {
+        // "azure-foundry/" must not be read as an Azure OpenAI deployment.
+        expect(providerForModel("azure-foundry/claude-opus-5-5")).toBe(
+            "azure-foundry",
+        );
+        expect(providerForModel("vertex/gemini-3.1-pro-preview")).toBe(
+            "vertex",
+        );
+        expect(providerForModel("xai/grok-4.3")).toBe("xai");
+        expect(providerForModel("custom/gpt-6.1-sol")).toBe("custom");
+    });
+
+    it("picks a Vertex protocol and a Foundry protocol from the id", () => {
+        expect(vertexModelProtocol("vertex/claude-opus-5-5@20260101")).toBe(
+            "anthropic",
+        );
+        expect(vertexModelProtocol("vertex/meta/llama-4-maverick-maas")).toBe(
+            "maas",
+        );
+        expect(vertexModelProtocol("vertex/gemini-3.8-flash")).toBe("gemini");
+        expect(
+            isAzureFoundryClaudeDeployment("azure-foundry/Claude-Opus-prod"),
+        ).toBe(true);
+        expect(
+            isAzureFoundryClaudeDeployment("azure-foundry/mistral-large-4"),
+        ).toBe(false);
+    });
+
     it("maps claude-* ids to the claude provider", () => {
         for (const model of [
             ...CLAUDE_MAIN_MODELS,
@@ -105,6 +147,18 @@ describe("resolveModel", () => {
         expect(resolveModel("gpt-6-astra", FALLBACK)).toBe(
             "gpt-6-astra",
         );
+    });
+
+    it("accepts account-specific Bedrock and Azure ids by shape", () => {
+        for (const model of [
+            "bedrock/us.anthropic.claude-opus-5-5",
+            "bedrock/arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5",
+            "azure/my-gpt-deployment",
+        ]) {
+            expect(resolveModel(model, FALLBACK)).toBe(model);
+        }
+        expect(resolveModel("bedrock/", FALLBACK)).toBe(FALLBACK);
+        expect(resolveModel("azure/has space", FALLBACK)).toBe(FALLBACK);
     });
 
     it("falls back for unknown model ids", () => {
@@ -245,7 +299,82 @@ describe("vercelModelId", () => {
     });
 });
 
+describe("explicit protocols for Vertex and Foundry ids", () => {
+    it("override the protocol inferred from the name", () => {
+        // A Foundry Claude deployment that was not named after its model.
+        expect(
+            isAzureFoundryClaudeDeployment("azure-foundry/anthropic:prod-sonnet"),
+        ).toBe(true);
+        expect(
+            isAzureFoundryClaudeDeployment("azure-foundry/openai:claude-router"),
+        ).toBe(false);
+        expect(azureFoundryDeploymentName("azure-foundry/anthropic:prod-sonnet")).toBe(
+            "prod-sonnet",
+        );
+        // A Vertex partner model with no publisher/ prefix.
+        expect(vertexModelProtocol("vertex/openai:mistral-large-2411")).toBe(
+            "maas",
+        );
+        expect(vertexModelProtocol("vertex/gemini:claude-lookalike")).toBe(
+            "gemini",
+        );
+        expect(vertexModelProtocol("vertex/anthropic:sonnet-pinned")).toBe(
+            "anthropic",
+        );
+        expect(vertexModelId("vertex/openai:mistral-large-2411")).toBe(
+            "mistral-large-2411",
+        );
+    });
+
+    it("do not hide the model from reasoning-level rules", () => {
+        expect(
+            reasoningLevelsForModel("azure-foundry/anthropic:claude-opus-5-5"),
+        ).not.toContain("none");
+    });
+});
+
+describe("resolveModel for account-specific providers", () => {
+    it("accepts the new prefixes by shape and rejects malformed ids", () => {
+        for (const id of [
+            "azure-foundry/claude-opus-5-5",
+            "vertex/claude-opus-5-5@20260101",
+            "vertex/meta/llama-4-maverick-maas",
+            "xai/grok-4.3",
+            "custom/deepseek/deepseek-v4",
+        ]) {
+            expect(resolveModel(id, "fallback")).toBe(id);
+        }
+        expect(resolveModel("vertex/", "fallback")).toBe("fallback");
+        expect(resolveModel("custom/has space", "fallback")).toBe("fallback");
+    });
+});
+
 describe("reasoningLevelsForModel", () => {
+    it("recognizes Claude behind Vertex and Foundry ids", () => {
+        for (const model of [
+            "vertex/claude-opus-5-5@20260101",
+            "vertex/claude-opus-5-5",
+            "azure-foundry/claude-opus-5-5",
+        ]) {
+            expect(reasoningLevelsForModel(model)).not.toContain("none");
+        }
+    });
+
+    it("recognizes Claude behind Bedrock ids, which cannot disable thinking", () => {
+        for (const model of [
+            "bedrock/anthropic.claude-opus-5-5",
+            "bedrock/us.anthropic.claude-opus-5-5",
+            "bedrock/global.anthropic.claude-fable-5-1-v1:0",
+            "bedrock/us-gov.anthropic.claude-opus-5-5",
+            "bedrock/arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5",
+        ]) {
+            expect(reasoningLevelsForModel(model)).not.toContain("none");
+        }
+        expect(
+            reasoningLevelsForModel("bedrock/us.anthropic.claude-sonnet-5-5"),
+        ).toContain("none");
+    });
+
     it("uses the GPT-5.6 subset exposed by the provider", () => {
         expect(reasoningLevelsForModel("gpt-5.6-terra")).toEqual([
             "none",

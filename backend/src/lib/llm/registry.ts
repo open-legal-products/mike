@@ -101,6 +101,7 @@ export function apiKeyForConfiguredModel(
   model: ConfiguredModel,
   apiKeys?: UserApiKeys,
 ): string | null {
+  if (model.apiKeyProvider && apiKeys?.disabledProviders?.includes(model.apiKeyProvider)) return null;
   if (model.apiKey?.trim()) return model.apiKey.trim();
   if (model.apiKeyProvider) {
     const userKey = apiKeys?.[model.apiKeyProvider];

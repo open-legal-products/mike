@@ -684,23 +684,23 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                               <DropdownItem
                                   selected={pathname === "/history"}
                                   onSelect={() => router.push("/history")}
-                                  className="gap-2 px-2 py-2 text-sm text-gray-700"
+                                  className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                               >
-                                  <HistorySkeuoIcon className="h-4 w-4" />
+                                  <HistorySkeuoIcon className={cn("h-4 w-4", pathname === "/history" ? "text-gray-900" : "text-black")} />
                                   History
                               </DropdownItem>
                               <DropdownItem
                                   onSelect={() => router.push("/settings")}
-                                  className="gap-2 px-2 py-2 text-sm text-gray-700"
+                                  className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                               >
-                                  <SettingsSkeuoIcon className="h-4 w-4" />
+                                  <SettingsSkeuoIcon className="h-4 w-4 text-black" />
                                   Settings
                               </DropdownItem>
                               <DropdownItem
                                   onSelect={() => router.push("/organizations")}
-                                  className="gap-2 px-2 py-2 text-sm text-gray-700"
+                                  className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                               >
-                                  <OrganizationSkeuoIcon className="h-4 w-4" />
+                                  <OrganizationSkeuoIcon className="h-4 w-4 text-black" />
                                   Organizations
                               </DropdownItem>
                               <DropdownItem
@@ -711,9 +711,9 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                               setSignOutWarningOpen(true),
                                           );
                                   }}
-                                  className="gap-2 px-2 py-2 text-sm text-gray-700"
+                                  className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                               >
-                                  <SignOutSkeuoIcon className="h-4 w-4" />
+                                  <SignOutSkeuoIcon className="h-4 w-4 text-black" />
                                   Sign out
                               </DropdownItem>
                           </DropdownContent>

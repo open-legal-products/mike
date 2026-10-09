@@ -1132,14 +1132,14 @@ export function AssistantMessage({
                 )}
 
                 {/* Copy button */}
-                <div className="flex items-center gap-2 py-2 font-sans justify-start">
+                <div className="flex items-center gap-2 font-sans justify-start">
                     {!isStreaming && !awaitingInput && (
                         <button
                             type="button"
                             aria-label={
                                 isCopied ? "Response copied" : "Copy response"
                             }
-                            className="p-1.5 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                            className="-ml-1.5 p-1.5 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                             onClick={handleCopy}
                         >
                             {isCopied ? (

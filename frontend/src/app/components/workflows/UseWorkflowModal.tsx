@@ -17,8 +17,9 @@ import { workflowDetailPath } from "./workflowRoutes";
 import {
     ModelToggle,
     type NoModelsReason,
-    type RouterSlug,
+    ROUTER_SLUGS,
 } from "../assistant/ModelToggle";
+import { routerModelsFromProfile } from "@/app/lib/routerModels";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
@@ -143,14 +144,10 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             return;
         }
         const defaultModel = profile.tabularModel;
-        const router = (["openrouter", "vercel", "opencode-go"] as const).find(
+        const router = ROUTER_SLUGS.find(
             (slug) => defaultModel.startsWith(`${slug}/`),
         );
-        const routerSelections: Record<RouterSlug, string[]> = {
-            openrouter: profile.openRouterModels,
-            vercel: profile.vercelModels,
-            "opencode-go": profile.openCodeGoModels,
-        };
+        const routerSelections = routerModelsFromProfile(profile);
         const routerSelectionValid =
             !router ||
             routerSelections[router].includes(
@@ -457,13 +454,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
                                     onChange={setSelectedModel}
                                     apiKeys={apiKeys}
                                     apiKeysLoading={profileLoading && !profile}
-                                    openRouterModels={
-                                        profile?.openRouterModels
-                                    }
-                                    vercelModels={profile?.vercelModels}
-                                    openCodeGoModels={
-                                        profile?.openCodeGoModels
-                                    }
+                                    routerModels={routerModelsFromProfile(profile)}
                                     onNoModelsClick={setNoModelsWarning}
                                 />
                             </div>

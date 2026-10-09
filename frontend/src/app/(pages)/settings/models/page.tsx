@@ -13,14 +13,13 @@ import {
 } from "@/shared/ui/dropdown";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { type ApiKeyState } from "@/app/lib/mikeApi";
+import { routerModelsFromProfile } from "@/app/lib/routerModels";
 import {
   MODELS,
   SETTINGS_MODELS,
   canonicalModelId,
   mergeConfiguredModelOptions,
-  openCodeGoModelOptions,
-  openRouterModelOptions,
-  vercelModelOptions,
+  routerModelOptions,
   type ModelOption,
 } from "@/app/components/assistant/ModelToggle";
 import { orderedModelGroups } from "@/shared/ui/ModelToggleUI";
@@ -57,12 +56,8 @@ export default function ModelPreferencesPage() {
     Partial<Record<ModelPreferenceField, string>>
   >({});
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openRouterSelection = profile?.openRouterModels ?? [];
-  const vercelSelection = profile?.vercelModels ?? [];
-  const selectedOpenRouterOptions = openRouterModelOptions(openRouterSelection);
-  const selectedVercelOptions = vercelModelOptions(vercelSelection);
-  const selectedOpenCodeGoOptions = openCodeGoModelOptions(
-    profile?.openCodeGoModels ?? [],
+  const selectedRouterOptions = routerModelOptions(
+    routerModelsFromProfile(profile),
   );
 
   useEffect(() => {
@@ -111,9 +106,7 @@ export default function ModelPreferencesPage() {
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...SETTINGS_MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
               ])}
               apiKeys={profile?.apiKeys}
@@ -137,9 +130,7 @@ export default function ModelPreferencesPage() {
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
               ])}
               apiKeys={profile?.apiKeys}
@@ -166,9 +157,7 @@ export default function ModelPreferencesPage() {
               )}
               options={mergeConfiguredModelOptions(configuredModels, [
                 ...SETTINGS_MODELS,
-                ...selectedOpenRouterOptions,
-                ...selectedVercelOptions,
-                ...selectedOpenCodeGoOptions,
+                ...selectedRouterOptions,
                 ...ollamaModels,
               ])}
               apiKeys={profile?.apiKeys}

@@ -744,6 +744,12 @@ export interface UserProfile {
     openRouterModels: string[];
     vercelModels: string[];
     openCodeGoModels: string[];
+    bedrockModels: string[];
+    azureModels: string[];
+    azureFoundryModels: string[];
+    vertexModels: string[];
+    xaiModels: string[];
+    customModels: string[];
     apiKeyStatus: ApiKeyStatus;
 }
 
@@ -837,6 +843,12 @@ export async function updateUserProfile(payload: {
     openRouterModels?: string[];
     vercelModels?: string[];
     openCodeGoModels?: string[];
+    bedrockModels?: string[];
+    azureModels?: string[];
+    azureFoundryModels?: string[];
+    vertexModels?: string[];
+    xaiModels?: string[];
+    customModels?: string[];
 }): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile", {
         method: "PATCH",
@@ -968,18 +980,41 @@ export type ApiKeyProvider =
     | "openrouter"
     | "vercel"
     | "opencode-go"
+    | "bedrock"
+    | "azure"
+    | "azure-foundry"
+    | "vertex"
+    | "xai"
+    | "custom"
     | "courtlistener";
 type ApiKeySource = "user" | "env" | null;
+
+/**
+ * The non-secret setting saved with a user's own key: the AWS region of a
+ * Bedrock key, the Azure resource of an Azure OpenAI or Azure AI Foundry key,
+ * the Vertex AI location of a service-account key, the base URL of a custom
+ * OpenAI-compatible endpoint.
+ */
+export type ApiKeySettings = {
+    bedrock?: { region: string } | null;
+    azure?: { endpoint: string } | null;
+    "azure-foundry"?: { endpoint: string } | null;
+    vertex?: { location: string } | null;
+    custom?: { baseUrl: string } | null;
+};
 export type ApiKeyState = Record<
     ApiKeyProvider,
     {
         configured: boolean;
         source: ApiKeySource;
+        enabled?: boolean;
     }
 >;
 
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
     sources?: Partial<Record<ApiKeyProvider, ApiKeySource>>;
+    enabled?: Partial<Record<ApiKeyProvider, boolean>>;
+    settings?: ApiKeySettings;
 };
 
 export interface OllamaModelOption {
@@ -1035,6 +1070,26 @@ export async function getVercelModels(): Promise<RouterCatalogModel[]> {
     return models;
 }
 
+export async function getBedrockModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>("/models/bedrock");
+    return models;
+}
+
+export async function getXaiModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
+        "/models/xai",
+    );
+    return models;
+}
+
+/** Models reported by the user's own OpenAI-compatible endpoint. */
+export async function getCustomEndpointModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
+        "/models/custom",
+    );
+    return models;
+}
+
 export async function getOpenCodeGoModels(): Promise<RouterCatalogModel[]> {
     const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
         "/models/opencode-go",
@@ -1042,14 +1097,32 @@ export async function getOpenCodeGoModels(): Promise<RouterCatalogModel[]> {
     return models;
 }
 
+/**
+ * Save, replace or remove a key. Keys that are saved with a setting (a region,
+ * endpoint, location or base URL) also send it; a setting with a null key changes the saved key's setting only.
+ */
 export async function saveApiKey(
     provider: ApiKeyProvider,
     apiKey: string | null,
+    settings?: ApiKeySettings[keyof ApiKeySettings],
 ): Promise<ApiKeyStatus> {
     return apiRequest<ApiKeyStatus>(`/user/api-keys/${provider}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: apiKey }),
+        body: JSON.stringify(
+            settings ? { api_key: apiKey, settings } : { api_key: apiKey },
+        ),
+    });
+}
+
+export async function setApiKeyEnabled(
+    provider: ApiKeyProvider,
+    enabled: boolean,
+): Promise<ApiKeyStatus> {
+    return apiRequest<ApiKeyStatus>(`/user/api-keys/${provider}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
     });
 }
 

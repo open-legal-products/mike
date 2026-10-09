@@ -15,11 +15,15 @@
     "test:mutation": "stryker run"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^5.0.111",
     "@ai-sdk/anthropic": "^4.0.65",
+    "@ai-sdk/azure": "^4.0.97",
     "@ai-sdk/google": "^4.0.82",
+    "@ai-sdk/google-vertex": "^5.0.108",
     "@ai-sdk/mistral": "^4.0.59",
     "@ai-sdk/openai": "^4.0.77",
     "@ai-sdk/openai-compatible": "^3.0.57",
+    "@ai-sdk/xai": "^5.0.19",
     "@aws-sdk/client-s3": "^3.1146.0",
     "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "@modelcontextprotocol/sdk": "^1.32.0",
@@ -35,6 +39,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.1",
     "fast-xml-parser": "^5.11.2",
+    "google-auth-library": "^10.9.1",
     "helmet": "^8.1.0",
     "html-to-text": "10.0.1",
     "ioredis": "^6.0.0",

@@ -140,11 +140,11 @@ test("Google SSO does not auto-connect Gmail; Add asks Google for access and Man
   connected = true;
   grant++;
 
-  // Like Slack: the Discover card stays, marked Added, and an installed card
-  // with an on/off switch appears.
+  // Like Slack: the card leaves Discover, and an installed card with an
+  // on/off switch appears.
   await expect(
-    discover.getByRole("button", { name: "Gmail connector added" }),
-  ).toBeDisabled();
+    discover.getByRole("region", { name: "Gmail connector" }),
+  ).toHaveCount(0);
   await expect(
     installed.getByRole("switch", { name: "Gmail connector", exact: true }),
   ).toHaveAttribute("aria-checked", "true");

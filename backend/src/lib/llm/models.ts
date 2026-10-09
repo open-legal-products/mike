@@ -52,7 +52,23 @@ const ALWAYS_REASONING_LEVELS: readonly ReasoningLevel[] =
 export function reasoningLevelsForModel(
     model: string,
 ): readonly ReasoningLevel[] {
-    const catalogId = model.replace(/^(?:openrouter|vercel)\//, "");
+    const catalogId = model.startsWith("bedrock/")
+        ? // Bedrock names Claude "anthropic.claude-…", optionally behind a
+          // cross-region inference-profile prefix ("us.", "us-gov.") or at
+          // the end of an inference-profile ARN, after its last "/".
+          model
+              .split("/")
+              .at(-1)!
+              .replace(/^(?:[a-z]+(?:-[a-z]+)*\.)?anthropic\./, "")
+        : model
+              .replace(/^(?:openrouter|vercel)\//, "")
+              // An explicit protocol is not part of the model name.
+              .replace(
+                  /^((?:vertex|azure-foundry)\/)(?:anthropic|openai|gemini):/,
+                  "$1",
+              )
+              // Vertex pins Claude versions as "claude-opus-5-5@20260101".
+              .replace(/^(vertex\/[^@]+)@/, "$1-");
     // Astra, Sol 6.1, and current Fable/Opus cannot disable thinking.
     if (
         /(?:^|\/)(?:gpt-6-astra|gpt-6\.1-sol|claude-fable-5-1|claude-opus-5-5)(?:$|-)/.test(
@@ -151,6 +167,12 @@ export function providerForModel(model: string): Provider {
     if (model.startsWith("openrouter/")) return "openrouter";
     if (model.startsWith("vercel/")) return "vercel";
     if (model.startsWith("opencode-go/")) return "opencode-go";
+    if (model.startsWith("bedrock/")) return "bedrock";
+    if (model.startsWith("azure/")) return "azure";
+    if (model.startsWith("azure-foundry/")) return "azure-foundry";
+    if (model.startsWith("vertex/")) return "vertex";
+    if (model.startsWith("xai/")) return "xai";
+    if (model.startsWith("custom/")) return "custom";
     if (model.startsWith("claude")) return "claude";
     if (model.startsWith("gemini")) return "gemini";
     if (model.startsWith("gpt-")) return "openai";
@@ -200,8 +222,13 @@ export function resolveModel(
             canonical.startsWith("ollama/") ||
             /^(?:openrouter|vercel)\/[^\s/]+\/[^\s]+$/.test(canonical) ||
             // OpenCode Go's catalog ids are single-segment ("glm-5"), not the
-            // vendor/model pairs OpenRouter and Vercel publish.
-            /^opencode-go\/[^\s]+$/.test(canonical))
+            // vendor/model pairs OpenRouter and Vercel publish. Bedrock and
+            // Vertex model ids, Azure deployment names and the models behind
+            // a custom endpoint are account-specific, and xAI's catalog is
+            // read live, so those are accepted by shape too.
+            /^(?:opencode-go|bedrock|azure|azure-foundry|vertex|xai|custom)\/[^\s]+$/.test(
+                canonical,
+            ))
     )
         return canonical;
     return fallback;
@@ -213,6 +240,90 @@ export function openRouterModelId(model: string): string {
 
 export function vercelModelId(model: string): string {
     return model.replace(/^vercel\//, "");
+}
+
+/** Bedrock model or inference-profile id, without the app-level prefix. */
+export function bedrockModelId(model: string): string {
+    return model.replace(/^bedrock\//, "");
+}
+
+/** Azure OpenAI deployment name, without the app-level prefix. */
+export function azureDeploymentName(model: string): string {
+    return model.replace(/^azure\//, "");
+}
+
+// Vertex AI and Azure AI Foundry serve several wire protocols, and neither
+// tells an API key which one a model speaks. Mike infers it from the name,
+// and a saved id can state it outright for names the inference gets wrong:
+// "anthropic:prod-sonnet", "openai:mistral-large-2411", "gemini:my-tuned-model".
+const EXPLICIT_PROTOCOL_RE = /^(anthropic|openai|gemini):/;
+
+type ExplicitProtocol = "anthropic" | "openai" | "gemini";
+
+function splitExplicitProtocol(id: string): {
+    protocol: ExplicitProtocol | null;
+    id: string;
+} {
+    const match = EXPLICIT_PROTOCOL_RE.exec(id);
+    return match
+        ? {
+              protocol: match[1] as ExplicitProtocol,
+              id: id.slice(match[0].length),
+          }
+        : { protocol: null, id };
+}
+
+/**
+ * Azure AI Foundry deployment name, without the app-level prefix or an
+ * explicit protocol.
+ */
+export function azureFoundryDeploymentName(model: string): string {
+    return splitExplicitProtocol(model.replace(/^azure-foundry\//, "")).id;
+}
+
+/**
+ * Foundry serves Claude over the Anthropic Messages API and everything else
+ * over Chat Completions. Without an explicit protocol it is read from the
+ * deployment name, which defaults to the model name ("claude-opus-5-5").
+ */
+export function isAzureFoundryClaudeDeployment(model: string): boolean {
+    const { protocol, id } = splitExplicitProtocol(
+        model.replace(/^azure-foundry\//, ""),
+    );
+    if (protocol) return protocol === "anthropic";
+    return /claude/i.test(id);
+}
+
+/** Vertex AI model id, without the app-level prefix or an explicit protocol. */
+export function vertexModelId(model: string): string {
+    return splitExplicitProtocol(model.replace(/^vertex\//, "")).id;
+}
+
+/**
+ * Vertex AI speaks three protocols: Anthropic Messages for Claude
+ * ("claude-opus-5-5@20260101"), OpenAI-compatible Chat Completions for
+ * partner and open models, which are named publisher/model
+ * ("meta/llama-4-maverick-maas"), and its own API for Gemini. An explicit
+ * "openai:" means the Chat Completions endpoint.
+ */
+export function vertexModelProtocol(
+    model: string,
+): "anthropic" | "maas" | "gemini" {
+    const { protocol, id } = splitExplicitProtocol(
+        model.replace(/^vertex\//, ""),
+    );
+    if (protocol) return protocol === "openai" ? "maas" : protocol;
+    if (id.startsWith("claude")) return "anthropic";
+    return id.includes("/") ? "maas" : "gemini";
+}
+
+export function xaiModelId(model: string): string {
+    return model.replace(/^xai\//, "");
+}
+
+/** Model name on a user's own endpoint, without the app-level prefix. */
+export function customEndpointModelId(model: string): string {
+    return model.replace(/^custom\//, "");
 }
 
 export function openCodeGoModelId(model: string): string {

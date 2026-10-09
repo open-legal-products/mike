@@ -17,6 +17,9 @@ import {
     listOpenCodeGoModels,
     listOpenRouterModels,
     listVercelModels,
+    listBedrockModels,
+    listCustomEndpointModels,
+    listXaiModels,
     type CatalogFailure,
     type CatalogResult,
 } from "./models.service";
@@ -79,6 +82,20 @@ modelsRouter.get("/vercel", requireAuth, (_req, res) =>
 // GET /models/opencode-go
 modelsRouter.get("/opencode-go", requireAuth, (_req, res) =>
     sendCatalog(res, listOpenCodeGoModels),
+);
+
+modelsRouter.get("/bedrock", requireAuth, (_req, res) =>
+    sendCatalog(res, listBedrockModels),
+);
+
+// GET /models/xai
+modelsRouter.get("/xai", requireAuth, (_req, res) =>
+    sendCatalog(res, listXaiModels),
+);
+
+// GET /models/custom
+modelsRouter.get("/custom", requireAuth, (_req, res) =>
+    sendCatalog(res, listCustomEndpointModels),
 );
 
 modelsRouter.use(routerErrorHandler("[models]"));

@@ -42,6 +42,18 @@ describe("getModelProvider", () => {
         );
         expect(getModelProvider("vercel/openai/gpt-5.4")).toBe("vercel");
         expect(getModelProvider("opencode-go/glm-5")).toBe("opencode-go");
+        expect(
+            getModelProvider("bedrock/us.anthropic.claude-opus-5-5"),
+        ).toBe("bedrock");
+        expect(getModelProvider("azure/gpt-6.1-sol")).toBe("azure");
+        expect(getModelProvider("azure-foundry/claude-opus-5-5")).toBe(
+            "azure-foundry",
+        );
+        expect(getModelProvider("vertex/gemini-3.1-pro-preview")).toBe(
+            "vertex",
+        );
+        expect(getModelProvider("xai/grok-4.3")).toBe("xai");
+        expect(getModelProvider("custom/my-model")).toBe("custom");
     });
 
     it("resolves any ollama/-prefixed id without consulting SETTINGS_MODELS", () => {
@@ -112,6 +124,12 @@ describe("isModelAvailable", () => {
 });
 
 describe("isProviderAvailable", () => {
+    it("excludes a disabled provider even when its key remains configured", () => {
+        const state = keys({ openai: true, openrouter: true });
+        state.openai.enabled = false;
+        expect(isModelAvailable("gpt-6-astra", state)).toBe(false);
+        expect(isModelAvailable("openrouter/openai/gpt-4o", state)).toBe(true);
+    });
     it("reflects the configured flag for the provider", () => {
         expect(isProviderAvailable("openai", keys({ openai: true }))).toBe(
             true,
@@ -140,6 +158,12 @@ describe("providerLabel", () => {
         expect(providerLabel("openrouter")).toBe("OpenRouter");
         expect(providerLabel("vercel")).toBe("Vercel AI Gateway");
         expect(providerLabel("opencode-go")).toBe("OpenCode Go");
+        expect(providerLabel("bedrock")).toBe("Amazon Bedrock");
+        expect(providerLabel("azure")).toBe("Azure OpenAI");
+        expect(providerLabel("azure-foundry")).toBe("Azure AI Foundry");
+        expect(providerLabel("vertex")).toBe("Google Vertex AI");
+        expect(providerLabel("xai")).toBe("xAI");
+        expect(providerLabel("custom")).toBe("OpenAI-compatible endpoint");
         expect(providerLabel("ollama")).toBe("Local (Ollama)");
         expect(providerLabel("gemini")).toBe("Google (Gemini)");
     });

@@ -15,21 +15,83 @@ storage instead of the infrastructure bundled with Docker Compose.
 
 ## Database setup
 
-For a fresh Supabase database, run the contents of `backend/schema.sql` in the
-Supabase SQL editor. The schema file contains the complete current database
-shape.
+Every Mike database records the migrations it has applied in
+`public.schema_migrations`, one row per file in `backend/migrations/`.
+`backend/scripts/migrate.sh` reads that table and applies only the files it
+does not list, in filename order, adding a row after each one succeeds. The
+script needs bash and `psql`, and a `DATABASE_URL` for a role that owns the
+`public` schema: on Supabase, the `postgres` direct or session-pooler
+connection string (not the transaction pooler).
 
-For an existing deployment, do not run the complete schema over production
-data. Back up the database first, identify the last migration already applied,
-then apply each newer file in `backend/migrations/` in filename order.
-Migration filenames follow `YYYYMMDD_NN_<name>.sql`.
+### Fresh install
 
-Keep the last applied migration filename with your deployment records. Do not
-blindly replay the directory against production: migrations are written for an
-expected starting schema, and a successful fresh install from `schema.sql` is
-not evidence that an older database has completed every upgrade step. The
-repository's schema-drift CI separately checks that its pinned historical
-baseline converges with the fresh schema after all later migrations run.
+Run the contents of `backend/schema.sql` in the Supabase SQL editor (or with
+`psql`). It contains the complete current database shape and records every
+migration it already includes, so there is nothing to apply afterwards.
+
+### Upgrading an existing deployment
+
+Do not run the complete schema over production data. Back up the database,
+then check and apply what is pending:
+
+```bash
+export DATABASE_URL='postgresql://postgres:<password>@<host>:5432/postgres'
+backend/scripts/migrate.sh status   # lists pending files; exits 2 if any
+backend/scripts/migrate.sh up
+```
+
+`up` stops at the first migration that fails; that file and everything after
+it stay pending, so fix the cause and run `up` again. Some migrations are not
+wrapped in a transaction, so a failure can leave part of one applied: restore
+the backup, or finish that file by hand and record it with `mark` (below).
+
+`status` and `up` also warn about two kinds of mismatch. A file that "has
+changed since it was applied" was edited after you ran it. A file "recorded as
+applied but not in backend/migrations" was usually renamed after you ran it,
+so its new name now shows as pending: if it is the same migration, record the
+new name with `mark` instead of running it a second time.
+
+To apply a migration some other way, such as in the SQL editor, record it
+afterwards so the runner skips it:
+
+```bash
+backend/scripts/migrate.sh mark <file>.sql
+```
+
+or, in the SQL editor, `insert into public.schema_migrations (filename) values
+('<file>.sql');`. To see what a database has run:
+
+```sql
+select filename, applied_at, checksum is not null as run_by_migrate_sh
+from public.schema_migrations
+order by filename;
+```
+
+### Adopting the ledger on an older deployment
+
+Deployments upgraded before `20261009_03_schema_migrations.sql` have no
+ledger yet, and the runner refuses to guess what they contain. Run `baseline`
+once with the last migration you applied, taken from your deployment records,
+then apply the rest:
+
+```bash
+backend/scripts/migrate.sh baseline <last applied file>.sql
+backend/scripts/migrate.sh up
+```
+
+`baseline` creates the ledger table if needed and records that file and every
+file that sorts before it as applied, without running them. Choose the file
+carefully: a migration recorded but never applied is skipped from then on.
+Migrations are written for an expected starting schema, so do not try to
+reach the same result by replaying the whole directory: a successful fresh
+install from `schema.sql` is not evidence that an older database has
+completed every upgrade step. The repository's schema-drift CI checks that a
+pinned historical baseline, upgraded with `migrate.sh`, converges with a
+fresh install.
+
+Docker Compose needs none of this: its `db-init` service runs
+`migrate.sh up` on every start, and adopts a volume created before the ledger
+automatically on its first start.
 
 ### After the organization-access upgrade: `tabular_review_legacy_shares`
 
@@ -511,8 +573,9 @@ commented `worker` service demonstrating this.
 ### Document lifecycle migration
 
 Apply `20260914_01_document_lifecycle.sql` before deploying the backend that uses
-its version RPCs. Fresh installs include it in `backend/schema.sql`; Compose's
-`db-init` service applies it during upgrades. Do not remove pending
+its version RPCs. Fresh installs include it in `backend/schema.sql`;
+`backend/scripts/migrate.sh up` and Compose's `db-init` service apply it
+during upgrades. Do not remove pending
 `document.cleanup` jobs: they retain the object keys needed to finish erasure.
 The migration makes both queue claim paths recover failed cleanup jobs, including
 ones rejected by an older worker during rollout, and exhausted stale claims.

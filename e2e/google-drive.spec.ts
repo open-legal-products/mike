@@ -103,7 +103,8 @@ test("Google Drive add, cancel and delete work like Slack", async ({
 
     await add.click();
     connected = true; // Represents the successful server-side code exchange.
-    await expect(drive.getByRole("button", { name: "Google Drive connector added" })).toBeDisabled();
+    // Once installed, the connector leaves Discover.
+    await expect(drive).toHaveCount(0);
     await installed.getByRole("button", { name: "Manage Google Drive" }).click();
     const dialog = page.getByRole("dialog", { name: "Google Drive", exact: true });
     await expect(dialog.getByText("Search files")).toBeVisible();

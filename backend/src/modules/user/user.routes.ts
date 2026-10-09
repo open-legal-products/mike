@@ -62,6 +62,7 @@ import {
     recordPasswordSet,
     refreshMcpConnectorTools,
     saveApiKey,
+    setApiKeyEnabled,
     setMcpToolEnabled,
     setMfaOnLogin,
     startMcpConnectorOAuth,
@@ -403,12 +404,45 @@ userRouter.put(
 
         const apiKey =
             typeof req.body?.api_key === "string" ? req.body.api_key : null;
+        const settings =
+            req.body && typeof req.body === "object"
+                ? (req.body as { settings?: unknown }).settings
+                : undefined;
         const db = createServerSupabase();
-        const result = await saveApiKey(db, { userId, provider, apiKey });
+        const result = await saveApiKey(db, {
+            userId,
+            provider,
+            apiKey,
+            settings,
+        });
         if (!result.ok) {
-            return void sendInternalError(res, result.error);
+            if (result.kind === "save_failed") {
+                return void sendInternalError(res, result.error);
+            }
+            return void res.status(400).json({ detail: result.detail });
         }
         res.json(result.status);
+    }),
+);
+
+// PATCH /user/api-keys/:provider — retain the key while disabling its provider.
+userRouter.patch(
+    "/api-keys/:provider",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const provider = normalizeApiKeyProvider(req.params.provider);
+        if (!provider || provider === "courtlistener" || typeof req.body?.enabled !== "boolean") {
+            return void res.status(400).json({ detail: "A supported provider and boolean enabled value are required." });
+        }
+        const result = await setApiKeyEnabled(
+            createServerSupabase(),
+            res.locals.userId as string,
+            provider,
+            req.body.enabled,
+        );
+        if (!result.ok) return sendServiceFailure(res, result);
+        res.json(result.data);
     }),
 );
 

@@ -34,7 +34,7 @@ function VisibleNoModelsWarning({
             title="No models available"
             message={
                 routerModelsMissing
-                    ? "Your router is connected, but it has no saved models. Add at least one under Bring Your Own Keys → Routers."
+                    ? "Your router is connected, but it has no saved models. Open your provider in Bring Your Own Keys and add a model under Model Selections."
                     : "Add an API key in Bring Your Own Keys before selecting a model."
             }
             icon={
@@ -44,11 +44,7 @@ function VisibleNoModelsWarning({
                 label: "Open Bring Your Own Keys",
                 onClick: () => {
                     onClose();
-                    router.push(
-                        routerModelsMissing
-                            ? "/settings/byok#routers"
-                            : "/settings/byok",
-                    );
+                    router.push("/settings/byok");
                 },
             }}
         />

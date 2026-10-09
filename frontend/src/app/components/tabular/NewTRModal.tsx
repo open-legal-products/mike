@@ -21,8 +21,9 @@ import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import {
     ModelToggle,
     type NoModelsReason,
-    type RouterSlug,
+    ROUTER_SLUGS,
 } from "../assistant/ModelToggle";
+import { routerModelsFromProfile } from "@/app/lib/routerModels";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
@@ -180,14 +181,10 @@ export function NewTRModal({
     useEffect(() => {
         if (!open || !profile?.tabularModel) return;
         const defaultModel = profile.tabularModel;
-        const router = (["openrouter", "vercel", "opencode-go"] as const).find(
+        const router = ROUTER_SLUGS.find(
             (slug) => defaultModel.startsWith(`${slug}/`),
         );
-        const selectedByRouter: Record<RouterSlug, string[]> = {
-            openrouter: profile.openRouterModels,
-            vercel: profile.vercelModels,
-            "opencode-go": profile.openCodeGoModels,
-        };
+        const selectedByRouter = routerModelsFromProfile(profile);
         const routerSelectionValid =
             !router ||
             selectedByRouter[router].includes(
@@ -569,9 +566,7 @@ export function NewTRModal({
                                 onChange={setSelectedModel}
                                 apiKeys={apiKeys}
                                 apiKeysLoading={profileLoading && !profile}
-                                openRouterModels={profile?.openRouterModels}
-                                vercelModels={profile?.vercelModels}
-                                openCodeGoModels={profile?.openCodeGoModels}
+                                routerModels={routerModelsFromProfile(profile)}
                                 onNoModelsClick={setNoModelsWarning}
                                 modalInput
                             />

@@ -11,6 +11,13 @@ import {
     type ReasoningLevel,
 } from "./llm";
 import {
+    azureCredentials,
+    azureFoundryCredentials,
+    bedrockCredentials,
+    customEndpointCredentials,
+    vertexCredentials,
+} from "./llm/cloudProviders";
+import {
     apiKeyForConfiguredModel,
     configuredModelRequiresApiKey,
     getConfiguredModel,
@@ -82,6 +89,7 @@ export function hasApiKeyForModel(
     apiKeys: UserApiKeys,
 ): boolean {
     const provider = providerForModel(model);
+    if (apiKeys.disabledProviders?.includes(provider)) return false;
     if (provider === "ollama") return true;
     if (provider === "openai-compatible") {
         const configured = getConfiguredModel(model);
@@ -90,6 +98,15 @@ export function hasApiKeyForModel(
             (!configuredModelRequiresApiKey(configured) ||
                 apiKeyForConfiguredModel(configured, apiKeys) !== null)
         );
+    }
+    if (provider === "bedrock") return bedrockCredentials(apiKeys) !== null;
+    if (provider === "azure") return azureCredentials(apiKeys) !== null;
+    if (provider === "azure-foundry") {
+        return azureFoundryCredentials(apiKeys) !== null;
+    }
+    if (provider === "vertex") return vertexCredentials(apiKeys) !== null;
+    if (provider === "custom") {
+        return customEndpointCredentials(apiKeys) !== null;
     }
     return !!apiKeys[provider]?.trim();
 }
@@ -140,6 +157,14 @@ export async function resolveEffectiveChatModel(args: {
                 "throw",
             );
             if (!hasApiKeyForModel(model, args.apiKeys)) {
+                if (args.apiKeys.disabledProviders?.includes(providerForModel(model))) {
+                    return {
+                        ok: false,
+                        status: 422,
+                        code: "model_unavailable",
+                        detail: "This model provider is turned off. Turn it on in Settings → Bring Your Own Keys or select another model.",
+                    };
+                }
                 return {
                     ok: false,
                     status: 422,
@@ -220,6 +245,12 @@ export function titleModelForChat(
         case "openrouter":
         case "vercel":
         case "opencode-go":
+        case "bedrock":
+        case "azure":
+        case "azure-foundry":
+        case "vertex":
+        case "xai":
+        case "custom":
         case "ollama":
         case "openai-compatible":
             return resolvedChatModel;

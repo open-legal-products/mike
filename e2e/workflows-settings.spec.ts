@@ -11,7 +11,7 @@
  *  - WorkflowDetailPage save status: text "Saving…" → "Saved" rendered in a plain <span>
  *  - settings/page.tsx: h2 "Profile"; display name autosaves on blur
  *  - settings/layout.tsx: h1 "Settings" in layout header
- *  - settings/models/page.tsx: h2 "API Keys"; label texts include "Anthropic (Claude) API Key" etc.
+ *  - settings/byok/page.tsx: provider cards open dialogs with individually labelled key fields.
  */
 import { test, expect, type Page } from "./fixtures";
 
@@ -301,9 +301,9 @@ test.describe("Settings", () => {
         }).toPass({ timeout: 90_000 });
     });
 
-    /* ── Test 7: API keys page loads and shows all three provider sections ── */
+    /* ── Test 7: BYOK provider cards and key dialogs ── */
 
-    test("API keys page loads and shows Anthropic, Google, and OpenAI sections", async ({
+    test("API keys page shows provider cards and opens key dialogs", async ({
         page,
     }) => {
         // API keys were split out of /settings/models into their own settings
@@ -316,22 +316,42 @@ test.describe("Settings", () => {
             page.getByRole("heading", { name: "Settings" }),
         ).toBeVisible({ timeout: 10_000 });
 
-        // The h2 "API Keys" section is present
-        // REGRESSION: fails if the /settings/byok page is broken or the API Keys section is removed
+        // The h2 "Saved Providers" and "Available Providers" sections are present
+        // REGRESSION: fails if the /settings/byok page is broken or its provider sections are removed
         await expect(
-            page.getByRole("heading", { name: "API Keys" }),
+            page.getByRole("heading", { name: "Saved Providers" }),
         ).toBeVisible({ timeout: 10_000 });
 
-        // All three provider label texts (from MODEL_API_KEY_FIELDS in api-keys/page.tsx) must appear
-        // REGRESSION: fails if any provider section is removed from the API keys page
-        await expect(
-            page.getByText("Anthropic (Claude) API Key"),
-        ).toBeVisible({ timeout: 10_000 });
-        await expect(page.getByText("Google (Gemini) API Key")).toBeVisible({
-            timeout: 10_000,
-        });
-        await expect(page.getByText("OpenAI API Key")).toBeVisible({
-            timeout: 10_000,
-        });
+        for (const [provider, label] of [
+            ["Anthropic (Claude)", "Anthropic (Claude) API Key"],
+            ["Google (Gemini)", "Google (Gemini) API Key"],
+            ["OpenAI", "OpenAI API Key"],
+            ["Amazon Bedrock", "Amazon Bedrock API Key"],
+            ["Azure OpenAI", "Azure OpenAI API Key"],
+            ["Azure AI Foundry", "Azure AI Foundry API Key"],
+            ["Google Vertex AI", "Google Vertex AI service-account key"],
+            ["xAI", "xAI API Key"],
+            ["OpenAI-compatible endpoint", "OpenAI-compatible endpoint API Key"],
+        ]) {
+            // No key is saved here, so each provider opens from its Add
+            // button. Exact: "Add OpenAI" is also the start of the
+            // OpenAI-compatible endpoint's button name.
+            const card = page.getByRole("button", {
+                name: `Add ${provider}`,
+                exact: true,
+            });
+            await expect(card).toBeVisible();
+            await card.click();
+            const dialog = page.getByRole("dialog", {
+                name: provider,
+                exact: true,
+            });
+            await expect(dialog).toBeVisible();
+            await expect(dialog.getByLabel(label, { exact: true })).toBeVisible();
+            await page.keyboard.press("Escape");
+            await expect(dialog).toBeHidden();
+            await expect(card).toBeFocused();
+        }
+
     });
 });

@@ -38,6 +38,7 @@ import {
     type NoModelsReason,
     type ReasoningLevel,
 } from "./ModelToggle";
+import { routerModelsFromProfile } from "@/app/lib/routerModels";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { WarningPopup } from "../popups/WarningPopup";
 import {
@@ -206,11 +207,7 @@ function ChatInputForChatImpl(
         lastSelectedModel: profile?.lastSelectedChatModel,
         routerSelections:
             profile && !apiKeysDegraded
-                ? {
-                  openRouterModels: profile.openRouterModels,
-                  vercelModels: profile.vercelModels,
-                  openCodeGoModels: profile.openCodeGoModels,
-                  }
+                ? routerModelsFromProfile(profile)
                 : null,
         apiKeys: apiKeysDegraded ? undefined : profile?.apiKeys,
         configuredModelIds,
@@ -884,9 +881,7 @@ function ChatInputForChatImpl(
                                     apiKeysLoading={
                                         profileLoading && !profile
                                     }
-                                    openRouterModels={profile?.openRouterModels}
-                                    vercelModels={profile?.vercelModels}
-                                    openCodeGoModels={profile?.openCodeGoModels}
+                                    routerModels={routerModelsFromProfile(profile)}
                                     compact={compactControls}
                                     triggerClassName={cn(
                                         "h-7.5",

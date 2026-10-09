@@ -30,7 +30,7 @@ export interface ModelToggleOption {
   id: string;
   label: string;
   group: ModelToggleGroup;
-  /** Execution path shown when the same model is available more than once. */
+  /** Provider route; direct/local/configured sources only show for duplicates. */
   source?: string;
 }
 
@@ -63,7 +63,23 @@ const ALWAYS_REASONING_LEVELS: readonly ReasoningLevel[] =
 export function reasoningLevelsForModel(
   modelId: string,
 ): readonly ReasoningLevel[] {
-  const catalogId = modelId.replace(/^(?:openrouter|vercel)\//, "");
+  const catalogId = modelId.startsWith("bedrock/")
+    ? // Bedrock names Claude "anthropic.claude-…", optionally behind a
+      // cross-region inference-profile prefix ("us.", "us-gov.") or at the
+      // end of an inference-profile ARN, after its last "/".
+      modelId
+        .split("/")
+        .at(-1)!
+        .replace(/^(?:[a-z]+(?:-[a-z]+)*\.)?anthropic\./, "")
+    : modelId
+        .replace(/^(?:openrouter|vercel)\//, "")
+        // An explicit protocol is not part of the model name.
+        .replace(
+          /^((?:vertex|azure-foundry)\/)(?:anthropic|openai|gemini):/,
+          "$1",
+        )
+        // Vertex pins Claude versions as "claude-opus-5-5@20260101".
+        .replace(/^(vertex\/[^@]+)@/, "$1-");
   // Astra, Sol 6.1, and current Fable/Opus cannot disable thinking.
   if (
     /(?:^|\/)(?:gpt-6-astra|gpt-6\.1-sol|claude-fable-5-1|claude-opus-5-5)(?:$|-)/.test(
@@ -113,6 +129,7 @@ export const MODEL_TOGGLE_GROUPS: readonly ModelToggleGroup[] = [
   "DeepSeek",
   "Xiaomi",
   "Mistral AI",
+  "xAI",
   "Configured",
   "Local",
   "Other providers",
@@ -308,18 +325,24 @@ export function ModelToggleUI({
                         aria-hidden="true"
                         className="h-1 w-1 shrink-0 rounded-full bg-gray-400/80"
                       />
-                      <span className="flex-1">{model.label}</span>
+                      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                        {model.label}
+                      </span>
+                      {model.id === value && (
+                        <Check
+                          aria-hidden="true"
+                          className="ml-1 h-3.5 w-3.5 shrink-0 text-gray-600"
+                        />
+                      )}
                       {model.source &&
-                        (routeCounts.get(
-                          `${model.group}\u0000${model.label.toLocaleLowerCase()}`,
-                        ) ?? 0) > 1 && (
-                          <span className="text-[9px] font-medium text-gray-400">
+                        (!["Direct", "Local", "Configured"].includes(model.source) ||
+                          (routeCounts.get(
+                            `${model.group}\u0000${model.label.toLocaleLowerCase()}`,
+                          ) ?? 0) > 1) && (
+                          <span className="shrink-0 text-right text-[10px] font-medium text-gray-400">
                             {model.source}
                           </span>
                         )}
-                      {model.id === value && (
-                        <Check className="ml-1 h-3.5 w-3.5 text-gray-600" />
-                      )}
                     </DropdownItem>
                   ))}
               </React.Fragment>

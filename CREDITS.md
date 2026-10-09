@@ -35,6 +35,7 @@ infrastructure, and development workflow, including optional local integrations.
 | [Tailwind CSS](https://tailwindcss.com/) | Shared styling and design tokens. |
 | [shadcn/ui](https://ui.shadcn.com/) and [Radix Primitives](https://www.radix-ui.com/primitives) | Reusable interface components and accessible interactions. |
 | [Lucide](https://lucide.dev/) | Interface icons. |
+| [Lobe Icons](https://github.com/lobehub/lobe-icons) | Provider logos vendored from `@lobehub/icons-static-svg` 1.95.1 (MIT); license in `frontend/public/icons/providers/`. Brand marks belong to their respective owners. |
 | [Tiptap](https://github.com/ueberdosis/tiptap) and [ProseMirror](https://prosemirror.net/) | Rich-text editing in the web app and Word add-in. |
 | [react-markdown](https://github.com/remarkjs/react-markdown), [remark](https://github.com/remarkjs/remark), and [rehype](https://github.com/rehypejs/rehype) | Rendering Markdown, tables, and formatted assistant responses. |
 | [Marked](https://github.com/markedjs/marked) | Markdown parsing. |

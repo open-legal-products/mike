@@ -223,7 +223,7 @@ export function NewWorkflowModal({
         disabled: creating,
       }}
     >
-      <div className="min-h-0 flex-1 overflow-y-auto pb-5">
+      <div data-modal-scroll="vertical" className="min-h-0 flex-1 overflow-y-auto pb-5">
         <div className="space-y-6">
           <div>
             <ModalFieldLabel htmlFor="new-workflow-title">

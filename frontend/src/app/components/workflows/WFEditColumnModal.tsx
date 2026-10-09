@@ -135,7 +135,7 @@ export function WFEditColumnModal({ column, onClose, onSave, onDelete }: Props) 
                 onSubmit={handleSubmit}
                 className="flex min-h-0 flex-1 flex-col"
             >
-                <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-5 pt-2">
+                <div data-modal-scroll="vertical" className="min-h-0 flex-1 overflow-y-auto pb-5 pt-2">
                         <FieldLabel htmlFor="workflow-column-name">
                             Column title
                         </FieldLabel>

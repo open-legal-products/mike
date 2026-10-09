@@ -27,6 +27,7 @@ describe("withPrefixCacheHints", () => {
     });
     expect(hints.providerOptions).toEqual({
       openai: { promptCacheKey: "chat-1" },
+      azure: { promptCacheKey: "chat-1" },
     });
     // Only the final message carries the breakpoint: Anthropic caches
     // everything before it, and an earlier breakpoint would be wasted.
@@ -38,5 +39,24 @@ describe("withPrefixCacheHints", () => {
       content: "question",
       providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
     });
+  });
+
+  it("adds a Bedrock cache point only when the adapter asks for one", () => {
+    const params = {
+      model: "bedrock/us.anthropic.claude-opus-5-5",
+      systemPrompt: "s",
+      messages,
+      conversationId: "chat-1",
+    };
+    expect(
+      withPrefixCacheHints(params, { bedrockCachePoint: true }).messages.at(-1)
+        ?.providerOptions,
+    ).toEqual({
+      anthropic: { cacheControl: { type: "ephemeral" } },
+      bedrock: { cachePoint: { type: "default" } },
+    });
+    expect(
+      withPrefixCacheHints(params).messages.at(-1)?.providerOptions,
+    ).not.toHaveProperty("bedrock");
   });
 });

@@ -559,9 +559,10 @@ describe("ConnectorsPage suggested connectors", () => {
         expect(startMcpConnectorOAuth).toHaveBeenCalledWith("notion-1");
         expect(refreshMcpConnectorTools).toHaveBeenCalledTimes(1);
         expect(screen.queryByText("Connector added")).toBeNull();
+        // Once installed, the preset leaves Discover.
         expect(
-            screen.getByRole("button", { name: "Notion connector added" }),
-        ).toBeDisabled();
+            screen.queryByRole("button", { name: "Add Notion connector" }),
+        ).toBeNull();
     });
 
     it("adds the Airtable DCR preset with one click", async () => {
@@ -598,9 +599,10 @@ describe("ConnectorsPage suggested connectors", () => {
         });
         expect(startMcpConnectorOAuth).toHaveBeenCalledWith("airtable-1");
         expect(refreshMcpConnectorTools).toHaveBeenCalledTimes(1);
+        // Once installed, the preset leaves Discover.
         expect(
-            screen.getByRole("button", { name: "Airtable connector added" }),
-        ).toBeDisabled();
+            screen.queryByRole("button", { name: "Add Airtable connector" }),
+        ).toBeNull();
     });
 
     it("adds the Linear DCR preset with one click", async () => {
@@ -652,9 +654,10 @@ describe("ConnectorsPage suggested connectors", () => {
         expect(startMcpConnectorOAuth).toHaveBeenCalledWith("linear-1");
         expect(popupClose).toHaveBeenCalled();
         expect(screen.queryByText("New Custom Connector")).toBeNull();
+        // Once installed, the preset leaves Discover.
         expect(
-            screen.getByRole("button", { name: "Linear connector added" }),
-        ).toBeDisabled();
+            screen.queryByRole("button", { name: "Add Linear connector" }),
+        ).toBeNull();
     });
 
     it("does not offer to add a preset that is already configured", async () => {
@@ -670,9 +673,10 @@ describe("ConnectorsPage suggested connectors", () => {
             await flushMicrotasks();
         });
 
+        // Once installed, the preset leaves Discover.
         expect(
-            screen.getByRole("button", { name: "Notion connector added" }),
-        ).toBeDisabled();
+            screen.queryByRole("button", { name: "Add Notion connector" }),
+        ).toBeNull();
         expect(createMcpConnector).not.toHaveBeenCalled();
         expect(
             screen.getByRole("switch", { name: "My Notion connector" }),
@@ -930,7 +934,7 @@ describe("Google Drive connection lifecycle", () => {
         expect(window.open).not.toHaveBeenCalled();
     });
 
-    it("shows Adding, then Cancel, and becomes an installed connector like Slack", async () => {
+    it("shows Adding, then Cancel, and moves from Discover to Installed like Slack", async () => {
         let resolveStart!: (value: { authorizationUrl: string }) => void;
         vi.mocked(startGoogleDriveOAuth).mockReturnValue(
             new Promise((resolve) => {
@@ -966,10 +970,10 @@ describe("Google Drive connection lifecycle", () => {
 
         expect(cancelGoogleDriveOAuth).not.toHaveBeenCalled();
         expect(
-            discover().getByRole("button", {
-                name: "Google Drive connector added",
+            discover().queryByRole("button", {
+                name: "Add Google Drive connector",
             }),
-        ).toBeDisabled();
+        ).toBeNull();
         expect(
             installed().getByRole("switch", { name: "Google Drive connector" }),
         ).toHaveAttribute("aria-checked", "true");

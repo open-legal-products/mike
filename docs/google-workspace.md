@@ -21,7 +21,7 @@ Gmail Trash is recoverable through Gmail; permanently deleting received/sent mai
 
 ## Operator setup
 
-1. Apply `backend/migrations/20260922_01_google_workspace.sql`, `backend/migrations/20261001_01_connector_write_access.sql`, and `backend/migrations/20261002_03_connector_read_only.sql` to the intended deployment after the Drive migration. Fresh installs include their final schema in `backend/schema.sql`; Compose's db-init replays these migrations. No remote database changes are performed by the tests below.
+1. Apply `backend/migrations/20260922_01_google_workspace.sql`, `backend/migrations/20261001_01_connector_write_access.sql`, and `backend/migrations/20261002_03_connector_read_only.sql` to the intended deployment after the Drive migration. Fresh installs include their final schema in `backend/schema.sql`; Compose's db-init applies them with `backend/scripts/migrate.sh`. No remote database changes are performed by the tests below.
 2. Enable **Gmail API** (`gmail.googleapis.com`) and **Google Calendar API** (`calendar-json.googleapis.com`) in the OAuth client's Google Cloud project. These are the REST APIs, not the Google MCP preview services.
 3. Configure a Web application OAuth client. The existing Drive client may be reused. Register these exact local redirect URIs:
 

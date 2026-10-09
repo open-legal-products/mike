@@ -73,12 +73,17 @@ export function stopNotice(
   return "";
 }
 
-/** Ensure a proxy-closed final SSE event is still visible to SDK parsers. */
+/**
+ * Ensure a proxy-closed final SSE event is still visible to SDK parsers.
+ * `baseFetch` replaces the global fetch for endpoints that need guarded
+ * egress (a user-supplied base URL).
+ */
 export async function aiSdkFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
+  baseFetch?: typeof fetch,
 ): Promise<Response> {
-  const response = await fetch(input, init);
+  const response = await (baseFetch ?? fetch)(input, init);
   if (
     !response.body ||
     !response.headers.get("content-type")?.includes("text/event-stream")
@@ -208,6 +213,8 @@ export type AiSdkAdapterConfig = {
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
   courtlistenerCitationReminder?: boolean;
+  /** Mark the prefix-cache breakpoint with a Bedrock cache point as well. */
+  bedrockCachePoint?: boolean;
 };
 
 type PendingToolExecution = {
@@ -346,12 +353,18 @@ function usesCourtlistenerTool(
  * covers the system prompt, tool definitions, and every earlier turn, and
  * the next request hits that prefix as long as it is byte-identical.
  * Providers ignore namespaces they do not own, so both hints are sent.
+ * Azure OpenAI reads the OpenAI hint from its own `azure` namespace. Bedrock
+ * caches at an explicit cache point too, but most Bedrock models reject one,
+ * so that marker is added only when the adapter asks for it.
  */
 type StreamTextProviderOptions = NonNullable<
   Parameters<typeof AiSdk.streamText>[0]["providerOptions"]
 >;
 
-export function withPrefixCacheHints(params: StreamChatParams): {
+export function withPrefixCacheHints(
+  params: StreamChatParams,
+  options: { bedrockCachePoint?: boolean } = {},
+): {
   messages: AiSdk.ModelMessage[];
   providerOptions?: StreamTextProviderOptions;
 } {
@@ -361,6 +374,9 @@ export function withPrefixCacheHints(params: StreamChatParams): {
   const last = params.messages.length - 1;
   const breakpoint = {
     anthropic: { cacheControl: { type: "ephemeral" } },
+    ...(options.bedrockCachePoint
+      ? { bedrock: { cachePoint: { type: "default" } } }
+      : {}),
   };
   return {
     messages: params.messages.map((message, index): AiSdk.ModelMessage => {
@@ -371,6 +387,7 @@ export function withPrefixCacheHints(params: StreamChatParams): {
     }),
     providerOptions: {
       openai: { promptCacheKey: params.conversationId },
+      azure: { promptCacheKey: params.conversationId },
     },
   };
 }
@@ -407,7 +424,9 @@ export async function streamAiSdk(
             : e.message,
           { cause: e },
         );
-  const cacheHints = withPrefixCacheHints(params);
+  const cacheHints = withPrefixCacheHints(params, {
+    bedrockCachePoint: config.bedrockCachePoint,
+  });
   const providerOptions: StreamTextProviderOptions = {
     ...(cacheHints.providerOptions ?? {}),
     ...(config.provider === "openrouter"

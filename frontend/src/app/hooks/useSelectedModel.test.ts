@@ -12,13 +12,19 @@ const keys: ApiKeyState = {
     openrouter: { configured: true, source: "user" },
     vercel: { configured: false, source: null },
     "opencode-go": { configured: false, source: null },
+    bedrock: { configured: true, source: "user" },
+    azure: { configured: false, source: null },
+    "azure-foundry": { configured: false, source: null },
+    vertex: { configured: true, source: "user" },
+    xai: { configured: false, source: null },
+    custom: { configured: false, source: null },
     courtlistener: { configured: false, source: null },
 };
 
 const routerSelections = {
-    openRouterModels: ["openai/gpt-5.4"],
-    vercelModels: [],
-    openCodeGoModels: [],
+    openrouter: ["openai/gpt-5.4"],
+    vercel: [],
+    "opencode-go": [],
 };
 
 describe("useSelectedModel", () => {
@@ -47,6 +53,25 @@ describe("useSelectedModel", () => {
             }),
         );
         expect(result.current[0]).toBe("gpt-6-luna");
+    });
+
+    it("restores a saved Bedrock model only while it is in the saved list", () => {
+        const bedrockModel = "bedrock/us.anthropic.claude-opus-5-5";
+        const selected = (bedrockModels: string[]) =>
+            renderHook(() =>
+                useSelectedModel({
+                    chatModel: bedrockModel,
+                    lastSelectedModel: "gpt-6-luna",
+                    routerSelections: {
+                        ...routerSelections,
+                        bedrock: bedrockModels,
+                    },
+                    apiKeys: keys,
+                }),
+            ).result.current[0];
+
+        expect(selected(["us.anthropic.claude-opus-5-5"])).toBe(bedrockModel);
+        expect(selected([])).toBe("gpt-6-luna");
     });
 
     it("keeps an explicit selection in component state only", () => {

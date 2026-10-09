@@ -50,6 +50,7 @@ export {
 } from "./user.profile";
 
 export { setMfaOnLogin } from "./user.mfa";
+export { setApiKeyEnabled } from "./user.apiKeyEnabled";
 
 export {
     getCustomInstructions,

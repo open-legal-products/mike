@@ -10,6 +10,8 @@ export default meta;
 
 const models: ModelToggleOption[] = [
     { id: "openai/gpt-5.6", label: "GPT-5.6", group: "OpenAI" },
+    { id: "openrouter/openai/gpt-4o", label: "GPT-4o", group: "OpenAI", source: "OpenRouter" },
+    { id: "azure/gpt-4o-mini", label: "GPT-4o Mini", group: "OpenAI", source: "Azure" },
     { id: "anthropic/claude-opus-4.1", label: "Claude Opus 4.1", group: "Anthropic" },
     { id: "anthropic/claude-sonnet-4.5", label: "Claude Sonnet 4.5", group: "Anthropic" },
     { id: "google/gemini-3-pro", label: "Gemini 3 Pro", group: "Google" },

@@ -17,7 +17,10 @@ import {
 } from "../../lib/llm/registry";
 import { getUserModelSettings } from "../user/user.service";
 import { resolveRequestedModel } from "../../lib/routerModels";
-import { TABULAR_MODEL_REQUIRED_DETAIL } from "../../lib/modelSelection";
+import {
+    TABULAR_MODEL_REQUIRED_DETAIL,
+    hasApiKeyForModel,
+} from "../../lib/modelSelection";
 import { UserFacingError } from "../../lib/userFacingError";
 import type { Db } from "../../lib/supabase";
 import type { ServiceFailure } from "../../lib/serviceResult";
@@ -111,6 +114,12 @@ function providerLabel(provider: Provider): string {
     if (provider === "openrouter") return "OpenRouter";
     if (provider === "vercel") return "Vercel AI Gateway";
     if (provider === "opencode-go") return "OpenCode Go";
+    if (provider === "bedrock") return "Amazon Bedrock";
+    if (provider === "azure") return "Azure OpenAI";
+    if (provider === "azure-foundry") return "Azure AI Foundry";
+    if (provider === "vertex") return "Google Vertex AI";
+    if (provider === "xai") return "xAI";
+    if (provider === "custom") return "OpenAI-compatible endpoint";
     if (provider === "ollama") return "Local (Ollama)";
     if (provider === "openai-compatible") return "Configured endpoint";
     return "Gemini";
@@ -139,7 +148,16 @@ export function missingModelApiKey(
             detail: `An API key is required to use ${configured.label || model}. Add the configured key or select a different tabular review model.`,
         };
     }
-    if (apiKeys[provider]?.trim()) return null;
+    // The same check chat uses: a key that needs a region, endpoint,
+    // location or base URL only counts together with it.
+    if (hasApiKeyForModel(model, apiKeys)) return null;
+    if (apiKeys.disabledProviders?.includes(provider)) {
+        return {
+            provider,
+            model,
+            detail: `${providerLabel(provider)} is turned off. Turn it on in Settings → Bring Your Own Keys or select a different tabular review model.`,
+        };
+    }
     return {
         provider,
         model,

@@ -88,6 +88,7 @@ import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { ModelToggle, type NoModelsReason } from "../assistant/ModelToggle";
+import { routerModelsFromProfile } from "@/app/lib/routerModels";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
@@ -1499,13 +1500,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                             apiKeysLoading={
                                                 profileLoading && !profile
                                             }
-                                            openRouterModels={
-                                                profile?.openRouterModels
-                                            }
-                                            vercelModels={profile?.vercelModels}
-                                            openCodeGoModels={
-                                                profile?.openCodeGoModels
-                                            }
+                                            routerModels={routerModelsFromProfile(profile)}
                                             onNoModelsClick={setNoModelsWarning}
                                         />
                                     ),

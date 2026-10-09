@@ -188,7 +188,7 @@ export function WorkflowDetailsModal({
               }
         }
       >
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-5">
+        <div data-modal-scroll="vertical" className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-5">
           <div className="space-y-6">
             <div>
               <ModalFieldLabel htmlFor="workflow-details-title">

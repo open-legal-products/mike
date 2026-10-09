@@ -34,7 +34,9 @@ authentication links expire and may only be usable once.
 For a secure email change, Supabase sends messages to both the current and new
 addresses. The change remains pending until both messages are confirmed. If an
 email change succeeds in Auth but the profile still shows the old address,
-verify that the latest database migration has been applied.
+verify that the latest database migration has been applied
+(`backend/scripts/migrate.sh status`; see "Database setup" in
+`docs/deployment.md`).
 
 ## Port 54322 is already allocated
 
