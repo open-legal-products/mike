@@ -10,6 +10,11 @@ import {
 } from "@/shared/ui/ModelToggleUI";
 import { isModelAvailable } from "@/app/lib/modelAvailability";
 import type { ApiKeyState } from "@/app/lib/mikeApi";
+import {
+  ROUTER_SLUGS,
+  type RouterModelSelections,
+  type RouterSlug,
+} from "@/app/lib/routerModels";
 import { useOllamaModels } from "@/app/hooks/useOllamaModels";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
@@ -17,23 +22,17 @@ export type ModelOption = ModelToggleOption;
 export type { ReasoningLevel };
 
 export const MODELS: ModelOption[] = [
-  { id: "claude-fable-5", label: "Claude Fable 5", group: "Anthropic" },
-  { id: "claude-opus-5", label: "Claude Opus 5", group: "Anthropic" },
-  { id: "claude-sonnet-5", label: "Claude Sonnet 5", group: "Anthropic" },
-  { id: "claude-opus-4-8", label: "Claude Opus 4.8", group: "Anthropic" },
-  { id: "claude-opus-4-7", label: "Claude Opus 4.7", group: "Anthropic" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", group: "Anthropic" },
-  { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", group: "Google" },
-  { id: "gemini-3.6-flash", label: "Gemini 3.6 Flash", group: "Google" },
-  { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash", group: "Google" },
-  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", group: "Google" },
-  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash", group: "Google" },
-  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", group: "OpenAI" },
-  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", group: "OpenAI" },
-  { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", group: "OpenAI" },
-  { id: "gpt-5.5", label: "GPT-5.5", group: "OpenAI" },
-  { id: "gpt-5.4", label: "GPT-5.4", group: "OpenAI" },
-  // Local (Ollama) models are appended dynamically — see useOllamaModels.
+  { id: "claude-fable-5-1", label: "Claude Fable 5.1", group: "Anthropic" },
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5", group: "Anthropic" },
+  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", group: "Anthropic" },
+  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", group: "Google" },
+  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro (Preview)", group: "Google" },
+  { id: "gpt-6-astra", label: "GPT-6 Astra", group: "OpenAI" },
+  { id: "gpt-6.1-sol", label: "GPT-6.1 Sol", group: "OpenAI" },
+  { id: "gpt-6-luna", label: "GPT-6 Luna", group: "OpenAI" },
+  { id: "mistral-large-4", label: "Mistral Large 4 (Preview)", group: "Mistral AI" },
+  { id: "mistral-medium-3-5", label: "Mistral Medium 3.5", group: "Mistral AI" },
+  { id: "mistral-small-2603", label: "Mistral Small 4", group: "Mistral AI" },
 ];
 
 export const SETTINGS_MODELS: ModelOption[] = [
@@ -44,12 +43,6 @@ export const SETTINGS_MODELS: ModelOption[] = [
     label: "Gemini 3.5 Flash-Lite",
     group: "Google",
   },
-  {
-    id: "gemini-3.1-flash-lite",
-    label: "Gemini 3.1 Flash-Lite",
-    group: "Google",
-  },
-  { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", group: "OpenAI" },
 ];
 
 for (const model of MODELS) model.source = "Direct";
@@ -64,8 +57,25 @@ export const ALLOWED_MODEL_IDS = new Set(MODELS.map((m) => m.id));
 // them on read keeps an old saved value working instead of orphaning it.
 // Kept in sync with backend/src/lib/llm/models.ts LEGACY_MODEL_IDS.
 export const LEGACY_MODEL_IDS: Record<string, string> = {
+  "claude-fable-5": "claude-fable-5-1",
+  "claude-opus-5": "claude-opus-5-5",
+  "claude-opus-4-8": "claude-opus-5-5",
+  "claude-opus-4-7": "claude-opus-5-5",
+  "claude-sonnet-5": "claude-sonnet-5-5",
+  "claude-sonnet-4-6": "claude-sonnet-5-5",
+  "gemini-3.7-flash": "gemini-3.8-flash",
+  "gemini-3.6-flash": "gemini-3.8-flash",
+  "gemini-3.5-flash": "gemini-3.8-flash",
+  "gemini-3-flash-preview": "gemini-3.8-flash",
+  "gemini-3.1-flash-lite": "gemini-3.5-flash-lite",
   "gemini-3.1-flash-lite-preview": "gemini-3.5-flash-lite",
-  "gpt-5.4-lite": "gpt-5.4-mini",
+  "gpt-5.6-sol": "gpt-6-astra",
+  "gpt-5.6-terra": "gpt-6.1-sol",
+  "gpt-5.6-luna": "gpt-6-luna",
+  "gpt-5.5": "gpt-6.1-sol",
+  "gpt-5.4": "gpt-6.1-sol",
+  "gpt-5.4-mini": "gpt-6-luna",
+  "gpt-5.4-lite": "gpt-6-luna",
 };
 
 export function canonicalModelId(id: string): string {
@@ -81,7 +91,10 @@ const MODEL_NAME_ACRONYMS: Record<string, string> = {
 
 export function modelDisplayName(modelId: string): string {
   const normalized = modelId
-    .replace(/^(?:openrouter|vercel|opencode-go|ollama)\//, "")
+    .replace(
+      /^(?:openrouter|vercel|opencode-go|bedrock|azure-foundry|azure|vertex|xai|custom|ollama)\//,
+      "",
+    )
     .split("/")
     .at(-1)!
     .replace(/(\d)-(\d)/g, "$1.$2");
@@ -107,12 +120,16 @@ export function modelDisplayName(modelId: string): string {
   return `${label} (${variantLabel})`;
 }
 
-/**
- * Router slugs, which double as model-id prefixes and API-key provider names.
- * Kept in sync with backend/src/lib/routerModels.ts ROUTER_SLUGS.
- */
-export const ROUTER_SLUGS = ["openrouter", "vercel", "opencode-go"] as const;
-export type RouterSlug = (typeof ROUTER_SLUGS)[number];
+export {
+  ROUTER_PROFILE_FIELDS,
+  ROUTER_SLUGS,
+  routerModelsFromProfile,
+  type RouterModelSelections,
+  type RouterProfileField,
+  type RouterSlug,
+} from "@/app/lib/routerModels";
+
+const NO_ROUTER_MODELS: RouterModelSelections = {};
 
 const ROUTER_VENDOR_GROUPS: Record<string, string> = {
   anthropic: "Anthropic",
@@ -135,6 +152,10 @@ const ROUTER_VENDOR_GROUPS: Record<string, string> = {
   mimo: "Xiaomi",
   mistral: "Mistral AI",
   mistralai: "Mistral AI",
+  meta: "Meta",
+  amazon: "Amazon",
+  xai: "xAI",
+  grok: "xAI",
 };
 
 /** Model maker used for grouping; the router remains a separate source. */
@@ -178,13 +199,14 @@ interface Props {
   /** True while the profile is still loading: render a neutral disabled
    *  trigger instead of flashing "No Models" on every page load. */
   apiKeysLoading?: boolean;
-  openRouterModels?: string[];
-  vercelModels?: string[];
-  openCodeGoModels?: string[];
+  /** The user's saved models, per router. */
+  routerModels?: RouterModelSelections;
   compact?: boolean;
   tone?: "muted" | "default";
   /** Render as a full-width liquid-glass control inside a modal form. */
   modalInput?: boolean;
+  /** Extra classes for the compact trigger button, for a host row's sizing. */
+  triggerClassName?: string;
   onNoModelsClick?: (reason: NoModelsReason) => void;
   reasoningLevel?: ReasoningLevel;
   onReasoningChange?: (level: ReasoningLevel) => void;
@@ -218,7 +240,123 @@ export function vercelModelOptions(models: string[]): ModelOption[] {
     id: `vercel/${model}`,
     label: modelDisplayName(model),
     group: underlyingProviderGroup(model, "vercel"),
-    source: "Vercel AI Gateway",
+    source: "Vercel",
+  }));
+}
+
+// Bedrock's cross-region inference-profile prefixes ("us.anthropic.claude-…").
+const BEDROCK_GEO_PREFIXES = new Set([
+  "us",
+  "us-gov",
+  "eu",
+  "apac",
+  "jp",
+  "au",
+  "ca",
+  "global",
+]);
+
+/**
+ * A Bedrock model id ("us.anthropic.claude-opus-5-5", "meta.llama4-v1:0", or
+ * an inference-profile ARN) as vendor/model, with the geo prefix and version
+ * suffix that only matter to AWS removed.
+ */
+export function bedrockCatalogModel(modelId: string): string {
+  const parts = modelId.split("/").at(-1)!.split(".");
+  if (parts.length > 2 && BEDROCK_GEO_PREFIXES.has(parts[0]!)) parts.shift();
+  if (parts.length < 2) return modelId;
+  const [vendor, ...rest] = parts;
+  const name = rest
+    .join(".")
+    .replace(/-v\d+(?::\d+)?$/, "")
+    .replace(/:\d+$/, "")
+    .replace(/-\d{8}$/, "");
+  return `${vendor}/${name}`;
+}
+
+export function bedrockModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => {
+    const catalogModel = bedrockCatalogModel(model);
+    return {
+      id: `bedrock/${model}`,
+      label: modelDisplayName(catalogModel),
+      group: underlyingProviderGroup(catalogModel, "bedrock"),
+      source: "Bedrock",
+    };
+  });
+}
+
+/** Azure deployments are named by their owner; the name is the label. */
+export function azureModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => ({
+    id: `azure/${model}`,
+    label: modelDisplayName(model),
+    group: underlyingProviderGroup(model, "azure"),
+    source: "Azure",
+  }));
+}
+
+/**
+ * Vertex and Foundry ids may state their wire protocol up front
+ * ("anthropic:prod-sonnet") when the name does not reveal it; that prefix is
+ * for the backend, not part of the model's name.
+ */
+export function withoutExplicitProtocol(modelId: string): string {
+  return modelId.replace(/^(?:anthropic|openai|gemini):/, "");
+}
+
+/** Foundry deployments are named by their owner too. */
+export function azureFoundryModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => {
+    const name = withoutExplicitProtocol(model);
+    return {
+      id: `azure-foundry/${model}`,
+      label: modelDisplayName(name),
+      group: underlyingProviderGroup(name, "azure-foundry"),
+      source: "Foundry",
+    };
+  });
+}
+
+/**
+ * A Vertex AI model id without the parts that only matter to Google: the
+ * version pin on Claude ("claude-opus-5-5@20260101") and the "-maas" suffix
+ * on partner models ("meta/llama-4-maverick-maas").
+ */
+export function vertexCatalogModel(modelId: string): string {
+  return withoutExplicitProtocol(modelId)
+    .replace(/@[^/]*$/, "")
+    .replace(/-maas$/, "");
+}
+
+export function vertexModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => {
+    const catalogModel = vertexCatalogModel(model);
+    return {
+      id: `vertex/${model}`,
+      label: modelDisplayName(catalogModel),
+      group: underlyingProviderGroup(catalogModel, "vertex"),
+      source: "Vertex",
+    };
+  });
+}
+
+export function xaiModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => ({
+    id: `xai/${model}`,
+    label: modelDisplayName(model),
+    group: "xAI",
+    source: "xAI",
+  }));
+}
+
+/** Models behind the user's own OpenAI-compatible endpoint. */
+export function customModelOptions(models: string[]): ModelOption[] {
+  return models.map((model) => ({
+    id: `custom/${model}`,
+    label: modelDisplayName(model),
+    group: underlyingProviderGroup(model, "custom"),
+    source: "Custom",
   }));
 }
 
@@ -227,8 +365,32 @@ export function openCodeGoModelOptions(models: string[]): ModelOption[] {
     id: `opencode-go/${model}`,
     label: modelDisplayName(model),
     group: underlyingProviderGroup(model, "opencode-go"),
-    source: "OpenCode Go",
+    source: "OpenCode",
   }));
+}
+
+const ROUTER_MODEL_OPTIONS: Record<
+  RouterSlug,
+  (models: string[]) => ModelOption[]
+> = {
+  openrouter: openRouterModelOptions,
+  vercel: vercelModelOptions,
+  "opencode-go": openCodeGoModelOptions,
+  bedrock: bedrockModelOptions,
+  azure: azureModelOptions,
+  "azure-foundry": azureFoundryModelOptions,
+  vertex: vertexModelOptions,
+  xai: xaiModelOptions,
+  custom: customModelOptions,
+};
+
+/** Picker options for every saved router model, in router order. */
+export function routerModelOptions(
+  selections: RouterModelSelections,
+): ModelOption[] {
+  return ROUTER_SLUGS.flatMap((slug) =>
+    ROUTER_MODEL_OPTIONS[slug](selections[slug] ?? []),
+  );
 }
 
 /** Deployment declarations override any static or router entry with the same id. */
@@ -248,12 +410,11 @@ export function ModelToggle({
   onChange,
   apiKeys,
   apiKeysLoading = false,
-  openRouterModels = [],
-  vercelModels = [],
-  openCodeGoModels = [],
+  routerModels = NO_ROUTER_MODELS,
   compact = false,
   tone,
   modalInput = false,
+  triggerClassName,
   onNoModelsClick,
   reasoningLevel,
   onReasoningChange,
@@ -262,9 +423,7 @@ export function ModelToggle({
   const configuredModels = useConfiguredModels();
   const models = mergeConfiguredModelOptions(configuredModels, [
     ...MODELS,
-    ...openRouterModelOptions(openRouterModels),
-    ...vercelModelOptions(vercelModels),
-    ...openCodeGoModelOptions(openCodeGoModels),
+    ...routerModelOptions(routerModels),
     ...ollamaModels.map((model) => ({
       ...model,
       label: modelDisplayName(model.id),
@@ -297,11 +456,7 @@ export function ModelToggle({
     ? (models.find((model) => model.id === value)?.label ?? "Select model")
     : (selected?.label ??
       (availableModels.length > 0 ? "Select model" : "No Models"));
-  const emptyReason = noModelsReason(apiKeys, {
-    openrouter: openRouterModels,
-    vercel: vercelModels,
-    "opencode-go": openCodeGoModels,
-  });
+  const emptyReason = noModelsReason(apiKeys, routerModels);
   return (
     <ModelToggleUI
       value={value}
@@ -313,6 +468,7 @@ export function ModelToggle({
       compact={compact}
       tone={tone}
       modalInput={modalInput}
+      triggerClassName={triggerClassName}
       emptyLabel="No Models"
       onEmptyClick={
         onNoModelsClick ? () => onNoModelsClick(emptyReason) : undefined

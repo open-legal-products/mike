@@ -1,22 +1,16 @@
 // Business logic + data-access for the audit module.
 //
-// Service layer behind audit.routes.ts. Both functions take an explicit
-// Supabase client (`db`) plus request-derived primitives, parse the caller's
-// filter, run the visibility-scoped query, and RETURN a `ServiceResult`.
-// They never touch req/res.
+// Service layer behind audit.routes.ts. listAuditEvents takes an explicit
+// Supabase client (`db`) plus request-derived primitives, parses the caller's
+// filter, runs the visibility-scoped query, and RETURNS a `ServiceResult`.
+// It never touches req/res.
 //
 // The query/CSV primitives themselves live in lib/auditExport because the
 // async "audit-csv" export job reuses them; they are re-exported by name here
 // so the module's facade is the one door into the audit surface.
 
 import type { Db } from "../../lib/supabase";
-import {
-  AUDIT_CSV_FILENAME,
-  AUDIT_EXPORT_LIMIT,
-  buildAuditCsv,
-  parseQuery,
-  queryEvents,
-} from "../../lib/auditExport";
+import { parseQuery, queryEvents } from "../../lib/auditExport";
 import {
   failure,
   internalFailure,
@@ -25,13 +19,10 @@ import {
 } from "../../lib/serviceResult";
 
 export {
-  buildAuditCsv,
   csvCell,
-  escapeLikePattern,
   parseQuery,
   queryEvents,
 } from "../../lib/auditExport";
-export type { AuditQuery, ParseQueryResult } from "../../lib/auditExport";
 
 export const PAGE_SIZE = 50;
 
@@ -41,8 +32,6 @@ export type AuditPage = {
   page: number;
   pageSize: number;
 };
-
-export type AuditCsv = { csv: string; filename: string };
 
 /**
  * One page of audit history: the caller's own events plus events in projects
@@ -72,30 +61,6 @@ export async function listAuditEvents(
     page: q.page,
     pageSize: PAGE_SIZE,
   });
-}
-
-/**
- * Synchronous CSV export of the same visibility-scoped history. buildAuditCsv
- * throws so the async "audit-csv" job can retry; here the throw is converted
- * into an internal failure, unwrapping `cause` so the log still carries the
- * PostgrestError's code/details/hint rather than only its message.
- */
-export async function exportAuditCsv(
-  db: Db,
-  args: {
-    userId: string;
-    email: string | undefined;
-    query: Record<string, unknown>;
-  },
-): Promise<ServiceResult<AuditCsv>> {
-  const parsed = parseQuery(args.query, AUDIT_EXPORT_LIMIT);
-  if (!parsed.ok) return failure("validation", parsed.error);
-  try {
-    const csv = await buildAuditCsv(db, args.userId, args.email, parsed.query);
-    return ok({ csv, filename: AUDIT_CSV_FILENAME });
-  } catch (err) {
-    return internalFailure(err instanceof Error && err.cause ? err.cause : err);
-  }
 }
 
 export { handleChatTurnAudit } from "./audit.jobs";

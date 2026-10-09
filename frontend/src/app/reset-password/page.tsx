@@ -4,14 +4,14 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { Input } from "@/app/components/ui/input";
+import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { SiteLogo } from "@/app/components/site-logo";
 import {
-    authGlassCardClassName,
-    authInputClassName,
-} from "@/app/components/auth/authStyles";
+    authGlassCardUIClassName,
+    authInputUIClassName,
+} from "@/shared/ui/AuthStylesUI";
 import {
     MIN_PASSWORD_LENGTH,
     minimumPasswordMessage,
@@ -100,7 +100,7 @@ function ResetPasswordContent() {
                 <SiteLogo size="lg" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className={authGlassCardClassName}>
+                <div className={authGlassCardUIClassName}>
                     {!displayedReady ? (
                         <div>
                             <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
@@ -166,7 +166,7 @@ function ResetPasswordContent() {
                                     <FieldLabel htmlFor="password">
                                         New password
                                     </FieldLabel>
-                                    <Input
+                                    <InputUI
                                         id="password"
                                         type="password"
                                         autoComplete="new-password"
@@ -175,14 +175,14 @@ function ResetPasswordContent() {
                                             setPassword(event.target.value)
                                         }
                                         required
-                                        className={`w-full ${authInputClassName}`}
+                                        className={`w-full ${authInputUIClassName}`}
                                     />
                                 </div>
                                 <div>
                                     <FieldLabel htmlFor="confirmPassword">
                                         Confirm new password
                                     </FieldLabel>
-                                    <Input
+                                    <InputUI
                                         id="confirmPassword"
                                         type="password"
                                         autoComplete="new-password"
@@ -193,7 +193,7 @@ function ResetPasswordContent() {
                                             )
                                         }
                                         required
-                                        className={`w-full ${authInputClassName}`}
+                                        className={`w-full ${authInputUIClassName}`}
                                     />
                                 </div>
                                 {error && (

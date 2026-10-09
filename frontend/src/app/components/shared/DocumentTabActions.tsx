@@ -17,13 +17,11 @@ import {
     Trash2,
 } from "lucide-react";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import type { HeaderActionsMenuItem } from "./HeaderActionsMenu";
@@ -205,7 +203,7 @@ export function DocumentTabActions({
             : undefined,
     });
     return (
-        <DropdownMenu
+        <Dropdown
             open={!!position}
             onOpenChange={(open) => {
                 if (!open) setPosition(null);
@@ -246,20 +244,20 @@ export function DocumentTabActions({
             })}
             {position &&
                 createPortal(
-                    <DropdownMenuTrigger asChild>
+                    <DropdownTrigger asChild>
                         <span
                             aria-hidden="true"
                             tabIndex={-1}
                             className="pointer-events-none fixed h-0 w-0"
                             style={{ left: position.x, top: position.y }}
                         />
-                    </DropdownMenuTrigger>,
+                    </DropdownTrigger>,
                     document.body,
                 )}
-            <LiquidDropdownContent
+            <DropdownContent
                 align="start"
                 sideOffset={0}
-                className="z-[160] w-44"
+                className="w-44"
                 onCloseAutoFocus={(event) => {
                     event.preventDefault();
                     if (!renaming) tabElement?.focus();
@@ -267,7 +265,7 @@ export function DocumentTabActions({
             >
                 {items.map(
                     ({ label, icon: Icon, onSelect, disabled, variant }) => (
-                        <LiquidDropdownItem
+                        <DropdownItem
                             key={label}
                             disabled={disabled}
                             variant={
@@ -294,16 +292,16 @@ export function DocumentTabActions({
                         >
                             {Icon && <Icon className="h-3.5 w-3.5" />}
                             {label}
-                        </LiquidDropdownItem>
+                        </DropdownItem>
                     ),
                 )}
-            </LiquidDropdownContent>
+            </DropdownContent>
             <WarningPopup
                 open={!!error}
                 title="File action failed"
                 message={error}
                 onClose={() => setError(null)}
             />
-        </DropdownMenu>
+        </Dropdown>
     );
 }

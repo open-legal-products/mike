@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
     AlertCircle,
+    AlertTriangle,
     Check,
     Download,
     Eye,
     Loader2,
     Pencil,
+    Plus,
     Trash2,
     Upload,
 } from "lucide-react";
@@ -25,6 +27,7 @@ import type { Document } from "@/app/components/shared/types";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { cn } from "@/app/lib/utils";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
+import { textLayerWarning } from "@/app/lib/textLayerWarning";
 import {
     LIQUID_FLOAT_PANEL_SURFACE_CLASS,
     LIQUID_GLASS_FLAT_CLASS,
@@ -77,6 +80,9 @@ interface DocumentSidePanelProps {
     canDelete?: boolean;
     onOwnerOnlyAction?: (action: string) => void;
     onDelete: (doc: Document) => Promise<void> | void;
+    /** Read-only panels only: copies the document into the caller's collection. */
+    onAdd?: (doc: Document) => void;
+    addLabel?: string;
 }
 
 export function DocumentSidePanel({
@@ -99,6 +105,8 @@ export function DocumentSidePanel({
     canDelete = true,
     onOwnerOnlyAction,
     onDelete,
+    onAdd,
+    addLabel = "Add",
 }: DocumentSidePanelProps) {
     const [mounted, setMounted] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -268,6 +276,12 @@ export function DocumentSidePanel({
         selectedVersion?.page_count === undefined
             ? doc.page_count
             : selectedVersion.page_count;
+    const selectedTextLayerWarning = textLayerWarning(
+        selectedPageCount,
+        selectedVersion?.textless_page_count === undefined
+            ? doc.textless_page_count
+            : selectedVersion.textless_page_count,
+    );
     const selectedVersionNumber =
         selectedVersion?.version_number ?? doc.active_version_number ?? null;
     const selectedUploadedAt = selectedVersion?.created_at ?? doc.created_at;
@@ -704,6 +718,12 @@ export function DocumentSidePanel({
                                         : "—"
                                 }
                             />
+                            {selectedTextLayerWarning && (
+                                <p className="flex items-start gap-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                                    {selectedTextLayerWarning}
+                                </p>
+                            )}
                         </div>
                     </div>
 
@@ -937,18 +957,35 @@ export function DocumentSidePanel({
                         className={cn(
                             "flex shrink-0 items-center justify-between py-3",
                             "bg-white/25",
+                            // No versions list fills the column, so the
+                            // actions are pinned to the bottom themselves.
+                            readOnly && "mt-auto",
                         )}
                     >
                         {readOnly ? (
-                            <PillButtonUI
-                                tone="white"
-                                size="normal"
-                                onClick={() => void onDownloadDocument(doc.id)}
-                                className="ml-auto"
-                            >
-                                <Download className="h-3.5 w-3.5 shrink-0" />
-                                Download
-                            </PillButtonUI>
+                            <>
+                                <PillButtonUI
+                                    tone="white"
+                                    size="normal"
+                                    onClick={() =>
+                                        void onDownloadDocument(doc.id)
+                                    }
+                                    className={onAdd ? undefined : "ml-auto"}
+                                >
+                                    <Download className="h-3.5 w-3.5 shrink-0" />
+                                    Download
+                                </PillButtonUI>
+                                {onAdd && (
+                                    <PillButtonUI
+                                        tone="blue"
+                                        size="normal"
+                                        onClick={() => onAdd(doc)}
+                                    >
+                                        <Plus className="h-3.5 w-3.5 shrink-0" />
+                                        {addLabel}
+                                    </PillButtonUI>
+                                )}
+                            </>
                         ) : (
                             <>
                                 <input

@@ -43,6 +43,9 @@
       "@mike/document-event-blocks-ui": [
         "../frontend/src/shared/ui/DocumentEventBlocksUI.tsx"
       ],
+      "@mike/input-ui": [
+        "../frontend/src/shared/ui/InputUI.tsx"
+      ],
       "@mike/glass-card-ui": [
         "../frontend/src/shared/ui/GlassCardUI.tsx"
       ],
@@ -62,7 +65,7 @@
         "../frontend/src/shared/ui/ToggleSwitchUI.tsx"
       ],
       "@mike/dropdown-ui": [
-        "../frontend/src/shared/ui/DropdownUI.tsx"
+        "../frontend/src/shared/ui/dropdown.tsx"
       ],
       "@mike/citation-pill-ui": [
         "../frontend/src/shared/ui/CitationPillUI.tsx"

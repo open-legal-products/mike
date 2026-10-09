@@ -220,7 +220,7 @@ function DocxViewContent(props: Props) {
                     <div className="absolute left-2 top-2 z-20 flex items-center gap-2 rounded-md bg-app-floating px-2 py-1 text-xs text-foreground shadow-sm">
                         <span>{warning}</span>
                         <button type="button" onClick={onWarningDismiss} aria-label="Dismiss warning"
-                            className="rounded px-1 focus-visible:outline-2 focus-visible:outline-ring">×</button>
+                            className="rounded px-1 focus-visible:outline-2 focus-visible:outline-blue-500/40">×</button>
                     </div>
                 )}
                 {pending && (

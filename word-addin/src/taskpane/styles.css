@@ -12,6 +12,7 @@
 @source "../../../frontend/src/shared/ui/PreResponseWrapperUI.tsx";
 @source "../../../frontend/src/shared/ui/DocumentEventBlocksUI.tsx";
 @source "../../../frontend/src/shared/ui/GlassCardUI.tsx";
+@source "../../../frontend/src/shared/ui/InputUI.tsx";
 @source "../../../frontend/src/shared/ui/GlassIconButtonUI.tsx";
 @source "../../../frontend/src/shared/ui/ModalUI.tsx";
 @source "../../../frontend/src/shared/ui/CloseButton.tsx";
@@ -23,7 +24,7 @@
 @source "../../../frontend/src/shared/ui/TextButtonUI.styles.ts";
 @source "../../../frontend/src/shared/ui/TextSlabUI.tsx";
 @source "../../../frontend/src/shared/ui/ToggleSwitchUI.tsx";
-@source "../../../frontend/src/shared/ui/DropdownUI.tsx";
+@source "../../../frontend/src/shared/ui/dropdown.tsx";
 @source "../../../frontend/src/shared/ui/CitationPillUI.tsx";
 @source "../../../frontend/src/shared/ui/ModelToggleUI.tsx";
 @source "../../../frontend/src/shared/ui/MikeIconUI.tsx";

@@ -49,6 +49,9 @@ jobs:
   dependency-audit:
     runs-on: ubuntu-latest
     strategy:
+      # Report every affected workspace; one vulnerable tree must not cancel
+      # the remaining audits and hide other updates that need attention.
+      fail-fast: false
       # npm throttles concurrent advisory requests from one runner egress IP.
       # Serialize the four lockfile scans so one workspace cannot force the
       # others onto the retired quick-audit endpoint or into a timeout.

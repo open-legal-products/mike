@@ -10,7 +10,7 @@
 //      request bodies carry privileged documents and chat transcripts, and
 //      headers carry session cookies. `beforeSend` strips request bodies,
 //      cookies, and auth headers, and redacts secret-looking keys anywhere
-//      in an event. `sendDefaultPii` stays false.
+//      in an event. `dataCollection` disables sensitive data capture.
 //   3. ONE EVENT PER FAILURE. Explicit `reportError` calls at the boundaries
 //      (HTTP 500 path, background jobs, stream failures, worker crashes) carry
 //      structured tags; a console bridge turns every remaining `console.error`
@@ -712,8 +712,13 @@ export function scrubEvent(
       event.message = `${label ? `${label}: ` : ""}${nestedError.name}: ${nestedError.message}`;
       event.fingerprint = ["console", label, nestedError.name];
       event.extra = { ...(event.extra ?? {}), error_stack: nestedError.stack };
-    } else if (!event.exception?.values?.length) {
+    } else if (!event.exception?.values?.length || mechanismInfo?.synthetic) {
+      // SDK v11 attaches a synthetic exception to console messages by default.
+      // Its value is the joined arguments, so strip positional payloads there too.
       event.message = label;
+      for (const value of event.exception?.values ?? []) {
+        if (value.mechanism?.synthetic) value.value = label;
+      }
     }
   }
 
@@ -820,13 +825,25 @@ export function initSentry(
     release: config.release,
     debug: config.debug,
     tracesSampleRate: config.tracesSampleRate,
-    sendDefaultPii: false,
+    dataCollection: {
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        },
     attachStacktrace: true,
     // Bodies are stripped in beforeSend as well; not collecting them at all
     // means they never sit in memory on the event either.
     integrations: [
       privacyBoundaryIntegration(),
-      Sentry.httpIntegration({ maxIncomingRequestBodySize: "none" }),
+      Sentry.httpIntegration(),
       Sentry.captureConsoleIntegration({ levels: ["error"] }),
       // Node 22 crashes on an unhandled rejection; the SDK's default "warn"
       // mode registers its own listener, which silently turns that crash

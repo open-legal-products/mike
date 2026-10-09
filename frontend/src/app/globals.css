@@ -275,14 +275,12 @@
 .dark .bg-green-50,
 .dark .bg-green-100,
 .dark .bg-emerald-50 { background-color: rgba(6, 78, 59, 0.32); }
-.dark .border-green-200,
 .dark .border-emerald-200 { border-color: rgba(52, 211, 153, 0.32); }
 .dark .text-green-700,
 .dark .text-green-800,
 .dark .text-emerald-700 { color: #6ee7b7; }
 .dark .bg-blue-50,
 .dark .bg-blue-100 { background-color: rgba(3, 73, 130, 0.3); }
-.dark .border-blue-200 { border-color: rgba(56, 189, 248, 0.3); }
 
 @layer base {
     * {
@@ -332,27 +330,12 @@
         opacity: 0;
     }
 
-    .sidebar-fade-in-3 {
-        animation: sidebarFadeIn 0.3s ease-out forwards;
-        animation-delay: 0.25s;
-        opacity: 0;
-    }
-
     @keyframes sidebarFadeIn {
         from {
             opacity: 0;
         }
         to {
             opacity: 1;
-        }
-    }
-
-    @keyframes scroll-left {
-        0% {
-            transform: translateX(0);
-        }
-        100% {
-            transform: translateX(calc(-100% + 100px));
         }
     }
 
@@ -363,10 +346,6 @@
         to {
             background-position: -200% 0;
         }
-    }
-
-    .animate-shimmer {
-        animation: shimmer 8s linear infinite;
     }
 }
 

@@ -4,8 +4,13 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Ellipsis, ListTree } from "lucide-react";
 import { TextButtonUI } from "@/shared/ui/TextButtonUI";
-import { DropdownMenu, DropdownMenuTrigger } from "@/app/components/ui/dropdown-menu";
-import { LiquidDropdownButton, LiquidDropdownCheckboxItem, LiquidDropdownContent } from "@/app/components/ui/liquid-dropdown";
+import {
+    Dropdown,
+    DropdownButton,
+    DropdownCheckboxItem,
+    DropdownContent,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 
 /** Extend EigenPal's overflow panel; keep navigation available when nothing overflows. */
 export function DocxNavigationMenu({ toolbar, open, onToggle }: {
@@ -30,7 +35,7 @@ export function DocxNavigationMenu({ toolbar, open, onToggle }: {
     }, [toolbar]);
 
     if (menu.trigger) return menu.panel && createPortal(
-        <LiquidDropdownButton
+        <DropdownButton
             className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5"
             aria-pressed={open}
             onClick={() => {
@@ -42,25 +47,25 @@ export function DocxNavigationMenu({ toolbar, open, onToggle }: {
             <ListTree aria-hidden="true" className="h-4 w-4" />
             Navigation pane
             {open && <Check aria-hidden="true" className="ml-auto h-4 w-4" />}
-        </LiquidDropdownButton>,
+        </DropdownButton>,
         menu.panel,
     );
 
     return createPortal(
         <span data-toolbar-fixed="" className="ml-auto flex flex-none items-center">
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
+            <Dropdown>
+                <DropdownTrigger asChild>
                     <TextButtonUI size="icon-xs" aria-label="More" title="More" className="h-6">
                         <Ellipsis aria-hidden="true" className="h-4 w-4" />
                     </TextButtonUI>
-                </DropdownMenuTrigger>
-                <LiquidDropdownContent align="end">
-                    <LiquidDropdownCheckboxItem checked={open} onCheckedChange={onToggle}>
+                </DropdownTrigger>
+                <DropdownContent align="end">
+                    <DropdownCheckboxItem checked={open} onCheckedChange={onToggle}>
                         <ListTree aria-hidden="true" className="h-4 w-4" />
                         Navigation pane
-                    </LiquidDropdownCheckboxItem>
-                </LiquidDropdownContent>
-            </DropdownMenu>
+                    </DropdownCheckboxItem>
+                </DropdownContent>
+            </Dropdown>
         </span>,
         toolbar,
     );

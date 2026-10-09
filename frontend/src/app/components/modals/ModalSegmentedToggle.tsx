@@ -34,7 +34,7 @@ export function ModalSegmentedToggle<T extends string>({
     return (
         <div
             className={cn(
-                `inline-grid gap-1 rounded-full ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`,
+                `inline-grid gap-1 rounded-full ${LIQUID_GLASS_SUBTLE_CLASS}`,
                 size === "sm" ? "h-8 p-1" : "h-9 p-1",
                 className,
             )}

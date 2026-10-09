@@ -20,7 +20,7 @@ import {
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { PasswordSettingsSection } from "@/app/components/settings/PasswordSettingsSection";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import {
@@ -472,7 +472,7 @@ export default function SecurityPage() {
     <div className="space-y-8">
       <section className="space-y-3">
         <SettingsHeading>Multi-Factor Authentication</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           {loading ? (
             <MfaSettingsSkeleton />
           ) : (
@@ -542,7 +542,7 @@ export default function SecurityPage() {
           {status && (
             <p className="px-4 py-3 text-xs text-gray-500">{status}</p>
           )}
-        </SettingsCard>
+        </GlassCardUI>
       </section>
       <PasswordSettingsSection />
       <Modal

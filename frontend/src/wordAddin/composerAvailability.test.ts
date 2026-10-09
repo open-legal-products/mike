@@ -21,21 +21,21 @@ describe("isModelAvailable fail-open", () => {
     it("allows sends while key status is unknown (null)", () => {
         // A flaky WKWebView preflight must not brick the composer: the
         // backend still rejects models it cannot serve.
-        expect(isModelAvailable("gemini-3-flash-preview", null)).toBe(true);
-        expect(isModelAvailable("claude-fable-5", null)).toBe(true);
+        expect(isModelAvailable("gemini-3.8-flash", null)).toBe(true);
+        expect(isModelAvailable("claude-fable-5-1", null)).toBe(true);
         expect(isModelAvailable("openrouter/openai/gpt-5.4", null)).toBe(true);
         expect(isModelAvailable("vercel/openai/gpt-5.4", null)).toBe(true);
         expect(isModelAvailable("opencode-go/glm-5", null)).toBe(true);
     });
 
     it("still gates on a LOADED status", () => {
-        expect(isModelAvailable("gemini-3-flash-preview", NO_KEYS)).toBe(false);
+        expect(isModelAvailable("gemini-3.8-flash", NO_KEYS)).toBe(false);
         expect(isModelAvailable("openrouter/openai/gpt-5.4", NO_KEYS)).toBe(
             false,
         );
         expect(isModelAvailable("opencode-go/glm-5", NO_KEYS)).toBe(false);
         expect(
-            isModelAvailable("gemini-3-flash-preview", {
+            isModelAvailable("gemini-3.8-flash", {
                 ...NO_KEYS,
                 gemini: true,
             }),

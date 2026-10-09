@@ -17,8 +17,8 @@ import { DocxView } from "@/app/components/shared/views/DocxView";
 import { PdfView } from "@/app/components/shared/views/PdfView";
 import { ProjectDocumentTabs } from "./ProjectDocumentTabs";
 import { AssistantSidePanel } from "../assistant/AssistantSidePanel";
-vi.mock("../assistant/DocPanel", () => ({
-    DocPanel: () => <div>Document body</div>,
+vi.mock("@/app/components/shared/DocumentContent", () => ({
+    DocumentContent: () => <div>Document body</div>,
 }));
 
 const fetchState = vi.hoisted(() => ({

@@ -5,11 +5,11 @@ import {
     ALLOWED_MODEL_IDS,
     canonicalModelId,
     ROUTER_SLUGS,
-    type RouterSlug,
     type ReasoningLevel,
 } from "../components/assistant/ModelToggle";
 import { isModelAvailable } from "../lib/modelAvailability";
 import type { ApiKeyState } from "../lib/mikeApi";
+import type { RouterModelSelections } from "../lib/routerModels";
 
 /**
  * The composer's accepted-id surface. Exported so the Word add-in drift guard
@@ -32,11 +32,8 @@ export interface SelectedModelSources {
     selectionKey?: string | null;
     chatModel?: string | null;
     lastSelectedModel?: string | null;
-    routerSelections?: {
-        openRouterModels: string[];
-        vercelModels: string[];
-        openCodeGoModels: string[];
-    } | null;
+    /** The user's saved models per router; null when they are not known. */
+    routerSelections?: RouterModelSelections | null;
     /** Undefined means availability is unknown and must fail open. */
     apiKeys?: ApiKeyState;
     /** Authenticated deployment models returned by GET /models/configured. */
@@ -48,7 +45,9 @@ function usableStoredModel(
     sources: SelectedModelSources,
 ): string | null {
     if (!value) return null;
-    const canonical = canonicalModelId(value);
+    const canonical = sources.configuredModelIds?.includes(value)
+        ? value
+        : canonicalModelId(value);
     if (!isAllowedModelId(canonical, sources.configuredModelIds)) return null;
 
     if (sources.configuredModelIds?.includes(canonical)) return canonical;
@@ -57,12 +56,8 @@ function usableStoredModel(
         canonical.startsWith(`${slug}/`),
     );
     if (router && sources.routerSelections) {
-        const selections: Record<RouterSlug, string[]> = {
-            openrouter: sources.routerSelections.openRouterModels,
-            vercel: sources.routerSelections.vercelModels,
-            "opencode-go": sources.routerSelections.openCodeGoModels,
-        };
-        if (!selections[router].includes(canonical.slice(router.length + 1))) {
+        const selection = sources.routerSelections[router] ?? [];
+        if (!selection.includes(canonical.slice(router.length + 1))) {
             return null;
         }
     }
@@ -79,23 +74,25 @@ export function useSelectedModel(
     const [model, setModelState] = useState("");
     const manuallySelected = useRef(false);
     const previousSelectionKey = useRef(sources.selectionKey);
-    const openRouterModels = sources.routerSelections?.openRouterModels;
-    const vercelModels = sources.routerSelections?.vercelModels;
-    const openCodeGoModels = sources.routerSelections?.openCodeGoModels;
+    // Callers build the selection map inline, so compare it by content: a
+    // fresh but equal object must not look like a changed selection.
+    const routerSelectionsKey = sources.routerSelections
+        ? JSON.stringify(sources.routerSelections)
+        : null;
+    const routerSelections = useMemo<RouterModelSelections | null>(
+        () =>
+            routerSelectionsKey === null
+                ? null
+                : (JSON.parse(routerSelectionsKey) as RouterModelSelections),
+        [routerSelectionsKey],
+    );
     const configuredModelIds = sources.configuredModelIds;
-    const hasRouterSelections = sources.routerSelections != null;
     const selectionSources = useMemo<SelectedModelSources>(
         () => ({
             selectionKey: sources.selectionKey,
             chatModel: sources.chatModel,
             lastSelectedModel: sources.lastSelectedModel,
-            routerSelections: hasRouterSelections
-                ? {
-                      openRouterModels: openRouterModels ?? [],
-                      vercelModels: vercelModels ?? [],
-                      openCodeGoModels: openCodeGoModels ?? [],
-                  }
-                : null,
+            routerSelections,
             apiKeys: sources.apiKeys,
             configuredModelIds,
         }),
@@ -103,10 +100,7 @@ export function useSelectedModel(
             sources.selectionKey,
             sources.chatModel,
             sources.lastSelectedModel,
-            hasRouterSelections,
-            openRouterModels,
-            vercelModels,
-            openCodeGoModels,
+            routerSelections,
             sources.apiKeys,
             configuredModelIds,
         ],
@@ -141,7 +135,9 @@ export function useSelectedModel(
 
     const setModel = useCallback(
         (id: string) => {
-            const canonical = canonicalModelId(id);
+            const canonical = configuredModelIds?.includes(id)
+                ? id
+                : canonicalModelId(id);
             const next = isAllowedModelId(canonical, configuredModelIds)
                 ? canonical
                 : "";

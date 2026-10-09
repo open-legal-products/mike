@@ -32,6 +32,23 @@ describe("AssistantMessage timeline", () => {
         });
     });
     afterEach(() => vi.unstubAllGlobals());
+    it("hides the copy button while it waits for input or approval", () => {
+        const { rerender } = render(
+            <AssistantMessage events={[approvalRequest]} awaitingInput />,
+        );
+
+        // Nothing has been delivered yet, so there is nothing to copy.
+        expect(
+            screen.queryByRole("button", { name: "Copy response" }),
+        ).toBeNull();
+
+        // Once the request is settled the message is an ordinary one again.
+        rerender(<AssistantMessage events={[approvalRequest]} />);
+        expect(
+            screen.getByRole("button", { name: "Copy response" }),
+        ).toBeInTheDocument();
+    });
+
     it("folds a run of reasoning events into one thinking block", () => {
         render(
             <AssistantMessage
@@ -106,6 +123,41 @@ describe("AssistantMessage timeline", () => {
         );
         expect(container.querySelector(".bg-red-400")).not.toBeNull();
         expect(screen.getByText("Connector unavailable")).toBeInTheDocument();
+    });
+
+    it("marks a successful connector call green and a failed one red", () => {
+        const call = (status: "ok" | "error"): AssistantEvent => ({
+            type: "mcp_tool_call",
+            connector_id: "c1",
+            connector_name: "Drive",
+            tool_name: "search",
+            openai_tool_name: "drive_search",
+            status,
+            ...(status === "error" ? { error: "Connector unavailable" } : {}),
+        });
+        const { container, unmount } = render(
+            <AssistantMessage
+                events={[call("ok"), { type: "content", text: "Found it." }]}
+            />,
+        );
+        fireEvent.click(
+            screen.getByRole("button", { name: "Completed in 1 step" }),
+        );
+        expect(container.querySelector(".bg-green-400")).not.toBeNull();
+        expect(container.querySelector(".bg-red-400")).toBeNull();
+        expect(container.querySelector(".bg-gray-500")).toBeNull();
+        unmount();
+
+        const failed = render(
+            <AssistantMessage
+                events={[call("error"), { type: "content", text: "Sorry." }]}
+            />,
+        );
+        fireEvent.click(
+            screen.getByRole("button", { name: "Completed in 1 step" }),
+        );
+        expect(failed.container.querySelector(".bg-red-400")).not.toBeNull();
+        expect(failed.container.querySelector(".bg-green-400")).toBeNull();
     });
 
     it("keeps a pending connector approval open in the assistant flow", () => {

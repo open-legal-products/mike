@@ -1,5 +1,6 @@
 "use client";
 
+import { findPendingAskInput } from "@/app/lib/pendingAskInput";
 import { useCallback, useMemo, useState, useRef, useEffect } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -213,7 +214,7 @@ export function ChatView({
     );
     // Per-edit in-flight set — disables Accept/Reject on only the one
     // edit currently being resolved, so sibling edits in the same message
-    // (and their twins in DocPanel) stay clickable.
+    // (and their twins in DocumentContent) stay clickable.
     const [reloadingEditIds, setReloadingEditIds] = useState<Set<string>>(
         () => new Set(),
     );
@@ -576,7 +577,7 @@ export function ChatView({
                 return next;
             });
             // Propagate the new status onto any open edit-tab for this
-            // edit so DocPanel's Accept/Reject buttons flip and disable
+            // edit so DocumentContent's Accept/Reject buttons flip and disable
             // (their sync effect keys off edit.status). Without this, a
             // resolve triggered from the inline EditCard or BulkEditActions
             // leaves the panel buttons looking live.
@@ -992,7 +993,7 @@ export function ChatView({
     ];
 
     const renderChatHeaderActions = () => (
-        <HeaderButtonsUI className="pointer-events-auto">
+        <HeaderButtonsUI className="pointer-events-auto backdrop-blur-2xl">
             {!isNewChat && (
                 <HeaderButtonUI
                     iconOnly
@@ -1108,6 +1109,11 @@ export function ChatView({
                                         const lastAssistantIndex = messages
                                             .map((m) => m.role)
                                             .lastIndexOf("assistant");
+                                        // The message still waiting on the
+                                        // user's input or approval, if any.
+                                        const pendingAskInputIndex =
+                                            findPendingAskInput(messages)
+                                                ?.messageIndex ?? -1;
                                         return messages.map((msg, i) => (
                                             <div
                                                 key={msg.id ?? i}
@@ -1151,6 +1157,9 @@ export function ChatView({
                                                         isStreaming={
                                                             i === messages.length - 1 &&
                                                             isResponseLoading
+                                                        }
+                                                        awaitingInput={
+                                                            i === pendingAskInputIndex
                                                         }
                                                         isError={!!msg.error}
                                                         errorMessage={

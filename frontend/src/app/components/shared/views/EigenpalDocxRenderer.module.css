@@ -36,7 +36,7 @@
 
 .host :global(.docx-toolbar) {
     /* Reuse Mike's text utilities and the same material/state tokens as
-       TextButtonUI, LiquidDropdown and the flat dropdown inputs. */
+       TextButtonUI, Dropdown and the flat dropdown inputs. */
     --foreground: var(--mike-docx-foreground);
     --muted-foreground: var(--mike-docx-muted-foreground);
     --ring: var(--mike-docx-focus-color);
@@ -115,7 +115,7 @@
 }
 
 /* The packaged toolbar doesn't expose a shared dropdown component slot.
-   Use LiquidDropdownSurface's material tokens for its menus, palettes, nested
+   Use DropdownSurface's material tokens for its menus, palettes, nested
    table pickers and overflow panel without replacing native menu behavior. */
 .host :global(.docx-toolbar) :is(
     :global(.docx-toolbar__menu),
@@ -131,7 +131,6 @@
     border: 1px solid var(--liquid-glass-border-float);
     border-radius: 1rem;
     box-shadow: var(--liquid-glass-shadow-float);
-    backdrop-filter: blur(40px);
 }
 
 /* Match Mike's dropdown rows, preserving font/style previews and swatch colors. */

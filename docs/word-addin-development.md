@@ -59,8 +59,8 @@ steps manually:
 
    When the backend uses local object storage, also set
    `R2_PUBLIC_ENDPOINT_URL=https://localhost:3200` in `backend/.env`. Signed
-   upload URLs then stay HTTPS in the Word task pane and webpack forwards the
-   the configured bucket path to `OBJECT_STORAGE_PROXY_TARGET` without changing
+   upload and download URLs then stay HTTPS in the Word task pane and webpack
+   forwards the configured bucket path to `OBJECT_STORAGE_PROXY_TARGET` without changing
    the signed host header.
 
 3. Install the trusted development certificate:

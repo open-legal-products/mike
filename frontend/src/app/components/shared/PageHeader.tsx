@@ -12,13 +12,11 @@ import { ChevronLeft, Loader2, Plus, Search, X } from "lucide-react";
 import { usePageChrome } from "@/app/contexts/PageChromeContext";
 import { cn } from "@/app/lib/utils";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
 } from "@/app/components/ui/liquid-surface";
@@ -583,8 +581,8 @@ function CollapsedBreadcrumbGroup({
 }) {
     return (
         <span className="hidden shrink-0 items-center gap-1.5 sm:flex">
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
+            <Dropdown>
+                <DropdownTrigger asChild>
                     <button
                         type="button"
                         className="text-gray-500 transition-colors hover:text-gray-700"
@@ -593,13 +591,13 @@ function CollapsedBreadcrumbGroup({
                     >
                         …
                     </button>
-                </DropdownMenuTrigger>
-                <LiquidDropdownContent
+                </DropdownTrigger>
+                <DropdownContent
                     align="start"
-                    className="z-[150] min-w-44 p-1 font-sans"
+                    className="min-w-44 p-1 font-sans"
                 >
                     {items.map((item, index) => (
-                        <LiquidDropdownItem
+                        <DropdownItem
                             key={index}
                             disabled={!item.onClick}
                             onSelect={item.onClick}
@@ -612,10 +610,10 @@ function CollapsedBreadcrumbGroup({
                             }
                         >
                             {item.label}
-                        </LiquidDropdownItem>
+                        </DropdownItem>
                     ))}
-                </LiquidDropdownContent>
-            </DropdownMenu>
+                </DropdownContent>
+            </Dropdown>
             <span className="text-gray-300">›</span>
         </span>
     );

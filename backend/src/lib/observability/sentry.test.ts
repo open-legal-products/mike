@@ -208,15 +208,25 @@ describe("initSentry", () => {
     expect(Sentry.init).toHaveBeenCalledOnce();
 
     const options = vi.mocked(Sentry.init).mock.calls[0][0]!;
-    expect(options.sendDefaultPii).toBe(false);
+    expect(options.dataCollection).toEqual({
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        });
     expect(options.environment).toBe("staging");
     expect(options.beforeSend).toBe(scrubEvent);
     expect(options.initialScope).toEqual({
       tags: { service: "mike-backend", role: "worker", install: "community", build_mode: "test", diagnostics_version: "2" },
     });
-    expect(sentryMock.httpIntegration).toHaveBeenCalledWith({
-      maxIncomingRequestBodySize: "none",
-    });
+    expect(sentryMock.httpIntegration).toHaveBeenCalledWith();
     // Crash parity: an unhandled rejection must still take the process
     // down, as it does without a DSN (Node's default), not be swallowed.
     expect(sentryMock.onUnhandledRejectionIntegration).toHaveBeenCalledWith({

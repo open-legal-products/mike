@@ -2,7 +2,6 @@
 
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown } from "lucide-react";
 import { deleteChat, renameChat } from "@/app/lib/mikeApi";
 import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { ProjectAssistantTable } from "@/app/components/projects/ProjectAssistantTable";
@@ -16,45 +15,9 @@ import { can, roleFrom } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 
 interface Props {
     params: Promise<{ id: string }>;
-}
-
-function SelectedChatActions({
-    selectedCount,
-    open,
-    onOpenChange,
-    onDelete,
-}: {
-    selectedCount: number;
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    onDelete: () => void;
-}) {
-    if (selectedCount === 0) return null;
-
-    return (
-        <div className="relative">
-            <TabPillButtonUI
-                onClick={() => onOpenChange(!open)}
-            >
-                Actions
-                <ChevronDown className="h-3.5 w-3.5" />
-            </TabPillButtonUI>
-            {open && (
-                <div className="absolute right-0 top-full z-[120] mt-1 w-36 overflow-hidden rounded-lg border border-white/60 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_12px_32px_rgba(15,23,42,0.14)] backdrop-blur-xl">
-                    <button
-                        onClick={onDelete}
-                        className="w-full px-3 py-1.5 text-left text-xs text-red-600 transition-colors hover:bg-red-50"
-                    >
-                        Delete
-                    </button>
-                </div>
-            )}
-        </div>
-    );
 }
 
 export default function ProjectAssistantPage({ params }: Props) {
@@ -75,7 +38,6 @@ export default function ProjectAssistantPage({ params }: Props) {
     const [selectedChatIds, setSelectedChatIds] = useState<string[]>([]);
     const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
     const [renameChatValue, setRenameChatValue] = useState("");
-    const [actionsOpen, setActionsOpen] = useState(false);
     const [confirmDeleteSelectedOpen, setConfirmDeleteSelectedOpen] =
         useState(false);
     // One place for "the server refused, or the request failed" — the
@@ -157,14 +119,12 @@ export default function ProjectAssistantPage({ params }: Props) {
      */
     function requestDeleteSelectedChats() {
         if (selectedChatIds.length === 0) return;
-        setActionsOpen(false);
         setConfirmDeleteSelectedOpen(true);
     }
 
     const handleDeleteSelectedChats = useCallback(async () => {
         const ids = [...selectedChatIds];
         setConfirmDeleteSelectedOpen(false);
-        setActionsOpen(false);
         setActionNotice(null);
         const roleById = new Map(
             chats.map((chat) => [chat.id, roleFrom(chat)] as const),
@@ -206,17 +166,8 @@ export default function ProjectAssistantPage({ params }: Props) {
 
     return (
         <>
-            <ProjectSectionToolbar
-                actions={selectedChatIds.length > 0 ? (
-                    <SelectedChatActions
-                        selectedCount={selectedChatIds.length}
-                        open={actionsOpen}
-                        onOpenChange={setActionsOpen}
-                        onDelete={requestDeleteSelectedChats}
-                    />
-                ) : undefined}
-            />
             <ProjectAssistantTable
+                renderToolbar={(actions) => <ProjectSectionToolbar actions={actions} />}
                 chats={visibleChats}
                 filteredChats={filteredChats}
                 selectedChatIds={selectedChatIds}

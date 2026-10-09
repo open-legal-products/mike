@@ -1,8 +1,8 @@
 "use client";
 
+import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown } from "lucide-react";
 import {
     getProjectFilterOptions,
     type ProjectFilterOptions,
@@ -48,6 +48,7 @@ import {
     TableCell,
     TableEmptyState,
     TableFilters,
+    TableSortFilter,
     type TableFilterOption,
     TableHeaderCell,
     TableHeaderRow,
@@ -62,9 +63,7 @@ import {
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { AccessScopeLabel } from "@/app/components/shared/AccessScopeLabel";
 
 function formatDate(iso: string) {
@@ -94,10 +93,6 @@ function getProjectCreatorLabel(
 type ProjectFilter = "all" | "shared" | "private";
 type ProjectSortKey = "name" | "cm" | "files" | "chats" | "reviews" | "created";
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-    { value: "asc", label: "Ascending" },
-    { value: "desc", label: "Descending" },
-];
 const PROJECT_FILTERS: { id: ProjectFilter; label: string }[] = [
     { id: "all", label: "All" },
     { id: "shared", label: "Shared" },
@@ -149,7 +144,6 @@ export function ProjectsOverview() {
         practices: [],
         owners: [],
     });
-    const actionsRef = useRef<HTMLDivElement>(null);
     const rowSelectionAnchorIdRef = useRef<string | null>(null);
     const { user, isAuthenticated, authLoading } = useAuth();
     const previewEmptyStates = searchParams.get("emptyStates") === "1";
@@ -200,17 +194,6 @@ export function ProjectsOverview() {
         };
     }, [authLoading, isAuthenticated]);
 
-    useEffect(() => {
-        function handleClick(e: MouseEvent) {
-            if (
-                actionsRef.current &&
-                !actionsRef.current.contains(e.target as Node)
-            )
-                setActionsOpen(false);
-        }
-        if (actionsOpen) document.addEventListener("mousedown", handleClick);
-        return () => document.removeEventListener("mousedown", handleClick);
-    }, [actionsOpen]);
 
     const practices = filterOptions.practices;
     const ownerOptions = filterOptions.owners;
@@ -274,13 +257,10 @@ export function ProjectsOverview() {
     const createdSortDirection =
         sort?.key === "created" ? sort.direction : null;
     const nameFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by project name"
             value={nameSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
             align="right"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("name", direction)}
         />
     );
@@ -298,12 +278,9 @@ export function ProjectsOverview() {
         />
     );
     const cmFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by CM"
             value={cmSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("cm", direction)}
         />
     );
@@ -330,42 +307,30 @@ export function ProjectsOverview() {
         />
     );
     const filesFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by files"
             value={filesSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("files", direction)}
         />
     );
     const chatsFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by chats"
             value={chatsSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("chats", direction)}
         />
     );
     const reviewsFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by tabular reviews"
             value={reviewsSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("reviews", direction)}
         />
     );
     const createdFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by created date"
             value={createdSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("created", direction)}
         />
     );
@@ -501,26 +466,54 @@ export function ProjectsOverview() {
         }
     }
 
+    function renderProjectActions(
+        project: Project | undefined,
+        close?: () => void,
+    ) {
+        const actionIds = project
+            ? rowActionSelectionIds(project.id, selectedIds)
+            : selectedIds;
+        const appliesToSelection = actionIds.length > 1;
+        const canManage = project ? can(roleFrom(project), "access.manage") : false;
+        return (
+            <RowActionMenuItems
+                onClose={close}
+                onView={
+                    appliesToSelection || !project
+                        ? undefined
+                        : () => router.push(`/projects/${project!.id}`)
+                }
+                viewLabel="Open"
+                onEditDetails={
+                    appliesToSelection || !canManage
+                        ? undefined
+                        : () => {
+                              setDetailsProject(project!);
+                          }
+                }
+                onDelete={
+                    appliesToSelection || !project
+                        ? requestDeleteSelected
+                        : canManage
+                          ? () => handleDeleteProjectRow(project!)
+                          : undefined
+                }
+                deleteLabel={
+                    appliesToSelection
+                        ? `Delete ${actionIds.length} projects`
+                        : undefined
+                }
+            />
+        );
+    }
+
     const toolbarActions =
         selectedIds.length > 0 ? (
-            <div ref={actionsRef} className="relative">
-                <TabPillButtonUI onClick={() => setActionsOpen((v) => !v)}>
-                    Actions
-                    <ChevronDown className="h-3.5 w-3.5" />
-                </TabPillButtonUI>
-                {actionsOpen && (
-                    <div
-                        className={`absolute right-0 top-full z-[120] mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
-                    >
-                        <button
-                            onClick={requestDeleteSelected}
-                            className="w-full px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 transition-colors"
-                        >
-                            Delete
-                        </button>
-                    </div>
-                )}
-            </div>
+            <SelectionActionsMenu
+                open={actionsOpen}
+                onOpenChange={setActionsOpen}
+                renderItems={(close) => renderProjectActions(projects.find((project) => project.id === selectedIds[0]), close)}
+            />
         ) : undefined;
 
     return (
@@ -720,11 +713,6 @@ export function ProjectsOverview() {
                 ) : (
                     <TableBody>
                         {visibleProjects.map((project) => {
-                            const actionIds = rowActionSelectionIds(
-                                project.id,
-                                selectedIds,
-                            );
-                            const appliesToSelection = actionIds.length > 1;
                             // The list rows carry the caller's merged
                             // access_role, so an organization admin editing a
                             // colleague's matter is no longer mistaken for an
@@ -737,45 +725,7 @@ export function ProjectsOverview() {
                                 <TableRow
                                     key={project.id}
                                     selected={selectedIds.includes(project.id)}
-                                    rightClickDropdown={(close, menuProps) => (
-                                        <RowActionMenuItems
-                                            onClose={close}
-                                            surfaceProps={menuProps}
-                                            onView={
-                                                appliesToSelection
-                                                    ? undefined
-                                                    : () =>
-                                                          router.push(
-                                                              `/projects/${project.id}`,
-                                                          )
-                                            }
-                                            viewLabel="Open"
-                                            onEditDetails={
-                                                appliesToSelection || !canManage
-                                                    ? undefined
-                                                    : () => {
-                                                          setDetailsProject(
-                                                              project,
-                                                          );
-                                                      }
-                                            }
-                                            onDelete={
-                                                appliesToSelection
-                                                    ? requestDeleteSelected
-                                                    : canManage
-                                                      ? () =>
-                                                            handleDeleteProjectRow(
-                                                                project,
-                                                            )
-                                                      : undefined
-                                            }
-                                            deleteLabel={
-                                                appliesToSelection
-                                                    ? `Delete ${actionIds.length} projects`
-                                                    : undefined
-                                            }
-                                        />
-                                    )}
+                                    rightClickDropdown={(close) => renderProjectActions(project, close)}
                                     onClick={(event) => {
                                         if (event.shiftKey) {
                                             event.preventDefault();

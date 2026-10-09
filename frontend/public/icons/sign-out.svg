@@ -1,10 +1,10 @@
 <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="door" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FAFBFC" stop-opacity="0.97"/>
-      <stop offset="0.45" stop-color="#E9ECF0" stop-opacity="0.95"/>
-      <stop offset="0.82" stop-color="#CBD1D9" stop-opacity="0.96"/>
-      <stop offset="1" stop-color="#DDE2E8" stop-opacity="0.96"/>
+      <stop offset="0" stop-color="#E3E7EC" stop-opacity="0.97"/>
+      <stop offset="0.45" stop-color="#CBD1D9" stop-opacity="0.95"/>
+      <stop offset="0.82" stop-color="#A9B2BE" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#BCC4CE" stop-opacity="0.96"/>
     </linearGradient>
     <radialGradient id="sheen">
       <stop offset="0" stop-color="#FFFFFF"/>

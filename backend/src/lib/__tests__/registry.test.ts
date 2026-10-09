@@ -4,7 +4,6 @@ import {
     apiKeyForConfiguredModel,
     configuredEndpointSummaries,
     configuredModelRequiresApiKey,
-    configuredModelIds,
     configuredModelSummaries,
     getConfiguredModel,
     loadModelRegistry,
@@ -93,7 +92,9 @@ describe("loadModelRegistry", () => {
                 },
             ],
         });
-        expect(configuredModelIds()).toEqual(["local-qwen"]);
+        expect(configuredModelSummaries().map((summary) => summary.id)).toEqual([
+            "local-qwen",
+        ]);
     });
 
     it("normalizes strings and trailing URL slashes", () => {

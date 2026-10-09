@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 const { forkMock } = vi.hoisted(() => ({ forkMock: vi.fn() }));
 vi.mock("node:child_process", () => ({ fork: forkMock }));
 import { extractGoogleDriveBinary } from "../googleDriveExtract";

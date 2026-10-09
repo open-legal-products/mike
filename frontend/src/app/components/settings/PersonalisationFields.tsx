@@ -2,20 +2,18 @@
 
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, X } from "lucide-react";
-import { authInputClassName } from "@/app/components/auth/authStyles";
-import { Input } from "@/app/components/ui/input";
+import { authInputUIClassName } from "@/shared/ui/AuthStylesUI";
+import { InputUI } from "@/shared/ui/InputUI";
 import { OptionPill } from "@/app/components/ui/option-pill";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {
-  DropdownMenu,
-  DropdownMenuRadioGroup,
-  DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-  LiquidDropdownCheckboxItem,
-  LiquidDropdownContent,
-  LiquidDropdownRadioItem,
-} from "@/app/components/ui/liquid-dropdown";
+  Dropdown,
+  DropdownCheckboxItem,
+  DropdownContent,
+  DropdownRadioGroup,
+  DropdownRadioItem,
+  DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { cn } from "@/app/lib/utils";
 import type { PersonalisationDetails } from "@/app/lib/mikeApi";
 import {
@@ -274,7 +272,7 @@ export function PersonalisationFields({
               htmlFor="other-jurisdiction"
               status={statusFor?.("otherJurisdiction")}
             />
-            <Input
+            <InputUI
               id="other-jurisdiction"
               value={form.otherJurisdiction}
               onChange={(event) =>
@@ -282,7 +280,7 @@ export function PersonalisationFields({
               }
               maxLength={100}
               placeholder="Enter your jurisdiction"
-              className={`w-full ${authInputClassName}`}
+              className={`w-full ${authInputUIClassName}`}
             />
           </div>
         )}
@@ -294,14 +292,14 @@ export function PersonalisationFields({
           label="Practice areas"
           status={statusFor?.("practiceAreas")}
         />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+        <Dropdown>
+          <DropdownTrigger asChild>
             <button
               type="button"
               aria-label={practiceAreasAriaLabel}
               className={cn(
                 "flex h-9 w-full items-center justify-between text-left text-sm outline-none",
-                authInputClassName,
+                authInputUIClassName,
                 form.practiceAreas.length === 0 && "text-gray-400",
               )}
             >
@@ -312,23 +310,23 @@ export function PersonalisationFields({
               </span>
               <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
             </button>
-          </DropdownMenuTrigger>
-          <LiquidDropdownContent
+          </DropdownTrigger>
+          <DropdownContent
             align="start"
             sideOffset={6}
             className="max-h-72 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto"
           >
             {COMMON_PRACTICE_AREAS.map((area) => (
-              <LiquidDropdownCheckboxItem
+              <DropdownCheckboxItem
                 key={area}
                 checked={form.selectedAreas.includes(area)}
                 onCheckedChange={() => form.toggleArea(area)}
                 onSelect={(event) => event.preventDefault()}
               >
                 {area}
-              </LiquidDropdownCheckboxItem>
+              </DropdownCheckboxItem>
             ))}
-            <LiquidDropdownCheckboxItem
+            <DropdownCheckboxItem
               checked={form.otherSelected}
               onCheckedChange={(checked) =>
                 form.setOtherSelected(checked === true)
@@ -336,9 +334,9 @@ export function PersonalisationFields({
               onSelect={(event) => event.preventDefault()}
             >
               Other
-            </LiquidDropdownCheckboxItem>
-          </LiquidDropdownContent>
-        </DropdownMenu>
+            </DropdownCheckboxItem>
+          </DropdownContent>
+        </Dropdown>
 
         {form.practiceAreas.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
@@ -371,13 +369,13 @@ export function PersonalisationFields({
               htmlFor="other-practice-area"
               status={statusFor?.("otherPracticeArea")}
             />
-            <Input
+            <InputUI
               id="other-practice-area"
               value={form.otherArea}
               onChange={(event) => form.setOtherArea(event.target.value)}
               maxLength={100}
               placeholder="Enter your practice area"
-              className={`w-full ${authInputClassName}`}
+              className={`w-full ${authInputUIClassName}`}
             />
           </div>
         )}
@@ -422,15 +420,15 @@ function ProfileDropdown({
   return (
     <div>
       <FieldLabelRow label={label} htmlFor={id} status={status} />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+      <Dropdown>
+        <DropdownTrigger asChild>
           <button
             id={id}
             type="button"
             aria-label={label}
             className={cn(
               "flex h-9 w-full items-center justify-between text-left text-sm outline-none",
-              authInputClassName,
+              authInputUIClassName,
               !value && "text-gray-400",
             )}
           >
@@ -440,8 +438,8 @@ function ProfileDropdown({
             </span>
             <ChevronDown className="h-4 w-4 shrink-0 text-gray-400" />
           </button>
-        </DropdownMenuTrigger>
-        <LiquidDropdownContent
+        </DropdownTrigger>
+        <DropdownContent
           align="start"
           sideOffset={6}
           className={cn(
@@ -449,23 +447,23 @@ function ProfileDropdown({
             maxHeight && "max-h-72 overflow-y-auto",
           )}
         >
-          <DropdownMenuRadioGroup
+          <DropdownRadioGroup
             value={value ?? ""}
             onValueChange={(nextValue) =>
               onChange(nextValue === NOT_SET_OPTION ? "" : nextValue)
             }
           >
-            <LiquidDropdownRadioItem value={NOT_SET_OPTION}>
+            <DropdownRadioItem value={NOT_SET_OPTION}>
               Not set
-            </LiquidDropdownRadioItem>
+            </DropdownRadioItem>
             {options.map((option) => (
-              <LiquidDropdownRadioItem key={option.value} value={option.value}>
+              <DropdownRadioItem key={option.value} value={option.value}>
                 {option.label}
-              </LiquidDropdownRadioItem>
+              </DropdownRadioItem>
             ))}
-          </DropdownMenuRadioGroup>
-        </LiquidDropdownContent>
-      </DropdownMenu>
+          </DropdownRadioGroup>
+        </DropdownContent>
+      </Dropdown>
     </div>
   );
 }

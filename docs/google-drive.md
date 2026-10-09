@@ -287,7 +287,7 @@ tokens or real client documents to PR evidence.
 From the repository root:
 
 ```bash
-npm test --prefix backend -- src/lib/integrations/__tests__ src/__tests__/integration/connectors.routes.test.ts src/__tests__/architecture.test.ts src/__tests__/composeMigrations.test.ts --maxWorkers=2
+npm test --prefix backend -- src/lib/integrations/__tests__ src/__tests__/integration/connectors.routes.test.ts src/__tests__/architecture.test.ts src/__tests__/migrationLedger.test.ts --maxWorkers=2
 npm run build --prefix backend
 npm run typecheck:test --prefix backend
 npm run typecheck:contracts --prefix backend

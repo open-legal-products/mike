@@ -108,11 +108,16 @@ test("rename chat: sidebar rename interaction updates the title", async ({ page 
     const titleGenerated = page
         .waitForResponse(
             (r) =>
-                /^\/api\/chat\/[^/]+\/generate-title$/.test(
-                    new URL(r.url()).pathname,
-                ) &&
+                new URL(r.url()).pathname === "/api/chat" &&
                 r.request().method() === "POST",
             { timeout: 30_000 },
+        )
+        // finished() has no timeout of its own; cap it like the response wait.
+        .then((r) =>
+            Promise.race([
+                r.finished(),
+                new Promise((resolve) => setTimeout(resolve, 30_000)),
+            ]),
         )
         .catch(() => null);
     await textarea.press("Enter");
@@ -133,14 +138,14 @@ test("rename chat: sidebar rename interaction updates the title", async ({ page 
     await activeItem.hover();
 
     // ── Step 5: click the MoreHorizontal trigger (three-dot menu) ────────────────
-    // SidebarChatItem.tsx lines 104-115: DropdownMenuTrigger wraps a <button> with
+    // SidebarChatItem.tsx: DropdownTrigger wraps a <button> with
     // the MoreHorizontal icon.  In the non-renaming state the two buttons inside the
     // item are [0] chat-title button and [1] the trigger; .last() picks the trigger.
     const triggerBtn = activeItem.locator("button").last();
     await triggerBtn.click();
 
-    // ── Step 6: click "Rename" in the Radix DropdownMenuContent ─────────────────
-    // SidebarChatItem.tsx lines 117-129: DropdownMenuItem with Pencil icon + "Rename"
+    // ── Step 6: click "Rename" in the dropdown ──────────────────────────────────
+    // SidebarChatItem.tsx: DropdownItem with Pencil icon + "Rename"
     const renameItem = page.getByRole("menuitem", { name: "Rename" });
     await expect(renameItem).toBeVisible({ timeout: 5_000 });
     await renameItem.click();
@@ -198,11 +203,16 @@ test("delete chat: sidebar delete action removes the chat from history", async (
     const titleGenerated = page
         .waitForResponse(
             (r) =>
-                /^\/api\/chat\/[^/]+\/generate-title$/.test(
-                    new URL(r.url()).pathname,
-                ) &&
+                new URL(r.url()).pathname === "/api/chat" &&
                 r.request().method() === "POST",
             { timeout: 30_000 },
+        )
+        // finished() has no timeout of its own; cap it like the response wait.
+        .then((r) =>
+            Promise.race([
+                r.finished(),
+                new Promise((resolve) => setTimeout(resolve, 30_000)),
+            ]),
         )
         .catch(() => null);
 
@@ -253,7 +263,7 @@ test("delete chat: sidebar delete action removes the chat from history", async (
 
     // ── Step 5-7: delete that specific chat ──────────────────────────────────────
     // deleteChatFn (ChatHistoryContext.tsx:157-168) optimistically removes the
-    // row. SidebarChatItem.tsx:132-144: the "Delete" DropdownMenuItem calls
+    // row. SidebarChatItem.tsx:132-144: the "Delete" DropdownItem calls
     // deleteChat(chat.id) directly — no confirmation dialog.
     await targetRow.hover();
     await targetRow.locator("button").last().click();

@@ -10,13 +10,12 @@ import {
   TableBody,
   TableCell,
   TableEmptyState,
-  TableFilters,
+  TableSortFilter,
   TableHeaderCell,
   TableHeaderRow,
   TableRow,
   TableScrollArea,
   TableStickyCell,
-  type TableFilterOption,
   type TableSortDirection,
 } from "@/app/components/shared/TablePrimitive";
 import { EmptyState } from "@/app/components/ui/empty-state";
@@ -38,11 +37,6 @@ import { CreateOrganizationModal } from "./OrganizationModals";
 
 type OrganizationFilter = "managed" | "joined" | "invites";
 type OrganizationSortKey = "name" | "members" | "created";
-
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-  { value: "asc", label: "Ascending" },
-  { value: "desc", label: "Descending" },
-];
 
 function formatDate(value?: string) {
   if (!value) return "—";
@@ -283,13 +277,11 @@ export function OrganizationsOverview() {
               <TableStickyCell header>
                 <span className="mr-1">Name</span>
                 {!loading ? (
-                  <TableFilters
+                  <TableSortFilter
                     label="Sort by organization name"
                     value={sort?.key === "name" ? sort.direction : null}
                     allLabel="Default order"
-                    options={SORT_OPTIONS}
                     align="right"
-                    widthClassName="w-40"
                     onChange={(direction) => setSortFor("name", direction)}
                   />
                 ) : null}
@@ -297,12 +289,10 @@ export function OrganizationsOverview() {
               <TableHeaderCell className="ml-auto w-32">
                 <span className="mr-1">Members</span>
                 {!loading ? (
-                  <TableFilters
+                  <TableSortFilter
                     label="Sort by member count"
                     value={sort?.key === "members" ? sort.direction : null}
                     allLabel="Default order"
-                    options={SORT_OPTIONS}
-                    widthClassName="w-40"
                     onChange={(direction) => setSortFor("members", direction)}
                   />
                 ) : null}
@@ -310,12 +300,10 @@ export function OrganizationsOverview() {
               <TableHeaderCell className="w-36">
                 <span className="mr-1">Created</span>
                 {!loading ? (
-                  <TableFilters
+                  <TableSortFilter
                     label="Sort by creation date"
                     value={sort?.key === "created" ? sort.direction : null}
                     allLabel="Default order"
-                    options={SORT_OPTIONS}
-                    widthClassName="w-40"
                     onChange={(direction) => setSortFor("created", direction)}
                   />
                 ) : null}

@@ -23,8 +23,8 @@ import { Router } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
-import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
+import { sendServiceFailure } from "../../lib/serviceResult";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { buildContentDisposition } from "../../lib/storage";
 import { normalizeApiKeyProvider } from "./user.apiKeyStore";
@@ -36,7 +36,6 @@ import {
     listMyInvitations,
 } from "../../lib/orgs";
 import { sendOrgFailure } from "../../lib/orgFailure";
-import { userExportFilename } from "./user.dataExport";
 import { configuredApiPublicUrl } from "../../lib/runtimeConfig";
 import {
     bootstrapUserProfile,
@@ -50,10 +49,9 @@ import {
     deleteUserProjectsData,
     deleteUserTabularReviews,
     errorMessage,
-    exportUserAccount,
-    exportUserChats,
-    exportUserTabularReviews,
     getApiKeyStatus,
+    getCustomInstructions,
+    getResponseStyle,
     getMcpConnector,
     getUserExportStatus,
     getUserProfile,
@@ -64,6 +62,7 @@ import {
     recordPasswordSet,
     refreshMcpConnectorTools,
     saveApiKey,
+    setApiKeyEnabled,
     setMcpToolEnabled,
     setMfaOnLogin,
     startMcpConnectorOAuth,
@@ -73,6 +72,10 @@ import {
     validateExportRequest,
     validateOnboardingPayload,
     validateProfilePayload,
+    validateCustomInstructionsPayload,
+    saveCustomInstructions,
+    validateResponseStylePayload,
+    saveResponseStyle,
 } from "./user.service";
 
 export const userRouter = Router();
@@ -262,6 +265,56 @@ userRouter.patch("/profile", requireAuth, asyncRoute(async (req, res) => {
     res.json(result.body);
 }));
 
+// GET /user/custom-instructions
+userRouter.get("/custom-instructions", requireAuth, asyncRoute(async (_req, res) => {
+    const userId = res.locals.userId as string;
+    const result = await getCustomInstructions(createServerSupabase(), userId);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// PUT /user/custom-instructions
+userRouter.put("/custom-instructions", requireAuth, asyncRoute(async (req, res) => {
+    const parsed = validateCustomInstructionsPayload(req.body);
+    if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+
+    const userId = res.locals.userId as string;
+    const result = await saveCustomInstructions(
+        createServerSupabase(),
+        userId,
+        parsed.content,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// GET /user/response-style
+userRouter.get("/response-style", requireAuth, asyncRoute(async (_req, res) => {
+    const userId = res.locals.userId as string;
+    const result = await getResponseStyle(createServerSupabase(), userId);
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+// PUT /user/response-style
+userRouter.put("/response-style", requireAuth, asyncRoute(async (req, res) => {
+    const parsed = validateResponseStylePayload(req.body);
+    if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+
+    const userId = res.locals.userId as string;
+    const result = await saveResponseStyle(
+        createServerSupabase(),
+        userId,
+        parsed.update,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
 // POST /user/onboarding
 userRouter.post("/onboarding", requireAuth, asyncRoute(async (req, res) => {
     const parsed = validateOnboardingPayload(req.body);
@@ -333,12 +386,45 @@ userRouter.put(
 
         const apiKey =
             typeof req.body?.api_key === "string" ? req.body.api_key : null;
+        const settings =
+            req.body && typeof req.body === "object"
+                ? (req.body as { settings?: unknown }).settings
+                : undefined;
         const db = createServerSupabase();
-        const result = await saveApiKey(db, { userId, provider, apiKey });
+        const result = await saveApiKey(db, {
+            userId,
+            provider,
+            apiKey,
+            settings,
+        });
         if (!result.ok) {
-            return void sendInternalError(res, result.error);
+            if (result.kind === "save_failed") {
+                return void sendInternalError(res, result.error);
+            }
+            return void res.status(400).json({ detail: result.detail });
         }
         res.json(result.status);
+    }),
+);
+
+// PATCH /user/api-keys/:provider — retain the key while disabling its provider.
+userRouter.patch(
+    "/api-keys/:provider",
+    requireAuth,
+    requireMfaIfEnrolled,
+    asyncRoute(async (req, res) => {
+        const provider = normalizeApiKeyProvider(req.params.provider);
+        if (!provider || provider === "courtlistener" || typeof req.body?.enabled !== "boolean") {
+            return void res.status(400).json({ detail: "A supported provider and boolean enabled value are required." });
+        }
+        const result = await setApiKeyEnabled(
+            createServerSupabase(),
+            res.locals.userId as string,
+            provider,
+            req.body.enabled,
+        );
+        if (!result.ok) return sendServiceFailure(res, result);
+        res.json(result.data);
     }),
 );
 
@@ -1200,90 +1286,11 @@ userRouter.delete(
     }),
 );
 
-// GET /user/export
-userRouter.get(
-    "/export",
-    requireAuth,
-    requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
-        const userId = res.locals.userId as string;
-        const userEmail = res.locals.userEmail as string | undefined;
-        const db = createServerSupabase();
-        const result = await exportUserAccount(db, userId, userEmail);
-        if (!result.ok) return void sendInternalError(res, result.error);
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${userExportFilename("account", userId)}"`,
-        );
-        void recordAudit(createServerSupabase(), {
-            userId,
-            userEmail: res.locals.userEmail as string | undefined,
-            action: "export.account",
-            surface: "account",
-        });
-        res.json(result.data);
-    }),
-);
-
-// GET /user/chats/export
-userRouter.get(
-    "/chats/export",
-    requireAuth,
-    requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
-        const userId = res.locals.userId as string;
-        const userEmail = res.locals.userEmail as string | undefined;
-        const db = createServerSupabase();
-        const result = await exportUserChats(db, userId, userEmail);
-        if (!result.ok) return void sendInternalError(res, result.error);
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${userExportFilename("chats", userId)}"`,
-        );
-        void recordAudit(createServerSupabase(), {
-            userId,
-            userEmail: res.locals.userEmail as string | undefined,
-            action: "export.chats",
-            surface: "account",
-        });
-        res.json(result.data);
-    }),
-);
-
-// GET /user/tabular-reviews/export
-userRouter.get(
-    "/tabular-reviews/export",
-    requireAuth,
-    requireMfaIfEnrolled,
-    asyncRoute(async (_req, res) => {
-        const userId = res.locals.userId as string;
-        const userEmail = res.locals.userEmail as string | undefined;
-        const db = createServerSupabase();
-        const result = await exportUserTabularReviews(db, userId, userEmail);
-        if (!result.ok) return void sendInternalError(res, result.error);
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${userExportFilename("tabular-reviews", userId)}"`,
-        );
-        void recordAudit(createServerSupabase(), {
-            userId,
-            userEmail: res.locals.userEmail as string | undefined,
-            action: "export.tabular",
-            surface: "account",
-        });
-        res.json(result.data);
-    }),
-);
-
 // ---------------------------------------------------------------------------
 // Async exports (durable): POST creates a DB-queue job that builds the
 // export off the request thread; GET polls it; the download endpoint streams
-// the finished artifact. The synchronous GET /user/*/export routes above
-// still work (curl users, older clients) — the frontend uses this flow so a
-// large export can neither time out the request nor die with a dropped tab.
+// the finished artifact, so a large export can neither time out the request
+// nor die with a dropped tab.
 // Artifacts expire after 24 hours (the runner's retention sweep deletes the
 // file and the job row).
 
@@ -1309,8 +1316,9 @@ userRouter.post(
         // a receipt for work that cannot happen — and worse than useless: the
         // pending row holds the (user, type) dedupe key forever, so the user
         // could never successfully start that export again, even after an
-        // operator turns the runner back on. Refuse instead. The synchronous
-        // GET /user/*/export routes still work, which is the escape hatch.
+        // operator turns the runner back on. Refuse instead: exports answer
+        // 503 until the runner is enabled (production must keep it on; see
+        // docs/memory.md).
         if (!dbJobsEnabled())
             return void res.status(503).json({
                 detail: "Exports are temporarily unavailable. Please try again later.",

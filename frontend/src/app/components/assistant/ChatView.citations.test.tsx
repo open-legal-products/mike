@@ -41,7 +41,7 @@ vi.mock("./AssistantWorkflowModal", () => ({
 }));
 vi.mock("./ChatAccessModal", () => ({ ChatAccessModal: () => null }));
 // Keep the tab helpers (ChatView computes tab ids with them) and stub only
-// the panel itself; rendering a real document viewer is DocPanel's business,
+// the panel itself; rendering a real document viewer is DocumentContent's business,
 // not this file's.
 vi.mock("./AssistantSidePanel", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./AssistantSidePanel")>()),

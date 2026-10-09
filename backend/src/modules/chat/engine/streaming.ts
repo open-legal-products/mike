@@ -10,23 +10,15 @@ import { UserFacingError } from "../../../lib/userFacingError";
 import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
 import { reportError } from "../../../lib/observability/sentry";
 import type { Db } from "../../../lib/supabase";
-import { buildUserMcpTools, type McpToolEvent } from "../../../lib/mcpConnectors";
-import type { SourceDocument } from "../../../lib/sourceDocuments";
+import { buildUserMcpTools } from "../../../lib/mcpConnectors";
 import { buildGoogleDriveTools } from "../../../lib/integrations/googleDrive";
-import {
-  COURTLISTENER_TOOLS,
-  type CaseCitationEvent,
-  type CourtlistenerToolEvent,
-} from "./tools/courtlistenerTools";
+import { COURTLISTENER_TOOLS } from "./tools/courtlistenerTools";
 import {
   type DocStore,
   type DocIndex,
   type TabularCellStore,
   type WorkflowStore,
   type ToolCall,
-  type AskInputResponseItem,
-  type AskInputsEvent,
-  type EditAnnotation,
   devLog,
   resolveDocLabel,
   TOOL_ERROR_MESSAGE,
@@ -201,6 +193,13 @@ export async function runLLMStream(params: {
   docStore: DocStore;
   docIndex: DocIndex;
   userId: string;
+  /**
+   * The caller's authenticated email. Direct (email-keyed) grants are part of
+   * the per-document role check edit_document runs before it writes, so a
+   * surface that omits it only lets the model edit documents the caller
+   * reaches as creator or organization member.
+   */
+  userEmail?: string | null;
   db: Db;
   write: (s: string) => void;
   extraTools?: unknown[];
@@ -271,6 +270,7 @@ export async function runLLMStream(params: {
     docStore,
     docIndex,
     userId,
+    userEmail,
     db,
     write: unsafeWrite,
     extraTools,
@@ -618,7 +618,10 @@ export async function runLLMStream(params: {
           courtlistenerTurnState,
           apiKeys,
           nonce,
-          { connectorApprovals: connectorApprovals && includeAskInputs },
+          {
+            connectorApprovals: connectorApprovals && includeAskInputs,
+            userEmail,
+          },
         );
         throwIfAborted(signal);
         for (const r of docsRead) {

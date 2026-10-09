@@ -10,6 +10,9 @@
     "sourceMap": true,
     "rootDir": "./src",
     "strict": true,
+    // Unused imports, locals and private functions fail the build instead of
+    // accumulating unnoticed.
+    "noUnusedLocals": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,

@@ -38,6 +38,7 @@ import {
     type NoModelsReason,
     type ReasoningLevel,
 } from "./ModelToggle";
+import { routerModelsFromProfile } from "@/app/lib/routerModels";
 import { NoModelsWarningPopup } from "../popups/NoModelsWarningPopup";
 import { WarningPopup } from "../popups/WarningPopup";
 import {
@@ -206,11 +207,7 @@ function ChatInputForChatImpl(
         lastSelectedModel: profile?.lastSelectedChatModel,
         routerSelections:
             profile && !apiKeysDegraded
-                ? {
-                  openRouterModels: profile.openRouterModels,
-                  vercelModels: profile.vercelModels,
-                  openCodeGoModels: profile.openCodeGoModels,
-                  }
+                ? routerModelsFromProfile(profile)
                 : null,
         apiKeys: apiKeysDegraded ? undefined : profile?.apiKeys,
         configuredModelIds,
@@ -693,7 +690,7 @@ function ChatInputForChatImpl(
                     {(selectedWorkflow || attachedDocs.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
                             {selectedWorkflow && (
-                                <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow backdrop-blur-sm">
+                                <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow">
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -825,7 +822,7 @@ function ChatInputForChatImpl(
                     {/* Controls */}
                     <div
                         ref={controlsRef}
-                        className="flex items-center justify-between py-2.5 pr-2.5 pl-1.5"
+                        className="flex items-center justify-between py-2 pr-2 pl-1.5"
                     >
                         <div className="flex items-center gap-1">
                             {!hideAddDocButton && composerOpen && (
@@ -851,7 +848,7 @@ function ChatInputForChatImpl(
                                     }}
                                     aria-label="Open workflows"
                                     className={cn(
-                                        "flex items-center gap-1.5 rounded-lg px-2 h-8 text-sm transition-colors",
+                                        "flex h-7.5 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm transition-colors",
                                         selectedWorkflow
                                             ? "text-blue-600 hover:text-blue-700"
                                             : "text-gray-400 hover:text-gray-700",
@@ -884,10 +881,12 @@ function ChatInputForChatImpl(
                                     apiKeysLoading={
                                         profileLoading && !profile
                                     }
-                                    openRouterModels={profile?.openRouterModels}
-                                    vercelModels={profile?.vercelModels}
-                                    openCodeGoModels={profile?.openCodeGoModels}
+                                    routerModels={routerModelsFromProfile(profile)}
                                     compact={compactControls}
+                                    triggerClassName={cn(
+                                        "h-7.5",
+                                        compactControls && "w-7.5",
+                                    )}
                                     onNoModelsClick={setNoModelsWarning}
                                     reasoningLevel={reasoningLevel}
                                     onReasoningChange={handleReasoningChange}
@@ -899,7 +898,7 @@ function ChatInputForChatImpl(
                                     isLoading ? "Stop response" : "Send message"
                                 }
                                 className={cn(
-                                    "relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[11px] h-8 w-8 flex items-center justify-center cursor-pointer disabled:cursor-default disabled:from-neutral-600 disabled:to-black backdrop-blur-xl border-0 active:enabled:scale-95 transition-all duration-150",
+                                    "relative flex h-7.5 w-7.5 cursor-pointer items-center justify-center rounded-full border-0 bg-gradient-to-b from-neutral-700 to-black text-white transition-all duration-150 active:enabled:scale-95 disabled:from-neutral-600 disabled:to-black",
                                     "shadow-[0_3px_9px_rgba(15,23,42,0.10),inset_1px_1px_0_rgba(255,255,255,0.22),inset_-1px_-1px_0_rgba(255,255,255,0.10),inset_-4px_-4px_9px_rgba(15,23,42,0.2)]",
                                 )}
                                 onClick={handleActionClick}

@@ -8,13 +8,15 @@ import {
   LoaderCircle,
   Settings2,
 } from "lucide-react";
+import { twMerge } from "tailwind-merge";
 import {
+  DROPDOWN_ROWS_CLASS,
   Dropdown,
   DropdownContent,
   DropdownItem,
   DropdownSeparator,
   DropdownTrigger,
-} from "./DropdownUI";
+} from "./dropdown";
 import {
   LIQUID_GLASS_FLOAT_CLASS,
   LIQUID_GLASS_HOVER_CLASS,
@@ -28,7 +30,7 @@ export interface ModelToggleOption {
   id: string;
   label: string;
   group: ModelToggleGroup;
-  /** Execution path shown when the same model is available more than once. */
+  /** Provider route; direct/local/configured sources only show for duplicates. */
   source?: string;
 }
 
@@ -54,15 +56,45 @@ const REASONING_LEVEL_LABELS: Record<ReasoningLevel, string> = {
 
 const STANDARD_REASONING_LEVELS: readonly ReasoningLevel[] =
   REASONING_LEVELS.filter((level) => level !== "max");
-const GPT_56_REASONING_LEVELS: readonly ReasoningLevel[] = REASONING_LEVELS;
+const ALWAYS_REASONING_LEVELS: readonly ReasoningLevel[] =
+  REASONING_LEVELS.filter((level) => level !== "none");
 
 /** Explicit AI SDK reasoning levels supported by the selected model family. */
 export function reasoningLevelsForModel(
   modelId: string,
 ): readonly ReasoningLevel[] {
-  const catalogId = modelId.replace(/^(?:openrouter|vercel)\//, "");
-  if (/(?:^|\/)gpt-5\.6(?:-|$)/.test(catalogId)) {
-    return GPT_56_REASONING_LEVELS;
+  const catalogId = modelId.startsWith("bedrock/")
+    ? // Bedrock names Claude "anthropic.claude-…", optionally behind a
+      // cross-region inference-profile prefix ("us.", "us-gov.") or at the
+      // end of an inference-profile ARN, after its last "/".
+      modelId
+        .split("/")
+        .at(-1)!
+        .replace(/^(?:[a-z]+(?:-[a-z]+)*\.)?anthropic\./, "")
+    : modelId
+        .replace(/^(?:openrouter|vercel)\//, "")
+        // An explicit protocol is not part of the model name.
+        .replace(
+          /^((?:vertex|azure-foundry)\/)(?:anthropic|openai|gemini):/,
+          "$1",
+        )
+        // Vertex pins Claude versions as "claude-opus-5-5@20260101".
+        .replace(/^(vertex\/[^@]+)@/, "$1-");
+  // Astra, Sol 6.1, and current Fable/Opus cannot disable thinking.
+  if (
+    /(?:^|\/)(?:gpt-6-astra|gpt-6\.1-sol|claude-fable-5-1|claude-opus-5-5)(?:$|-)/.test(
+      catalogId,
+    )
+  ) {
+    return catalogId.includes("claude-")
+      ? STANDARD_REASONING_LEVELS.filter((level) => level !== "none")
+      : ALWAYS_REASONING_LEVELS;
+  }
+  if (/(?:^|\/)gpt-(?:5\.6|6(?:\.1)?)(?:-|$)/.test(catalogId)) {
+    return REASONING_LEVELS;
+  }
+  if (/(?:^|\/)mistral-(?:large-4|medium-3-5|small-2603)$/.test(catalogId)) {
+    return ["none", "high"];
   }
   return STANDARD_REASONING_LEVELS;
 }
@@ -97,6 +129,7 @@ export const MODEL_TOGGLE_GROUPS: readonly ModelToggleGroup[] = [
   "DeepSeek",
   "Xiaomi",
   "Mistral AI",
+  "xAI",
   "Configured",
   "Local",
   "Other providers",
@@ -121,6 +154,8 @@ export interface ModelToggleUIProps {
   /** `default` matches the toolbar's other buttons; `muted` is the lighter chat-composer look. */
   tone?: "muted" | "default";
   modalInput?: boolean;
+  /** Extra classes for the compact trigger button, for a host row's sizing. */
+  triggerClassName?: string;
   emptyLabel?: string;
   onEmptyClick?: () => void;
   reasoningLevel?: ReasoningLevel;
@@ -145,6 +180,7 @@ export function ModelToggleUI({
   compact = false,
   tone = "muted",
   modalInput = false,
+  triggerClassName,
   emptyLabel = "No Models",
   onEmptyClick,
   reasoningLevel,
@@ -192,8 +228,11 @@ export function ModelToggleUI({
         disabled={!onEmptyClick}
         className={
           modalInput
-            ? `flex h-10 w-full items-center rounded-xl px-3 text-sm text-gray-400 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} backdrop-blur-xl transition-colors enabled:cursor-pointer enabled:hover:text-gray-700 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2`
-            : "flex h-8 shrink-0 items-center rounded-lg px-2 text-sm text-gray-400 transition-colors enabled:cursor-pointer enabled:hover:text-gray-700 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2"
+            ? `flex h-10 w-full items-center rounded-xl px-3 text-sm text-gray-400 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} transition-colors enabled:cursor-pointer enabled:hover:text-gray-700 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2`
+            : twMerge(
+                "flex h-8 shrink-0 items-center rounded-lg px-2 text-sm text-gray-400 transition-colors enabled:cursor-pointer enabled:hover:text-gray-700 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
+                triggerClassName,
+              )
         }
       >
         <span className="max-w-[200px] truncate">{emptyLabel}</span>
@@ -219,8 +258,11 @@ export function ModelToggleUI({
           disabled={loading}
           className={
             modalInput
-              ? `flex h-10 w-full items-center justify-between gap-2 rounded-xl px-3 text-sm text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} backdrop-blur-xl transition-colors enabled:cursor-pointer disabled:cursor-default disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${open ? LIQUID_GLASS_SELECTED_CLASS : ""}`
-              : `flex h-8 shrink-0 items-center rounded-lg text-sm ${tone === "default" ? "text-gray-700 enabled:hover:text-gray-900 disabled:hover:text-gray-700" : "text-gray-400 enabled:hover:text-gray-700 disabled:hover:text-gray-400"} transition-colors enabled:cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${compact ? "w-8 justify-center px-0" : "gap-1.5 px-2"} ${open ? "text-gray-700" : ""}`
+              ? `flex h-10 w-full items-center justify-between gap-2 rounded-xl px-3 text-sm text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} transition-colors enabled:cursor-pointer disabled:cursor-default disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${open ? LIQUID_GLASS_SELECTED_CLASS : ""}`
+              : twMerge(
+                  `flex h-8 shrink-0 items-center rounded-lg text-sm ${tone === "default" ? "text-gray-700 enabled:hover:text-gray-900 disabled:hover:text-gray-700" : "text-gray-400 enabled:hover:text-gray-700 disabled:hover:text-gray-400"} transition-colors enabled:cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2 ${compact ? "w-8 justify-center px-0" : "gap-1.5 px-2"} ${open ? "text-gray-700" : ""}`,
+                  triggerClassName,
+                )
           }
         >
           {compact ? (
@@ -251,7 +293,9 @@ export function ModelToggleUI({
         sideOffset={modalInput ? 4 : 8}
         className={`flex max-h-[min(320px,60vh)] flex-col overflow-hidden rounded-2xl text-gray-700 ${modalInput ? "w-[var(--radix-dropdown-menu-trigger-width)]" : "w-56"}`}
       >
-        <div className="-mr-1.5 min-h-0 flex-1 space-y-1 overflow-y-auto pr-1.5">
+        <div
+          className={`-mr-1.5 min-h-0 flex-1 overflow-y-auto pr-1.5 ${DROPDOWN_ROWS_CLASS}`}
+        >
           {availableGroups.map(({ group, items }) => {
             const expanded = expandedGroup === group;
             return (
@@ -281,18 +325,24 @@ export function ModelToggleUI({
                         aria-hidden="true"
                         className="h-1 w-1 shrink-0 rounded-full bg-gray-400/80"
                       />
-                      <span className="flex-1">{model.label}</span>
+                      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                        {model.label}
+                      </span>
+                      {model.id === value && (
+                        <Check
+                          aria-hidden="true"
+                          className="ml-1 h-3.5 w-3.5 shrink-0 text-gray-600"
+                        />
+                      )}
                       {model.source &&
-                        (routeCounts.get(
-                          `${model.group}\u0000${model.label.toLocaleLowerCase()}`,
-                        ) ?? 0) > 1 && (
-                          <span className="text-[9px] font-medium text-gray-400">
+                        (!["Direct", "Local", "Configured"].includes(model.source) ||
+                          (routeCounts.get(
+                            `${model.group}\u0000${model.label.toLocaleLowerCase()}`,
+                          ) ?? 0) > 1) && (
+                          <span className="shrink-0 text-right text-[10px] font-medium text-gray-400">
                             {model.source}
                           </span>
                         )}
-                      {model.id === value && (
-                        <Check className="ml-1 h-3.5 w-3.5 text-gray-600" />
-                      )}
                     </DropdownItem>
                   ))}
               </React.Fragment>

@@ -838,11 +838,10 @@ describe("org invitations", () => {
     });
 
     it("never demotes an admin who accepts a member invitation", async () => {
-        // Roles are floors, not ceilings — the same rule strongerRole applies
-        // to project grants. An invitation is an offer of access, not an
-        // instruction to reduce it, and quietly demoting the org's only admin
-        // by way of a stale invitation would trip the last-admin guard on the
-        // way past.
+        // Roles are floors, not ceilings. An invitation is an offer of access,
+        // not an instruction to reduce it, and quietly demoting the org's only
+        // admin by way of a stale invitation would trip the last-admin guard
+        // on the way past.
         const db = seedOrg();
         (db._tables.org_invitations as Row[]).push({
             id: "inv-weak",

@@ -102,7 +102,7 @@ export function ConnectorActionCard({ item }: { item: ConnectorApprovalItem }) {
       )}
       {item.before !== undefined && (
         <details className="group/approval-details">
-          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 [&::-webkit-details-marker]:hidden">
             <ChevronRight
               aria-hidden="true"
               className="size-3 shrink-0 group-open/approval-details:rotate-90"

@@ -2,14 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Input } from "@/app/components/ui/input";
+import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import { SiteLogo } from "@/app/components/site-logo";
 import {
-    authGlassCardClassName,
-    authInputClassName,
-} from "@/app/components/auth/authStyles";
+    authGlassCardUIClassName,
+    authInputUIClassName,
+} from "@/shared/ui/AuthStylesUI";
 import { requestPasswordReset } from "@/app/lib/authApi";
 import { FieldLabel } from "@/app/components/ui/form-field";
 
@@ -45,7 +45,7 @@ export default function ForgotPasswordPage() {
                 <SiteLogo size="lg" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className={authGlassCardClassName}>
+                <div className={authGlassCardUIClassName}>
                     {submitted ? (
                         <div>
                             <h1 className="text-2xl font-medium font-serif text-gray-950">
@@ -84,7 +84,7 @@ export default function ForgotPasswordPage() {
                                     <FieldLabel htmlFor="email">
                                         Email
                                     </FieldLabel>
-                                    <Input
+                                    <InputUI
                                         id="email"
                                         type="email"
                                         autoComplete="email"
@@ -93,7 +93,7 @@ export default function ForgotPasswordPage() {
                                             setEmail(event.target.value)
                                         }
                                         required
-                                        className={`w-full ${authInputClassName}`}
+                                        className={`w-full ${authInputUIClassName}`}
                                     />
                                 </div>
                                 <PillButtonUI

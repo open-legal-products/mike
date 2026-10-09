@@ -168,7 +168,9 @@ module.exports = async (_env, options) => {
     },
     resolve: {
       extensions: [".ts", ".tsx", ".js", ".jsx"],
-      modules: [path.resolve(__dirname, "node_modules"), "node_modules"],
+      // Resolve each package's nested dependencies before the add-in fallback.
+      // Sentry's build plugin and runtime SDK can require different versions.
+      modules: ["node_modules", path.resolve(__dirname, "node_modules")],
       alias: {
         // Cross-app source files must use the add-in's React runtime so the
         // bundle never picks up a second copy from frontend/node_modules.
@@ -193,6 +195,7 @@ module.exports = async (_env, options) => {
         "@mike/document-event-blocks-ui": frontendSharedUi(
           "DocumentEventBlocksUI.tsx",
         ),
+        "@mike/input-ui": frontendSharedUi("InputUI.tsx"),
         "@mike/glass-card-ui": frontendSharedUi("GlassCardUI.tsx"),
         "@mike/modal-ui": frontendSharedUi("ModalUI.tsx"),
         "@mike/header-buttons-ui": frontendSharedUi(
@@ -203,7 +206,7 @@ module.exports = async (_env, options) => {
           "TabPillButtonUI.tsx",
         ),
         "@mike/toggle-switch-ui": frontendSharedUi("ToggleSwitchUI.tsx"),
-        "@mike/dropdown-ui": frontendSharedUi("DropdownUI.tsx"),
+        "@mike/dropdown-ui": frontendSharedUi("dropdown.tsx"),
         "@mike/citation-pill-ui": frontendSharedUi("CitationPillUI.tsx"),
         "@mike/model-toggle-ui": frontendSharedUi("ModelToggleUI.tsx"),
         "@mike/mike-icon-ui": frontendSharedUi("MikeIconUI.tsx"),

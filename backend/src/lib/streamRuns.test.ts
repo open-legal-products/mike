@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Response } from "express";
 import {
     FINISHED_RUN_RETENTION_MS,
+    IDLE_RUN_TIMEOUT_MS,
     MAX_RUN_LIFETIME_MS,
     STOPPED_RUN_GRACE_MS,
     attachStreamRunSse,
@@ -10,6 +11,7 @@ import {
     getStreamRun,
     resetStreamRunsForTests,
     startStreamRun,
+    stopOutcomeFrame,
 } from "./streamRuns";
 
 /** An Express response reduced to what SSE streaming touches. */
@@ -237,7 +239,7 @@ describe("stream runs", () => {
             end: () => events.push("end"),
         });
 
-        vi.advanceTimersByTime(MAX_RUN_LIFETIME_MS + 1);
+        hung.stop();
         expect(hung.signal.aborted).toBe(true);
         expect(hung.finished).toBe(false);
         expect(
@@ -307,5 +309,100 @@ describe("stream runs", () => {
         res.writableEnded = true;
         run.write("data: ignored\n\n");
         expect(res.chunks).toEqual([]);
+    });
+
+    describe("deadlines", () => {
+        it("aborts a run that goes silent and ends readers with one error then DONE", () => {
+            vi.useFakeTimers();
+            const run = start("run-idle", "review:idle");
+            const reader = fakeResponse();
+            attachStreamRunSse(reader as unknown as Response, run);
+
+            vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS + 1);
+            expect(run.signal.aborted).toBe(true);
+            expect(run.stopReason).toBe("idle");
+
+            // The route never unwinds: the grace timer ends it.
+            vi.advanceTimersByTime(STOPPED_RUN_GRACE_MS + 1);
+            expect(run.finished).toBe(true);
+            expect(reader.chunks).toHaveLength(2);
+            expect(reader.chunks[0]).toContain('"type":"error"');
+            expect(reader.chunks[0]).toContain('"safe_to_display":true');
+            expect(reader.chunks[0]).not.toContain("cancelled");
+            expect(reader.chunks[1]).toContain("[DONE]");
+        });
+
+        it("keeps a run alive for as long as it keeps producing output", () => {
+            vi.useFakeTimers();
+            const run = start("run-busy", "review:busy");
+            // Three times the idle window, but never silent for a full one.
+            for (let i = 0; i < 6; i++) {
+                vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS / 2);
+                run.write(`data: {"n":${i}}\n\n`);
+            }
+            expect(run.signal.aborted).toBe(false);
+            expect(run.stopReason).toBeNull();
+        });
+
+        it("counts keep-alive comments as activity", () => {
+            vi.useFakeTimers();
+            const run = start("run-wait", "review:wait");
+            for (let i = 0; i < 4; i++) {
+                vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS - 1000);
+                run.write(": tool-wait\n\n");
+            }
+            expect(run.signal.aborted).toBe(false);
+        });
+
+        it("stops a run that outlives the lifetime cap even while it keeps emitting", () => {
+            vi.useFakeTimers();
+            vi.stubEnv("STREAM_MAX_LIFETIME_MS", String(10 * 60_000));
+            const run = start("run-cap", "review:cap");
+            for (let i = 0; i < 20; i++) {
+                vi.advanceTimersByTime(60_000);
+                run.write(`data: {"n":${i}}\n\n`);
+            }
+            expect(run.signal.aborted).toBe(true);
+            expect(run.stopReason).toBe("max_lifetime");
+            vi.unstubAllEnvs();
+        });
+
+        it("honours the env overrides", () => {
+            vi.useFakeTimers();
+            vi.stubEnv("STREAM_IDLE_TIMEOUT_MS", "60000");
+            const run = start("run-env", "review:env");
+            vi.advanceTimersByTime(59_000);
+            expect(run.signal.aborted).toBe(false);
+            vi.advanceTimersByTime(2_000);
+            expect(run.signal.aborted).toBe(true);
+            vi.unstubAllEnvs();
+        });
+
+        it("an explicit stop keeps the cancelled outcome and clears the deadline timers", () => {
+            vi.useFakeTimers();
+            const run = start("run-user", "review:user");
+            run.stop();
+            expect(run.stopReason).toBe("user");
+            expect(stopOutcomeFrame(run)).toContain('"type":"cancelled"');
+            // A later deadline must not re-stop or change the reason.
+            vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS * 2);
+            expect(run.stopReason).toBe("user");
+        });
+
+        it("clears the deadline timers when the run finishes", () => {
+            vi.useFakeTimers();
+            const run = start("run-done", "review:done");
+            run.finish();
+            expect(vi.getTimerCount()).toBe(1); // only the retention timer
+            vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS * 2);
+            expect(run.signal.aborted).toBe(false);
+        });
+
+        it("a deadline outcome frame is an error, not cancelled", () => {
+            vi.useFakeTimers();
+            const run = start("run-frame", "review:frame");
+            vi.advanceTimersByTime(IDLE_RUN_TIMEOUT_MS + 1);
+            expect(stopOutcomeFrame(run)).toContain('"type":"error"');
+        });
     });
 });

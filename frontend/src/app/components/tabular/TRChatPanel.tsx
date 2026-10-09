@@ -11,7 +11,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Pencil, Trash2 } from "lucide-react";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { MikeIcon } from "@/shared/ui/MikeIconUI";
 import {
     streamTabularChat,
     streamTabularChatTurn,

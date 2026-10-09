@@ -73,10 +73,26 @@ afterEach(async () => {
     vi.unstubAllGlobals();
 });
 
+/**
+ * Wait until the editor is interactive, not merely painted. The renderer's
+ * DOM commits one scheduler tick before its ready effect, and while RTL polls
+ * React runs effects outside act(). Until onReady runs, DocxView has no
+ * surface: edits are ignored and onReady later resets the scroll position.
+ * Its follow-up effects (citation focus) need one more tick. In the browser
+ * the loading overlay covers the editor for this whole window.
+ */
+async function editorReady(text?: string) {
+    if (text) await screen.findByText(text);
+    const editor = await screen.findByTestId("renderer-scroll");
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Loading document" })).toBeNull());
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    return editor;
+}
+
 it("toggles editing controls without replacing the editor or refetching bytes", async () => {
     const view = (toolbarVisible: boolean) => <DocxView documentId="toolbar-toggle" cacheBytes={false} defaultMode="edit" toolbarVisible={toolbarVisible} />;
     const { rerender } = render(view(true));
-    const editor = await screen.findByTestId("renderer-scroll");
+    const editor = await editorReady();
     const toolbar = screen.getByRole("toolbar");
     editor.scrollTop = 420;
     const calls = vi.mocked(authenticatedFetch).mock.calls.length;
@@ -145,8 +161,7 @@ it("selects one native citation range and leaves selection alone during repaints
     const view = (quoteFocusKey: number) => <DocxView documentId="native-selection" cacheBytes={false}
         defaultMode="edit" quotes={quotes} quoteFocusKey={quoteFocusKey} />;
     const { container, rerender } = render(view(0));
-    await screen.findByText("EigenPal preview");
-    await waitFor(() => expect(screen.queryByRole("status", { name: "Loading document" })).toBeNull());
+    await editorReady("EigenPal preview");
     expect(selectText).toHaveBeenCalledWith("Missing segment");
     expect(selectText).toHaveBeenLastCalledWith("Payment in thirty days.");
     expect(selectText).not.toHaveBeenCalledWith("Confidential information.");
@@ -234,10 +249,7 @@ it("leaves native revision painting alone during page repaints and clears it on 
     activateRevision.mockReturnValue(true);
     const { rerender } = render(<DocxView documentId="paint-settle" cacheBytes={false}
         highlightEdit={{ key: "edit-8", ins_w_id: "8" }} />);
-    await screen.findByText("EigenPal preview");
-    await waitFor(() => expect(screen.queryByRole("status", { name: "Loading document" })).toBeNull());
-    // Finish the initial ready-state effects before observing a later repaint.
-    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+    await editorReady("EigenPal preview");
     activateRevision.mockClear();
     clearRevisionHighlight.mockClear();
     const page = document.createElement("div");
@@ -262,12 +274,12 @@ it("reports rendering failure and recovers with new bytes", async () => {
 it("keeps the live editor through metadata refreshes after local editing begins", async () => {
     const view = (refetchKey: number) => <DocxView documentId="live-edit" versionId="v1" cacheBytes={false} defaultMode="edit" refetchKey={refetchKey} />;
     const { rerender } = render(view(0));
-    await screen.findByText("Document revision 1");
+    const editor = await editorReady("Document revision 1");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
-    const editor = screen.getByTestId("renderer-scroll");
     vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([2])));
-    rerender(view(1));
-    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
+    // Let the refreshed bytes arrive, so the assertions observe the adoption decision.
+    await act(async () => { rerender(view(1)); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(authenticatedFetch).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("renderer-scroll")).toBe(editor);
     expect(screen.getByText("Document revision 1")).toBeVisible();
 });
@@ -293,14 +305,13 @@ it("adopts a server refresh after saving and uses the refreshed content hash for
     const view = (refetchKey: number) => <DocxView documentId="clean-refresh" versionId="v1" cacheBytes={false}
         defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
     const { rerender } = render(view(0));
-    await screen.findByText("Document revision 1");
-    const originalEditor = screen.getByTestId("renderer-scroll");
+    const originalEditor = await editorReady("Document revision 1");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "Save document" }));
     await waitFor(() => expect(saveState).toHaveBeenLastCalledWith("clean-refresh", expect.objectContaining({ dirty: false, status: "saved" })));
     vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([3])));
     rerender(view(1));
-    await screen.findByText("Document revision 3");
+    await editorReady("Document revision 3");
     expect(screen.getByTestId("renderer-scroll")).not.toBe(originalEditor);
     exportDocx.mockResolvedValue(new Uint8Array([43]).buffer);
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
@@ -316,8 +327,7 @@ it("retains the live editor and save baseline when a refresh contains its own sa
     const view = (refetchKey: number) => <DocxView documentId="own-save-refresh" versionId="v1" cacheBytes={false}
         defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
     const { rerender } = render(view(0));
-    await screen.findByText("Document revision 1");
-    const originalEditor = screen.getByTestId("renderer-scroll");
+    const originalEditor = await editorReady("Document revision 1");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "Save document" }));
     await waitFor(() => expect(saveState).toHaveBeenLastCalledWith("own-save-refresh", expect.objectContaining({ dirty: false, status: "saved" })));
@@ -342,8 +352,7 @@ it("does not replay a snapshot received during a save after that save completes"
     const view = (refetchKey: number) => <DocxView documentId="inflight-refresh" versionId="v1" cacheBytes={false}
         defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
     const { rerender } = render(view(0));
-    await screen.findByText("Document revision 1");
-    const originalEditor = screen.getByTestId("renderer-scroll");
+    const originalEditor = await editorReady("Document revision 1");
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "Save document" }));
     await waitFor(() => expect(replaceVersion).toHaveBeenCalledOnce());
@@ -362,8 +371,7 @@ it("ignores a server read started before a local save even if it arrives after t
     const view = (refetchKey: number) => <DocxView documentId="late-refresh" versionId="v1" cacheBytes={false}
         defaultMode="edit" refetchKey={refetchKey} onSaveStateChange={saveState} />;
     const { rerender } = render(view(0));
-    await screen.findByText("Document revision 1");
-    const originalEditor = screen.getByTestId("renderer-scroll");
+    const originalEditor = await editorReady("Document revision 1");
     let finishRead!: (response: Response) => void;
     vi.mocked(authenticatedFetch).mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
     rerender(view(1));
@@ -390,7 +398,7 @@ function ClosableViewer() {
 it("keeps the actual editor mounted after failed saves until discard is confirmed", async () => {
     replaceVersion.mockRejectedValue(new Error("network"));
     render(<ClosableViewer />);
-    const editor = await screen.findByTestId("renderer-scroll");
+    const editor = await editorReady();
     fireEvent.click(screen.getByRole("button", { name: "Change document" }));
     fireEvent.click(screen.getByRole("button", { name: "Save document" }));
     await screen.findByText(/Changes could not be saved/);

@@ -88,6 +88,7 @@ variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 - [Microsoft Word add-in](word-addin/README.md)
 - [Tamper-evident exports](docs/tamper-evident-exports.md)
 - [Safe local testing](docs/safe-local-testing.md)
+- [Preset contract templates and publisher credits](docs/preset-templates.md)
 - [End-to-end testing and CI](docs/e2e-ci.md)
 - [Contributing](CONTRIBUTING.md)
 - [Open-source credits](CREDITS.md)
@@ -103,6 +104,8 @@ packaged and synchronized with this application.
 ## License
 
 Mike is available under the [GNU Affero General Public License v3.0](LICENSE).
+Bundled [public contract templates](docs/preset-templates.md#maintaining-the-catalog)
+retain their publishers' separate licenses and notices.
 
 ## Gmail and Google Calendar
 

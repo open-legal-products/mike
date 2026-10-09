@@ -2,7 +2,7 @@
 // check), recursive delete, and moving documents between folders.
 
 import { parseFolderPath, validateFolderMove, collectFolderSubtree } from "../../lib/folderTree";
-import { checkProjectAccess } from "../../lib/access";
+import { checkProjectAccess, creatorScopedAllowed } from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import {
   type Db,
@@ -103,6 +103,9 @@ export async function updateProjectFolder(
   return { ok: true, folder: data };
 }
 
+export const FOLDER_DELETE_FOREIGN_DOCUMENTS_FORBIDDEN =
+  "This folder contains documents added by other people. Only the project owner can delete it.";
+
 export type DeleteFolderResult =
   | { ok: true }
   | { ok: false; kind: "forbidden" }
@@ -121,10 +124,13 @@ export async function deleteProjectFolder(
 ): Promise<DeleteFolderResult> {
   const { projectId, folderId, userId, userEmail } = args;
 
-  // Folder deletion cascades into every nested document and its storage
-  // objects — but so does deleting those documents one at a time, which a
-  // member may already do. Gating the folder higher bought no safety, only a
-  // confusing extra tier.
+  // Folder deletion cascades into every nested document, all its versions,
+  // and their storage objects. Deleting a single document is creator-scoped
+  // (deleteDocument / creatorScopedAllowed), so an Editor may only cascade
+  // over a subtree whose documents they could each delete themselves; one
+  // colleague's document anywhere below refuses the whole delete rather than
+  // leaving a half-deleted tree. Owners may already delete the whole project
+  // and with it every document, so they may clear a subtree too.
   const access = await checkProjectAccess(projectId, userId, userEmail, db);
   if (!access.ok) return { ok: false, kind: "forbidden" };
   if (!can(access.projectRole, "docs.organize"))
@@ -143,10 +149,26 @@ export async function deleteProjectFolder(
 
   const { data: docs, error: docsError } = await db
     .from("documents")
-    .select("id")
+    .select("id, user_id")
     .eq("project_id", projectId)
     .in("folder_id", [...folderIds]);
   if (docsError) return { ok: false, kind: "db_error", error: docsError };
+
+  if (!can(access.projectRole, "container.delete")) {
+    const foreign = (docs ?? []).some((d) => {
+      const creatorId = (d.user_id as string | null) ?? null;
+      return !creatorScopedAllowed(
+        { isCreator: !!creatorId && creatorId === userId, projectRole: access.projectRole },
+        creatorId,
+      );
+    });
+    if (foreign)
+      return {
+        ok: false,
+        kind: "role_forbidden",
+        detail: FOLDER_DELETE_FOREIGN_DOCUMENTS_FORBIDDEN,
+      };
+  }
 
   const docIds = (docs ?? []).map((d) => d.id as string);
   const deleteDocsError = await deleteProjectDocumentsAndVersionFiles(

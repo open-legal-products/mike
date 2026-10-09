@@ -9,13 +9,11 @@ import { Check, MessageSquare, Pencil, Reply, Trash2, X } from "lucide-react";
 import type { Editor } from "@docx-editor.dev/core/contracts/editor";
 import { useEditorSnapshot } from "@docx-editor.dev/react";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { docxCommentEditable } from "./docxCommentEditing";
 import {
@@ -156,7 +154,7 @@ export function DocxReviewActions({
     };
     return (
         <>
-            <DropdownMenu
+            <Dropdown
                 open={!!menu && !!item}
                 onOpenChange={(open) => {
                     if (!open) setMenu(null);
@@ -165,20 +163,20 @@ export function DocxReviewActions({
             >
                 {menu &&
                     createPortal(
-                        <DropdownMenuTrigger asChild>
+                        <DropdownTrigger asChild>
                             <span
                                 aria-hidden="true"
                                 tabIndex={-1}
                                 className="pointer-events-none fixed h-0 w-0"
                                 style={{ left: menu.x, top: menu.y }}
                             />
-                        </DropdownMenuTrigger>,
+                        </DropdownTrigger>,
                         surface.ownerDocument.body,
                     )}
-                <LiquidDropdownContent
+                <DropdownContent
                     align="start"
                     sideOffset={0}
-                    className="z-[250] w-48"
+                    className="w-48"
                     onCloseAutoFocus={(event) => {
                         event.preventDefault();
                         if (pending.current) {
@@ -194,7 +192,7 @@ export function DocxReviewActions({
                 >
                     {item?.kind === "comment" && menu?.highlight ? (
                         <>
-                            <LiquidDropdownItem
+                            <DropdownItem
                                 disabled={!onView}
                                 onSelect={() => {
                                     pending.current = {
@@ -206,19 +204,19 @@ export function DocxReviewActions({
                             >
                                 <MessageSquare className="h-3.5 w-3.5" />
                                 View comment
-                            </LiquidDropdownItem>
-                            <LiquidDropdownItem
+                            </DropdownItem>
+                            <DropdownItem
                                 disabled={disabled}
                                 variant="destructive"
                                 onSelect={() => run("delete")}
                             >
                                 <Trash2 className="h-3.5 w-3.5" />
                                 Delete comment
-                            </LiquidDropdownItem>
+                            </DropdownItem>
                         </>
                     ) : item?.kind === "comment" ? (
                         <>
-                            <LiquidDropdownItem
+                            <DropdownItem
                                 disabled={disabled || !author?.trim()}
                                 onSelect={() => {
                                     pending.current = {
@@ -230,9 +228,9 @@ export function DocxReviewActions({
                             >
                                 <Reply className="h-3.5 w-3.5" />
                                 Reply to comment
-                            </LiquidDropdownItem>
+                            </DropdownItem>
                             {onEdit && (
-                                <LiquidDropdownItem
+                                <DropdownItem
                                     disabled={
                                         disabled ||
                                         !docxCommentEditable(
@@ -251,37 +249,37 @@ export function DocxReviewActions({
                                 >
                                     <Pencil className="h-3.5 w-3.5" />
                                     Edit comment
-                                </LiquidDropdownItem>
+                                </DropdownItem>
                             )}
-                            <LiquidDropdownItem
+                            <DropdownItem
                                 disabled={disabled}
                                 variant="destructive"
                                 onSelect={() => run("delete")}
                             >
                                 <Trash2 className="h-3.5 w-3.5" />
                                 Delete comment
-                            </LiquidDropdownItem>
+                            </DropdownItem>
                         </>
                     ) : (
                         <>
-                            <LiquidDropdownItem
+                            <DropdownItem
                                 disabled={disabled}
                                 onSelect={() => run("accept")}
                             >
                                 <Check className="h-3.5 w-3.5" />
                                 Accept tracked change
-                            </LiquidDropdownItem>
-                            <LiquidDropdownItem
+                            </DropdownItem>
+                            <DropdownItem
                                 disabled={disabled}
                                 onSelect={() => run("reject")}
                             >
                                 <X className="h-3.5 w-3.5" />
                                 Reject tracked change
-                            </LiquidDropdownItem>
+                            </DropdownItem>
                         </>
                     )}
-                </LiquidDropdownContent>
-            </DropdownMenu>
+                </DropdownContent>
+            </Dropdown>
             <WarningPopup
                 open={!!error}
                 title="Unable to update document"

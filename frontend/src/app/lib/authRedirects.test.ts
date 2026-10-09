@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-    authCallbackUrl,
     authErrorDescription,
-    browserAuthCallbackUrl,
     safeAuthNext,
 } from "./authRedirects";
 
@@ -32,31 +30,6 @@ describe("safeAuthNext", () => {
 
     it("uses a caller-provided fallback when no destination is supplied", () => {
         expect(safeAuthNext(undefined, "/login")).toBe("/login");
-    });
-});
-
-describe("authCallbackUrl", () => {
-    it("builds an origin-bound callback with an encoded safe destination", () => {
-        expect(
-            authCallbackUrl(
-                "https://app.example.com",
-                "/settings?emailChange=processed",
-            ),
-        ).toBe(
-            "https://app.example.com/auth/callback?next=%2Fsettings%3FemailChange%3Dprocessed",
-        );
-    });
-
-    it("builds callbacks from the browser origin", () => {
-        expect(browserAuthCallbackUrl("/reset-password")).toBe(
-            "http://localhost:3000/auth/callback?next=%2Freset-password",
-        );
-    });
-
-    it("does not build a browser callback during server rendering", () => {
-        vi.stubGlobal("window", undefined);
-
-        expect(browserAuthCallbackUrl("/reset-password")).toBeUndefined();
     });
 });
 

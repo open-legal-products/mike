@@ -2,6 +2,7 @@ import {
     attachAssistantTurnSse,
     startAssistantTurnRun,
 } from "../../lib/assistantTurnRuns";
+import { stopOutcomeFrame } from "../../lib/streamRuns";
 // HTTP layer for the project-chat module.
 //
 // The route handler parses the request body, calls
@@ -19,7 +20,6 @@ import {
     appendAssistantEventsToMessage,
     AssistantStreamError,
     assistantStreamErrorPayload,
-    ASSISTANT_ERROR_MESSAGE,
     buildCancelledAssistantMessage,
     extractCitations,
     isAbortError,
@@ -241,6 +241,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 docStore,
                 docIndex,
                 userId,
+                userEmail,
                 db,
                 write,
                 extraTools: PROJECT_EXTRA_TOOLS,
@@ -413,7 +414,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                         );
                     }
                 }
-                write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+                write(stopOutcomeFrame(run));
                 write("data: [DONE]\n\n");
                 return;
             }

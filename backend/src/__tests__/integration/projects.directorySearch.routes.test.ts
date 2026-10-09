@@ -80,15 +80,6 @@ vi.mock("../../lib/access", async (importOriginal) => ({
     resolveContentOrgId: vi.fn(async () => null),
 }));
 
-vi.mock("../../lib/userDataCleanup", () => ({
-    deleteProjectsByIds: vi.fn(async () => 0),
-    deleteAllUserChats: vi.fn(async () => {}),
-    deleteAllUserTabularReviews: vi.fn(async () => {}),
-    deleteUserAccountData: vi.fn(async () => {}),
-    deleteUserProjects: vi.fn(async () => 0),
-    listOrgsBlockingAccountDeletion: vi.fn(async () => []),
-}));
-
 vi.mock("../../lib/documentVersions", () => ({
     attachActiveVersionPaths: vi.fn(async () => {}),
     attachLatestVersionNumbers: vi.fn(async () => {}),

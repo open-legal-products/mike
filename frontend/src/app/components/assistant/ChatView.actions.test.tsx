@@ -130,8 +130,18 @@ vi.mock("./UserMessage", () => ({
     UserMessage: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 vi.mock("./AssistantMessage", () => ({
-    AssistantMessage: ({ minHeight }: { minHeight?: string }) => (
-        <div data-testid="assistant-message" style={{ minHeight }} />
+    AssistantMessage: ({
+        minHeight,
+        awaitingInput,
+    }: {
+        minHeight?: string;
+        awaitingInput?: boolean;
+    }) => (
+        <div
+            data-testid="assistant-message"
+            data-awaiting-input={String(!!awaitingInput)}
+            style={{ minHeight }}
+        />
     ),
 }));
 vi.mock("@/app/components/modals/AddDocumentsModal", () => ({
@@ -399,6 +409,39 @@ beforeEach(() => {
     });
     renameChat.mockResolvedValue(undefined);
     deleteChat.mockResolvedValue(undefined);
+});
+
+describe("ChatView responses waiting on the user", () => {
+    const question: Message = { role: "user", content: "Send the email" };
+    const asking = {
+        role: "assistant",
+        content: "",
+        events: [{ type: "ask_inputs", event_id: "ask-1", items: [] }],
+    } as unknown as Message;
+    const earlier = {
+        role: "assistant",
+        content: "Done.",
+        events: [{ type: "content", text: "Done." }],
+    } as unknown as Message;
+
+    it("flags only the message that is still waiting for input or approval", () => {
+        renderView(vi.fn(), [question, earlier, question, asking]);
+
+        expect(
+            screen
+                .getAllByTestId("assistant-message")
+                .map((message) => message.dataset.awaitingInput),
+        ).toEqual(["false", "true"]);
+    });
+
+    it("stops flagging it once the user has replied", () => {
+        renderView(vi.fn(), [question, asking, question]);
+
+        expect(screen.getByTestId("assistant-message")).toHaveAttribute(
+            "data-awaiting-input",
+            "false",
+        );
+    });
 });
 
 describe("ChatView header actions", () => {

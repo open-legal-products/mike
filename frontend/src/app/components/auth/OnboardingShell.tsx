@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { SiteLogo } from "@/app/components/site-logo";
-import { authGlassCardClassName } from "@/app/components/auth/authStyles";
+import { authGlassCardUIClassName } from "@/shared/ui/AuthStylesUI";
 
 export function OnboardingShell({
     step,
@@ -19,7 +19,7 @@ export function OnboardingShell({
                 <SiteLogo size="lg" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className={authGlassCardClassName}>
+                <div className={authGlassCardUIClassName}>
                     <p className="mb-2 text-xs font-medium text-gray-400">
                         {step}
                     </p>

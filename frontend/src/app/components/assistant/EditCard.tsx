@@ -104,7 +104,7 @@ interface Props {
     resolvedStatus?: "accepted" | "rejected";
     /**
      * True while an accept/reject request for any edit on this document
-     * is in flight (from here, DocPanel, or the bulk bar). When true the
+     * is in flight (from here, DocumentContent, or the bulk bar). When true the
      * Accept/Reject buttons disable so the user can't race resolutions.
      */
     isReloading?: boolean;

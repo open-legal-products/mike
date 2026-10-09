@@ -7,7 +7,7 @@ import { SiteLogo } from "@/app/components/site-logo";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { challengeAndVerifyMfa, listMfaFactors } from "@/app/lib/authApi";
-import { authGlassCardClassName } from "@/app/components/auth/authStyles";
+import { authGlassCardUIClassName } from "@/shared/ui/AuthStylesUI";
 import {
     needsMfaVerification,
     VerificationCodeInput,
@@ -137,7 +137,7 @@ export default function VerifyMfaPage() {
             <div className="absolute left-1/2 top-4 -translate-x-1/2 md:top-8">
                 <SiteLogo size="lg" asLink />
             </div>
-            <div className={`w-full max-w-md ${authGlassCardClassName}`}>
+            <div className={`w-full max-w-md ${authGlassCardUIClassName}`}>
                 <div className="mb-8 space-y-2">
                     <h1 className="font-serif text-2xl font-medium text-gray-950">
                         Verify your identity

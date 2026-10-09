@@ -3,16 +3,16 @@
 import { useState } from "react";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 import { cn } from "@/app/lib/utils";
+import { FORM_CONTROL_GLASS_CLASS } from "../ui/form-field";
 import {
     Dropdown,
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/DropdownUI";
+} from "@/shared/ui/dropdown";
 import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SELECTED_CLASS,
-    LIQUID_GLASS_SUBTLE_CLASS,
 } from "@/shared/ui/LiquidGlassUI";
 
 export type ModalSelectOption =
@@ -84,7 +84,8 @@ export function ModalSelect({
                     type="button"
                     disabled={disabled}
                     className={cn(
-                        `flex h-10 w-full items-center justify-between rounded-xl px-3 text-sm text-gray-700 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} backdrop-blur-xl transition-colors focus:outline-none disabled:cursor-not-allowed disabled:opacity-60`,
+                        FORM_CONTROL_GLASS_CLASS,
+                        `flex h-10 items-center justify-between ${LIQUID_GLASS_HOVER_CLASS}`,
                         isOpen && LIQUID_GLASS_SELECTED_CLASS,
                         className,
                     )}
@@ -134,9 +135,9 @@ export function ModalSelect({
                             selected={option.value === value}
                             onSelect={() => handleSelect(option.value)}
                             className={cn(
-                                "theme-dropdown-item flex w-full items-center rounded-md px-3 py-2 text-left text-xs transition-all",
+                                "w-full rounded-md py-2 text-left transition-all",
                                 option.value === value
-                                    ? "theme-dropdown-selected text-gray-900"
+                                    ? "text-gray-900"
                                     : "text-gray-700",
                             )}
                         >

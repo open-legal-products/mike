@@ -343,3 +343,6 @@ export async function listOpenCodeGoModels(
         return { ok: false, kind: "error", error };
     }
 }
+
+export { listBedrockModels } from "./models.bedrock";
+export { listCustomEndpointModels, listXaiModels } from "./models.compatible";

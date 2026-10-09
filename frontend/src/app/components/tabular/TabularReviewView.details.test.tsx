@@ -59,14 +59,8 @@ vi.mock("@/app/contexts/SidebarContext", () => ({
 vi.mock("@/app/hooks/useConfiguredModels", () => ({
     useConfiguredModels: () => [],
 }));
-vi.mock("../assistant/ModelToggle", () => ({
-    SETTINGS_MODELS: [
-        {
-            id: "claude-sonnet-5",
-            label: "Claude Sonnet 5",
-            group: "Anthropic",
-        },
-    ],
+vi.mock("../assistant/ModelToggle", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../assistant/ModelToggle")>()),
     ModelToggle: ({
         onChange,
     }: {

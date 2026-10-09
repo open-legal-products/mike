@@ -1,5 +1,8 @@
 "use client";
 
+import { RowActionMenuItems } from "@/app/components/shared/RowActions";
+import { rowActionSelectionIds } from "@/app/components/shared/TablePrimitive";
+import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -7,7 +10,6 @@ import {
     Loader2,
     Square,
     Play,
-    ChevronDown,
     MessageSquare,
     MessageSquareX,
     Download,
@@ -85,8 +87,8 @@ import { useSidebar } from "@/app/contexts/SidebarContext";
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
-import { LIQUID_GLASS_FLOAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { ModelToggle, type NoModelsReason } from "../assistant/ModelToggle";
+import { routerModelsFromProfile } from "@/app/lib/routerModels";
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 
@@ -179,7 +181,6 @@ export function TRView({ reviewId, projectId }: Props) {
     const [noModelsWarning, setNoModelsWarning] =
         useState<NoModelsReason | null>(null);
     const [modelRequiredWarning, setModelRequiredWarning] = useState(false);
-    const actionsRef = useRef<HTMLDivElement>(null);
     const tableRef = useRef<TRTableHandle>(null);
     const reviewFileUploadInputRef = useRef<HTMLInputElement>(null);
     const reviewFolderUploadInputRef = useRef<HTMLInputElement>(null);
@@ -224,19 +225,6 @@ export function TRView({ reviewId, projectId }: Props) {
         window.history.replaceState(null, "", newUrl);
     }, [chatOpen, selectedChatId]);
 
-    useEffect(() => {
-        if (!actionsOpen) return;
-        function handleClickOutside(e: MouseEvent) {
-            if (
-                actionsRef.current &&
-                !actionsRef.current.contains(e.target as Node)
-            )
-                setActionsOpen(false);
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () =>
-            document.removeEventListener("mousedown", handleClickOutside);
-    }, [actionsOpen]);
 
     useEffect(() => {
         // Cancellation flag: on a rapid reviewId change the previous fetch
@@ -756,7 +744,7 @@ export function TRView({ reviewId, projectId }: Props) {
                 }
                 const provider =
                     payload &&
-                    ["claude", "gemini", "openai"].includes(payload.provider)
+                    ["claude", "gemini", "openai", "mistral"].includes(payload.provider)
                         ? (payload.provider as ModelProvider)
                         : getModelProvider(tabularModel);
                 if (payload?.code === "missing_api_key" && provider) {
@@ -1032,11 +1020,11 @@ export function TRView({ reviewId, projectId }: Props) {
         setExpandedDocumentId(document.id);
     }
 
-    async function handleDeleteDocuments() {
+    async function handleDeleteDocuments(targetIds: string[] = selectedRowIds) {
         // Removing documents deletes their cells — member tier, like every
         // other reshaping of the review.
         if (!requireStructure("remove documents from this review")) return;
-        const rowIdsToDelete = [...selectedRowIds];
+        const rowIdsToDelete = [...targetIds];
         if (rowIdsToDelete.length === 0) return;
         const documentIdsToDelete = new Set(
             rows
@@ -1110,9 +1098,20 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    async function handleClearResults() {
+    async function handleClearResults(targetIds: string[] = selectedRowIds) {
         if (!requireStructure("clear results")) return;
-        await clearResultsForRows([...selectedRowIds]);
+        await clearResultsForRows([...targetIds]);
+    }
+
+    function renderReviewRowActions(ids: string[], close?: () => void) {
+        return (
+            <RowActionMenuItems
+                onClose={close}
+                onClearResults={() => void handleClearResults(ids)}
+                clearResultsDisabled={cellMutationsBlocked}
+                onDelete={() => void handleDeleteDocuments(ids)}
+            />
+        );
     }
 
     async function handleClearAllResults() {
@@ -1501,13 +1500,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                             apiKeysLoading={
                                                 profileLoading && !profile
                                             }
-                                            openRouterModels={
-                                                profile?.openRouterModels
-                                            }
-                                            vercelModels={profile?.vercelModels}
-                                            openCodeGoModels={
-                                                profile?.openCodeGoModels
-                                            }
+                                            routerModels={routerModelsFromProfile(profile)}
                                             onNoModelsClick={setNoModelsWarning}
                                         />
                                     ),
@@ -1594,63 +1587,11 @@ export function TRView({ reviewId, projectId }: Props) {
                                         <div className="h-3 w-24 rounded bg-gray-100 animate-pulse" />
                                     ) : null}
                                     {!loading && selectedRowIds.length > 0 && (
-                                        <>
-                                            {/* Desktop: compact Actions menu */}
-                                            <div
-                                                ref={actionsRef}
-                                                className="relative max-md:hidden"
-                                            >
-                                                <TabPillButtonUI
-                                                    onClick={() =>
-                                                        setActionsOpen(
-                                                            (v) => !v,
-                                                        )
-                                                    }
-                                                >
-                                                    Actions
-                                                    <ChevronDown className="h-3.5 w-3.5" />
-                                                </TabPillButtonUI>
-                                                {actionsOpen && (
-                                                    <div
-                                                        className={`absolute right-0 top-full z-50 mt-1 w-36 overflow-hidden rounded-lg ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`}
-                                                    >
-                                                        <button
-                                                            onClick={
-                                                                handleClearResults
-                                                            }
-                                                            disabled={
-                                                                cellMutationsBlocked
-                                                            }
-                                                            className="theme-dropdown-item w-full px-3 py-1.5 text-left text-xs text-gray-700 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-                                                        >
-                                                            Clear results
-                                                        </button>
-                                                        <button
-                                                            onClick={
-                                                                handleDeleteDocuments
-                                                            }
-                                                            className="w-full px-3 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 transition-colors"
-                                                        >
-                                                            Delete
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            {/* Mobile (toolbar dropdown): flattened entries */}
-                                            <TabPillButtonUI
-                                                onClick={handleClearResults}
-                                                disabled={cellMutationsBlocked}
-                                                className="md:hidden"
-                                            >
-                                                Clear results
-                                            </TabPillButtonUI>
-                                            <TabPillButtonUI
-                                                onClick={handleDeleteDocuments}
-                                                className="md:hidden text-red-600"
-                                            >
-                                                Delete
-                                            </TabPillButtonUI>
-                                        </>
+                                        <SelectionActionsMenu
+                                            open={actionsOpen}
+                                            onOpenChange={setActionsOpen}
+                                            renderItems={(close) => renderReviewRowActions(selectedRowIds, close)}
+                                        />
                                     )}
                                     {!loading && (
                                         <TabPillButtonUI
@@ -1711,6 +1652,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                 uploadingFilenames={uploadingDroppedFilenames}
                                 dragOverFiles={dragOverReviewFiles}
                                 onSelectionChange={setSelectedRowIds}
+                                rightClickDropdown={(row, close) => renderReviewRowActions(rowActionSelectionIds(row.id, selectedRowIds), close)}
                                 onDocumentOpen={handleDocumentOpen}
                                 onExpand={(cell) => {
                                     setExpandedCell(cell);

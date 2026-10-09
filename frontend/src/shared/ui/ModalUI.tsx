@@ -172,7 +172,10 @@ export function ModalUI({
                     </header>
                 )}
 
-                <div className="flex min-h-0 flex-1 flex-col px-5">
+                {/* Scroll gutters protect shadows and focus rings without moving
+                    content. Mark body scrollers explicitly so nested menus and
+                    inset panels keep their own spacing. */}
+                <div className="flex min-h-0 flex-1 flex-col px-5 [&_[data-modal-scroll]]:-mx-2 [&_[data-modal-scroll]]:px-2 [&_[data-modal-scroll=horizontal]]:-my-2 [&_[data-modal-scroll=horizontal]]:py-2">
                     {children}
                 </div>
 

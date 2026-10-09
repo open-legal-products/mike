@@ -98,6 +98,11 @@ function LastSelectedModel() {
     );
 }
 
+function ProviderState() {
+    const { profile } = useUserProfile();
+    return <span data-testid="provider-state">{JSON.stringify(profile?.apiKeys.openai)}</span>;
+}
+
 function TabularChatSettings() {
     const { persistChatModelSelection, persistChatReasoningSelection } =
         useUserProfile();
@@ -137,6 +142,23 @@ afterEach(() => {
     document.documentElement.classList.remove("dark");
     document.documentElement.style.colorScheme = "";
     vi.clearAllMocks();
+});
+
+it("restores a disabled provider's saved-key state when loading the profile", async () => {
+    const profile = apiProfile(false);
+    getUserProfile.mockResolvedValue({
+        ...profile,
+        apiKeyStatus: {
+            ...profile.apiKeyStatus,
+            openai: false,
+            sources: { openai: "user" },
+            enabled: { openai: false },
+        },
+    });
+    render(<UserProfileProvider><ProviderState /></UserProfileProvider>);
+    await waitFor(() => expect(screen.getByTestId("provider-state")).toHaveTextContent(
+        JSON.stringify({ configured: false, enabled: false, source: "user" }),
+    ));
 });
 
 describe("UserProfileProvider dark mode", () => {

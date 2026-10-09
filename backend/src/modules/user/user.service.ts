@@ -10,7 +10,7 @@
 // The implementation is split by concern across sibling files; this module is
 // the aggregate surface the routes (and tests) import from:
 //
-//   user.shared.ts   — shared types + helpers (Db, errorMessage)
+//   user.shared.ts   — shared types + helpers (Db, errorMessage, ...)
 //   user.profile.ts  — load/serialize/validate + bootstrap/read/update profile
 //   user.mfa.ts      — the MFA-on-login toggle (+ verified-TOTP factor lookup)
 //   user.apiKeys.ts  — BYO API-key status + save (over user.apiKeyStore.ts)
@@ -18,8 +18,8 @@
 //   user.settings.ts — per-user model settings + last-selected model/reasoning
 //   user.mcp.ts      — MCP connector wrappers over lib/mcpConnectors
 //   user.account.ts  — destructive account/data deletion (args + ordering kept)
-//   user.export.ts   — data-export payload builders + the durable async
-//                      export flow (enqueue / poll / download artifact)
+//   user.export.ts   — the durable async export flow (enqueue / poll /
+//                      download artifact); user.exportJobs.ts builds it
 //
 // Security boundaries preserved across the split verbatim:
 //   - API-key crypto: writes funnel through saveUserApiKey (never reimplemented).
@@ -27,8 +27,8 @@
 //     the verified-TOTP factor lookup lives here.
 //   - Data deletion: the userDataCleanup helpers + auth-admin deleteUser call are
 //     invoked with identical args and ordering (destructive — exact preservation).
-//   - Exports: the payload builders are called here; the route owns the
-//     Content-Type / Content-Disposition headers and filenames.
+//   - Exports: the payload builders run in the export job; the download
+//     route owns the Content-Type / Content-Disposition headers.
 //
 // The re-exports below are NAMED so intra-module helpers (e.g. the profile-row
 // loaders reused by user.mfa.ts) stay off this public surface — the routes and
@@ -47,16 +47,26 @@ export {
     updateUserProfile,
     completeUserOnboarding,
     recordPasswordSet,
-    type PersonalisationUpdate,
-    type RecordPasswordSetResult,
 } from "./user.profile";
 
-export { setMfaOnLogin, type SetMfaOnLoginResult } from "./user.mfa";
+export { setMfaOnLogin } from "./user.mfa";
+export { setApiKeyEnabled } from "./user.apiKeyEnabled";
+
+export {
+    getCustomInstructions,
+    saveCustomInstructions,
+    validateCustomInstructionsPayload,
+} from "./user.customInstructions";
+
+export {
+    getResponseStyle,
+    saveResponseStyle,
+    validateResponseStylePayload,
+} from "./user.responseStyle";
 
 export {
     getApiKeyStatus,
     saveApiKey,
-    type SaveApiKeyResult,
 } from "./user.apiKeys";
 
 export {
@@ -68,7 +78,6 @@ export {
     startMcpConnectorOAuth,
     refreshMcpConnectorTools,
     setMcpToolEnabled,
-    type RefreshMcpToolsResult,
 } from "./user.mcp";
 
 export {
@@ -80,17 +89,10 @@ export {
 } from "./user.account";
 
 export {
-    exportUserAccount,
-    exportUserChats,
-    exportUserTabularReviews,
     validateExportRequest,
     startUserExport,
     getUserExportStatus,
     loadUserExportArtifact,
-    type ValidateExportRequestResult,
-    type StartUserExportResult,
-    type UserExportStatus,
-    type UserExportArtifact,
 } from "./user.export";
 
 // Per-user settings and the API-key store are user-domain data that other
@@ -104,13 +106,6 @@ export {
 } from "./user.settings";
 export {
     getUserApiKeys,
-    getUserApiKeyStatus,
-    hasEnvApiKey,
-    normalizeApiKeyProvider,
-    saveUserApiKey,
-    type ApiKeyProvider,
-    type ApiKeySource,
-    type ApiKeyStatus,
 } from "./user.apiKeyStore";
 
 export { resolveUserChatSelection } from "./user.chatSelection";
@@ -118,10 +113,9 @@ export { resolveUserChatSelection } from "./user.chatSelection";
 export { handleAccountDelete } from "./user.accountJobs";
 export { handleExportBuild } from "./user.exportJobs";
 export { handleMcpRefreshToken, MCP_TOKEN_REFRESH_WINDOW_MS } from "./user.mcpJobs";
-export { EXPORT_TYPES, MAX_ZIP_EXPORT_DOCUMENTS, type ExportType } from "./user.exportContracts";
+export { MAX_ZIP_EXPORT_DOCUMENTS } from "./user.exportContracts";
 
-export { deleteUserOrganizations, deleteAllUserChats, deleteAllUserTabularReviews, deleteProjectsByIds, deleteUserProjects, deleteUserAccountData, listOrgsBlockingAccountDeletion } from "./user.dataCleanup";
-export type { AccountDeletionOrgBlocker } from "./user.dataCleanup";
+export { deleteProjectsByIds } from "./user.dataCleanup";
 export { describeAccountDeletionBlockers } from "./user.account";
 
-export { userExportFilename, buildUserChatsExport, buildUserTabularReviewsExport, projectManifestFilename, buildProjectExportManifest, buildUserAccountExport } from "./user.dataExport";
+export { projectManifestFilename, buildProjectExportManifest } from "./user.dataExport";

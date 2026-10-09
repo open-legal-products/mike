@@ -62,7 +62,12 @@ vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
     ).__fakePdf!.getDocument(),
 }));
 
-import { extractPdfText } from "./pdfText";
+import {
+  countPagesWithoutText,
+  extractPdfText,
+  extractPdfTextForModel,
+  textLayerNotice,
+} from "./pdfText";
 
 function withPdf(
   pages: FakeItem[][],
@@ -407,5 +412,94 @@ describe("extractPdfText layout reconstruction", () => {
     };
 
     await expect(extractPdfText(new ArrayBuffer(8))).resolves.toBe("");
+  });
+});
+
+describe("text layer detection", () => {
+  const unreadable = () => {
+    (globalThis as { __fakePdf?: unknown }).__fakePdf = {
+      getDocument: () => ({ promise: Promise.reject(new Error("bad pdf")) }),
+    };
+  };
+
+  it("leaves a PDF with text on every page unchanged", async () => {
+    withPdf([[item("Intro", 72, 700)], [item("Terms", 72, 700)]]);
+
+    await expect(extractPdfTextForModel(new ArrayBuffer(8))).resolves.toBe(
+      "[Page 1]\nIntro\n\n[Page 2]\nTerms",
+    );
+    await expect(countPagesWithoutText(new ArrayBuffer(8))).resolves.toBe(0);
+  });
+
+  it("replaces a fully scanned PDF with a single notice", async () => {
+    withPdf([[], []]);
+
+    await expect(extractPdfTextForModel(new ArrayBuffer(8))).resolves.toBe(
+      "[This PDF has no text layer, so its content cannot be read. It is most likely a scanned document that needs OCR.]",
+    );
+    await expect(countPagesWithoutText(new ArrayBuffer(8))).resolves.toBe(2);
+  });
+
+  it("names the pages without text in a partly scanned PDF", async () => {
+    withPdf([
+      [item("Brief", 72, 700)],
+      [],
+      [],
+      [],
+      [item("Closing", 72, 700)],
+      [],
+    ]);
+
+    const text = await extractPdfTextForModel(new ArrayBuffer(8));
+    expect(text).toMatch(
+      /^\[Pages 2–4, 6 of this PDF have no text layer, so their content cannot be read\. They are most likely scanned and need OCR\.\]\n\n\[Page 1\]\nBrief/,
+    );
+    await expect(countPagesWithoutText(new ArrayBuffer(8))).resolves.toBe(4);
+  });
+
+  it("uses the singular for one page without text", () => {
+    expect(textLayerNotice([2], 3)).toMatch(
+      /^\[Page 2 of this PDF has no text layer/,
+    );
+  });
+
+  it("treats a content line that reads like a page marker as text", async () => {
+    withPdf([[item("[Page 2]", 72, 700)], [item("Terms", 72, 700)]]);
+
+    await expect(countPagesWithoutText(new ArrayBuffer(8))).resolves.toBe(0);
+    await expect(extractPdfTextForModel(new ArrayBuffer(8))).resolves.toBe(
+      "[Page 1]\n[Page 2]\n\n[Page 2]\nTerms",
+    );
+  });
+
+  it("counts unpositioned form field values as page text", async () => {
+    withPdf([[]], [[{ fieldName: "Name", fieldValue: "Jane Doe" }]]);
+
+    await expect(countPagesWithoutText(new ArrayBuffer(8))).resolves.toBe(0);
+  });
+
+  it("reports an unreadable PDF as unknown, not as fully readable", async () => {
+    unreadable();
+    await expect(countPagesWithoutText(new ArrayBuffer(8))).resolves.toBeNull();
+    await expect(extractPdfTextForModel(new ArrayBuffer(8))).resolves.toBe("");
+  });
+
+  it("destroys the pdfjs loading task after reading, and after a failure", async () => {
+    const destroy = vi.fn(() => Promise.resolve());
+    const readable = fakePdf([[item("Text", 72, 700)]]);
+    (globalThis as { __fakePdf?: unknown }).__fakePdf = {
+      getDocument: () => ({ ...readable.getDocument(), destroy }),
+    };
+    await countPagesWithoutText(new ArrayBuffer(8));
+    expect(destroy).toHaveBeenCalledTimes(1);
+
+    (globalThis as { __fakePdf?: unknown }).__fakePdf = {
+      getDocument: () => ({
+        promise: Promise.reject(new Error("bad pdf")),
+        destroy,
+      }),
+    };
+    await extractPdfText(new ArrayBuffer(8));
+    expect(destroy).toHaveBeenCalledTimes(2);
   });
 });

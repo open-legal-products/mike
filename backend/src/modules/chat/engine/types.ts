@@ -1,5 +1,3 @@
-export { STANDARD_FONT_DATA_URL } from "../../../lib/pdfText";
-
 // Re-exported so the chat modules that already import it from here keep
 // working; the definition lives in lib/log.ts.
 export { devLog } from "../../../lib/log";
@@ -83,7 +81,6 @@ export type ChatMessage = {
  * single-segment quotes that matched.
  */
 export type { QuoteVerification } from "@mike/contracts";
-import type { QuoteVerification } from "@mike/contracts";
 
 // ---------------------------------------------------------------------------
 // Doc resolution helpers (used by citations + documentOps)
@@ -119,23 +116,17 @@ export function resolveDocLabel(
 // ---------------------------------------------------------------------------
 
 export type { AskInputOption } from "@mike/contracts";
-import type { AskInputOption } from "@mike/contracts";
 
 export const MAX_ASK_INPUT_TEXT_LENGTH = 5_000;
 /** What the user sees for a failed tool call; the raw error stays server-side. */
 export const TOOL_ERROR_MESSAGE = "This tool could not complete its request.";
 
 export type { AskInputItem } from "@mike/contracts";
-import type { AskInputItem } from "@mike/contracts";
 
 export type { AskInputsEvent } from "@mike/contracts";
-import type { AskInputsEvent } from "@mike/contracts";
 
 export type { AskInputResponseItem } from "@mike/contracts";
-import type { AskInputResponseItem } from "@mike/contracts";
 
 export type { AskInputsResponseRequest } from "@mike/contracts";
-import type { AskInputsResponseRequest } from "@mike/contracts";
 
 export type { EditAnnotation } from "@mike/contracts";
-import type { EditAnnotation } from "@mike/contracts";

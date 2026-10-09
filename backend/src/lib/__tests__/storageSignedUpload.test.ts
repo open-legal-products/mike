@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 // Exercises the real AWS SDK signer: presigning is offline, so this catches
 // query parameters the SDK adds on its own.
 let getSignedUploadUrl: typeof import("../storage").getSignedUploadUrl;
+let getSignedUrl: typeof import("../storage").getSignedUrl;
 
 function signedHeaders(url: string): string {
   return new URL(url).searchParams.get("X-Amz-SignedHeaders") ?? "";
@@ -15,7 +16,19 @@ beforeAll(async () => {
   process.env.R2_SECRET_ACCESS_KEY = "test-secret-key";
   process.env.R2_BUCKET_NAME = "mike";
   vi.resetModules();
-  ({ getSignedUploadUrl } = await import("../storage.js"));
+  ({ getSignedUploadUrl, getSignedUrl } = await import("../storage.js"));
+});
+
+describe("signed download URLs", () => {
+  it("uses the public endpoint when the storage endpoint is internal", async () => {
+    process.env.R2_PUBLIC_ENDPOINT_URL = "http://localhost:9000";
+    try {
+      const url = await getSignedUrl("documents/u1/d1/source.docx");
+      expect(new URL(url!).host).toBe("localhost:9000");
+    } finally {
+      process.env.R2_PUBLIC_ENDPOINT_URL = "";
+    }
+  });
 });
 
 describe("signed direct-upload URLs", () => {

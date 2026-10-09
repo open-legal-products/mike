@@ -5,8 +5,8 @@ import type { Document, PanelDocument } from "../shared/types";
 import { reorderTabs } from "@/app/lib/reorderTabs";
 import { ProjectDocumentTabs } from "./ProjectDocumentTabs";
 import { AssistantSidePanel } from "../assistant/AssistantSidePanel";
-vi.mock("../assistant/DocPanel", () => ({
-    DocPanel: () => <div>Document body</div>,
+vi.mock("@/app/components/shared/DocumentContent", () => ({
+    DocumentContent: () => <div>Document body</div>,
 }));
 
 const initialTabs = [

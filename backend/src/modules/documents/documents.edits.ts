@@ -1,46 +1,18 @@
-// Tracked-change (assistant edit) operations: listing change ids embedded in
-// the active DOCX and accepting / rejecting an individual edit.
+// Tracked-change (assistant edit) operations: accepting / rejecting an
+// individual edit in the active DOCX.
 
 import { randomUUID } from "node:crypto";
 import { downloadFile, uploadFile, deleteFileBestEffort, versionStorageKey } from "../../lib/storage";
-import {
-    extractTrackedChangeIds,
-    resolveTrackedChange,
-} from "../../lib/docxTrackedChanges";
+import { resolveTrackedChange } from "../../lib/docxTrackedChanges";
 import { buildDownloadUrl } from "../../lib/downloadTokens";
 import { contentSha256, loadActiveVersion } from "../../lib/documentVersions";
 import { ensureDocAccess } from "../../lib/access";
 import { can, DOCUMENT_EDIT_FORBIDDEN } from "../../lib/permissions";
 import { downloadFilenameForVersion, type Db } from "./documents.shared";
-import { ensureDocumentAccess } from "./documents.access";
 import { updateDocumentVersion } from "./documents.lifecycle";
 // devLog comes from lib/chat/types (a leaf file — importing the whole chat
 // barrel here just for a logger would be a heavy dependency edge).
 import { devLog } from "../../lib/log";
-
-// ---------------------------------------------------------------------------
-// Tracked-change ids
-// ---------------------------------------------------------------------------
-
-export async function getTrackedChangeIds(
-    documentId: string,
-    userId: string,
-    userEmail: string | undefined,
-    versionIdParam: string | null,
-    db: Db,
-): Promise<{ ok: true; ids: unknown } | { ok: false; detail: string }> {
-    const access = await ensureDocumentAccess(documentId, userId, userEmail, db);
-    if (!access.ok) return { ok: false, detail: "Document not found" };
-
-    const active = await loadActiveVersion(documentId, db, versionIdParam);
-    if (!active) return { ok: false, detail: "No file available" };
-
-    const raw = await downloadFile(active.storage_path);
-    if (!raw) return { ok: false, detail: "Document bytes not available" };
-
-    const ids = await extractTrackedChangeIds(Buffer.from(raw));
-    return { ok: true, ids };
-}
 
 // ---------------------------------------------------------------------------
 // Accept / reject a tracked-change edit

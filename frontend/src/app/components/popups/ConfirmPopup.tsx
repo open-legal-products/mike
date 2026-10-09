@@ -90,7 +90,7 @@ export function ConfirmPopup({
         aria-labelledby={title ? titleId : undefined}
         aria-label={title ? undefined : "Confirm action"}
         className={cn(
-          `pointer-events-auto w-[min(92vw,520px)] rounded-2xl px-4 py-3 text-sm ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-2xl`,
+          `pointer-events-auto w-[min(92vw,520px)] rounded-2xl px-4 py-3 text-sm ${LIQUID_GLASS_FLOAT_CLASS}`,
           className,
         )}
       >

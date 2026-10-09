@@ -208,18 +208,33 @@ export interface ApiKeyStatus {
   claude: boolean;
   gemini: boolean;
   openai: boolean;
+  mistral: boolean;
   openrouter: boolean;
   vercel: boolean;
   "opencode-go": boolean;
+  // Absent from a backend that predates these providers.
+  bedrock?: boolean;
+  azure?: boolean;
+  "azure-foundry"?: boolean;
+  vertex?: boolean;
+  xai?: boolean;
+  custom?: boolean;
   courtlistener: boolean;
   sources?: Partial<
     Record<
       | "claude"
       | "gemini"
       | "openai"
+      | "mistral"
       | "openrouter"
       | "vercel"
       | "opencode-go"
+      | "bedrock"
+      | "azure"
+      | "azure-foundry"
+      | "vertex"
+      | "xai"
+      | "custom"
       | "courtlistener",
       "user" | "env" | null
     >

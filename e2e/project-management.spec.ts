@@ -17,14 +17,16 @@ import { createProject } from "./helpers";
 
 /**
  * Navigate to the projects list and return the table row for `projectName`.
- * Rows are <div class="group">; the sidebar "Recent Projects" renders the same
- * name as a <button>, so scoping to div.group avoids a strict-mode double match.
+ * Rows are <div class="group"> inside <main>. The sidebar "Recent Projects"
+ * list sits outside <main> and also renders project names in div.group rows
+ * (and keeps a stale copy after a rename or delete), so every row lookup in
+ * this file is scoped to main.
  */
 async function gotoProjectRow(
     page: import("@playwright/test").Page,
     projectName: string,
 ) {
-    const row = page.locator("div.group").filter({ hasText: projectName });
+    const row = page.locator("main div.group").filter({ hasText: projectName });
     await page.goto("/projects");
     await expect(row.first()).toBeVisible({ timeout: 12_000 });
     return row;
@@ -49,9 +51,9 @@ test("rename a project via Edit details", async ({ page }) => {
     await createProject(page, projectName);
 
     /* Navigate to the projects list (where the rename UI lives) and grab the
-       row. Each project row is a <div class="group">. The sidebar "Recent
-       Projects" list renders the same name as a <button> (not div.group), so
-       scoping to div.group keeps the lookup to the table row. */
+       row. Each project row is a <div class="group"> inside <main>; the
+       sidebar "Recent Projects" list sits outside main, so scoping to main
+       keeps the lookup to the table row. */
     const row = await gotoProjectRow(page, projectName);
 
     /* The ··· button (middle-dot U+00B7 × 3) is inside the last cell of the row */
@@ -63,7 +65,7 @@ test("rename a project via Edit details", async ({ page }) => {
      * inline "Rename" affordance is gone; renaming now happens in
      * ProjectDetailsModal, which also carries the CM number and practice fields.
      */
-    await page.getByRole("button", { name: "Edit details", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Edit details", exact: true }).click();
 
     /* ProjectDetailsModal's name field is pre-filled with the current name;
        fill() clears it first, platform-independently. */
@@ -76,14 +78,14 @@ test("rename a project via Edit details", async ({ page }) => {
     await page.getByRole("button", { name: "Update", exact: true }).click();
 
     /* handleRenameSubmit optimistically updates the projects list state.
-       Scope to table rows (div.group) so the sidebar's stale copy of the old
+       Scope to table rows in main so the sidebar's stale copy of the old
        name does not interfere with the negative assertion below. */
     // REGRESSION: fails if rename input or submit handler is removed
     await expect(
-        page.locator("div.group").filter({ hasText: newName }),
+        page.locator("main div.group").filter({ hasText: newName }),
     ).toBeVisible({ timeout: 5_000 });
     await expect(
-        page.locator("div.group").filter({ hasText: projectName }),
+        page.locator("main div.group").filter({ hasText: projectName }),
     ).toHaveCount(0);
 });
 
@@ -95,9 +97,9 @@ test("delete a project", async ({ page }) => {
 
     /*
      * Back to the projects list.
-     * Rows are scoped to div.group — the sidebar "Recent Projects" list also
-     * shows the name as a <button>, so an unscoped getByText would match two
-     * elements.
+     * Rows are scoped to main div.group — the sidebar "Recent Projects" list
+     * (outside main) also shows the name, so an unscoped lookup would match
+     * two elements.
      *
      * The row checkbox is wrapped in a div with onClick={e.stopPropagation()}
      * to prevent accidental row navigation. Clicking the checkbox alone is safe.
@@ -118,18 +120,19 @@ test("delete a project", async ({ page }) => {
     await expect(actionsBtn).toBeVisible({ timeout: 3_000 });
     await actionsBtn.click();
 
-    /* exact:true so the substring match can't pick up any other button whose
+    /* exact:true so the substring match can't pick up any other item whose
        accessible name merely contains "Delete". */
-    const deleteBtn = page.getByRole("button", { name: "Delete", exact: true });
+    const deleteBtn = page.getByRole("menuitem", { name: "Delete", exact: true });
     await expect(deleteBtn).toBeVisible({ timeout: 3_000 });
 
     // REGRESSION: fails if `handleDeleteSelected` is removed
     await deleteBtn.click();
 
     /* handleDeleteSelected removes the project from local state immediately.
-       Scope to table rows so a stale sidebar entry can't keep this truthy. */
+       Scope to table rows in main so a stale sidebar entry can't keep this
+       truthy. */
     await expect(
-        page.locator("div.group").filter({ hasText: projectName }),
+        page.locator("main div.group").filter({ hasText: projectName }),
     ).toHaveCount(0, { timeout: 10_000 });
 });
 
@@ -177,7 +180,7 @@ test("create a folder inside a project", async ({ page }) => {
     // REGRESSION: fails if folder creation button or API call is removed
     await expect(page.getByText(folderName)).toBeVisible({ timeout: 10_000 });
 
-    const folderRow = page.locator("div.group").filter({
+    const folderRow = page.locator("main div.group").filter({
         hasText: folderName,
     });
     await expect(folderRow.locator('input[type="checkbox"]')).toBeVisible();

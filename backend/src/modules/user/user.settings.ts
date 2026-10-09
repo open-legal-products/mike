@@ -1,7 +1,14 @@
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import { type UserApiKeys } from "../../lib/llm";
 import { type ReasoningLevel } from "../../lib/llm";
-import { getUserApiKeys as getStoredUserApiKeys } from "./user.apiKeyStore";
+import { getUserApiKeys } from "./user.apiKeyStore";
+import { loadCustomInstructions } from "./user.customInstructions";
+import {
+    DEFAULT_RESPONSE_STYLE,
+    loadResponseStyle,
+    type ResponseStyle,
+} from "./user.responseStyle";
+import { safeError } from "../../lib/safeError";
 import {
     getAllUserRouterModels,
 } from "../../lib/routerModels";
@@ -30,6 +37,10 @@ export type UserModelSettings = {
         practiceSetting: string | null;
         professionalTitle: string | null;
         practiceAreas: string[];
+        /** Free-form instructions from Settings > Personalisation. */
+        customInstructions?: string;
+        /** Response style from Settings > Personalisation. */
+        responseStyle?: ResponseStyle;
     };
 };
 
@@ -38,7 +49,13 @@ export async function getUserModelSettings(
     db?: Db,
 ): Promise<UserModelSettings> {
     const client = db ?? createServerSupabase();
-    const [profileResult, api_keys, routerModels] = await Promise.all([
+    const [
+        profileResult,
+        api_keys,
+        routerModels,
+        customInstructions,
+        responseStyle,
+    ] = await Promise.all([
         client
             .from("user_profiles")
             .select(
@@ -46,8 +63,23 @@ export async function getUserModelSettings(
             )
             .eq("user_id", userId)
             .single(),
-        getStoredUserApiKeys(userId, client),
+        getUserApiKeys(userId, client),
         getAllUserRouterModels(userId, client),
+        // Instructions are an enhancement: a failed read must not block chat.
+        loadCustomInstructions(client, userId).catch((error: unknown) => {
+            console.error(
+                "[user-settings] custom instructions load failed",
+                safeError(error),
+            );
+            return "";
+        }),
+        loadResponseStyle(client, userId).catch((error: unknown) => {
+            console.error(
+                "[user-settings] response style load failed",
+                safeError(error),
+            );
+            return DEFAULT_RESPONSE_STYLE;
+        }),
     ]);
     let data = profileResult.data;
     let profileError = profileResult.error;
@@ -167,6 +199,8 @@ export async function getUserModelSettings(
                       (area): area is string => typeof area === "string",
                   )
                 : [],
+            customInstructions,
+            responseStyle,
         },
         api_keys,
     };
@@ -202,12 +236,4 @@ export async function persistLastSelectedChatModel(
         })
         .eq("user_id", userId);
     return error ?? null;
-}
-
-export async function getUserApiKeys(
-    userId: string,
-    db?: Db,
-): Promise<UserApiKeys> {
-    const client = db ?? createServerSupabase();
-    return getStoredUserApiKeys(userId, client);
 }

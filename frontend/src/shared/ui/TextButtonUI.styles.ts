@@ -20,7 +20,7 @@ export function textButtonUIClassName({
 } = {}) {
     return twMerge(
         clsx(
-            "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-sm border-0 bg-transparent font-normal text-muted-foreground shadow-none transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-50 disabled:hover:text-muted-foreground",
+            "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-sm border-0 bg-transparent font-normal text-muted-foreground shadow-none transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-default disabled:opacity-50 disabled:hover:text-muted-foreground",
             sizeClasses[size],
             className,
         ),

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+    getProjectPeople,
     listOrgMembers,
     type AccessAssignmentRole,
     type OrgMember,
@@ -37,6 +38,7 @@ export function CreateAccessStep({
     orgOverrides = [],
     onOrgOverridesChange,
     inheritedFromProject = false,
+    inheritedProjectId = null,
     ownerLabel = "Project owners",
 }: {
     orgId: string | null;
@@ -48,6 +50,8 @@ export function CreateAccessStep({
     orgOverrides?: PendingOrgOverride[];
     onOrgOverridesChange?: (overrides: PendingOrgOverride[]) => void;
     inheritedFromProject?: boolean;
+    /** The project whose people are shown, read-only, when access is inherited. */
+    inheritedProjectId?: string | null;
     ownerLabel?: string;
 }) {
     const [memberState, setMemberState] = useState<{
@@ -81,13 +85,76 @@ export function CreateAccessStep({
         };
     }, [inheritedFromProject, orgId]);
 
+    const [projectPeopleState, setProjectPeopleState] = useState<{
+        projectId: string;
+        rows: AccessRow[];
+        error: string | null;
+    } | null>(null);
+
+    useEffect(() => {
+        if (!inheritedFromProject || !inheritedProjectId) return;
+        let cancelled = false;
+        getProjectPeople(inheritedProjectId)
+            .then((people) => {
+                if (cancelled) return;
+                const rows: AccessRow[] = [];
+                if (people.owner) {
+                    rows.push({
+                        key: "creator",
+                        user_id: people.owner.user_id,
+                        email: people.owner.email,
+                        display_name: people.owner.display_name,
+                        role: "owner",
+                        isCreator: true,
+                    });
+                }
+                for (const member of people.members) {
+                    // A denied organization member has no access to show.
+                    if (member.role === "deny") continue;
+                    rows.push({
+                        key: member.user_id ?? member.email,
+                        user_id: member.user_id ?? null,
+                        email: member.email,
+                        display_name: member.display_name,
+                        role: member.role ?? "editor",
+                    });
+                }
+                setProjectPeopleState({
+                    projectId: inheritedProjectId,
+                    rows,
+                    error: null,
+                });
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setProjectPeopleState({
+                        projectId: inheritedProjectId,
+                        rows: [],
+                        error: "Could not load the project's members.",
+                    });
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [inheritedFromProject, inheritedProjectId]);
+
+    const projectPeople =
+        inheritedFromProject &&
+        !!inheritedProjectId &&
+        projectPeopleState?.projectId === inheritedProjectId
+            ? projectPeopleState
+            : null;
+    const loadingProjectPeople =
+        inheritedFromProject && !!inheritedProjectId && !projectPeople;
+
     const hasLoadedCurrentOrg = !!orgId && memberState?.orgId === orgId;
     const members = hasLoadedCurrentOrg ? memberState.members : [];
     const loading = !!orgId && !inheritedFromProject && !hasLoadedCurrentOrg;
     const loadError = hasLoadedCurrentOrg ? memberState.error : null;
 
     const rows: AccessRow[] = inheritedFromProject
-        ? []
+        ? (projectPeople?.rows ?? [])
         : [
                 ...(currentEmail
                     ? [
@@ -219,7 +286,7 @@ export function CreateAccessStep({
             <AccessEditor
                 scope={inheritedFromProject ? "project" : "direct"}
                 rows={rows}
-                loading={loading}
+                loading={loading || loadingProjectPeople}
                 canManage={!inheritedFromProject}
                 currentUserEmail={currentUserEmail}
                 currentUserId={currentUserId}
@@ -233,7 +300,7 @@ export function CreateAccessStep({
                         directGrants.filter((grant) => grant.email !== row.email),
                     )
                 }
-                error={loadError}
+                error={projectPeople?.error ?? loadError}
             />
         </div>
     );

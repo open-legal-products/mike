@@ -3,13 +3,11 @@
 import { useState, useRef } from "react";
 import { MoreHorizontal, Pencil, Trash2, Users, Loader2 } from "lucide-react";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { RenameModal } from "@/app/components/modals/RenameModal";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
@@ -152,22 +150,26 @@ export function SidebarChatItem({
                       : `pr-3 ${LIQUID_GLASS_HOVER_CLASS} hover:pr-1`,
             )}
         >
-                {responseStatus === "loading" ? (
-                    <Loader2
-                        role="status"
-                        aria-label={`${chatTitle} response loading`}
-                        className="ml-2.5 h-3.5 w-3.5 shrink-0 animate-spin text-blue-600 motion-reduce:animate-none"
-                    />
-                ) : (
-                    <ChatSkeuoIcon
-                        tone={
-                            responseStatus === "complete"
-                                ? "green"
-                                : "blue"
-                        }
-                        className="ml-2.5 h-3.5 w-3.5 shrink-0"
-                    />
-                )}
+                {/* 16px icon slot + ml-2/pl-2 match the top nav rows'
+                    px-2 / w-4 icon / gap-2, so icons and titles line up. */}
+                <span className="ml-2 flex h-4 w-4 shrink-0 items-center justify-center">
+                    {responseStatus === "loading" ? (
+                        <Loader2
+                            role="status"
+                            aria-label={`${chatTitle} response loading`}
+                            className="h-3.5 w-3.5 animate-spin text-blue-600 motion-reduce:animate-none"
+                        />
+                    ) : (
+                        <ChatSkeuoIcon
+                            tone={
+                                responseStatus === "complete"
+                                    ? "green"
+                                    : "blue"
+                            }
+                            className="h-3.5 w-3.5"
+                        />
+                    )}
+                </span>
                 <button
                     type="button"
                     onClick={onSelect}
@@ -182,8 +184,10 @@ export function SidebarChatItem({
                     onBlur={(e) => {
                         if (!e.currentTarget.matches(":hover")) resetTitle();
                     }}
+                    // The row owns the hover fill, so it draws the ring.
+                    data-focus-fill
                     className={cn(
-                        "min-w-0 flex-1 overflow-hidden whitespace-nowrap py-1 pl-2 text-left text-xs",
+                        "min-w-0 flex-1 overflow-hidden whitespace-nowrap py-1 pl-2 text-left text-xs outline-none",
                         isActive
                             ? "pr-3 text-gray-900"
                             : menuOpen
@@ -234,8 +238,8 @@ export function SidebarChatItem({
                     </span>
                 )}
 
-                <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-                    <DropdownMenuTrigger asChild>
+                <Dropdown open={menuOpen} onOpenChange={setMenuOpen}>
+                    <DropdownTrigger asChild>
                         <button
                             type="button"
                             aria-label={`Actions for ${chat.title ?? "Untitled chat"}`}
@@ -247,9 +251,9 @@ export function SidebarChatItem({
                         >
                             <MoreHorizontal className="h-4 w-4" />
                         </button>
-                    </DropdownMenuTrigger>
-                    <LiquidDropdownContent align="end" className="z-101">
-                        <LiquidDropdownItem
+                    </DropdownTrigger>
+                    <DropdownContent align="end">
+                        <DropdownItem
                             onSelect={() => {
                                 if (!canShare) {
                                     setGate({
@@ -263,8 +267,8 @@ export function SidebarChatItem({
                         >
                             <Users className="mr-2 h-4 w-4" />
                             Share
-                        </LiquidDropdownItem>
-                        <LiquidDropdownItem
+                        </DropdownItem>
+                        <DropdownItem
                             onSelect={() => {
                                 if (!canRename) {
                                     setGate({
@@ -278,8 +282,8 @@ export function SidebarChatItem({
                         >
                             <Pencil className="mr-2 h-4 w-4" />
                             Rename
-                        </LiquidDropdownItem>
-                        <LiquidDropdownItem
+                        </DropdownItem>
+                        <DropdownItem
                             onSelect={() => {
                                 if (!canDelete) {
                                     setGate({
@@ -301,9 +305,9 @@ export function SidebarChatItem({
                         >
                             <Trash2 className="mr-2 h-4 w-4" />
                             Delete
-                        </LiquidDropdownItem>
-                    </LiquidDropdownContent>
-                </DropdownMenu>
+                        </DropdownItem>
+                    </DropdownContent>
+                </Dropdown>
             {/* TODO(contacts): no `contacts` to pass. The sidebar rows come
                 from get_chats_overview and GET /chat/:id serves only
                 chat + is_owner + access_role, so no ranked admin list

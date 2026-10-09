@@ -7,6 +7,19 @@ const { updatePersonalisation } = vi.hoisted(() => ({
   updatePersonalisation: vi.fn(),
 }));
 
+vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
+  getCustomInstructions: vi.fn(async () => ({ content: "" })),
+  updateCustomInstructions: vi.fn(async (content: string) => ({ content })),
+  getResponseStyle: vi.fn(async () => ({
+    verbosity: "balanced",
+    formatting: "balanced",
+    tone: "balanced",
+    language: "auto",
+  })),
+  updateResponseStyle: vi.fn(async (style: unknown) => style),
+}));
+
 vi.mock("@/app/contexts/UserProfileContext", () => ({
   useUserProfile: () => ({
     profile: {
@@ -25,13 +38,30 @@ describe("PersonalisationPage", () => {
     updatePersonalisation.mockResolvedValue(true);
   });
 
+  it("shows the background, response style, and custom instruction sections", async () => {
+    render(<PersonalisationPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "Your background" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Response style" }),
+    ).toBeInTheDocument();
+    for (const setting of ["Verbosity", "Headers and Lists", "Tone", "Language"]) {
+      expect(
+        await screen.findByRole("button", { name: setting }),
+      ).toBeInTheDocument();
+    }
+  });
+
   it("updates the user's professional profile", async () => {
     const user = userEvent.setup();
     const { container } = render(<PersonalisationPage />);
 
+    // Four background rows plus the four response style rows.
     expect(
       container.querySelectorAll('[data-slot="settings-row"]'),
-    ).toHaveLength(4);
+    ).toHaveLength(8);
 
     await user.click(screen.getByRole("button", { name: "Title" }));
     await user.click(

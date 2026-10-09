@@ -201,7 +201,7 @@ export function ConnectorDetailsModal({
                                             <button
                                                 type="button"
                                                 onClick={onCancelReconnect}
-                                                className="rounded text-xs font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                                className="rounded text-xs font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
                                             >
                                                 Cancel
                                             </button>
@@ -210,7 +210,7 @@ export function ConnectorDetailsModal({
                                             type="button"
                                             onClick={onRefresh}
                                             disabled={busyKey !== null}
-                                            className="inline-flex items-center gap-1 rounded text-xs font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-gray-300"
+                                            className="inline-flex items-center gap-1 rounded text-xs font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:text-gray-300"
                                         >
                                             {busyKey ===
                                             `refresh:${connector.id}` ? (
@@ -301,7 +301,7 @@ function ToolList({
                                             isExpanded ? null : tool.id,
                                         )
                                     }
-                                    className="inline-flex h-5 w-5 items-center justify-center rounded text-gray-400 transition-colors hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    className="inline-flex h-5 w-5 items-center justify-center rounded text-gray-400 transition-colors hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
                                     aria-expanded={isExpanded}
                                     aria-label={`${isExpanded ? "Collapse" : "Expand"} ${tool.title}`}
                                 >

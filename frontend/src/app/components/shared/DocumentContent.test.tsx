@@ -12,14 +12,13 @@ import {
     waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DocPanel } from "../assistant/DocPanel";
 import { ProjectDocumentPanels } from "../projects/ProjectDocumentPanels";
 import {
     panelDocumentFromCitation,
     type DocumentCitation,
     type EditAnnotation,
 } from "./types";
-import type { DocumentContentMode } from "./DocumentContent";
+import { DocumentContent, type DocumentContentMode } from "./DocumentContent";
 
 const { viewer, resolveEdit, loadVersions } = vi.hoisted(() => ({
     viewer: vi.fn(),
@@ -84,7 +83,7 @@ function content(
 ) {
     if (surface === "assistant")
         return (
-            <DocPanel
+            <DocumentContent
                 showToolbarToggle
                 canEdit={canEdit}
                 document={panelDocumentFromCitation(
@@ -418,7 +417,7 @@ it.each(["pdf", "spreadsheet", "case"] as const)(
     "does not offer the DOCX toolbar toggle for %s documents",
     (type) => {
         render(
-            <DocPanel
+            <DocumentContent
                 showToolbarToggle
                 document={{
                     document_id: "other",

@@ -21,10 +21,7 @@ vi.mock("../../../lib/storage", () => ({
   extractedTextKey: (id: string) => `extracted-text/${id}.txt`,
 }));
 vi.mock("../../../lib/dbq/enqueue", () => dbq);
-vi.mock("../../../lib/docxTrackedChanges", () => ({
-  ...docx,
-  extractTrackedChangeIds: vi.fn(),
-}));
+vi.mock("../../../lib/docxTrackedChanges", () => docx);
 vi.mock("../../../lib/access", () => access);
 vi.mock("../../../lib/permissions", () => ({ can: () => true }));
 vi.mock("../../../lib/downloadTokens", () => ({

@@ -822,7 +822,8 @@ export function NewWorkflowModal({
             <form
                 id={formId}
                 onSubmit={handleSubmit}
-                className="-mx-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-5"
+                data-modal-scroll="vertical"
+                className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-5"
             >
                 {!isEditing && step === "access" ? (
                     <CreateAccessStep

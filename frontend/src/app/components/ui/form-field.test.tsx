@@ -11,10 +11,11 @@ describe("FormTextInput", () => {
         );
     });
 
-    it("also rings the minimal variant", () => {
+    it("rings the minimal variant for keyboard navigation only", () => {
         render(<FormTextInput variant="minimal" aria-label="Title" />);
         expect(screen.getByRole("textbox", { name: "Title" })).toHaveClass(
             "focus-visible:ring-2",
+            "keyboard-focus-ring",
         );
     });
 });

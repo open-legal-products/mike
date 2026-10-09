@@ -32,9 +32,6 @@
 
 export type ProjectRole = "owner" | "editor" | "viewer";
 
-/** `deny` is an organization-only override, not a capability-bearing role. */
-export type OrganizationAccessOverride = ProjectRole | "deny";
-
 /** The role values a direct access grant may carry (the whole ladder). */
 export const PROJECT_ROLES: ProjectRole[] = ["owner", "editor", "viewer"];
 
@@ -65,19 +62,6 @@ const REQUIRED_RANK: Record<Capability, number> = {
     "access.manage": ROLE_RANK.owner,
     "container.delete": ROLE_RANK.owner,
 };
-
-/**
- * The stronger of two roles; retained for direct-scope compatibility helpers.
- * Organization access is resolved exclusively and never merged with grants.
- */
-export function strongerRole(
-    a: ProjectRole | null,
-    b: ProjectRole | null,
-): ProjectRole | null {
-    if (!a) return b;
-    if (!b) return a;
-    return ROLE_RANK[a] >= ROLE_RANK[b] ? a : b;
-}
 
 /** Fail closed: an absent/unknown role can do nothing. */
 export function can(

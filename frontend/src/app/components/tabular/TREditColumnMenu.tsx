@@ -8,14 +8,12 @@ import { generateTabularColumnPrompt } from "@/app/lib/mikeApi";
 import { FORMAT_OPTIONS, formatLabel, formatIcon } from "./columnFormat";
 import { TAG_COLORS } from "./pillUtils";
 import {
-    DropdownMenu,
-    DropdownMenuRadioGroup,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownRadioItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownRadioGroup,
+    DropdownRadioItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { GlassIconButtonUI } from "@/shared/ui/GlassIconButtonUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FieldLabel } from "@/app/components/ui/form-field";
@@ -27,7 +25,7 @@ import {
 // Liquid-glass field styling shared by the menu's inputs/controls, matching the
 // modal's glass treatment (translucent white over the light-gray panel).
 const GLASS_FIELD =
-    `${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`;
+    LIQUID_GLASS_SUBTLE_CLASS;
 
 export interface TREditColumnMenuProps {
     column: ColumnConfig;
@@ -242,7 +240,7 @@ export function TREditColumnMenu({
                 createPortal(
                     <div
                         ref={panelRef}
-                        className={`fixed z-[40] rounded-3xl p-3 ${LIQUID_GLASS_FLOAT_CLASS} backdrop-blur-3xl`}
+                        className={`fixed z-[40] rounded-3xl p-3 ${LIQUID_GLASS_FLOAT_CLASS}`}
                         style={{
                             top: menuPos.top,
                             left: menuPos.left,
@@ -277,8 +275,8 @@ export function TREditColumnMenu({
                         <FieldLabel htmlFor={`${menuId}-format`}>
                             Format
                         </FieldLabel>
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
+                        <Dropdown>
+                            <DropdownTrigger asChild>
                                 <button
                                     id={`${menuId}-format`}
                                     className={`flex w-full items-center justify-between rounded-lg px-2 py-1 text-xs text-gray-700 transition-colors hover:bg-white/75 focus:outline-none ${GLASS_FIELD}`}
@@ -294,15 +292,14 @@ export function TREditColumnMenu({
                                     </span>
                                     <ChevronDown className="h-3 w-3 text-gray-400" />
                                 </button>
-                            </DropdownMenuTrigger>
-                            <LiquidDropdownContent
+                            </DropdownTrigger>
+                            <DropdownContent
                                 align="start"
-                                className="z-[50]"
                                 style={{
                                     width: "var(--radix-dropdown-menu-trigger-width)",
                                 }}
                             >
-                                <DropdownMenuRadioGroup
+                                <DropdownRadioGroup
                                     value={format}
                                     onValueChange={(v) => {
                                         setFormat(v as ColumnFormat);
@@ -311,18 +308,18 @@ export function TREditColumnMenu({
                                     }}
                                 >
                                     {FORMAT_OPTIONS.map((o) => (
-                                        <LiquidDropdownRadioItem
+                                        <DropdownRadioItem
                                             key={o.value}
                                             value={o.value}
                                             className="text-xs"
                                         >
                                             <o.icon className="h-3 w-3 text-gray-400" />
                                             {o.label}
-                                        </LiquidDropdownRadioItem>
+                                        </DropdownRadioItem>
                                     ))}
-                                </DropdownMenuRadioGroup>
-                            </LiquidDropdownContent>
-                        </DropdownMenu>
+                                </DropdownRadioGroup>
+                            </DropdownContent>
+                        </Dropdown>
                     </div>
 
                     {/* Tag input */}

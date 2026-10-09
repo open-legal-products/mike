@@ -35,6 +35,12 @@ import {
 interface Props {
     events?: AssistantEvent[];
     isStreaming?: boolean;
+    /**
+     * The response has paused to ask the user for input or approval and is
+     * still waiting. Nothing has been delivered yet, so the status icon holds
+     * a neutral state and the copy button stays hidden.
+     */
+    awaitingInput?: boolean;
     isError?: boolean;
     /** Human-readable error text rendered alongside the red Mike icon. */
     errorMessage?: string;
@@ -107,6 +113,7 @@ interface Props {
 export function AssistantMessage({
     events,
     isStreaming = false,
+    awaitingInput = false,
     isError = false,
     errorMessage,
     citations = [],
@@ -167,7 +174,9 @@ export function AssistantMessage({
         ? "error"
         : isStreaming
           ? "active"
-          : null;
+          : awaitingInput
+            ? "waiting"
+            : null;
 
     const isRenderableEvent = (event: AssistantEvent) =>
         event.type !== "error" &&
@@ -416,7 +425,7 @@ export function AssistantMessage({
                     key={globalIdx}
                     showConnector={showConnector}
                     isStreaming={event.isStreaming}
-                    dotColor={isError ? "red" : "gray"}
+                    dotColor={isError ? "red" : "green"}
                 >
                     <span className="font-medium">
                         {event.isStreaming ? "Using connector..." : label}
@@ -1061,7 +1070,7 @@ export function AssistantMessage({
 
                 {/* Download cards for created docs — generated docs now
                     persist as first-class documents, so clicking opens
-                    them in the DocPanel (like edited docs). */}
+                    them in the DocumentContent (like edited docs). */}
                 {events &&
                     !isStreaming &&
                     events.some(
@@ -1123,14 +1132,14 @@ export function AssistantMessage({
                 )}
 
                 {/* Copy button */}
-                <div className="flex items-center gap-2 py-2 font-sans justify-start">
-                    {!isStreaming && (
+                <div className="flex items-center gap-2 font-sans justify-start">
+                    {!isStreaming && !awaitingInput && (
                         <button
                             type="button"
                             aria-label={
                                 isCopied ? "Response copied" : "Copy response"
                             }
-                            className="p-1.5 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                            className="-ml-1.5 p-1.5 rounded text-gray-500 hover:text-gray-700 hover:bg-gray-100"
                             onClick={handleCopy}
                         >
                             {isCopied ? (

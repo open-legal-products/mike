@@ -5,10 +5,10 @@ import request from "supertest";
 // The async export surface: POST /user/exports (schedule) + GET
 // /user/exports/:id (poll). Two invariants are baselined here.
 //
-// 1. RATE LIMITING. The legacy synchronous exports are all mounted behind
-//    exportLimiter (10/hour) because an export is the most expensive read the
-//    API offers — it walks a user's whole corpus. The async POST schedules
-//    exactly that work, so it must sit behind the same budget. Its POLL,
+// 1. RATE LIMITING. An export is the most expensive read the API offers — it
+//    walks a user's whole corpus — so the async POST that schedules one sits
+//    behind exportLimiter (10/hour), the budget the synchronous project
+//    export also uses. Its POLL,
 //    however, must NOT: a client polls every couple of seconds while one
 //    export builds, so putting the poll under a 10/hour budget would 429 the
 //    user out of their own (successfully scheduled) export.

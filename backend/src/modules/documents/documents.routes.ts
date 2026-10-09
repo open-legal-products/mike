@@ -17,7 +17,6 @@ import { sendDocumentDisplay } from "../../lib/documentDisplay";
 import { contentTypeForDocumentType } from "../../lib/documentTypes";
 import { uniqueArchiveFilename } from "../../lib/zipExport";
 import {
-    listSingleDocuments,
     getDocument,
     deleteDocument,
     getDisplayableVersion,
@@ -28,20 +27,10 @@ import {
     createVersionFromDocument,
     renameVersion,
     deleteVersion,
-    getTrackedChangeIds,
     resolveEdit,
 } from "./documents.service";
 
 export const documentsRouter = Router();
-
-// GET /single-documents
-documentsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
-    const userId = res.locals.userId as string;
-    const db = createServerSupabase();
-    const result = await listSingleDocuments(userId, db);
-    if (!result.ok) return void sendInternalError(res, result.error);
-    res.json(result.docs);
-}));
 
 // GET /single-documents/:documentId
 // One document, same shape as a list entry — the client polls this while a
@@ -387,35 +376,6 @@ documentsRouter.delete(
             return void res.status(status).json({ detail: result.detail });
         }
         res.json(result.payload);
-    }),
-);
-
-// GET /single-documents/:documentId/tracked-change-ids
-// Returns the ordered list of { kind, w_id } for every w:ins / w:del in
-// the current (or specified) version's document.xml. The frontend uses
-// this to tag each rendered <ins>/<del> with data-w-id, since
-// docx-preview drops the w:id attribute during parsing.
-documentsRouter.get(
-    "/:documentId/tracked-change-ids",
-    requireAuth,
-    asyncRoute(async (req, res) => {
-        const userId = res.locals.userId as string;
-        const userEmail = res.locals.userEmail as string | undefined;
-        const { documentId } = req.params;
-        const versionIdParam =
-            typeof req.query.version_id === "string" ? req.query.version_id : null;
-        const db = createServerSupabase();
-
-        const result = await getTrackedChangeIds(
-            documentId,
-            userId,
-            userEmail,
-            versionIdParam,
-            db,
-        );
-        if (!result.ok)
-            return void res.status(404).json({ detail: result.detail });
-        res.json({ ids: result.ids });
     }),
 );
 

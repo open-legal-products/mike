@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -32,14 +33,17 @@ function renderTable(selectedChatIds: string[], canCreateChat = true, rows = cha
     const onDeleteSelectedChats = vi.fn();
     const onOpenChat = vi.fn();
     const setSelectedChatIds = vi.fn();
-    render(
-        <ProjectAssistantTable
+    function Harness() {
+        const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+        const [renameChatValue, setRenameChatValue] = useState("");
+        return <ProjectAssistantTable
+            renderToolbar={(actions) => <>{actions}</>}
             canCreateChat={canCreateChat}
             chats={rows}
             filteredChats={rows}
             selectedChatIds={selectedChatIds}
-            renamingChatId={null}
-            renameChatValue=""
+            renamingChatId={renamingChatId}
+            renameChatValue={renameChatValue}
             currentUserId="user-1"
             onCreateChat={onCreateChat}
             onOpenChat={onOpenChat}
@@ -48,10 +52,11 @@ function renderTable(selectedChatIds: string[], canCreateChat = true, rows = cha
             onOwnerOnlyAction={vi.fn()}
             submitChatRename={vi.fn()}
             setSelectedChatIds={setSelectedChatIds}
-            setRenamingChatId={vi.fn()}
-            setRenameChatValue={vi.fn()}
-        />,
-    );
+            setRenamingChatId={setRenamingChatId}
+            setRenameChatValue={setRenameChatValue}
+        />;
+    }
+    render(<Harness />);
     return {
         onCreateChat,
         onDeleteChat,
@@ -62,6 +67,39 @@ function renderTable(selectedChatIds: string[], canCreateChat = true, rows = cha
 }
 
 describe("ProjectAssistantTable row context actions", () => {
+    it.each([1, 2])("matches toolbar and right-click actions for %i selected chats", async (count) => {
+        const user = userEvent.setup();
+        renderTable(chats.slice(0, count).map((chat) => chat.id));
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        const toolbarItems = screen.getAllByRole("menuitem").map((item) => item.textContent);
+        expect(toolbarItems).toEqual(count === 1 ? ["View", "Rename", "Delete"] : ["Delete 2 chats"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("First chat"));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(toolbarItems);
+    });
+
+    it("keeps focus in the rename field after a toolbar action", async () => {
+        const user = userEvent.setup();
+        renderTable(["chat-1"]);
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+        const input = screen.getByDisplayValue("First chat");
+        expect(input).toHaveFocus();
+        await user.type(input, " renamed");
+        expect(input).toHaveValue("First chat renamed");
+    });
+
+    it("confirms a single toolbar delete before invoking the handler", async () => {
+        const user = userEvent.setup();
+        const { onDeleteChat, onDeleteSelectedChats } = renderTable(["chat-1"]);
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+        expect(onDeleteChat).not.toHaveBeenCalled();
+        await user.click(screen.getByRole("button", { name: "Delete" }));
+        expect(onDeleteChat).toHaveBeenCalledWith(chats[0]);
+        expect(onDeleteSelectedChats).not.toHaveBeenCalled();
+    });
+
     it.each([false, true])("gates empty-state Create on resolved edit permission (%s)", (allowed) => {
         const { onCreateChat } = renderTable([], allowed, []);
         const button = screen.getByRole("button", { name: "Create" });
@@ -70,17 +108,19 @@ describe("ProjectAssistantTable row context actions", () => {
         fireEvent.click(button);
         expect(onCreateChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
     });
-    it("deletes the whole selection when right-clicking a selected row", async () => {
+    it.each(["right-click", "toolbar"])("deletes the whole selection from the %s menu", async (surface) => {
         const user = userEvent.setup();
         const { onDeleteChat, onDeleteSelectedChats } = renderTable([
             "chat-1",
             "chat-2",
         ]);
 
-        fireEvent.contextMenu(screen.getByText("First chat"));
-        expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
-        expect(screen.queryByRole("button", { name: "View" })).toBeNull();
-        await user.click(screen.getByRole("button", { name: "Delete 2 chats" }));
+        if (surface === "toolbar")
+            await user.click(screen.getByRole("button", { name: "Actions" }));
+        else fireEvent.contextMenu(screen.getByText("First chat"));
+        expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: "View" })).toBeNull();
+        await user.click(screen.getByRole("menuitem", { name: "Delete 2 chats" }));
 
         expect(onDeleteSelectedChats).toHaveBeenCalledOnce();
         expect(onDeleteChat).not.toHaveBeenCalled();
@@ -91,7 +131,7 @@ describe("ProjectAssistantTable row context actions", () => {
         const { onDeleteChat, onDeleteSelectedChats } = renderTable(["chat-2"]);
 
         fireEvent.contextMenu(screen.getByText("First chat"));
-        await user.click(screen.getByRole("button", { name: "Delete" }));
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
         // The single-row delete is confirmed first; the bulk one is confirmed
         // by the page that owns the selection.
         await user.click(screen.getByRole("button", { name: "Delete" }));
@@ -105,7 +145,7 @@ describe("ProjectAssistantTable row context actions", () => {
         const { onOpenChat } = renderTable([]);
 
         fireEvent.contextMenu(screen.getByText("First chat"));
-        await user.click(screen.getByRole("button", { name: "View" }));
+        await user.click(screen.getByRole("menuitem", { name: "View" }));
 
         expect(onOpenChat).toHaveBeenCalledWith("chat-1");
     });

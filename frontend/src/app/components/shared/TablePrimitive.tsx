@@ -10,18 +10,16 @@ import {
     type ReactNode,
     type RefObject,
 } from "react";
-import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/app/lib/utils";
 import {
-    DropdownMenu,
-    DropdownMenuSeparator,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownAtPoint,
+    DropdownContent,
+    DropdownItem,
+    DropdownSeparator,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import {
     LIQUID_GLASS_SELECTED_CLASS,
     LIQUID_GLASS_GROUP_HOVER_CLASS,
@@ -152,8 +150,8 @@ export function TableFilters<T extends string>({
     const selected = options.find((option) => option.value === value);
 
     return (
-        <DropdownMenu open={open} onOpenChange={setOpen}>
-            <DropdownMenuTrigger asChild>
+        <Dropdown open={open} onOpenChange={setOpen}>
+            <DropdownTrigger asChild>
                 <button
                     type="button"
                     aria-label={label}
@@ -170,27 +168,27 @@ export function TableFilters<T extends string>({
                         }`}
                     />
                 </button>
-            </DropdownMenuTrigger>
-            <LiquidDropdownContent
+            </DropdownTrigger>
+            <DropdownContent
                 align={align === "right" ? "start" : "end"}
-                className={`z-[120] overflow-hidden ${widthClassName}`}
+                className={`overflow-hidden ${widthClassName}`}
             >
-                <LiquidDropdownItem
+                <DropdownItem
                     selected={value === null}
                     onSelect={() => onChange(null)}
                     className="flex w-full items-center justify-between px-3 py-2"
                 >
                     {allLabel}
                     {!value && <Check className="h-3.5 w-3.5 text-gray-400" />}
-                </LiquidDropdownItem>
+                </DropdownItem>
                 {options.length > 0 && (
-                    <DropdownMenuSeparator className="-mx-1 my-1 bg-white/60" />
+                    <DropdownSeparator className="-mx-1 bg-white/60" />
                 )}
                 {options.map((option) => {
                     const Icon = option.icon;
 
                     return (
-                        <LiquidDropdownItem
+                        <DropdownItem
                             key={option.value}
                             selected={value === option.value}
                             onSelect={() => onChange(option.value)}
@@ -211,11 +209,39 @@ export function TableFilters<T extends string>({
                             {value === option.value && (
                                 <Check className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                             )}
-                        </LiquidDropdownItem>
+                        </DropdownItem>
                     );
                 })}
-            </LiquidDropdownContent>
-        </DropdownMenu>
+            </DropdownContent>
+        </Dropdown>
+    );
+}
+
+const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
+    { value: "asc", label: "Ascending" },
+    { value: "desc", label: "Descending" },
+];
+
+/** Ascending/descending sort menu for a column header. */
+export function TableSortFilter({
+    allLabel = "Default Order",
+    widthClassName = "w-40",
+    ...props
+}: {
+    label: string;
+    value: TableSortDirection | null;
+    onChange: (value: TableSortDirection | null) => void;
+    allLabel?: string;
+    widthClassName?: string;
+    align?: "left" | "right";
+}) {
+    return (
+        <TableFilters
+            {...props}
+            allLabel={allLabel}
+            widthClassName={widthClassName}
+            options={SORT_OPTIONS}
+        />
     );
 }
 
@@ -256,11 +282,7 @@ export function TableScrollArea({
     return (
         <div
             className={cn(
-                // A narrower gutter than the page header and toolbar, because
-                // the row's own `pl-3` sits inside it: the selection checkbox
-                // is what has to line up with the header text and the tab
-                // pills, not the table's box.
-                "mx-4 mb-2 min-h-0 min-w-0 flex-1 rounded-2xl md:mx-6 md:mb-3",
+                "mx-3 mb-2 min-h-0 min-w-0 flex-1 rounded-2xl md:mx-6.5 md:mb-3",
                 className,
             )}
         >
@@ -316,39 +338,36 @@ export function TableRow({
 }: DivProps & {
     interactive?: boolean;
     selected?: boolean;
-    rightClickDropdown?:
-        | ReactNode
-        | ((close: () => void, menuProps: DivProps) => ReactNode);
+    /**
+     * Dropdown items for this row's right-click menu, rendered inside a
+     * `DropdownAtPoint` at the cursor.
+     */
+    rightClickDropdown?: ReactNode | ((close: () => void) => ReactNode);
 }) {
-    const [menuCoords, setMenuCoords] = useState<{
-        top: number;
-        left: number;
+    const [menuPoint, setMenuPoint] = useState<{
+        x: number;
+        y: number;
     } | null>(null);
 
     useEffect(() => {
-        if (!menuCoords) return;
-        function handleClick() {
-            setMenuCoords(null);
-        }
+        if (!menuPoint) return;
         function handleCloseRowActions() {
-            setMenuCoords(null);
+            setMenuPoint(null);
         }
-        document.addEventListener("click", handleClick);
         document.addEventListener(
             CLOSE_ROW_ACTIONS_EVENT,
             handleCloseRowActions,
         );
         return () => {
-            document.removeEventListener("click", handleClick);
             document.removeEventListener(
                 CLOSE_ROW_ACTIONS_EVENT,
                 handleCloseRowActions,
             );
         };
-    }, [menuCoords]);
+    }, [menuPoint]);
 
     function closeRightClickDropdown() {
-        setMenuCoords(null);
+        setMenuPoint(null);
     }
 
     function handleContextMenu(e: ReactMouseEvent<HTMLDivElement>) {
@@ -357,11 +376,7 @@ export function TableRow({
         e.preventDefault();
         e.stopPropagation();
         closeRowActionMenus();
-        const menuWidth = 192;
-        setMenuCoords({
-            top: e.clientY,
-            left: Math.min(e.clientX, window.innerWidth - menuWidth - 8),
-        });
+        setMenuPoint({ x: e.clientX, y: e.clientY });
     }
 
     return (
@@ -379,24 +394,20 @@ export function TableRow({
             >
                 {children}
             </div>
-            {menuCoords &&
-                rightClickDropdown &&
-                canPortalToDocument() &&
-                createPortal(
-                    typeof rightClickDropdown === "function"
-                        ? rightClickDropdown(closeRightClickDropdown, {
-                              style: {
-                                  position: "fixed",
-                                  top: menuCoords.top,
-                                  left: menuCoords.left,
-                              },
-                              className: "z-[120]",
-                              onClick: (e) => e.stopPropagation(),
-                              onContextMenu: (e) => e.preventDefault(),
-                          })
-                        : rightClickDropdown,
-                    document.body,
-                )}
+            {menuPoint && rightClickDropdown && canPortalToDocument() && (
+                <DropdownAtPoint
+                    point={menuPoint}
+                    onClose={closeRightClickDropdown}
+                    className="w-48"
+                    // React events bubble through the portal to the row.
+                    onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => e.preventDefault()}
+                >
+                    {typeof rightClickDropdown === "function"
+                        ? rightClickDropdown(closeRightClickDropdown)
+                        : rightClickDropdown}
+                </DropdownAtPoint>
+            )}
         </>
     );
 }

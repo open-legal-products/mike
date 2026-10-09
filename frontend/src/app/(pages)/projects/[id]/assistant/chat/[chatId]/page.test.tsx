@@ -789,7 +789,11 @@ describe("project chat workspace lifecycle", () => {
             },
         ];
         await renderWorkspace();
-        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "New Chat" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
         const rows = await screen.findAllByRole("menuitem");
         expect(rows.map((row) => row.textContent)).toEqual([
             expect.stringContaining("Older"),
@@ -900,7 +904,11 @@ describe("leaving a project chat mid-stream", () => {
             updated_at: "2026-09-14T00:00:00Z",
         });
 
-        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "New Chat" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
         fireEvent.click(
             (await screen.findAllByRole("menuitem")).find((row) =>
                 row.textContent?.includes("Other thread"),
@@ -921,7 +929,11 @@ describe("leaving a project chat mid-stream", () => {
         );
         await body.close();
         expect(body.state.cancelled).toBe(false);
-        fireEvent.click(screen.getByRole("button", { name: "Other thread" }));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "Other thread" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
         const completedRow = (await screen.findAllByRole("menuitem")).find(
             (row) => row.textContent?.includes("Original thread"),
         )!;
@@ -957,7 +969,11 @@ describe("leaving a project chat mid-stream", () => {
             title: "Original thread",
             created_at: "2026-09-14T00:00:00Z",
         });
-        fireEvent.click(screen.getByRole("button", { name: "New Chat" }));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "New Chat" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
         fireEvent.click(
             (await screen.findAllByRole("menuitem")).find((row) =>
                 row.textContent?.includes("Other thread"),
@@ -984,7 +1000,11 @@ describe("leaving a project chat mid-stream", () => {
                   })
                 : Promise.resolve(otherHistory),
         );
-        fireEvent.click(screen.getByRole("button", { name: "Other thread" }));
+        // Radix opens on pointerdown, not click.
+        fireEvent.pointerDown(
+            screen.getByRole("button", { name: "Other thread" }),
+            new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+        );
         fireEvent.click(
             (await screen.findAllByRole("menuitem")).find((row) =>
                 row.textContent?.includes("Original thread"),

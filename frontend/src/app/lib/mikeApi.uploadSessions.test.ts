@@ -17,7 +17,7 @@ import {
     uploadReviewDocument,
     uploadStandaloneDocument,
     uploadStandaloneDocuments,
-    uploadWorkflowAsset,
+    uploadWorkflowAssets,
 } from "./mikeApi";
 import { uploadProcessingPollDelayMs } from "@/shared/api/uploadSessionClient";
 
@@ -941,7 +941,7 @@ describe("direct upload sessions", () => {
         },
         {
             name: "workflow asset",
-            run: (file: File) => uploadWorkflowAsset("workflow-1", file),
+            run: (file: File) => uploadWorkflowAssets("workflow-1", [{ file }]),
             purpose: "document_create",
             destination: { scope: "workflow", workflow_id: "workflow-1" },
         },

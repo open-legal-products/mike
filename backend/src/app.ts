@@ -250,7 +250,6 @@ app.post("/projects/:projectId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/generate", chatLimiter);
 app.post("/chat/create", chatCreateLimiter);
-app.post("/chat/:chatId/generate-title", chatCreateLimiter);
 app.post("/workflow-addons/:addonId/import", workflowImportLimiter);
 const legacyUploadRemoved = (_req: express.Request, res: express.Response) => {
   res.status(410).json({
@@ -271,13 +270,9 @@ app.put(
 );
 app.post("/projects/:projectId/documents", legacyUploadRemoved);
 app.get("/projects/:projectId/export", exportLimiter);
-app.get("/user/export", exportLimiter);
-app.get("/user/chats/export", exportLimiter);
-app.get("/user/tabular-reviews/export", exportLimiter);
-app.get("/audit/export", exportLimiter);
-// Scheduling an async export costs exactly what the synchronous GETs above
-// cost — the same whole-corpus walk, just on a worker — so it shares their
-// budget. Deliberately POST-only: the /user/exports/:id poll and its download
+// Scheduling an async export costs what the synchronous project export above
+// costs — a whole-corpus walk, just on a worker — so it shares its budget.
+// Deliberately POST-only: the /user/exports/:id poll and its download
 // stay on the general limiter, because a client polls every couple of seconds
 // while an export builds and a 10/hour budget would lock the user out of an
 // export they legitimately scheduled.
@@ -309,7 +304,6 @@ app.use("/quick-actions", quickActionsRouter);
 app.use("/workflow-addons", workflowAddonsRouter);
 app.use("/user/memory", userMemoryRouter);
 app.use("/user", userRouter);
-app.use("/users", userRouter);
 app.use("/download", downloadsRouter);
 app.use("/documents", sourceDocumentsRouter);
 app.use("/audit", auditRouter);

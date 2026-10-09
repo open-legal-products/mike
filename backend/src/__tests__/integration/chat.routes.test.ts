@@ -419,11 +419,10 @@ vi.mock("../../modules/user/user.settings", () => ({
     })),
     persistLastSelectedChatModel: vi.fn(async () => null),
     persistLastSelectedReasoningLevel: vi.fn(async () => null),
-    getUserApiKeys: vi.fn(async () => ({})),
 }));
 
-// generate-title calls completeText; stub it so the success-path tests don't
-// reach a real LLM. Everything else in lib/llm stays real.
+// Chat title generation calls completeText; stub it so the success-path tests
+// don't reach a real LLM. Everything else in lib/llm stays real.
 vi.mock("../../lib/llm", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../lib/llm")>();
     return {
@@ -438,7 +437,7 @@ import { createServerSupabase } from "../../lib/supabase";
 
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
-    model: "gemini-3-flash-preview",
+    model: "gemini-3.8-flash",
 };
 
 function findAssistantReservation() {
@@ -699,7 +698,7 @@ describe("POST /chat — streaming endpoint", () => {
             memory_curator_model: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
-            last_selected_chat_model: "gpt-5.6-luna",
+            last_selected_chat_model: "gpt-6-luna",
             api_keys: { openai: "test-key" },
         });
 
@@ -710,11 +709,11 @@ describe("POST /chat — streaming endpoint", () => {
 
         expect(res.status).toBe(200);
         expect(runLLMStream).toHaveBeenCalledWith(
-            expect.objectContaining({ model: "gpt-5.6-luna" }),
+            expect.objectContaining({ model: "gpt-6-luna" }),
         );
         expect(dbInserts).toContainEqual({
             table: "chats",
-            value: expect.objectContaining({ model: "gpt-5.6-luna" }),
+            value: expect.objectContaining({ model: "gpt-6-luna" }),
         });
     expect(userSettings.persistLastSelectedChatModel).not.toHaveBeenCalled();
     });
@@ -994,7 +993,7 @@ describe("POST /chat — streaming endpoint", () => {
             const first = await request(app)
                 .post("/chat")
                 .set("Authorization", "Bearer test")
-                .send({ ...VALID_BODY, model: "gpt-5.6-terra" });
+                .send({ ...VALID_BODY, model: "gpt-6.1-sol" });
 
             expect(first.text).toContain('"type":"ask_inputs"');
             expect(first.text).not.toContain('"type":"error"');
@@ -1055,7 +1054,7 @@ describe("POST /chat — streaming endpoint", () => {
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send({
-                    model: "gpt-5.6-terra",
+                    model: "gpt-6.1-sol",
                     chat_id: "chat-1",
                     messages: [
                         { role: "user", content: "Draft a letter." },
@@ -1126,7 +1125,7 @@ describe("POST /chat — streaming endpoint", () => {
                 document_name: "Contract.docx",
                 storage: "cloud",
                 document_context: "GOVERNED BY DELAWARE LAW",
-                model: "gemini-3-flash-preview",
+                model: "gemini-3.8-flash",
             });
 
         expect(res.status).toBe(200);
@@ -1263,7 +1262,7 @@ describe("POST /chat — streaming endpoint", () => {
             memory_curator_model: null,
             last_selected_reasoning_level: null,
             tabular_model: null,
-            last_selected_chat_model: "gpt-5.6-luna",
+            last_selected_chat_model: "gpt-6-luna",
             api_keys: { openai: "test-key" },
         });
 
@@ -1278,7 +1277,7 @@ describe("POST /chat — streaming endpoint", () => {
 
         expect(res.status).toBe(200);
         expect(runLLMStream).toHaveBeenCalledWith(
-            expect.objectContaining({ model: "gpt-5.6-luna" }),
+            expect.objectContaining({ model: "gpt-6-luna" }),
         );
     });
 
@@ -1953,17 +1952,17 @@ describe("PATCH /chat/:chatId", () => {
         const res = await request(app)
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
-            .send({ model: "gemini-3-flash-preview" });
+            .send({ model: "gemini-3.8-flash" });
 
         expect(res.status).toBe(200);
         expect(dbUpdates).toContainEqual({
             table: "chats",
-            value: { model: "gemini-3-flash-preview" },
+            value: { model: "gemini-3.8-flash" },
             filters: [{ column: "id", value: "chat-1" }],
         });
         expect(userSettings.persistLastSelectedChatModel).toHaveBeenCalledWith(
             "u1",
-            "gemini-3-flash-preview",
+            "gemini-3.8-flash",
             expect.anything(),
         );
     });
@@ -2004,13 +2003,13 @@ describe("PATCH /word-chat/:chatId/model", () => {
             .patch(`/word-chat/${chatId}/model`)
             .query({ document_id: documentId })
             .set("Authorization", "Bearer test")
-            .send({ model: "gemini-3-flash-preview" });
+            .send({ model: "gemini-3.8-flash" });
 
         expect(res.status).toBe(200);
         expect(dbUpdates).toContainEqual({
             table: "word_chats",
             value: expect.objectContaining({
-                model: "gemini-3-flash-preview",
+                model: "gemini-3.8-flash",
             }),
             filters: [
                 { column: "id", value: chatId },
@@ -2019,7 +2018,7 @@ describe("PATCH /word-chat/:chatId/model", () => {
         });
         expect(userSettings.persistLastSelectedChatModel).toHaveBeenCalledWith(
             "u1",
-            "gemini-3-flash-preview",
+            "gemini-3.8-flash",
             expect.anything(),
         );
     });
@@ -2063,9 +2062,8 @@ describe("PATCH /word-chat/:chatId/model", () => {
 // A table-aware supabase stub lets us vary how u1 reaches the project: a
 // direct 'viewer' grant (may read, must not write), or org membership, which
 // inherits project member and may write. The security property under test:
-// POST /chat with an existing chat_id and POST /chat/:chatId/generate-title
-// are WRITES and must require content.edit, while GET /chat/:chatId stays a
-// read open to viewers.
+// POST /chat with an existing chat_id is a WRITE and must require
+// content.edit, while GET /chat/:chatId stays a read open to viewers.
 //
 // The same stub backs the sharing routes (PATCH/DELETE/people): it records
 // every update/delete with its filters, so a test can prove the write was
@@ -2273,7 +2271,7 @@ async function seedResolvableModel() {
         memory_curator_model: null,
         last_selected_reasoning_level: null,
         tabular_model: null,
-        last_selected_chat_model: "gpt-5.6-luna",
+        last_selected_chat_model: "gpt-6-luna",
         api_keys: { openai: "test-key" },
     });
 }
@@ -2313,25 +2311,6 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
         expect(res.status).toBe(403);
         expect(res.body).toHaveProperty("detail");
         expect(runLLMStream).not.toHaveBeenCalled();
-    });
-
-    it("403s a personal-project Viewer calling generate-title", async () => {
-        mockedCreate.mockImplementation(
-      () =>
-        makeRbacDb(null, "colleague-1", {
-                grantRole: "viewer",
-                project: { org_id: null },
-                chat: { org_id: null },
-            }) as never,
-        );
-
-        const res = await request(app)
-            .post("/chat/chat-1/generate-title")
-            .set("Authorization", "Bearer test")
-            .send({ message: "hello there" });
-
-        expect(res.status).toBe(403);
-        expect(res.body).toHaveProperty("detail");
     });
 
     // A Viewer can open the project, so answering "Project not found" told
@@ -2398,40 +2377,6 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
 
         expect(res.status).toBe(200);
         expect(runLLMStream).toHaveBeenCalledTimes(1);
-    });
-
-    it("still lets an org admin generate a title", async () => {
-        await seedResolvableModel();
-        mockedCreate.mockImplementation(() => makeRbacDb("admin") as never);
-
-        const res = await request(app)
-            .post("/chat/chat-1/generate-title")
-            .set("Authorization", "Bearer test")
-            .send({ message: "hello there" });
-
-        expect(res.status).toBe(200);
-        expect(res.body.title).toBe("Generated Title");
-    });
-
-    // The update's error used to be ignored, so a failed write still
-    // answered 200 with the new title: the sidebar renamed the chat and the
-    // next reload silently put the old name back.
-    it("reports a failed title write instead of answering 200", async () => {
-        await seedResolvableModel();
-        mockedCreate.mockImplementation(
-            () =>
-                makeRbacDb("admin", "colleague-1", {
-                    chatWriteError: "title update failed",
-                }) as never,
-        );
-
-        const res = await request(app)
-            .post("/chat/chat-1/generate-title")
-            .set("Authorization", "Bearer test")
-            .send({ message: "hello there" });
-
-        expect(res.status).toBe(500);
-        expect(res.body.detail).toBe("Something went wrong. Please try again.");
     });
 
     it("still lets a project viewer GET the chat (reads stay project.view)", async () => {
@@ -3204,19 +3149,6 @@ describe("chat grants, deletion and roster", () => {
             expect(res.status).toBe(200);
             expect(res.body.access_role).toBe("editor");
             expect(res.body.is_owner).toBe(false);
-        });
-
-        it("may generate a title (content.edit)", async () => {
-            await seedResolvableModel();
-            mockedCreate.mockImplementation(directShare);
-
-            const res = await request(app)
-                .post("/chat/chat-1/generate-title")
-                .set("Authorization", "Bearer test")
-                .send({ message: "hello there" });
-
-            expect(res.status).toBe(200);
-            expect(res.body.title).toBe("Generated Title");
         });
 
         it("marks a collaborator's generated turn as shared memory context", async () => {

@@ -266,6 +266,16 @@ export async function officeFileToPdf(
   return outputPath;
 }
 
-export function convertedPdfKey(userId: string, docId: string): string {
-  return `converted-pdfs/${userId}/${docId}.pdf`;
+/**
+ * Storage key of a document's PDF rendition. With a version slug the key is
+ * per version, so a rendition never overwrites another version's.
+ */
+export function convertedPdfKey(
+  userId: string,
+  docId: string,
+  versionSlug?: string,
+): string {
+  return versionSlug
+    ? `converted-pdfs/${userId}/${docId}/${versionSlug}.pdf`
+    : `converted-pdfs/${userId}/${docId}.pdf`;
 }

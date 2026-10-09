@@ -33,17 +33,6 @@ export function safeAuthNext(
     return `${resolved.pathname}${resolved.search}`;
 }
 
-export function authCallbackUrl(origin: string, next: string): string {
-    const callback = new URL("/auth/callback", origin);
-    callback.searchParams.set("next", safeAuthNext(next));
-    return callback.toString();
-}
-
-export function browserAuthCallbackUrl(next: string): string | undefined {
-    if (typeof window === "undefined") return undefined;
-    return authCallbackUrl(window.location.origin, next);
-}
-
 export function authErrorDescription(
     search: string,
     hash: string,

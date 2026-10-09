@@ -4,9 +4,11 @@ import {
     useMemo,
     useRef,
     useState,
+    type ReactNode,
     type Dispatch,
     type SetStateAction,
 } from "react";
+import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import {
     RowActionMenuItems,
     RowActions,
@@ -19,7 +21,7 @@ import {
     TableCell,
     TableEmptyState,
     TableFilters,
-    type TableFilterOption,
+    TableSortFilter,
     TableHeaderCell,
     TableHeaderRow,
     TablePrimaryCell,
@@ -47,11 +49,6 @@ function creatorLabel(chat: Chat, currentUserId?: string | null) {
 
 type ProjectChatSortKey = "name" | "created";
 
-const SORT_OPTIONS: TableFilterOption<TableSortDirection>[] = [
-    { value: "asc", label: "Ascending" },
-    { value: "desc", label: "Descending" },
-];
-
 export function ProjectAssistantTable({
     chats,
     filteredChats,
@@ -70,6 +67,7 @@ export function ProjectAssistantTable({
     setRenamingChatId,
     setRenameChatValue,
     loading = false,
+    renderToolbar,
 }: {
     chats: Chat[];
     filteredChats: Chat[];
@@ -88,6 +86,7 @@ export function ProjectAssistantTable({
     setRenamingChatId: Dispatch<SetStateAction<string | null>>;
     setRenameChatValue: Dispatch<SetStateAction<string>>;
     loading?: boolean;
+    renderToolbar?: (actions: ReactNode) => ReactNode;
 }) {
     const [creatorFilter, setCreatorFilter] = useState<string | null>(null);
     const [sort, setSort] = useState<{
@@ -117,6 +116,35 @@ export function ProjectAssistantTable({
     function clearSelection() {
         rowSelectionAnchorIdRef.current = null;
         setSelectedChatIds([]);
+    }
+
+    function requestRenameChat(chat: Chat) {
+        if (!can(roleFrom(chat), "content.edit")) {
+            onOwnerOnlyAction({ action: "rename this chat", requiredRole: "editor" });
+            return;
+        }
+        setRenameChatValue(chat.title ?? "Untitled Chat");
+        setRenamingChatId(chat.id);
+    }
+
+    function renderChatActions(chat: Chat | undefined, onClose: () => void) {
+        const actionIds = chat
+            ? rowActionSelectionIds(chat.id, selectedChatIds)
+            : selectedChatIds;
+        const appliesToSelection = actionIds.length > 1;
+        return (
+            <RowActionMenuItems
+                onClose={onClose}
+                onView={!appliesToSelection && chat ? () => onOpenChat(chat.id) : undefined}
+                onRename={!appliesToSelection && chat ? () => requestRenameChat(chat) : undefined}
+                onDelete={() =>
+                    appliesToSelection || !chat
+                        ? onDeleteSelectedChats()
+                        : requestDeleteChat(chat)
+                }
+                deleteLabel={appliesToSelection ? `Delete ${actionIds.length} chats` : undefined}
+            />
+        );
     }
 
     function handleCreatorFilterChange(value: string | null) {
@@ -178,13 +206,10 @@ export function ProjectAssistantTable({
     const createdSortDirection =
         sort?.key === "created" ? sort.direction : null;
     const nameFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by chat name"
             value={nameSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
             align="right"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("name", direction)}
         />
     );
@@ -199,18 +224,20 @@ export function ProjectAssistantTable({
         />
     );
     const createdFilterButton = (
-        <TableFilters
+        <TableSortFilter
             label="Sort by created date"
             value={createdSortDirection}
-            allLabel="Default Order"
-            widthClassName="w-40"
-            options={SORT_OPTIONS}
             onChange={(direction) => handleSortChange("created", direction)}
         />
     );
 
     return (
         <>
+        {renderToolbar?.(selectedChatIds.length > 0 ? (
+            <SelectionActionsMenu
+                renderItems={(close) => renderChatActions(chats.find((chat) => chat.id === selectedChatIds[0]), close)}
+            />
+        ) : undefined)}
         <TableScrollArea
             header={
                 <TableHeaderRow className="pr-8 md:pr-8">
@@ -280,68 +307,11 @@ export function ProjectAssistantTable({
             ) : (
                 <TableBody>
                     {visibleChats.map((chat) => {
-                        const actionIds = rowActionSelectionIds(
-                            chat.id,
-                            selectedChatIds,
-                        );
-                        const appliesToSelection = actionIds.length > 1;
                         return (
                         <TableRow
                             key={chat.id}
                             selected={selectedChatIds.includes(chat.id)}
-                            rightClickDropdown={(close, menuProps) => (
-                                <RowActionMenuItems
-                                    onClose={close}
-                                    surfaceProps={menuProps}
-                                    onView={
-                                        appliesToSelection
-                                            ? undefined
-                                            : () => onOpenChat(chat.id)
-                                    }
-                                    onRename={
-                                        appliesToSelection
-                                            ? undefined
-                                            : () => {
-                                                  // Renaming is content.edit
-                                                  // (member+) judged on the
-                                                  // SERVED role, not on "did
-                                                  // I create this row": a
-                                                  // project admin renames a
-                                                  // colleague's chat, and a
-                                                  // viewer cannot rename one
-                                                  // they may only read.
-                                                  if (
-                                                      !can(
-                                                          roleFrom(chat),
-                                                          "content.edit",
-                                                      )
-                                                  ) {
-                                                      onOwnerOnlyAction({
-                                                          action: "rename this chat",
-                                                          requiredRole:
-                                                              "editor",
-                                                      });
-                                                      return;
-                                                  }
-                                                  setRenameChatValue(
-                                                      chat.title ??
-                                                          "Untitled Chat",
-                                                  );
-                                                  setRenamingChatId(chat.id);
-                                              }
-                                    }
-                                    onDelete={() =>
-                                        appliesToSelection
-                                            ? onDeleteSelectedChats()
-                                            : requestDeleteChat(chat)
-                                    }
-                                    deleteLabel={
-                                        appliesToSelection
-                                            ? `Delete ${actionIds.length} chats`
-                                            : undefined
-                                    }
-                                />
-                            )}
+                            rightClickDropdown={(close) => renderChatActions(chat, close)}
                             onClick={(event) => {
                                 if (renamingChatId === chat.id) return;
                                 if (event.shiftKey) {
@@ -408,30 +378,7 @@ export function ProjectAssistantTable({
                             >
                                 <RowActions
                                     onView={() => onOpenChat(chat.id)}
-                                    onRename={() => {
-                                        // Renaming is content.edit (member+)
-                                        // judged on the SERVED role, not on
-                                        // "did I create this row": a project
-                                        // admin renames a colleague's chat,
-                                        // and a viewer cannot rename one they
-                                        // may only read.
-                                        if (
-                                            !can(
-                                                roleFrom(chat),
-                                                "content.edit",
-                                            )
-                                        ) {
-                                            onOwnerOnlyAction({
-                                                action: "rename this chat",
-                                                requiredRole: "editor",
-                                            });
-                                            return;
-                                        }
-                                        setRenameChatValue(
-                                            chat.title ?? "Untitled Chat",
-                                        );
-                                        setRenamingChatId(chat.id);
-                                    }}
+                                    onRename={() => requestRenameChat(chat)}
                                     onDelete={() => requestDeleteChat(chat)}
                                 />
                             </div>

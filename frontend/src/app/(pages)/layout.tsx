@@ -139,7 +139,14 @@ export default function MikeLayout({
                                             : "relative shrink-0 pb-2 pt-3",
                                     )}
                                 >
-                                    <HeaderButtonsUI className="pointer-events-auto">
+                                    <HeaderButtonsUI
+                                        className={cn(
+                                            "pointer-events-auto",
+                                            // Only the chat page floats this
+                                            // bar over scrolling content.
+                                            isChatPage && "backdrop-blur-2xl",
+                                        )}
+                                    >
                                         <HeaderButtonUI
                                             iconOnly
                                             onClick={handleSidebarToggle}

@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { useState } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectsOverview } from "./ProjectsOverview";
@@ -32,6 +33,7 @@ vi.mock("@/app/hooks/useQueryParamTab", () => ({
 vi.mock("@/app/hooks/usePaginatedProjects", () => ({
     usePaginatedProjects: (options: unknown) => {
         usePaginatedProjectsSpy(options);
+        const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
         return {
             projects: projectRows.current,
             setProjects: vi.fn(),
@@ -42,8 +44,8 @@ vi.mock("@/app/hooks/usePaginatedProjects", () => ({
             loadMoreError: null,
             loadMore: vi.fn(),
             retry: retrySpy,
-            selectedProjectIds: [],
-            setSelectedProjectIds: vi.fn(),
+            selectedProjectIds,
+            setSelectedProjectIds,
             selectAllMatching: vi.fn(),
             getProjectOwnerId: vi.fn(),
         };
@@ -104,6 +106,23 @@ describe("ProjectsOverview tabs", () => {
                 removeEventListener: vi.fn(),
             }),
         );
+    });
+
+    it.each([1, 2])("matches toolbar and right-click actions for %i selected projects", async (count) => {
+        const user = userEvent.setup();
+        projectRows.current = [1, 2].map((index) => ({
+            id: `project-${index}`, name: `Project ${index}`, user_id: "user-1",
+            access_role: "owner", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+        }));
+        render(<ProjectsOverview />);
+        await user.click(screen.getByRole("checkbox", { name: "Select Project 1" }));
+        if (count === 2) await user.click(screen.getByRole("checkbox", { name: "Select Project 2" }));
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+        expect(items).toEqual(count === 1 ? ["Open", "Edit details", "Delete"] : ["Delete 2 projects"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("Project 1"), { clientX: 40, clientY: 40 });
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(items);
     });
 
     it("shows All first and defaults to it", () => {

@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signup } from "@/app/lib/authApi";
-import { Input } from "@/app/components/ui/input";
+import { InputUI } from "@/shared/ui/InputUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { pillButtonUIClassName } from "@/shared/ui/PillButtonUI.styles";
 import Link from "next/link";
@@ -11,9 +11,9 @@ import { SiteLogo } from "@/app/components/site-logo";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { cn } from "@/app/lib/utils";
 import {
-    authGlassCardClassName,
-    authInputClassName,
-} from "@/app/components/auth/authStyles";
+    authGlassCardUIClassName,
+    authInputUIClassName,
+} from "@/shared/ui/AuthStylesUI";
 import { knownErrorCodeMessage } from "@/app/lib/userFacingError";
 
 const SIGNUP_ERROR_MESSAGES = {
@@ -27,7 +27,7 @@ import {
     MIN_PASSWORD_LENGTH,
     minimumPasswordMessage,
 } from "@/app/components/auth/passwordPolicy";
-import { AuthDivider } from "@/app/components/auth/AuthDivider";
+import { AuthDividerUI } from "@/shared/ui/AuthDividerUI";
 import { GoogleAuthButton } from "@/app/components/auth/GoogleAuthButton";
 import { FieldLabel } from "@/app/components/ui/form-field";
 
@@ -115,7 +115,7 @@ function SignupContent() {
                     <SiteLogo size="lg" asLink />
                 </div>
                 <div className="w-full max-w-md">
-                    <div className={authGlassCardClassName}>
+                    <div className={authGlassCardUIClassName}>
                         <h1 className="font-serif text-2xl font-medium text-gray-950">
                             Account created!
                         </h1>
@@ -145,7 +145,7 @@ function SignupContent() {
                 <SiteLogo size="lg" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className={cn(authGlassCardClassName, "mb-4")}>
+                <div className={cn(authGlassCardUIClassName, "mb-4")}>
                     <h2 className="mb-6 text-left text-2xl font-medium font-serif text-gray-950">
                         Sign Up
                     </h2>
@@ -155,13 +155,13 @@ function SignupContent() {
                             <FieldLabel htmlFor="email">
                                 Email
                             </FieldLabel>
-                            <Input
+                            <InputUI
                                 id="email"
                                 type="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 required
-                                className={`w-full ${authInputClassName}`}
+                                className={`w-full ${authInputUIClassName}`}
                             />
                         </div>
 
@@ -169,14 +169,14 @@ function SignupContent() {
                             <FieldLabel htmlFor="password">
                                 Password
                             </FieldLabel>
-                            <Input
+                            <InputUI
                                 id="password"
                                 type="password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 placeholder={`Min. ${MIN_PASSWORD_LENGTH} Characters`}
                                 required
-                                className={`w-full ${authInputClassName}`}
+                                className={`w-full ${authInputUIClassName}`}
                             />
                         </div>
 
@@ -184,7 +184,7 @@ function SignupContent() {
                             <FieldLabel htmlFor="confirmPassword">
                                 Confirm Password
                             </FieldLabel>
-                            <Input
+                            <InputUI
                                 id="confirmPassword"
                                 type="password"
                                 value={confirmPassword}
@@ -192,7 +192,7 @@ function SignupContent() {
                                     setConfirmPassword(e.target.value)
                                 }
                                 required
-                                className={`w-full ${authInputClassName}`}
+                                className={`w-full ${authInputUIClassName}`}
                             />
                         </div>
 
@@ -232,7 +232,7 @@ function SignupContent() {
                             >
                                 {loading ? "Creating account..." : "Sign up"}
                             </PillButtonUI>
-                            <AuthDivider />
+                            <AuthDividerUI />
                             <GoogleAuthButton
                                 onError={setError}
                                 disabled={loading}

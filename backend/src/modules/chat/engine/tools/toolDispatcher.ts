@@ -294,6 +294,11 @@ export async function runToolCalls(
      * Without it, a connector write that needs approval is refused.
      */
     connectorApprovals?: boolean;
+    /**
+     * The caller's authenticated email, for the per-document write check
+     * edit_document runs (direct grants are keyed by email).
+     */
+    userEmail?: string | null;
   } = {},
 ): Promise<{
   toolResults: unknown[];
@@ -1504,6 +1509,7 @@ export async function runToolCalls(
         const result = await runEditDocument({
           documentId: indexed.document_id,
           userId,
+          userEmail: options.userEmail ?? null,
           edits,
           db,
           reuseVersion,
@@ -1781,6 +1787,7 @@ export async function runToolCalls(
                 // it must not see a size that disagrees with content_sha256.
                 size_bytes: raw.byteLength,
                 page_count: active?.page_count ?? null,
+                textless_page_count: active?.textless_page_count ?? null,
                 content_sha256: contentSha256(raw),
               }));
               const { data: insertedVersions, error: verErr } = await createDocumentVersions(db, versionRows);

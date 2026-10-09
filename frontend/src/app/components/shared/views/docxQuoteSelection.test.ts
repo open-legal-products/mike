@@ -12,7 +12,7 @@ const row = [
 
 function documentSearch(paragraphs: string[]) {
     const query = vi.fn(() => paragraphs.map((text) => ({ text })));
-    const findMatches = vi.fn((text: string): TextMatch[] =>
+    const findOne = (text: string): TextMatch[] =>
         paragraphs.flatMap((paragraph, paragraphIndex) => {
             const matches: TextMatch[] = [];
             for (
@@ -31,8 +31,10 @@ function documentSearch(paragraphs: string[]) {
                 });
             }
             return matches;
-        }),
-    );
+        });
+    const findMatches = vi.fn((search: string | readonly string[]) =>
+        typeof search === "string" ? findOne(search) : search.map(findOne),
+    ) as unknown as Editor["findMatches"];
     return { query, findMatches } as unknown as Pick<
         Editor,
         "query" | "findMatches"
@@ -139,7 +141,11 @@ describe("findDocxQuote", () => {
             text: "January 2026",
             scope: { kind: "headerFooter", rId: "header1" },
         };
-        vi.mocked(editor.findMatches).mockReturnValue([exact as TextMatch]);
+        editor.findMatches = vi.fn((search: string | readonly string[]) =>
+            typeof search === "string"
+                ? [exact as TextMatch]
+                : search.map(() => [exact as TextMatch]),
+        ) as unknown as Editor["findMatches"];
         expect(findDocxQuote(editor, "January 2026")).toEqual({
             start: exact,
             end: exact,
@@ -150,8 +156,11 @@ describe("findDocxQuote", () => {
     it("ignores header matches with the same paragraph ordinal when mapping body endpoints", () => {
         const editor = documentSearch(row);
         const search = editor.findMatches;
-        editor.findMatches = (text, options) =>
-            [
+        editor.findMatches = ((text, options) => {
+            if (typeof text !== "string") {
+                return search(text, options);
+            }
+            return [
                 {
                     blockId: "header",
                     start: 0,
@@ -162,6 +171,7 @@ describe("findDocxQuote", () => {
                 } as TextMatch,
                 ...search(text, options),
             ].filter(() => !text.includes("\n"));
+        }) as Editor["findMatches"];
         expect(findDocxQuote(editor, row.join("\n"))?.start.blockId).toBe(
             "paragraph-0",
         );

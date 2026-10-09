@@ -13,7 +13,7 @@ import { type DocumentActions } from "../shared/DocumentTabActions";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import Image from "next/image";
 import { BookOpenText } from "lucide-react";
-import { DocPanel, type DocPanelMode } from "./DocPanel";
+import { DocumentContent, type DocumentContentMode } from "@/app/components/shared/DocumentContent";
 import { DocumentTabBar } from "../shared/DocumentTabBar";
 import type { Citation, EditAnnotation, PanelDocument } from "../shared/types";
 import { cn } from "@/app/lib/utils";
@@ -139,7 +139,7 @@ interface Props {
     ) => void;
     /**
      * Parent-driven reloading flag per document. Download buttons in
-     * DocPanel show a spinner iff this returns true for the tab's
+     * DocumentContent show a spinner iff this returns true for the tab's
      * documentId. Used to signal "accept/reject in flight".
      */
     isEditorReloading?: (documentId: string) => boolean;
@@ -276,7 +276,7 @@ export function AssistantSidePanel({
             ref={panelRef}
             className={cn(
                 "relative flex h-full w-full shrink-0 flex-col md:my-3 md:mr-3 md:h-[calc(100%-1.5rem)] md:w-[var(--assistant-panel-width)]",
-                "rounded-2xl backdrop-blur-2xl",
+                "rounded-2xl",
                 LIQUID_GLASS_FLOAT_CLASS,
                 "overflow-hidden",
             )}
@@ -350,7 +350,7 @@ export function AssistantSidePanel({
                         <button
                             type="button"
                             onClick={onOpenDocuments}
-                            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
+                            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
                         >
                             <BookOpenText aria-hidden="true" className="h-4 w-4" />
                             Open Documents
@@ -359,7 +359,7 @@ export function AssistantSidePanel({
                 ) : null}
                 {tabs.map((tab) => {
                     const isActive = tab.id === active?.id;
-                    const mode: DocPanelMode =
+                    const mode: DocumentContentMode =
                         tab.kind === "citation"
                             ? {
                                   kind: "citation",
@@ -388,7 +388,7 @@ export function AssistantSidePanel({
                             aria-hidden={!isActive}
                             inert={!isActive}
                         >
-                            <DocPanel
+                            <DocumentContent
                                 showToolbarToggle
                                 canEdit={permissions(tab.document.document_id).canEdit}
                                 onDownloadReady={(download) => viewers.registerDownload(tab.id, download)}

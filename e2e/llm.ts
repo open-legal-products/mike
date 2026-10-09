@@ -9,10 +9,6 @@
  * Without that secret, these specs cannot submit a message in CI and would
  * otherwise hang until their timeout.
  *
- * The auto title-generation call (POST /chat/:id/generate-title) is NOT why
- * the gate exists: keyless it just returns 500, and the specs already treat it
- * as best-effort (`.catch(() => null)`).
- *
  * In CI the key is the `ANTHROPIC_API_KEY` repository secret, which
  * `.github/workflows/e2e.yml` exposes both to the backend (backend/.env) and
  * to the Playwright process. Guarding with

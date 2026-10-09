@@ -150,7 +150,6 @@ describe("HistoryPage", () => {
       "rounded-full",
       "border-white/80",
       "bg-green-400/80",
-      "backdrop-blur-xl",
     );
     expect(screen.getByText("gpt-5")).toHaveClass("w-28", "text-xs");
     expect(screen.getByText("Email").parentElement).toHaveClass("ml-auto");

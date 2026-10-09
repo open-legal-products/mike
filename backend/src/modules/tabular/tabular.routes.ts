@@ -17,6 +17,7 @@ import {
     attachStreamRunSse,
     getActiveStreamRun,
     startStreamRun,
+    stopOutcomeFrame,
 } from "../../lib/streamRuns";
 import {
     attachAssistantTurnSse,
@@ -611,7 +612,7 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             // Stopped. The cells are already back to "pending"; tell every
             // attached reader how the run ended, the way a chat turn does,
             // so a second tab does not sit on a spinner.
-            write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+            write(stopOutcomeFrame(run));
             write("data: [DONE]\n\n");
         }
     } catch (err) {
@@ -1133,7 +1134,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             // Readers still attached (Stop came from another tab, or this one
             // is only watching) learn the outcome the same way a reload
             // would: the stored row now ends "Cancelled by user."
-            write(`data: ${JSON.stringify({ type: "cancelled" })}\n\n`);
+            write(stopOutcomeFrame(run));
             write("data: [DONE]\n\n");
             return;
         }

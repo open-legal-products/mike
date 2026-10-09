@@ -15,6 +15,7 @@ export type NewDocumentVersion = {
   file_type?: string | null;
   size_bytes?: number | null;
   page_count?: number | null;
+  textless_page_count?: number | null;
   content_sha256?: string | null;
 };
 
@@ -105,7 +106,7 @@ export async function updateDocumentVersion(
       : query.eq("content_sha256", options.expectedContentSha256);
   const result = await query
     .select(
-      "id, version_number, source, created_at, filename, file_type, size_bytes, page_count",
+      "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, textless_page_count",
     )
     .maybeSingle();
   if (!result.error && result.data)

@@ -2,13 +2,11 @@
 
 import { Files, FolderUp, Upload } from "lucide-react";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
 
 interface DocumentUploadMenuProps {
@@ -28,8 +26,8 @@ export function DocumentUploadMenu({
         disabled || (!onSavedFiles && !onUploadFiles && !onUploadFolder);
 
     return (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+        <Dropdown>
+            <DropdownTrigger asChild>
                 <HeaderButtonUI
                     disabled={triggerDisabled}
                     title="Upload"
@@ -38,40 +36,40 @@ export function DocumentUploadMenu({
                 >
                     <Upload className="h-3.5 w-3.5" />
                 </HeaderButtonUI>
-            </DropdownMenuTrigger>
-            <LiquidDropdownContent
+            </DropdownTrigger>
+            <DropdownContent
                 align="end"
-                className="z-[160] min-w-40 p-1"
+                className="min-w-40 p-1"
             >
                 {onSavedFiles !== undefined && (
-                    <LiquidDropdownItem
+                    <DropdownItem
                         disabled={disabled || !onSavedFiles}
                         onSelect={() => onSavedFiles?.()}
                         className="flex items-center px-3 py-2"
                     >
                         <Files className="mr-2 h-3.5 w-3.5" />
                         Saved Documents
-                    </LiquidDropdownItem>
+                    </DropdownItem>
                 )}
-                <LiquidDropdownItem
+                <DropdownItem
                     disabled={disabled || !onUploadFiles}
                     onSelect={() => onUploadFiles?.()}
                     className="flex items-center px-3 py-2"
                 >
                     <Upload className="mr-2 h-3.5 w-3.5" />
                     Upload Documents
-                </LiquidDropdownItem>
+                </DropdownItem>
                 {onUploadFolder !== undefined && (
-                    <LiquidDropdownItem
+                    <DropdownItem
                         disabled={disabled || !onUploadFolder}
                         onSelect={() => onUploadFolder?.()}
                         className="flex items-center px-3 py-2"
                     >
                         <FolderUp className="mr-2 h-3.5 w-3.5" />
                         Upload folder
-                    </LiquidDropdownItem>
+                    </DropdownItem>
                 )}
-            </LiquidDropdownContent>
-        </DropdownMenu>
+            </DropdownContent>
+        </Dropdown>
     );
 }

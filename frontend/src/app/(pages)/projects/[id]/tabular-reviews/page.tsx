@@ -2,9 +2,8 @@
 
 import { use, useCallback, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown } from "lucide-react";
 import { deleteTabularReview, updateTabularReview } from "@/app/lib/mikeApi";
-import { ProjectReviewsTable } from "@/app/components/projects/ProjectReviewsTable";
+import { ReviewsListTable } from "@/app/components/tabular/ReviewsListTable";
 import { TabularReviewDetailsModal } from "@/app/components/tabular/TabularReviewDetailsModal";
 import {
     ProjectSectionToolbar,
@@ -13,7 +12,6 @@ import {
 import type { TabularReview } from "@/app/components/shared/types";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import {
@@ -28,39 +26,6 @@ interface Props {
     params: Promise<{ id: string }>;
 }
 
-function SelectedReviewActions({
-    selectedCount,
-    open,
-    onOpenChange,
-    onDelete,
-}: {
-    selectedCount: number;
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    onDelete: () => void;
-}) {
-    if (selectedCount === 0) return null;
-
-    return (
-        <div className="relative">
-            <TabPillButtonUI onClick={() => onOpenChange(!open)}>
-                Actions
-                <ChevronDown className="h-3.5 w-3.5" />
-            </TabPillButtonUI>
-            {open && (
-                <div className="absolute right-0 top-full z-[120] mt-1 w-36 overflow-hidden rounded-lg border border-white/60 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_12px_32px_rgba(15,23,42,0.14)] backdrop-blur-xl">
-                    <button
-                        onClick={onDelete}
-                        className="w-full px-3 py-1.5 text-left text-xs text-red-600 transition-colors hover:bg-red-50"
-                    >
-                        Delete
-                    </button>
-                </div>
-            )}
-        </div>
-    );
-}
-
 export default function ProjectTabularReviewsPage({ params }: Props) {
     use(params);
     const workspace = useProjectWorkspace();
@@ -72,7 +37,6 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
     const [detailsReview, setDetailsReview] = useState<TabularReview | null>(
         null,
     );
-    const [actionsOpen, setActionsOpen] = useState(false);
     const [bulkDeleteNotice, setBulkDeleteNotice] = useState<string | null>(
         null,
     );
@@ -190,7 +154,6 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
 
     const handleDeleteSelectedReviews = useCallback(async () => {
         const ids = [...selectedReviewIds];
-        setActionsOpen(false);
         setBulkDeleteNotice(null);
         const roleById = new Map(
             reviews.map((review) => [review.id, roleFrom(review)] as const),
@@ -238,23 +201,13 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
 
     return (
         <>
-            <ProjectSectionToolbar
-                actions={
-                    selectedReviewIds.length > 0 ? (
-                        <SelectedReviewActions
-                            selectedCount={selectedReviewIds.length}
-                            open={actionsOpen}
-                            onOpenChange={setActionsOpen}
-                            onDelete={() => void handleDeleteSelectedReviews()}
-                        />
-                    ) : undefined
-                }
-            />
-            <ProjectReviewsTable
-                docs={docs}
+            <ReviewsListTable
+                renderToolbar={(actions) => <ProjectSectionToolbar actions={actions} />}
+                rowClassName="pr-8 md:pr-8"
                 reviews={visibleReviews}
                 selectedReviewIds={selectedReviewIds}
-                creatingReview={workspace.creatingReview}
+                createDisabled={workspace.creatingReview || docs.length === 0}
+                emptyDescription="Extract data from project documents into tables using AI."
                 loading={effectiveLoading}
                 loadingMore={loadingMore}
                 hasMore={hasMore}
@@ -263,7 +216,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 onToggleAll={handleToggleAllReviews}
                 selectingAll={selectingAll}
                 deletingReviewIds={deletingReviewIds}
-                hasActiveSearch={debouncedSearch.trim().length > 0}
+                hasActiveFilters={debouncedSearch.trim().length > 0}
                 sort={sort}
                 onSortChange={(key, direction) => {
                     setSelectedReviewIds([]);
@@ -272,9 +225,9 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 onLoadMore={() => void loadMore()}
                 onRetry={retry}
                 onCreateReview={workspace.openNewReview}
-                onOpenReview={(reviewId) =>
+                onOpenReview={(review) =>
                     router.push(
-                        `/projects/${projectId}/tabular-reviews/${reviewId}`,
+                        `/projects/${projectId}/tabular-reviews/${review.id}`,
                     )
                 }
                 onOpenDetails={handleOpenDetails}

@@ -5,7 +5,7 @@ import Image from "next/image";
 import { MoreHorizontal } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
-import { MikeIcon } from "@/app/components/chat/mike-icon";
+import { MikeIcon } from "@/shared/ui/MikeIconUI";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import type { Document, Message, QuickAction } from "../shared/types";
 import {
@@ -161,7 +161,7 @@ export function InitialView({
                                     key={action.id}
                                     type="button"
                                     onClick={() => handleQuickAction(action)}
-                                    className={`inline-flex h-8 items-center justify-center rounded-full px-3 font-medium text-gray-600 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} backdrop-blur-xl transition-all hover:text-gray-900 active:scale-[0.98] disabled:cursor-default disabled:opacity-45 disabled:active:scale-100`}
+                                    className={`inline-flex h-8 items-center justify-center rounded-full px-3 font-medium text-gray-600 ${LIQUID_GLASS_SUBTLE_CLASS} ${LIQUID_GLASS_HOVER_CLASS} transition-all hover:text-gray-900 active:scale-[0.98] disabled:cursor-default disabled:opacity-45 disabled:active:scale-100`}
                                 >
                                     {action.name?.trim() ||
                                         action.workflow.title}

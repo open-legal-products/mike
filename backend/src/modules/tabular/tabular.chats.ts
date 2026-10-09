@@ -41,11 +41,10 @@ import {
 } from "../user/user.service";
 import {
     resolveEffectiveChatModel,
-    resolveEffectiveReasoningLevel,
     titleModelForChat,
 } from "../../lib/modelSelection";
 import { generateChatTitle } from "./tabular.extract";
-import { loadReviewRows } from "./tabular.rows";
+import { filterReadableReviewRows, loadReviewRows } from "./tabular.rows";
 import {
     parseCellContent,
     statusFailure,
@@ -589,12 +588,25 @@ export async function prepareTabularChat(
         return internalFailure(audienceError);
     }
 
-    // Fetch all cells and logical review rows for this review.
-    const { data: cells } = await db
+    // Fetch all cells and logical review rows for this review, narrowed to
+    // the rows whose source documents the caller can read: the model answers
+    // the caller, so it must not be handed filenames or extracted text the
+    // caller could not open themselves (see filterReadableReviewRows).
+    const { data: allCells } = await db
         .from("tabular_cells")
         .select("*")
         .eq("review_id", reviewId);
-    const rows = await loadReviewRows(db, reviewId);
+    const { rows } = await filterReadableReviewRows(
+        db,
+        await loadReviewRows(db, reviewId),
+        [],
+        userId,
+        userEmail,
+    );
+    const visibleRowIds = new Set(rows.map((row) => row.id));
+    const cells = (allCells ?? []).filter((c: { row_id?: string }) =>
+        visibleRowIds.has(c.row_id as string),
+    );
 
     const sortedColumns = (
         (review.columns_config ?? []) as { index: number; name: string }[]

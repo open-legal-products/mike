@@ -5,7 +5,7 @@ import {
     createEventScrubber,
     normalizeApiPath,
     parseSampleRate,
-    redactSensitiveValues,
+    redactShaped,
     redactUrl,
     releaseName,
     redactText,
@@ -16,10 +16,10 @@ import {
     resolveDsn,
 } from "./sentryEvent";
 
-describe("redactSensitiveValues", () => {
+describe("redactShaped", () => {
     it("filters secret-looking keys at any depth and leaves the rest", () => {
         expect(
-            redactSensitiveValues({
+            redactShaped({
                 note: "keep",
                 Authorization: "Bearer x",
                 nested: { apiKey: "k", list: [{ refresh_token: "t", n: 1 }] },
@@ -33,12 +33,12 @@ describe("redactSensitiveValues", () => {
 
     it("stops descending past the depth cap instead of recursing forever", () => {
         const deep = { a: { b: { c: { d: { e: { f: { g: { h: "x" } } } } } } } };
-        expect(JSON.stringify(redactSensitiveValues(deep))).toContain("[Truncated]");
+        expect(JSON.stringify(redactShaped(deep))).toContain("[Truncated]");
     });
 
     it("passes primitives through", () => {
-        expect(redactSensitiveValues("s")).toBe("s");
-        expect(redactSensitiveValues(null)).toBeNull();
+        expect(redactShaped("s")).toBe("s");
+        expect(redactShaped(null)).toBeNull();
     });
 });
 

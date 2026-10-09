@@ -94,7 +94,7 @@ export function EditDocument() {
                 }}>Try invalid file</PillButtonUI>
                 <label className="text-xs">
                     Open local DOCX
-                    <input type="file" accept=".docx" className="ml-2 rounded focus-visible:outline-2 focus-visible:outline-ring"
+                    <input type="file" accept=".docx" className="ml-2 rounded focus-visible:outline-2 focus-visible:outline-blue-500/40"
                         onChange={(event) => {
                             const file = event.target.files?.[0];
                             if (file) { setName(file.name); setUrl(URL.createObjectURL(file)); }

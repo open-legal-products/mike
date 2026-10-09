@@ -18,13 +18,14 @@
 // snapshot.
 
 import { type UserApiKeys } from "../../lib/llm";
-import {
-    ensureReviewAccess,
-    filterAccessibleDocumentIds,
-} from "../../lib/access";
+import { ensureReviewAccess } from "../../lib/access";
 import { can } from "../../lib/permissions";
 import { failure, internalFailure } from "../../lib/serviceResult";
-import { loadReviewRows, type ReviewRow } from "./tabular.rows";
+import {
+    filterReadableReviewRows,
+    loadReviewRows,
+    type ReviewRow,
+} from "./tabular.rows";
 import {
     statusFailure,
     validateSelectedModel,
@@ -172,15 +173,7 @@ export async function loadTabularGenerateWork(
 
     // A row is only extractable if the requester can access every source
     // document feeding it; drop rows containing anything they cannot see.
-    const sourceIds = [
-        ...new Set(rows.flatMap((row) => row.source_document_ids ?? [])),
-    ];
-    const allowedSourceIds = new Set(
-        await filterAccessibleDocumentIds(sourceIds, userId, userEmail, db),
-    );
-    rows = rows.filter((row) =>
-        (row.source_document_ids ?? []).every((id) => allowedSourceIds.has(id)),
-    );
+    ({ rows } = await filterReadableReviewRows(db, rows, [], userId, userEmail));
 
     return { ok: true, data: { rows, cellMap } };
 }

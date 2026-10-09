@@ -6,7 +6,7 @@ type IconProps = Omit<
 >;
 
 const ICON_BASE_PATH = "/icons";
-const ICON_VERSION = "53";
+const ICON_VERSION = "54";
 
 function AppSidebarIcon({
   name,

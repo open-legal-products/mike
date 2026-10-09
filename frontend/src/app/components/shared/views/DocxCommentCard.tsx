@@ -11,13 +11,11 @@ import type {
 } from "@docx-editor.dev/core/contracts/editor";
 import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-} from "@/app/components/ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownItem,
-} from "@/app/components/ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { LIQUID_FLOAT_PANEL_SURFACE_CLASS } from "@/app/components/ui/liquid-surface";
 import { DocxCommentEdit } from "./DocxCommentEdit";
 import { DocxCommentReply } from "./DocxCommentReply";
@@ -79,7 +77,7 @@ export function DocxCommentCard({
             data-active={thread.isActive || undefined}
             tabIndex={0}
             aria-label={`Comment by ${thread.author || "Unknown author"}`}
-            className={`w-[var(--mike-docx-comment-width)] p-3 focus-visible:outline-2 focus-visible:outline-ring ${thread.activatable ? "cursor-pointer" : ""} ${LIQUID_FLOAT_PANEL_SURFACE_CLASS} ${thread.isActive ? "ring-1 ring-ring/30" : ""}`}
+            className={`w-[var(--mike-docx-comment-width)] p-3 focus-visible:outline-2 focus-visible:outline-blue-500/40 ${thread.activatable ? "cursor-pointer" : ""} ${LIQUID_FLOAT_PANEL_SURFACE_CLASS} ${thread.isActive ? "ring-1 ring-ring/30" : ""}`}
             onClick={(event) => {
                 // Controls and forms inside the card keep their own behavior,
                 // and selecting card text to copy it must not jump the page.
@@ -106,7 +104,7 @@ export function DocxCommentCard({
                     className={
                         index === 0
                             ? "space-y-1"
-                            : "-mx-3 mt-3 space-y-1 border-t border-border px-3 pt-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+                            : "-mx-3 mt-3 space-y-1 border-t border-border px-3 pt-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-500/40"
                     }
                 >
                     <div className="flex items-center justify-between gap-2">
@@ -206,8 +204,8 @@ function CommentMenu({
     // Opening the editor must not lose focus back to the trigger on close.
     const editing = useRef(false);
     return (
-        <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
+        <Dropdown modal={false}>
+            <DropdownTrigger asChild>
                 <TextButtonUI
                     size="icon-xs"
                     aria-label={label}
@@ -216,10 +214,10 @@ function CommentMenu({
                 >
                     <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
                 </TextButtonUI>
-            </DropdownMenuTrigger>
-            <LiquidDropdownContent
+            </DropdownTrigger>
+            <DropdownContent
                 align="end"
-                className="z-[250] w-36"
+                className="w-36"
                 onCloseAutoFocus={(event) => {
                     if (!editing.current) return;
                     editing.current = false;
@@ -227,7 +225,7 @@ function CommentMenu({
                     onEdit();
                 }}
             >
-                <LiquidDropdownItem
+                <DropdownItem
                     disabled={!canEdit}
                     onSelect={() => {
                         editing.current = true;
@@ -235,16 +233,16 @@ function CommentMenu({
                 >
                     <Pencil className="h-3.5 w-3.5" />
                     Edit
-                </LiquidDropdownItem>
-                <LiquidDropdownItem
+                </DropdownItem>
+                <DropdownItem
                     disabled={!canDelete}
                     variant="destructive"
                     onSelect={onDelete}
                 >
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete
-                </LiquidDropdownItem>
-            </LiquidDropdownContent>
-        </DropdownMenu>
+                </DropdownItem>
+            </DropdownContent>
+        </Dropdown>
     );
 }

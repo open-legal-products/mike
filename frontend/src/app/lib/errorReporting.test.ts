@@ -201,7 +201,19 @@ describe("browserSentryOptions", () => {
         expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
         expect(options.environment).toBe("self-hosted");
         expect(options.release).toBeUndefined();
-        expect(options.sendDefaultPii).toBe(false);
+        expect(options.dataCollection).toEqual({
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        });
         expect(options.tracesSampleRate).toBe(0);
         expect(options.beforeSend).toBe(scrubEvent);
         expect(options).not.toHaveProperty("replaysOnErrorSampleRate");

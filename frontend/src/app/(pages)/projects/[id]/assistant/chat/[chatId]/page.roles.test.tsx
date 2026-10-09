@@ -105,7 +105,7 @@ vi.mock("@/app/components/shared/views/SpreadsheetView", () => ({
 vi.mock("@/app/components/shared/views/DocxView", () => ({
     DocxView: () => null,
 }));
-vi.mock("@/app/components/chat/mike-icon", () => ({ MikeIcon: () => null }));
+vi.mock("@/shared/ui/MikeIconUI", () => ({ MikeIcon: () => null }));
 
 // PageHeader renders its custom actions; HeaderActionsMenu is flattened to
 // plain buttons so the test can drive the page's handlers without Radix.

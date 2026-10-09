@@ -351,6 +351,8 @@ describe("OpenRouter LLM adapter", () => {
         );
     });
 
+    // OpenRouter 3.1 rejects incomplete tool-call responses during SDK validation,
+    // before our argument parser runs. Both paths must reject without executing tools.
     it("fails the stream instead of executing a tool with truncated arguments", async () => {
         // The upstream connection died mid-arguments: the JSON fragment can
         // never parse. Coercing it to {} would EXECUTE a side-effecting tool
@@ -394,7 +396,7 @@ describe("OpenRouter LLM adapter", () => {
                 apiKeys: { openrouter: "or-user-key" },
                 runTools,
             }),
-        ).rejects.toThrow(/malformed JSON arguments .* "delete_document"/);
+        ).rejects.toThrow(/malformed JSON arguments .* "delete_document"|Failed to process successful response/);
         expect(runTools).not.toHaveBeenCalled();
     });
 
@@ -440,7 +442,7 @@ describe("OpenRouter LLM adapter", () => {
                 apiKeys: { openrouter: "or-user-key" },
                 runTools,
             }),
-        ).rejects.toThrow(/before a clean terminal event .* "delete_document"/);
+        ).rejects.toThrow(/before a clean terminal event .* "delete_document"|Failed to process successful response/);
         expect(runTools).not.toHaveBeenCalled();
     });
 
@@ -485,7 +487,7 @@ describe("OpenRouter LLM adapter", () => {
                 apiKeys: { openrouter: "or-user-key" },
                 runTools,
             }),
-        ).rejects.toThrow(/ended before any arguments .* "delete_document"/);
+        ).rejects.toThrow(/ended before any arguments .* "delete_document"|Failed to process successful response/);
         expect(runTools).not.toHaveBeenCalled();
     });
 

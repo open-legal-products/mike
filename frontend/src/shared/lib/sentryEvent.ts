@@ -595,9 +595,6 @@ function isDevToolchainNoise(event: ScrubbableEvent, automatic: boolean): boolea
     return known.length > 0 && known.every((location) => DEV_TOOLCHAIN_FRAME.test(location));
 }
 
-/** Kept for callers and tests: SDK-shaped redaction. */
-export const redactSensitiveValues = redactShaped;
-
 const DEFAULT_MAX_EVENTS_PER_ISSUE_PER_MINUTE = 10;
 const THROTTLE_WINDOW_MS = 60_000;
 

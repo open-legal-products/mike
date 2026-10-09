@@ -21,7 +21,7 @@ import {
   SettingsDescription,
   SettingsLabel,
 } from "@/app/components/settings/SettingsText";
-import { SettingsCard } from "@/app/components/settings/SettingsCard";
+import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 
@@ -237,7 +237,7 @@ export default function SettingsPage() {
       {/* Profile Settings */}
       <section className="space-y-3">
         <SettingsHeading>Profile</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow layout="stacked">
             <div>
               <div className="flex items-start justify-between gap-3">
@@ -300,13 +300,13 @@ export default function SettingsPage() {
               />
             </div>
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
 
       {/* Email */}
       <section className="space-y-3">
         <SettingsHeading>Email</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow layout="stacked">
             <div className="space-y-2">
               <SettingsTextInput
@@ -359,25 +359,25 @@ export default function SettingsPage() {
               </div>
             </div>
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
 
       {/* Plan */}
       <section className="space-y-3">
         <SettingsHeading>Usage Plan</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow layout="stacked">
             <p className="text-base font-medium text-gray-500 capitalize">
               {profile?.tier || "Free"}
             </p>
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
 
       {/* Danger Zone */}
       <section className="space-y-3">
         <SettingsHeading tone="danger">Danger Zone</SettingsHeading>
-        <SettingsCard>
+        <GlassCardUI>
           <SettingsRow>
             <div className="min-w-0 space-y-1">
               <SettingsLabel>Delete account</SettingsLabel>
@@ -398,7 +398,7 @@ export default function SettingsPage() {
               Delete account
             </PillButtonUI>
           </SettingsRow>
-        </SettingsCard>
+        </GlassCardUI>
       </section>
       <ConfirmPopup
         open={deleteConfirm}

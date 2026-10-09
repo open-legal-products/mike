@@ -1,3 +1,4 @@
+import { normalizeReasoningLevelForModel } from "./models";
 import type { LanguageModel, ToolSet } from "ai" with {
   "resolution-mode": "import",
 };
@@ -10,7 +11,12 @@ import type {
   StreamChatParams,
   StreamChatResult,
 } from "./types";
-import { toProviderStreamError } from "./providerErrors";
+import { streamChunkTimeouts } from "../runtimeConfig";
+import {
+  asProviderStallError,
+  streamErrorMessage,
+  toProviderStreamError,
+} from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 
 /**
@@ -67,12 +73,17 @@ export function stopNotice(
   return "";
 }
 
-/** Ensure a proxy-closed final SSE event is still visible to SDK parsers. */
+/**
+ * Ensure a proxy-closed final SSE event is still visible to SDK parsers.
+ * `baseFetch` replaces the global fetch for endpoints that need guarded
+ * egress (a user-supplied base URL).
+ */
 export async function aiSdkFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
+  baseFetch?: typeof fetch,
 ): Promise<Response> {
-  const response = await fetch(input, init);
+  const response = await (baseFetch ?? fetch)(input, init);
   if (
     !response.body ||
     !response.headers.get("content-type")?.includes("text/event-stream")
@@ -202,6 +213,8 @@ export type AiSdkAdapterConfig = {
   supportsReasoning?: boolean;
   /** OpenAI's CourtListener tools require an extra instruction after use. */
   courtlistenerCitationReminder?: boolean;
+  /** Mark the prefix-cache breakpoint with a Bedrock cache point as well. */
+  bedrockCachePoint?: boolean;
 };
 
 type PendingToolExecution = {
@@ -311,19 +324,13 @@ function toAiSdkTools(
   );
 }
 
-function errorMessage(error: unknown, label: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string" && error.trim()) return error;
-  return `${label} stream failed.`;
-}
-
 /**
  * The ORIGINAL Error instance from a `tool-error` / `error` part. Re-wrapping
  * it discards error identity, including control-flow and user-facing error
  * types thrown inside runTools (the SDK's tool `execute`).
  */
 function rethrowable(error: unknown, label: string): Error {
-  return error instanceof Error ? error : new Error(errorMessage(error, label));
+  return error instanceof Error ? error : new Error(streamErrorMessage(error, label));
 }
 
 function usesCourtlistenerTool(
@@ -346,12 +353,18 @@ function usesCourtlistenerTool(
  * covers the system prompt, tool definitions, and every earlier turn, and
  * the next request hits that prefix as long as it is byte-identical.
  * Providers ignore namespaces they do not own, so both hints are sent.
+ * Azure OpenAI reads the OpenAI hint from its own `azure` namespace. Bedrock
+ * caches at an explicit cache point too, but most Bedrock models reject one,
+ * so that marker is added only when the adapter asks for it.
  */
 type StreamTextProviderOptions = NonNullable<
   Parameters<typeof AiSdk.streamText>[0]["providerOptions"]
 >;
 
-export function withPrefixCacheHints(params: StreamChatParams): {
+export function withPrefixCacheHints(
+  params: StreamChatParams,
+  options: { bedrockCachePoint?: boolean } = {},
+): {
   messages: AiSdk.ModelMessage[];
   providerOptions?: StreamTextProviderOptions;
 } {
@@ -361,6 +374,9 @@ export function withPrefixCacheHints(params: StreamChatParams): {
   const last = params.messages.length - 1;
   const breakpoint = {
     anthropic: { cacheControl: { type: "ephemeral" } },
+    ...(options.bedrockCachePoint
+      ? { bedrock: { cachePoint: { type: "default" } } }
+      : {}),
   };
   return {
     messages: params.messages.map((message, index): AiSdk.ModelMessage => {
@@ -371,6 +387,7 @@ export function withPrefixCacheHints(params: StreamChatParams): {
     }),
     providerOptions: {
       openai: { promptCacheKey: params.conversationId },
+      azure: { promptCacheKey: params.conversationId },
     },
   };
 }
@@ -407,7 +424,9 @@ export async function streamAiSdk(
             : e.message,
           { cause: e },
         );
-  const cacheHints = withPrefixCacheHints(params);
+  const cacheHints = withPrefixCacheHints(params, {
+    bedrockCachePoint: config.bedrockCachePoint,
+  });
   const providerOptions: StreamTextProviderOptions = {
     ...(cacheHints.providerOptions ?? {}),
     ...(config.provider === "openrouter"
@@ -443,6 +462,11 @@ export async function streamAiSdk(
       maxOutputTokens: maxOutputTokensFor(config.provider),
       stopWhen: sdk.stepCountIs(maxIterations),
       abortSignal: internalAbort.signal,
+      // Cut off a provider that stops sending, at the source. Tool execution
+      // is deliberately not bounded here: it runs through runTools, which
+      // does not observe the SDK's per-tool signal, so the run-level idle
+      // deadline in streamRuns.ts is what covers a hung tool.
+      timeout: streamChunkTimeouts(),
       reasoning:
         config.supportsReasoning === false
           ? undefined
@@ -538,6 +562,10 @@ export async function streamAiSdk(
         case "error":
           throw guardAbortShaped(toProviderStreamError(part.error, config));
         case "abort": {
+          const stalled = params.abortSignal?.aborted
+            ? null
+            : asProviderStallError(part.reason, config);
+          if (stalled) throw stalled;
           const error = new Error(part.reason || "Stream aborted.");
           error.name = "AbortError";
           throw error;
@@ -589,7 +617,12 @@ export async function completeAiSdkText(
     system: params.systemPrompt,
     prompt: params.user,
     maxOutputTokens: params.maxTokens ?? 512,
-    reasoning: config.supportsReasoning === false ? undefined : "none",
+    reasoning:
+      config.supportsReasoning === false
+        ? undefined
+        : (normalizeReasoningLevelForModel(config.modelId, "none") as
+            | Exclude<NonNullable<StreamChatParams["reasoning"]>, "max">
+            | undefined),
   });
   return result.text;
 }

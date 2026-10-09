@@ -4,14 +4,12 @@ import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { listDocumentVersions, type DocumentVersion } from "@/app/lib/mikeApi";
 import {
-    DropdownMenu,
-    DropdownMenuTrigger,
-    DropdownMenuRadioGroup,
-} from "../ui/dropdown-menu";
-import {
-    LiquidDropdownContent,
-    LiquidDropdownRadioItem,
-} from "../ui/liquid-dropdown";
+    Dropdown,
+    DropdownContent,
+    DropdownRadioGroup,
+    DropdownRadioItem,
+    DropdownTrigger,
+} from "@/shared/ui/dropdown";
 import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { VersionChip } from "./VersionChip";
 
@@ -78,13 +76,13 @@ export function DocumentVersionPicker({
     // when there is only one available version (deleted versions do not count).
     if (!versions || versions.length <= 1) return label;
     return (
-        <DropdownMenu
+        <Dropdown
             open={open}
             onOpenChange={(nextOpen) => {
                 if (!disabled || !nextOpen) setOpen(nextOpen);
             }}
         >
-            <DropdownMenuTrigger asChild disabled={disabled}>
+            <DropdownTrigger asChild disabled={disabled}>
                 <TextButtonUI
                     size="xs"
                     disabled={disabled}
@@ -103,9 +101,9 @@ export function DocumentVersionPicker({
                     {label}
                     <ChevronDown aria-hidden="true" className="h-3 w-3" />
                 </TextButtonUI>
-            </DropdownMenuTrigger>
-            <LiquidDropdownContent align="start">
-                <DropdownMenuRadioGroup
+            </DropdownTrigger>
+            <DropdownContent align="start">
+                <DropdownRadioGroup
                     value={selectedId}
                     onValueChange={(id) => {
                         const version = versions.find((item) => item.id === id);
@@ -114,7 +112,7 @@ export function DocumentVersionPicker({
                     }}
                 >
                     {versions.map((version) => (
-                        <LiquidDropdownRadioItem
+                        <DropdownRadioItem
                             key={version.id}
                             value={version.id}
                             disabled={disabled}
@@ -132,10 +130,10 @@ export function DocumentVersionPicker({
                                     Current
                                 </span>
                             )}
-                        </LiquidDropdownRadioItem>
+                        </DropdownRadioItem>
                     ))}
-                </DropdownMenuRadioGroup>
-            </LiquidDropdownContent>
-        </DropdownMenu>
+                </DropdownRadioGroup>
+            </DropdownContent>
+        </Dropdown>
     );
 }

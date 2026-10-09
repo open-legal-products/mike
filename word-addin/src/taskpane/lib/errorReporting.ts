@@ -59,6 +59,19 @@ export function addinSentryOptions(
     dsn: env.dsn,
     fallback: MIKE_SENTRY_DSN.wordAddin,
   });
+  const dataCollection = {
+            userInfo: false,
+            cookies: false,
+            httpHeaders: { request: false, response: false },
+            httpBodies: [],
+            urlQueryParams: false,
+            genAI: { inputs: false, outputs: false },
+            databaseQueryData: false,
+            queues: false,
+            graphQL: { document: false, variables: false },
+            stackFrameVariables: false,
+            frameContextLines: 0,
+        };
   return {
     dsn: dsn || undefined,
     enabled: dsn.length > 0,
@@ -66,7 +79,7 @@ export function addinSentryOptions(
     release: releaseName(env.release, env.gitSha),
     tracesSampleRate: parseSampleRate(env.tracesSampleRate, 0),
     // No session replay: the pane sits next to a privileged document.
-    sendDefaultPii: false,
+    dataCollection,
     attachStacktrace: true,
     integrations: [privacyBoundaryIntegration(), Sentry.captureConsoleIntegration({ levels: ["error"] })],
     initialScope: {

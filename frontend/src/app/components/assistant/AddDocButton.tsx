@@ -7,7 +7,7 @@ import {
     DropdownContent,
     DropdownItem,
     DropdownTrigger,
-} from "@/shared/ui/DropdownUI";
+} from "@/shared/ui/dropdown";
 
 interface Props {
     onBrowseAll: () => void;
@@ -31,7 +31,7 @@ export function AddDocButton({
                 <button
                     type="button"
                     disabled={uploading}
-                    className={`flex items-center gap-1 px-2 h-8 rounded-lg text-sm transition-colors cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    className={`flex h-7.5 items-center gap-1 rounded-lg px-2 text-sm transition-colors cursor-pointer disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${
                         selectedDocIds.length > 0
                             ? "text-gray-700 hover:text-gray-900"
                             : "text-gray-400 hover:text-gray-700"

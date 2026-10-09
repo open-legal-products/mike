@@ -9,16 +9,17 @@ import {
   contentSha256,
 } from "../../lib/documentVersions";
 import {
-  deleteFile,
   deleteFileBestEffort,
   downloadFile,
-  uploadFile,
   storageKey,
 } from "../../lib/storage";
 import { convertedPdfKey } from "../../lib/convert";
-import { checkProjectAccess, resolveContentOrgId } from "../../lib/access";
+import {
+  checkProjectAccess,
+  ensureDocAccess,
+  resolveContentOrgId,
+} from "../../lib/access";
 import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
-import { contentTypeForDocumentType } from "../../lib/documentTypes";
 import {
   type Db,
   type RoleForbidden,
@@ -162,6 +163,23 @@ export async function assignOrCopyDocument(
     .eq("user_id", userId)
     .single();
   if (!doc) return { ok: false, kind: "doc_not_found" };
+  // Authorship is provenance, not access. A document created inside an
+  // organization matter stays the firm's: once its author leaves the org, is
+  // denied the project, or loses their grant, `user_id = me` alone would
+  // still let them copy the bytes into a personal project. Require the
+  // caller's CURRENT access to wherever the document lives now.
+  const sourceAccess = await ensureDocAccess(
+    doc as {
+      user_id: string | null;
+      project_id: string | null;
+      org_id?: string | null;
+      workflow_id?: string | null;
+    },
+    userId,
+    userEmail,
+    db,
+  );
+  if (!sourceAccess.ok) return { ok: false, kind: "doc_not_found" };
   await attachActiveVersionPaths(
     db,
     [doc as { id: string; current_version_id?: string | null }],
@@ -203,7 +221,7 @@ export async function assignOrCopyDocument(
     const { data: srcV } = await db
       .from("document_versions")
       .select(
-        "storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count",
+        "storage_path, pdf_storage_path, version_number, filename, source, file_type, size_bytes, page_count, textless_page_count",
       )
       .eq("id", doc.current_version_id)
       .single();
@@ -259,6 +277,8 @@ export async function assignOrCopyDocument(
             (srcV.size_bytes as number | null) ?? doc.size_bytes ?? null,
           page_count:
             (srcV.page_count as number | null) ?? doc.page_count ?? null,
+          textless_page_count:
+            (srcV.textless_page_count as number | null) ?? null,
           content_sha256: contentSha256(srcBytes),
         });
       const copyVersionRowId = (newV?.id as string | null) ?? null;

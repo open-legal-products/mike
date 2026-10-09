@@ -644,31 +644,10 @@ export async function setProjectMemoryEnabled(
     );
 }
 
-export async function exportAccountData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/export");
-}
-
-export async function exportChatData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/chats/export");
-}
-
-export async function exportTabularReviewsData(): Promise<{
-    blob: Blob;
-    filename: string | null;
-}> {
-    return apiBlobRequest("/user/tabular-reviews/export");
-}
-
 // --- Async (durable) exports -----------------------------------------------
 // POST schedules a backend job that builds the export off the request thread;
 // the status endpoint is polled until "done"; the download endpoint streams
-// the artifact. Unlike the legacy GET exports above, a large export can
+// the artifact. Unlike a synchronous GET export, a large export can
 // neither time out the request nor die with a closed tab, and a re-click
 // while one is building dedupes onto the running job.
 
@@ -765,6 +744,12 @@ export interface UserProfile {
     openRouterModels: string[];
     vercelModels: string[];
     openCodeGoModels: string[];
+    bedrockModels: string[];
+    azureModels: string[];
+    azureFoundryModels: string[];
+    vertexModels: string[];
+    xaiModels: string[];
+    customModels: string[];
     apiKeyStatus: ApiKeyStatus;
 }
 
@@ -827,28 +812,6 @@ export async function getAuditHistory(
     return apiRequest(`/audit?${qs.toString()}`, { signal });
 }
 
-export async function exportAuditHistory(params: {
-    q?: string;
-    action?: string;
-    status?: string;
-    surface?: string;
-    from?: string;
-    to?: string;
-    sortBy?: "created_at" | "user_email" | "title" | "model";
-    sortDirection?: "asc" | "desc";
-}): Promise<{ blob: Blob; filename: string | null }> {
-    const qs = new URLSearchParams();
-    if (params.q) qs.set("q", params.q);
-    if (params.action) qs.set("action", params.action);
-    if (params.status) qs.set("status", params.status);
-    if (params.surface) qs.set("surface", params.surface);
-    if (params.from) qs.set("from", params.from);
-    if (params.to) qs.set("to", params.to);
-    if (params.sortBy) qs.set("sort_by", params.sortBy);
-    if (params.sortDirection) qs.set("sort_dir", params.sortDirection);
-    return apiBlobRequest(`/audit/export?${qs.toString()}`);
-}
-
 export async function getUserProfile(): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile");
 }
@@ -880,11 +843,106 @@ export async function updateUserProfile(payload: {
     openRouterModels?: string[];
     vercelModels?: string[];
     openCodeGoModels?: string[];
+    bedrockModels?: string[];
+    azureModels?: string[];
+    azureFoundryModels?: string[];
+    vertexModels?: string[];
+    xaiModels?: string[];
+    customModels?: string[];
 }): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+    });
+}
+
+export interface CustomInstructions {
+    content: string;
+}
+
+export async function getCustomInstructions(
+    signal?: AbortSignal,
+): Promise<CustomInstructions> {
+    return apiRequest<CustomInstructions>("/user/custom-instructions", {
+        signal,
+    });
+}
+
+export async function updateCustomInstructions(
+    content: string,
+): Promise<CustomInstructions> {
+    return apiRequest<CustomInstructions>("/user/custom-instructions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+    });
+}
+
+/**
+ * Mirrors RESPONSE_STYLE_OPTIONS in the backend user module. The language
+ * codes mirror backend/src/lib/responseLanguages.ts and are listed in the
+ * order the selector shows them.
+ */
+export const RESPONSE_STYLE_OPTIONS = {
+    verbosity: ["concise", "balanced", "detailed"],
+    formatting: ["balanced", "less", "more"],
+    tone: ["formal", "balanced", "plain"],
+    language: [
+        "auto",
+        "en-US",
+        "en-GB",
+        "ar",
+        "zh-Hans",
+        "zh-Hant",
+        "cs",
+        "da",
+        "nl",
+        "fi",
+        "fr",
+        "de",
+        "el",
+        "he",
+        "hi",
+        "id",
+        "it",
+        "ja",
+        "ko",
+        "ms",
+        "nb",
+        "pl",
+        "pt-BR",
+        "pt-PT",
+        "ru",
+        "es",
+        "sv",
+        "th",
+        "tr",
+        "uk",
+        "vi",
+    ],
+} as const;
+
+export type ResponseStyleField = keyof typeof RESPONSE_STYLE_OPTIONS;
+
+export type ResponseStyle = {
+    [Field in ResponseStyleField]: (typeof RESPONSE_STYLE_OPTIONS)[Field][number];
+};
+
+export async function getResponseStyle(
+    signal?: AbortSignal,
+): Promise<ResponseStyle> {
+    return apiRequest<ResponseStyle>("/user/response-style", { signal });
+}
+
+/** Sends only the changed fields; the response is the full saved style. */
+export async function updateResponseStyle(
+    update: Partial<ResponseStyle>,
+): Promise<ResponseStyle> {
+    return apiRequest<ResponseStyle>("/user/response-style", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
     });
 }
 
@@ -918,26 +976,46 @@ export type ApiKeyProvider =
     | "claude"
     | "gemini"
     | "openai"
+    | "mistral"
     | "openrouter"
     | "vercel"
     | "opencode-go"
+    | "bedrock"
+    | "azure"
+    | "azure-foundry"
+    | "vertex"
+    | "xai"
+    | "custom"
     | "courtlistener";
 type ApiKeySource = "user" | "env" | null;
+
+/**
+ * The non-secret setting saved with a user's own key: the AWS region of a
+ * Bedrock key, the Azure resource of an Azure OpenAI or Azure AI Foundry key,
+ * the Vertex AI location of a service-account key, the base URL of a custom
+ * OpenAI-compatible endpoint.
+ */
+export type ApiKeySettings = {
+    bedrock?: { region: string } | null;
+    azure?: { endpoint: string } | null;
+    "azure-foundry"?: { endpoint: string } | null;
+    vertex?: { location: string } | null;
+    custom?: { baseUrl: string } | null;
+};
 export type ApiKeyState = Record<
     ApiKeyProvider,
     {
         configured: boolean;
         source: ApiKeySource;
+        enabled?: boolean;
     }
 >;
 
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
     sources?: Partial<Record<ApiKeyProvider, ApiKeySource>>;
+    enabled?: Partial<Record<ApiKeyProvider, boolean>>;
+    settings?: ApiKeySettings;
 };
-
-export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
-    return apiRequest<ApiKeyStatus>("/user/api-keys");
-}
 
 export interface OllamaModelOption {
     id: string;
@@ -992,6 +1070,26 @@ export async function getVercelModels(): Promise<RouterCatalogModel[]> {
     return models;
 }
 
+export async function getBedrockModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>("/models/bedrock");
+    return models;
+}
+
+export async function getXaiModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
+        "/models/xai",
+    );
+    return models;
+}
+
+/** Models reported by the user's own OpenAI-compatible endpoint. */
+export async function getCustomEndpointModels(): Promise<RouterCatalogModel[]> {
+    const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
+        "/models/custom",
+    );
+    return models;
+}
+
 export async function getOpenCodeGoModels(): Promise<RouterCatalogModel[]> {
     const { models } = await apiRequest<{ models: RouterCatalogModel[] }>(
         "/models/opencode-go",
@@ -999,14 +1097,32 @@ export async function getOpenCodeGoModels(): Promise<RouterCatalogModel[]> {
     return models;
 }
 
+/**
+ * Save, replace or remove a key. Keys that are saved with a setting (a region,
+ * endpoint, location or base URL) also send it; a setting with a null key changes the saved key's setting only.
+ */
 export async function saveApiKey(
     provider: ApiKeyProvider,
     apiKey: string | null,
+    settings?: ApiKeySettings[keyof ApiKeySettings],
 ): Promise<ApiKeyStatus> {
     return apiRequest<ApiKeyStatus>(`/user/api-keys/${provider}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: apiKey }),
+        body: JSON.stringify(
+            settings ? { api_key: apiKey, settings } : { api_key: apiKey },
+        ),
+    });
+}
+
+export async function setApiKeyEnabled(
+    provider: ApiKeyProvider,
+    enabled: boolean,
+): Promise<ApiKeyStatus> {
+    return apiRequest<ApiKeyStatus>(`/user/api-keys/${provider}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
     });
 }
 
@@ -1958,6 +2074,7 @@ export interface DocumentVersion {
     file_type?: string | null;
     size_bytes?: number | null;
     page_count?: number | null;
+    textless_page_count?: number | null;
     deleted_at?: string | null;
     deleted_by?: string | null;
 }
@@ -2111,10 +2228,6 @@ export async function uploadStandaloneDocuments(
         onProgress: options?.onProgress,
         signal: options?.signal,
     });
-}
-
-export async function listStandaloneDocuments(): Promise<Document[]> {
-    return apiRequest<Document[]>("/single-documents");
 }
 
 export async function getDocument(documentId: string): Promise<Document> {
@@ -2388,18 +2501,6 @@ export async function updateLastSelectedChatSettings(payload: {
 
 export async function deleteChat(chatId: string): Promise<void> {
     await apiRequest(`/chat/${chatId}`, { method: "DELETE" });
-}
-
-export async function generateChatTitle(
-    chatId: string,
-    message: string,
-    model: string,
-): Promise<{ title: string }> {
-    return apiRequest<{ title: string }>(`/chat/${chatId}/generate-title`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, model }),
-    });
 }
 
 const panelDocumentRequests = new Map<string, Promise<PanelDocument>>();
@@ -3254,16 +3355,6 @@ export async function copyDocumentsToWorkflowAssets(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ document_ids: documentIds }),
         },
-    );
-}
-
-export async function uploadWorkflowAsset(
-    workflowId: string,
-    file: File,
-    options?: UploadRequestOptions<Document>,
-): Promise<Document> {
-    return firstUploadResult(
-        await uploadWorkflowAssets(workflowId, [{ file }], options),
     );
 }
 
