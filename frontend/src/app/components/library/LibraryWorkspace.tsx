@@ -50,6 +50,7 @@ import {
 } from "@/app/lib/mikeApi";
 import type { Document } from "@/app/components/shared/types";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
+import { notifyError } from "@/app/lib/userFacingError";
 
 type LibraryViewCollection = {
     documents: Document[];
@@ -102,6 +103,23 @@ const DOCUMENT_PAGE_SIZE = 40;
 function libraryLevelKey(parentId: string | null): string {
     return parentId ?? ROOT_LEVEL_KEY;
 }
+
+/**
+ * Re-entry points for the toast "Retry" buttons. A `useCallback` cannot
+ * reference itself, so a retry re-enters the latest loader through this ref
+ * rather than capturing a stale closure.
+ */
+interface LibraryRetries {
+    loadLibrary: (kind: LibraryKind) => void;
+    loadFolderChildren: (kind: LibraryKind, folderId: string) => void;
+    loadMoreDocuments: (kind: LibraryKind, parentId: string | null) => void;
+}
+
+const NO_LIBRARY_RETRIES: LibraryRetries = {
+    loadLibrary: () => {},
+    loadFolderChildren: () => {},
+    loadMoreDocuments: () => {},
+};
 
 const LibraryWorkspaceContext =
     createContext<LibraryWorkspaceContextValue | null>(null);
@@ -172,6 +190,7 @@ export function LibraryWorkspaceProvider({
     const loadMoreDocumentsRequestsRef = useRef<Map<string, Promise<void>>>(
         new Map(),
     );
+    const retryRef = useRef<LibraryRetries>(NO_LIBRARY_RETRIES);
 
     // Refetches root-level content plus every folder level already lazy-loaded
     // for this kind (each level re-requested at its current page size), so a
@@ -252,7 +271,14 @@ export function LibraryWorkspaceProvider({
           },
         }));
             } catch (error) {
-                console.error("[library] failed to load", error);
+                // Everything below resets this kind to an empty shelf. That
+                // is indistinguishable from "you have no files", so the user
+                // has to be told which one it is.
+                notifyError(error, {
+                    action: `load your ${kind}`,
+                    dedupeKey: `library:${kind}`,
+                    onRetry: () => retryRef.current.loadLibrary(kind),
+                });
                 setCollections((prev) => ({
                     ...prev,
                     [kind]: EMPTY_COLLECTION,
@@ -324,7 +350,15 @@ export function LibraryWorkspaceProvider({
                         },
                     }));
                 } catch (error) {
-          console.error("[library] failed to load folder children", error);
+                    notifyError(error, {
+                        action: "open the folder",
+                        dedupeKey: `library-folder:${kind}:${folderId}`,
+                        onRetry: () =>
+                            retryRef.current.loadFolderChildren(
+                                kind,
+                                folderId,
+                            ),
+                    });
                 } finally {
                     folderChildrenRequestsRef.current.delete(key);
                 }
@@ -401,7 +435,12 @@ export function LibraryWorkspaceProvider({
                         },
                     }));
                 } catch (error) {
-          console.error("[library] failed to load more documents", error);
+                    notifyError(error, {
+                        action: `load more ${kind}`,
+                        dedupeKey: `library-more:${kind}:${levelKey}`,
+                        onRetry: () =>
+                            retryRef.current.loadMoreDocuments(kind, parentId),
+                    });
                 } finally {
                     setLoadingMoreDocumentsByKind((prev) => ({
                         ...prev,
@@ -415,6 +454,16 @@ export function LibraryWorkspaceProvider({
         },
         [documentLimitByKind],
     );
+
+    useEffect(() => {
+        retryRef.current = {
+            loadLibrary: (kind) => void loadLibrary(kind),
+            loadFolderChildren: (kind, folderId) =>
+                void loadFolderChildren(kind, folderId),
+            loadMoreDocuments: (kind, parentId) =>
+                void loadMoreDocuments(kind, parentId),
+        };
+    }, [loadFolderChildren, loadLibrary, loadMoreDocuments]);
 
     const setSearchForKind = useCallback((kind: LibraryKind, value: string) => {
         setSearchByKind((prev) => ({ ...prev, [kind]: value }));
@@ -539,7 +588,11 @@ export function LibraryCollectionPage({
   const [serverQueryLoadingMore, setServerQueryLoadingMore] = useState(false);
   const [serverQueryHasMore, setServerQueryHasMore] = useState(false);
   const [serverQueryRefreshVersion, setServerQueryRefreshVersion] = useState(0);
+  const [filterOptionsAttempt, setFilterOptionsAttempt] = useState(0);
   const serverQueryRequestRef = useRef(0);
+  // "Retry" on the search toasts re-enters the latest loader; a callback
+  // cannot reference itself.
+  const loadMoreServerDocumentsRef = useRef<() => void>(() => {});
     const loadedFolderRouteRef = useRef<string | null>(null);
     const loadFolderChildrenRef = useRef(loadFolderChildren);
     loadFolderChildrenRef.current = loadFolderChildren;
@@ -598,11 +651,21 @@ export function LibraryCollectionPage({
                 return loadFolderChildrenRef.current(kind, folderId);
             })
             .catch((error) => {
-                console.error("[library] failed to load folder route", error);
                 loadedFolderRouteRef.current = null;
                 if (!cancelled) {
                     router.replace(collectionRootPath, { scroll: false });
                 }
+                // The user asked for a folder and landed at the root
+                // instead; say why, and let Retry navigate back into it.
+                notifyError(error, {
+                    action: "open the folder",
+                    dedupeKey: `library-route:${kind}:${folderId}`,
+                    onRetry: () =>
+                        router.push(
+                            `${collectionRootPath}/folders/${encodeURIComponent(folderId)}`,
+                            { scroll: false },
+                        ),
+                });
             });
 
         return () => {
@@ -740,13 +803,21 @@ export function LibraryCollectionPage({
       .then((options) => {
         if (!cancelled) setDocumentTypeOptions(options.fileTypes);
       })
-      .catch(() => {
-        if (!cancelled) setDocumentTypeOptions([]);
+      .catch((error) => {
+        if (cancelled) return;
+        // An empty type filter reads as "this library has one file type",
+        // so the user is told the list is missing rather than wrong.
+        setDocumentTypeOptions([]);
+        notifyError(error, {
+          action: "load the file type filter",
+          dedupeKey: `library-filter-options:${kind}`,
+          onRetry: () => setFilterOptionsAttempt((attempt) => attempt + 1),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [kind]);
+  }, [filterOptionsAttempt, kind]);
 
   const serverQueryActive =
     debouncedSearch.trim().length > 0 ||
@@ -785,9 +856,15 @@ export function LibraryCollectionPage({
           !controller.signal.aborted &&
           requestVersion === serverQueryRequestRef.current
         ) {
-          console.error("[library] failed to search", error);
           setServerDocuments([]);
           setServerQueryHasMore(false);
+          // No results and a failed search look identical in the table.
+          notifyError(error, {
+            action: "search this library",
+            dedupeKey: `library-search:${kind}`,
+            onRetry: () =>
+              setServerQueryRefreshVersion((version) => version + 1),
+          });
         }
       })
       .finally(() => {
@@ -841,7 +918,11 @@ export function LibraryCollectionPage({
       setServerQueryHasMore(result.documentsHasMore);
     } catch (error) {
       if (requestVersion === serverQueryRequestRef.current) {
-        console.error("[library] failed to load more search results", error);
+        notifyError(error, {
+          action: "load more search results",
+          dedupeKey: `library-search-more:${kind}`,
+          onRetry: () => loadMoreServerDocumentsRef.current(),
+        });
       }
     } finally {
       if (requestVersion === serverQueryRequestRef.current) {
@@ -859,6 +940,11 @@ export function LibraryCollectionPage({
     tableQuery.fileType,
     tableQuery.sort,
   ]);
+
+  useEffect(() => {
+    loadMoreServerDocumentsRef.current = () =>
+      void handleLoadMoreServerDocuments();
+  }, [handleLoadMoreServerDocuments]);
 
     const operations = useMemo(
         () => ({

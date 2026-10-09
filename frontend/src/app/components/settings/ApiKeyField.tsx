@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import {
   MfaVerificationPopup,
   needsMfaVerification,
 } from "@/app/components/popups/MfaVerificationPopup";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { SettingsTextInput } from "@/app/components/settings/SettingsTextInput";
 import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsDescription, SettingsLabel } from "./SettingsText";
 import { MikeApiError, isMfaRequiredError } from "@/app/lib/mikeApi";
+import {
+  UserVisibleError,
+  notifyError,
+  notifyInfo,
+  notifySuccess,
+} from "@/app/lib/userFacingError";
 import { settingsGlassIconButtonClassName } from "@/app/(pages)/settings/settingsStyles";
 
 // The backend never returns saved keys, so the mask is a fixed-length stand-in.
@@ -84,10 +89,20 @@ export function ApiKeyField({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [pendingMfaAction, setPendingMfaAction] = useState<
     "save" | "remove" | null
   >(null);
+
+  // The field is cleared on success and whenever the saved-key state
+  // changes, and the user may well correct a rejected key before reaching
+  // for the toast. A Retry therefore reads the box as it is NOW instead of
+  // resending the value the failed attempt closed over.
+  const valueRef = useRef(value);
+  const settingValueRef = useRef(settingValue);
+  useEffect(() => { settingValueRef.current = settingValue; }, [settingValue]);
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
 
   useEffect(() => {
     setValue("");
@@ -105,6 +120,24 @@ export function ApiKeyField({
   const dirty = keyDirty || (hasSavedKey && settingDirty);
   const showMask = hasSavedKey && !isEditing && !keyDirty;
 
+  /**
+   * Re-run a save only while the box still holds the key that failed.
+   * Anything else — a corrected key, a cleared field — would silently store
+   * the wrong secret, so say what happened and leave the input alone.
+   */
+  const retrySave = (attempted: string, attemptedSetting: string) => {
+    if (valueRef.current === attempted && settingValueRef.current === attemptedSetting) {
+      void handleSave();
+      return;
+    }
+    notifyInfo(
+      valueRef.current.trim().length > 0
+        ? `Your ${label} has changed since that attempt. Press Save to store the key now in the field.`
+        : `The ${label} field is empty, so there is nothing to retry. Enter the key again and press Save.`,
+      "Nothing was sent",
+    );
+  };
+
   const handleSave = async () => {
     const invalidKey = keyDirty ? (validateKey?.(value) ?? null) : null;
     if (invalidKey) {
@@ -121,6 +154,8 @@ export function ApiKeyField({
       normalizedSetting = normalized;
     }
     setSettingError(null);
+    const attempted = valueRef.current;
+    const attemptedSetting = settingValueRef.current;
     setIsSaving(true);
     try {
       if (await needsMfaVerification()) {
@@ -135,16 +170,29 @@ export function ApiKeyField({
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
       } else {
-        setWarningMessage(`Failed to save ${label}. Please try again.`);
+        // The caller reports failure as `false`, with no error to classify.
+        notifyError(
+          new UserVisibleError(
+            `Mike couldn't save your ${label}. The key was not changed.`,
+            { retryable: true },
+          ),
+          {
+            action: `save your ${label}`,
+            onRetry: () => retrySave(attempted, attemptedSetting),
+          },
+        );
       }
     } catch (error) {
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("save");
       } else if (error instanceof MikeApiError && error.status === 400) {
         // The backend's validation message says what to correct.
-        setWarningMessage(error.message);
+        setKeyError(error.message);
       } else {
-        setWarningMessage(`Failed to save ${label}. Please try again.`);
+        notifyError(error, {
+          action: `save your ${label}`,
+          onRetry: () => retrySave(attempted, attemptedSetting),
+        });
       }
     } finally {
       setIsSaving(false);
@@ -159,14 +207,28 @@ export function ApiKeyField({
         return;
       }
       const ok = await onRemove();
-      if (!ok) {
-        setWarningMessage(`Failed to remove ${label}. Please try again.`);
+      if (ok) {
+        notifySuccess(`${label} removed.`);
+      } else {
+        notifyError(
+          new UserVisibleError(
+            `Mike couldn't remove your ${label}. The key is still saved.`,
+            { retryable: true },
+          ),
+          {
+            action: `remove your ${label}`,
+            onRetry: () => void handleRemove(),
+          },
+        );
       }
     } catch (error) {
       if (isMfaRequiredError(error)) {
         setPendingMfaAction("remove");
       } else {
-        setWarningMessage(`Failed to remove ${label}. Please try again.`);
+        notifyError(error, {
+          action: `remove your ${label}`,
+          onRetry: () => void handleRemove(),
+        });
       }
     } finally {
       setIsSaving(false);
@@ -316,12 +378,6 @@ export function ApiKeyField({
         open={!!pendingMfaAction}
         onCancel={() => setPendingMfaAction(null)}
         onVerified={() => void handleMfaVerified()}
-      />
-      <WarningPopup
-        open={!!warningMessage}
-        title="API key update failed"
-        message={warningMessage}
-        onClose={() => setWarningMessage(null)}
       />
     </>
   );

@@ -2,6 +2,7 @@ import { useState, type ComponentProps } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import type { Document } from "@/app/components/shared/types";
 import {
@@ -81,6 +82,7 @@ function Harness({
 
     return (
         <>
+            <ToastViewportUI />
             <output data-testid="documents-state">
                 {JSON.stringify(documents)}
             </output>
@@ -108,6 +110,7 @@ function Harness({
 describe("DocTable remove-from-folder failures", () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        clearToasts();
     });
 
     it.each([1, 2])("matches toolbar and right-click actions for %i selected documents", async (count) => {
@@ -181,7 +184,7 @@ describe("DocTable remove-from-folder failures", () => {
 
         expect(
             await screen.findByText(
-                "The document could not be removed from its folder. Please try again.",
+                "Couldn't remove the document from its folder",
             ),
         ).toBeInTheDocument();
         expect(tableOperations.refreshCollection).toHaveBeenCalledOnce();
@@ -215,7 +218,7 @@ describe("DocTable remove-from-folder failures", () => {
 
         expect(
             await screen.findByText(
-                "A document could not be removed from its folder. Please try again.",
+                "Couldn't move the document out of its folder",
             ),
         ).toBeInTheDocument();
         await waitFor(() =>

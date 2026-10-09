@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     fireEvent,
     render,
@@ -17,6 +17,7 @@ import {
   setProjectMemoryEnabled,
   uploadProjectDocuments,
 } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { NewProjectModal } from "./NewProjectModal";
 
 const { useUserProfile } = vi.hoisted(() => ({
@@ -161,20 +162,6 @@ describe("NewProjectModal sharing", () => {
         );
     });
 
-    it("warns when organizations cannot be loaded", async () => {
-        vi.mocked(listOrgs).mockRejectedValue(new Error("network unavailable"));
-
-        renderModal();
-
-        expect(
-            await screen.findByText("Organizations unavailable"),
-        ).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "Your organizations could not be loaded. Close this message and try opening the project form again.",
-            ),
-        ).toBeInTheDocument();
-    });
 
   it("creates new projects with memory enabled by default", async () => {
     const user = userEvent.setup({ delay: null });
@@ -950,12 +937,67 @@ describe("NewProjectModal sharing", () => {
         vi.mocked(listOrgs).mockRejectedValue(
             new MikeApiError({ status: 500, message: "boom" }),
         );
-        render(<NewProjectModal open onClose={vi.fn()} onCreated={vi.fn()} />);
+        render(<><NewProjectModal open onClose={vi.fn()} onCreated={vi.fn()} /><ToastViewportUI /></>);
 
-        // An API failure is surfaced by the same warning popup as a transport
+        // An API failure is surfaced by the same toast as a transport
         // failure, never swallowed into a bare "No organization" list.
         expect(
-            await screen.findByText("Organizations unavailable"),
+            await screen.findByText("Couldn't load your organizations"),
         ).toBeInTheDocument();
+    });
+});
+
+describe("NewProjectModal load failures", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        clearToasts();
+        vi.mocked(listOrgs).mockResolvedValue([]);
+        vi.mocked(listOrgMembers).mockResolvedValue([]);
+        useUserProfile.mockReturnValue({
+            profile: { practiceAreas: [], projectMemoryDefault: true },
+        });
+    });
+
+    afterEach(() => {
+        clearToasts();
+    });
+
+    // The organisation picker silently degraded to "No organization" only,
+    // which reads as "this account is in no firm" — and a project created
+    // from that picker lands in the wrong workspace.
+    it("says when the organisation list could not be loaded", async () => {
+        vi.mocked(listOrgs).mockRejectedValue(new Error("boom"));
+
+        render(
+            <>
+                <NewProjectModal open onClose={vi.fn()} onCreated={vi.fn()} />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await waitFor(() =>
+            expect(
+                screen.getByText("Couldn't load your organizations"),
+            ).toBeInTheDocument(),
+        );
+    });
+
+    it("reloads the organisation list from the toast", async () => {
+        const user = userEvent.setup();
+        vi.mocked(listOrgs).mockRejectedValueOnce(new Error("boom"));
+
+        render(
+            <>
+                <NewProjectModal open onClose={vi.fn()} onCreated={vi.fn()} />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await waitFor(() =>
+            screen.getByText("Couldn't load your organizations"),
+        );
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+
+        await waitFor(() => expect(listOrgs).toHaveBeenCalledTimes(2));
     });
 });

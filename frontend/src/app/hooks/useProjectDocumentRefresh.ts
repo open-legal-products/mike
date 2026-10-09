@@ -25,6 +25,10 @@ export function useProjectDocumentRefresh(
                 return;
             lastCheckRef.current = Date.now();
             const pending = refresh()
+                // Deliberately silent: nobody asked for this check, no user
+                // action fails when it does, and the next focus, visibility
+                // change or interval tick retries it. Anything the user does
+                // start (open, download, delete) reports its own failure.
                 .catch(() => {})
                 .finally(() => {
                     if (pendingRef.current === pending)

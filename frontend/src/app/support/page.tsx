@@ -6,6 +6,11 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { authenticatedFetch } from "@/app/lib/authEvents";
+import {
+    describeError,
+    supportMailtoFor,
+    type UserFacingError,
+} from "@/app/lib/userFacingError";
 
 type FeedbackType = "bug" | "feature" | "question" | "other";
 
@@ -24,7 +29,7 @@ export default function SupportPage() {
     const [link, setLink] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isSubmitted, setIsSubmitted] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<UserFacingError | null>(null);
 
     const feedbackTypes: {
         value: FeedbackType;
@@ -53,8 +58,7 @@ export default function SupportPage() {
         },
     ];
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const submitFeedback = async () => {
         setError(null);
         setIsSubmitting(true);
 
@@ -72,16 +76,45 @@ export default function SupportPage() {
             });
 
             if (!response.ok) {
-                throw new Error("Failed to submit feedback");
+                // Carry the status and request id so the failure can be
+                // classified, and so support can find it in the logs.
+                const body = (await response.json().catch(() => ({}))) as {
+                    code?: unknown;
+                    detail?: unknown;
+                };
+                throw Object.assign(
+                    new Error(
+                        typeof body.detail === "string"
+                            ? body.detail
+                            : "Support request failed",
+                    ),
+                    {
+                        status: response.status,
+                        code:
+                            typeof body.code === "string" ? body.code : null,
+                        requestId: response.headers.get("x-request-id"),
+                    },
+                );
             }
 
             setIsSubmitted(true);
         } catch (err) {
             console.error("Error submitting feedback:", err);
-            setError("Failed to submit your feedback. Please try again.");
+            setError(
+                describeError(err, {
+                    action: "send your message",
+                    fallback:
+                        "Mike couldn't send your message. Try again, or email us directly.",
+                }),
+            );
         } finally {
             setIsSubmitting(false);
         }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        await submitFeedback();
     };
 
     if (isSubmitted) {
@@ -230,8 +263,32 @@ export default function SupportPage() {
 
                             {/* Error Message */}
                             {error && (
-                                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-                                    {error}
+                                <div
+                                    role="alert"
+                                    className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"
+                                >
+                                    {error.message}
+                                    {error.retryable && (
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                void submitFeedback()
+                                            }
+                                            disabled={isSubmitting}
+                                            className="ml-2 underline underline-offset-2 disabled:no-underline disabled:opacity-60"
+                                        >
+                                            Retry
+                                        </button>
+                                    )}
+                                    <a
+                                        href={supportMailtoFor(
+                                            error,
+                                            `Support form failed. Subject: ${subject}`,
+                                        )}
+                                        className="ml-2 underline underline-offset-2"
+                                    >
+                                        Email support directly
+                                    </a>
                                 </div>
                             )}
 

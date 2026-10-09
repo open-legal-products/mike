@@ -26,6 +26,7 @@ import {
     DropdownItem,
     DropdownTrigger,
 } from "@/shared/ui/dropdown";
+import { notifyError } from "@/app/lib/userFacingError";
 import { LIQUID_GLASS_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 
 export { CLOSE_ROW_ACTIONS_EVENT, closeRowActionMenus };
@@ -107,6 +108,25 @@ export function RowActionMenuItems({
         onClose?.();
         action();
     };
+
+    // "Delete" alone would make the title "Couldn't delete"; callers that
+    // name the row ("Delete review") already read as an action.
+    const deleteAction =
+        deleteLabel.trim().toLowerCase() === "delete"
+            ? "delete this item"
+            : deleteLabel.trim().toLowerCase();
+
+    async function runDelete() {
+        if (!onDelete) return;
+        try {
+            await onDelete();
+        } catch (error) {
+            notifyError(error, {
+                action: deleteAction,
+                onRetry: () => void runDelete(),
+            });
+        }
+    }
 
     return (
         <>
@@ -203,15 +223,7 @@ export function RowActionMenuItems({
                 <DropdownItem
                     variant="destructive"
                     disabled={deleting || deleteDisabled}
-                    onSelect={run(() => {
-                        // The menu closes immediately, so an async handler that
-                        // rejects has nothing left to report to. Swallow it here
-                        // rather than leaving an unhandled rejection; surfaces
-                        // that can explain the failure do so themselves.
-                        void Promise.resolve(onDelete()).catch((error) => {
-                            console.error("row delete action failed", error);
-                        });
-                    })}
+                    onSelect={run(() => { void runDelete(); })}
                 >
                     <Trash2 className="h-3.5 w-3.5" />
                     {deleteLabel}

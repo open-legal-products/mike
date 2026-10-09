@@ -13,6 +13,7 @@ import { DayPicker, type Matcher } from "@daypicker/react";
 import dayPickerStyles from "@daypicker/react/style.module.css";
 import { getAuditHistory, type AuditEvent } from "@/app/lib/mikeApi";
 import { runUserExport } from "@/app/lib/asyncExport";
+import { notifyError } from "@/app/lib/userFacingError";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import {
   SkeletonLine,
@@ -38,7 +39,6 @@ import {
   DropdownTrigger,
 } from "@/shared/ui/dropdown";
 import { cn } from "@/app/lib/utils";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 
 const ACTION_LABELS: Record<string, string> = {
   "chat.message": "Chat",
@@ -154,7 +154,6 @@ export default function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [exportWarningOpen, setExportWarningOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [action, setAction] = useState<string | null>(null);
@@ -242,8 +241,11 @@ export default function HistoryPage() {
       anchor.download = filename ?? "history-export.csv";
       anchor.click();
       URL.revokeObjectURL(url);
-    } catch {
-      setExportWarningOpen(true);
+    } catch (error) {
+      notifyError(error, {
+        action: "export your history",
+        onRetry: () => void handleExport(),
+      });
     } finally {
       setExporting(false);
     }
@@ -500,12 +502,6 @@ export default function HistoryPage() {
           </TableBody>
         )}
       </TableScrollArea>
-      <WarningPopup
-        open={exportWarningOpen}
-        title="Export failed"
-        message="Your history could not be exported. Please try again."
-        onClose={() => setExportWarningOpen(false)}
-      />
     </div>
   );
 }

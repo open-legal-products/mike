@@ -5,7 +5,7 @@ import {
     SCHEMA_OUT_OF_DATE_MESSAGE,
     UPSTREAM_UNAVAILABLE_MESSAGE,
 } from "./mikeApi";
-import { notifyError } from "./userFacingError";
+import { describeError, notifyError } from "./userFacingError";
 
 const reporting = vi.hoisted(() => ({ reportError: vi.fn(), isReported: vi.fn(() => false) }));
 vi.mock("./errorReporting", async (importOriginal) => ({
@@ -49,5 +49,22 @@ describe("notifyError for server-reported 5xx codes", () => {
 
         expect(getSnapshot().at(-1)?.message).not.toContain("secret");
         expect(getSnapshot().at(-1)?.message).not.toBe(UPSTREAM_UNAVAILABLE_MESSAGE);
+    });
+});
+
+describe("describeError for server-reported 5xx codes", () => {
+    // Inline messages (settings forms, the connectors page) use the web
+    // describeError, not notifyError; they must read the same sentence the
+    // toast would, not the generic 5xx line.
+    it.each([
+        ["schema_out_of_date", SCHEMA_OUT_OF_DATE_MESSAGE],
+        ["upstream_unavailable", UPSTREAM_UNAVAILABLE_MESSAGE],
+    ])("gives mikeApi's sentence for %s inline too", (code, message) => {
+        const described = describeError(
+            new MikeApiError({ status: 503, code, message: "x" }),
+            { action: "load your connectors", fallback: "Fallback." },
+        );
+
+        expect(described.message).toBe(message);
     });
 });

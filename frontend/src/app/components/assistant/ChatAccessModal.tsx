@@ -11,7 +11,7 @@ import {
     type ContentAccess,
 } from "@/app/lib/mikeApi";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 import type { Chat } from "@/app/components/shared/types";
 
 interface Props {
@@ -67,6 +67,14 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                 setAccessState({ chatId, value: nextAccess });
                 setAccessError(null);
             } catch (cause) {
+                notifyError(cause, {
+                    action: "load who this chat is shared with",
+                    dedupeKey: `chat-access:${chatId}`,
+                    onRetry: async () => {
+                        await refreshAccess();
+                        setAccessError(null);
+                    },
+                });
                 setAccessError(
                     userFacingApiError(
                         cause,
@@ -76,8 +84,20 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
             }
             return people;
         },
-        [canManage],
+        [canManage, refreshAccess],
     );
+
+    const reportAccessFailure = (error: unknown, action: string) => {
+        setAccessError("Sharing details could not be loaded, so access cannot be changed here.");
+        notifyError(error, {
+            action,
+            dedupeKey: `chat-access:${chat.id}`,
+            onRetry: async () => {
+                await refreshAccess();
+                setAccessError(null);
+            },
+        });
+    };
 
     return (
         <AccessModal
@@ -118,11 +138,23 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                 error: accessError,
                 onGrant: async (email, role) => {
                     await grantChatAccess(chat.id, email, role);
-                    await refreshAccess();
+                    // The grant itself succeeded; a failed re-read is its own
+                    // problem and must not be reported as a failed share.
+                    await refreshAccess().catch((error) =>
+                        reportAccessFailure(
+                            error,
+                            "refresh who this chat is shared with",
+                        ),
+                    );
                 },
                 onRevoke: async (email) => {
                     await revokeChatAccess(chat.id, email);
-                    await refreshAccess();
+                    await refreshAccess().catch((error) =>
+                        reportAccessFailure(
+                            error,
+                            "refresh who this chat is shared with",
+                        ),
+                    );
                 },
             }}
         />

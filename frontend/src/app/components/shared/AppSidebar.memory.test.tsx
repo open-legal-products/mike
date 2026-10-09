@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listProjectChats, listProjectSummaries } from "@/app/lib/mikeApi";
 import { beginAssistantTurn } from "@/app/lib/assistantTurns";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { AppSidebar } from "./AppSidebar";
 
 const state = vi.hoisted(() => ({
@@ -88,18 +89,18 @@ describe("AppSidebar account dropdown", () => {
     expect(assistant.parentElement?.nextElementSibling).toContainElement(ide);
   });
 
-  it("shows a warning popup when sign out fails", async () => {
+  it("shows a recovery toast when sign out fails", async () => {
     state.signOut.mockRejectedValue(new Error("network unavailable"));
     const user = userEvent.setup();
-    render(<AppSidebar isOpen onToggle={vi.fn()} />);
+    clearToasts();
+    render(<><AppSidebar isOpen onToggle={vi.fn()} /><ToastViewportUI /></>);
 
     await user.click(screen.getByText("Alice").closest("button")!);
     await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
 
-    expect(await screen.findByText("Sign out failed")).toBeInTheDocument();
-    expect(
-      screen.getByText("Unable to sign out. Please try again."),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't sign out");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    clearToasts();
   });
 
   it("shows responses loading while selected and detached, then marks a detached response complete until opened", async () => {

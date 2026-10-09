@@ -8,6 +8,7 @@ import {
     startUserExport,
 } from "@/app/lib/mikeApi";
 import PrivacyDataPage from "./page";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 
 // The export buttons drive the async job flow: schedule → poll → download.
 // These tests pin that wiring (start called with the right type, download
@@ -83,22 +84,38 @@ describe("privacy-data async exports", () => {
         expect(mockedStatus).toHaveBeenCalledTimes(2);
     });
 
-    it("surfaces a failed build instead of downloading anything", async () => {
+    it("surfaces a failed build in a toast instead of downloading anything", async () => {
+        const alertSpy = vi
+            .spyOn(window, "alert")
+            .mockImplementation(() => {});
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        clearToasts();
         mockedStart.mockResolvedValue({ export_id: "job-9" });
         mockedStatus.mockResolvedValue({ status: "failed" });
 
-        render(<PrivacyDataPage />);
+        render(
+            <>
+                <PrivacyDataPage />
+                <ToastViewportUI />
+            </>,
+        );
         const exportButtons = screen.getAllByRole("button", {
             name: "Export",
         });
         await userEvent.click(exportButtons[0]);
 
-        expect(await screen.findByText("Action failed")).toBeInTheDocument();
+        const toast = await screen.findByRole("alert");
+        expect(toast).toHaveTextContent("Couldn't export your chats");
+        expect(toast).toHaveTextContent(
+            "Mike couldn't build the export. Try again, and contact support if it keeps happening.",
+        );
         expect(
-            screen.getByText("Failed to export chats. Please try again."),
+            screen.getByRole("button", { name: "Retry" }),
         ).toBeInTheDocument();
+        expect(alertSpy).not.toHaveBeenCalled();
         expect(mockedStart).toHaveBeenCalledWith("chats");
         expect(mockedDownload).not.toHaveBeenCalled();
+        clearToasts();
     });
 
     it("exports app and project memory as a ZIP archive", async () => {
@@ -143,5 +160,36 @@ describe("privacy-data async exports", () => {
         await userEvent.click(confirmButtons.at(-1)!);
 
         await waitFor(() => expect(mockedDeleteMemories).toHaveBeenCalledOnce());
+    });
+
+    it("re-asks for confirmation when Retry follows a failed deletion", async () => {
+        clearToasts();
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        mockedDeleteMemories.mockRejectedValue(
+            Object.assign(new Error("boom"), { status: 500 }),
+        );
+
+        render(
+            <>
+                <PrivacyDataPage />
+                <ToastViewportUI />
+            </>,
+        );
+        await userEvent.click(
+            screen.getByRole("button", { name: "Delete all memory" }),
+        );
+        await userEvent.click(
+            screen.getAllByRole("button", { name: "Delete" }).at(-1)!,
+        );
+        await waitFor(() => expect(mockedDeleteMemories).toHaveBeenCalledOnce());
+
+        await userEvent.click(
+            await screen.findByRole("button", { name: "Retry" }),
+        );
+
+        // Nothing is erased straight from the toast; the dialog comes back.
+        expect(mockedDeleteMemories).toHaveBeenCalledOnce();
+        expect(await screen.findByText("Delete all memory?")).toBeVisible();
+        clearToasts();
     });
 });
