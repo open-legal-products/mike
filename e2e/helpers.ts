@@ -13,7 +13,7 @@ import path from "path";
 export const PDF_FIXTURE = path.join(__dirname, "fixtures/test.pdf");
 
 /** Anthropic model available through the CI provider fixture or a local live key. */
-export const CLAUDE_MODEL_LABEL = "Claude Sonnet 4.6";
+export const CLAUDE_MODEL_LABEL = "Claude Sonnet 5.5";
 
 /**
  * Select a Claude model in the chat input's ModelToggle. ModelToggle exposes a
