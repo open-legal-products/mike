@@ -12,6 +12,21 @@ export function eventErrorMessage(event: AssistantEvent): string | null {
     return null;
 }
 
+/**
+ * Label for a connector tool: the connector's own title when it sent one,
+ * otherwise its identifier made readable ("get_workspace_teams" becomes
+ * "Get workspace teams").
+ */
+export function connectorToolLabel(
+    toolName: string,
+    toolTitle?: string | null,
+): string {
+    const title = toolTitle?.trim();
+    if (title) return title;
+    const words = toolName.replace(/[_-]+/g, " ").trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : toolName;
+}
+
 export function toolCallLabel(name: string): string {
     if (name === "ask_inputs") return "Asking for input...";
     if (name === "generate_docx") return "Creating document...";

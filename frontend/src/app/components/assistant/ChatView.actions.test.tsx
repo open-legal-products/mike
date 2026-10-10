@@ -83,7 +83,7 @@ vi.mock("./ChatInput", () => ({
         onDocumentClick?: (document: Document) => void;
         ref?: Ref<ChatInputHandle>;
     }) => {
-        useImperativeHandle(ref, () => ({ addDoc, addFiles: vi.fn(), startWorkflow: vi.fn(), startWorkflowDocumentSelection: vi.fn() }));
+        useImperativeHandle(ref, () => ({ addDoc, addFiles: vi.fn(), addExcerpt: vi.fn(), startWorkflow: vi.fn(), startWorkflowDocumentSelection: vi.fn() }));
         return <button onClick={() => onDocumentClick?.(spreadsheet)}>
             Open Budget.xlsx
         </button>;

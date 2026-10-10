@@ -283,6 +283,8 @@ export type McpToolEvent = {
   connector_id: string;
   connector_name: string;
   tool_name: string;
+  /** Human-readable tool label from the connector, when it provides one. */
+  tool_title?: string;
   openai_tool_name: string;
   status: "ok" | "error";
   error?: string;

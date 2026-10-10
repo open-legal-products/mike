@@ -36,9 +36,10 @@ Changes to chat rendering, effect dependencies, scrolling or reveal animations
 must exercise a long conversation and paced streaming, not just a completed
 response. `e2e/assistant-streaming.spec.ts` loads eight synthetic exchanges and
 sends four content replies or eight reasoning replies through a browser
-`ReadableStream`, with CPU throttling. The reasoning case also expands,
-collapses and resizes a live disclosure. Both cases run in the general assistant,
-project assistant and tabular-review chat (six browser scenarios).
+`ReadableStream`, with CPU throttling. The reasoning case also scrolls long
+reasoning with the keyboard, checks its bottom blur, toggles its disclosure
+and resizes the viewport. Both cases run in the general assistant, project
+assistant and tabular-review chat (six browser scenarios).
 It uses the real Next.js/React renderer, fails on browser console errors and
 uncaught exceptions, and requires no model-provider key. It belongs to the
 Playwright `synthetic` project (specs that mock every `/api` call in the

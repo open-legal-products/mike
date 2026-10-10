@@ -146,6 +146,13 @@ describe("AssistantMessage timeline", () => {
         expect(container.querySelector(".bg-green-400")).not.toBeNull();
         expect(container.querySelector(".bg-red-400")).toBeNull();
         expect(container.querySelector(".bg-gray-500")).toBeNull();
+        // The connector step carries a decorative svg icon beside its label.
+        const icon = screen.getByTestId("connector-event-icon");
+        expect(icon.getAttribute("src")).toContain(
+            "/icons/features/connector.svg",
+        );
+        expect(icon).toHaveAttribute("aria-hidden", "true");
+        expect(icon.parentElement).toHaveTextContent("Drive: Search");
         unmount();
 
         const failed = render(
@@ -203,7 +210,7 @@ describe("AssistantMessage timeline", () => {
         );
         fireEvent.click(screen.getByText("Asked for approval"));
         expect(screen.getByText("Approved")).toBeVisible();
-        expect(screen.getByText("Gmail: gmail_send")).toBeVisible();
+        expect(screen.getByText("Gmail: Gmail send")).toBeVisible();
     });
 
     it("marks the response failed for a top-level error event", () => {

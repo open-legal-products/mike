@@ -23,6 +23,7 @@ import { useQuickActions } from "@/app/hooks/useQuickActions";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatInputPrompt } from "./ChatInputPrompt";
+import { ResponseSelectionMenu } from "./ResponseSelectionMenu";
 import {
     AssistantSidePanel,
     assistantSidePanelTabId,
@@ -1315,6 +1316,13 @@ export function ChatView({
                     </>
                 )}
             </div>
+
+            <ResponseSelectionMenu
+                canAsk={canSend === undefined || canSend === true}
+                onAddExcerpt={(excerpt) =>
+                    chatInputRef.current?.addExcerpt(excerpt)
+                }
+            />
 
             <AssistantWorkflowModal
                 open={workflowModalOpen}

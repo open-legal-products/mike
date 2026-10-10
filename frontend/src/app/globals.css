@@ -526,3 +526,11 @@
     --tw-ring-shadow: 0 0 #0000;
     --tw-ring-offset-shadow: 0 0 #0000;
 }
+
+/* The response passage a note is being written about. Focusing the note field
+   drops the browser's selection highlight, so ResponseSelectionMenu marks the
+   range with the CSS Custom Highlight API instead. */
+::highlight(response-excerpt) {
+    background-color: Highlight;
+    color: HighlightText;
+}

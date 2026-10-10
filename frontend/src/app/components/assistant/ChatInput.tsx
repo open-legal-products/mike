@@ -15,12 +15,16 @@ import {
     ArrowRight,
     Check,
     Loader2,
+    MessageSquare,
     Square,
+    TextQuote,
     Waypoints,
     X,
 } from "lucide-react";
 import { AddDocButton } from "./AddDocButton";
 import { UploadOverlay } from "./UploadOverlay";
+import { COMPOSER_SEND_BUTTON_CLASS } from "./composerStyles";
+import { ExcerptModal } from "./ExcerptModal";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
@@ -67,6 +71,10 @@ import {
     partitionSupportedDocumentFiles,
 } from "@/app/lib/documentUploadValidation";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    serializeExcerpts,
+    type MessageExcerpt,
+} from "@/app/lib/messageExcerpts";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import {
     routerSelections,
@@ -76,6 +84,8 @@ import {
 export interface ChatInputHandle {
     addDoc: (doc: Document) => void;
     addFiles: (files: File[]) => void;
+    /** Quotes a passage of an assistant response above the next message. */
+    addExcerpt: (excerpt: MessageExcerpt) => void;
     startWorkflow: (
         workflow: { id: string; title: string },
         prompt?: string,
@@ -179,6 +189,10 @@ function ChatInputForChatImpl(
     const composerOpen = canSend === true && !chatLoading;
     const [value, setValue] = useState("");
     const [attachedDocs, setAttachedDocs] = useState<Document[]>([]);
+    const [excerpts, setExcerpts] = useState<MessageExcerpt[]>([]);
+    const [openExcerpt, setOpenExcerpt] = useState<MessageExcerpt | null>(
+        null,
+    );
     const [selectedWorkflow, setSelectedWorkflow] = useState<{
         id: string;
         title: string;
@@ -473,6 +487,17 @@ function ChatInputForChatImpl(
         addFiles: (files: File[]) => {
             void handleDroppedFiles(files);
         },
+        addExcerpt: (excerpt: MessageExcerpt) => {
+            if (!composerOpen) return;
+            setExcerpts((prev) =>
+                prev.some(
+                    (e) => e.text === excerpt.text && e.note === excerpt.note,
+                )
+                    ? prev
+                    : [...prev, excerpt],
+            );
+            requestAnimationFrame(() => textareaRef.current?.focus());
+        },
         startWorkflow: (workflow, prompt) => {
             setSelectedWorkflow(workflow);
             if (prompt !== undefined) setValue(prompt);
@@ -560,11 +585,14 @@ function ChatInputForChatImpl(
         updateInput(el);
     };
 
+    const hasAnnotatedExcerpt = excerpts.some((excerpt) => excerpt.note);
+
     const submitMessage = (
         query: string,
         workflow: { id: string; title: string } | null,
     ) => {
-        if (!query || isLoading) return;
+        // An annotated excerpt already says what is being asked about it.
+        if ((!query && !hasAnnotatedExcerpt) || isLoading) return;
         if (!model) {
             setModelRequiredWarning(true);
             return;
@@ -593,10 +621,11 @@ function ChatInputForChatImpl(
         }));
         setAttachedDocs([]);
         setSelectedWorkflow(null);
+        setExcerpts([]);
 
         onSubmit?.({
             role: "user",
-            content: query,
+            content: serializeExcerpts(excerpts, query),
             files: files.length > 0 ? files : undefined,
             workflow: workflow ?? undefined,
             model,
@@ -690,7 +719,9 @@ function ChatInputForChatImpl(
                     )}
                 >
                     {/* Attached chips */}
-                    {(selectedWorkflow || attachedDocs.length > 0) && (
+                    {(selectedWorkflow ||
+                        attachedDocs.length > 0 ||
+                        excerpts.length > 0) && (
                         <div className="flex flex-wrap gap-1.5 px-2 pt-2">
                             {selectedWorkflow && (
                                 <div className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-xs bg-blue-600 text-white border border-white/20 shadow">
@@ -771,6 +802,50 @@ function ChatInputForChatImpl(
                                     </div>
                                 );
                             })}
+                            {excerpts.map((excerpt, index) => (
+                                <div
+                                    key={`${index}-${excerpt.text}`}
+                                    className={`inline-flex max-w-full items-center rounded-[10px] text-xs text-gray-800 ${LIQUID_GLASS_FLAT_CLASS}`}
+                                >
+                                    <button
+                                        type="button"
+                                        onClick={() => setOpenExcerpt(excerpt)}
+                                        aria-label={`View excerpt: ${excerpt.text.slice(0, 60)}`}
+                                        className="inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-[10px] py-0.5 pl-2 transition-colors hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                                    >
+                                        {excerpt.note ? (
+                                            <MessageSquare
+                                                aria-hidden="true"
+                                                className="h-2.5 w-2.5 shrink-0"
+                                            />
+                                        ) : (
+                                            <TextQuote
+                                                aria-hidden="true"
+                                                className="h-2.5 w-2.5 shrink-0"
+                                            />
+                                        )}
+                                        <span>
+                                            {excerpt.note
+                                                ? "Annotated Excerpt"
+                                                : "Excerpt"}
+                                        </span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            setExcerpts((prev) =>
+                                                prev.filter(
+                                                    (_, i) => i !== index,
+                                                ),
+                                            )
+                                        }
+                                        aria-label={`Remove excerpt: ${excerpt.text.slice(0, 60)}`}
+                                        className="mx-1 rounded-full p-0.5 text-gray-400 transition-colors hover:bg-gray-900/5 hover:text-gray-700"
+                                    >
+                                        <X className="h-2.5 w-2.5" />
+                                    </button>
+                                </div>
+                            ))}
                         </div>
                     )}
 
@@ -901,14 +976,15 @@ function ChatInputForChatImpl(
                                     isLoading ? "Stop response" : "Send message"
                                 }
                                 className={cn(
-                                    "relative flex h-7.5 w-7.5 cursor-pointer items-center justify-center rounded-full border-0 bg-gradient-to-b from-neutral-700 to-black text-white transition-all duration-150 active:enabled:scale-95 disabled:from-neutral-600 disabled:to-black",
-                                    "shadow-[0_3px_9px_rgba(15,23,42,0.10),inset_1px_1px_0_rgba(255,255,255,0.22),inset_-1px_-1px_0_rgba(255,255,255,0.10),inset_-4px_-4px_9px_rgba(15,23,42,0.2)]",
+                                    COMPOSER_SEND_BUTTON_CLASS,
+                                    "h-7.5 w-7.5",
                                 )}
                                 onClick={handleActionClick}
                                 disabled={
                                     !isLoading &&
                                     (!composerOpen ||
-                                        !value.trim() ||
+                                        (!value.trim() &&
+                                            !hasAnnotatedExcerpt) ||
                                         slashCommandsLoading)
                                 }
                             >
@@ -940,6 +1016,10 @@ function ChatInputForChatImpl(
                     event.currentTarget.value = "";
                     if (files.length) void handleDroppedFiles(files);
                 }}
+            />
+            <ExcerptModal
+                excerpt={openExcerpt}
+                onClose={() => setOpenExcerpt(null)}
             />
             <AddDocumentsModal
                 open={docSelectorOpen}

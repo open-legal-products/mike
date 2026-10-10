@@ -124,14 +124,42 @@ for (const scope of ["assistant", "project", "tabular"] as const) {
                     await input.press("Enter");
                     if (streamKind === "reasoning" && turn === 2) {
                         await page.waitForFunction(() => Boolean((window as Window & { finishReasoning?: () => void }).finishReasoning), undefined, { timeout: 180_000 });
-                        await page.getByRole("button", { name: "Expand thought process", exact: true }).last().click();
+                        const reasoning = page.getByRole("region", { name: "Thought process", exact: true }).last();
+                        await expect(reasoning).toContainText("Sentence 149 in answer 2.");
+                        await expect(page.getByRole("button", { name: /^(Expand|Minimise) thought process$/ })).toHaveCount(0);
+                        await expect.poll(() => reasoning.evaluate((element) =>
+                            element.scrollHeight > element.clientHeight && element.clientHeight <= 144,
+                        )).toBe(true);
+                        await expect(page.getByRole("button", { name: "Scroll to bottom of thought process", exact: true })).toHaveCount(0);
+                        const reasoningFade = reasoning.locator("..").locator('[data-slot="reasoning-scroll-fade"]');
+                        await expect(reasoningFade).toBeVisible();
+                        await expect(reasoningFade).toHaveCSS("backdrop-filter", /^blur\(/);
+                        await expect(reasoningFade).toHaveCSS("pointer-events", "none");
+                        await reasoning.focus();
+                        await page.keyboard.press("End");
+                        await expect.poll(() => reasoning.evaluate((element) =>
+                            element.scrollTop + element.clientHeight >= element.scrollHeight - 2,
+                        )).toBe(true);
+                        await expect(reasoningFade).toBeHidden();
+                        await expect(reasoning).toBeFocused();
                         await page.setViewportSize({ width: 480, height: 720 });
-                        await page.getByRole("button", { name: "Minimise thought process", exact: true }).last().click();
+                        await expect.poll(() => reasoning.evaluate((element) =>
+                            element.scrollHeight > element.clientHeight && element.clientHeight <= 144,
+                        )).toBe(true);
+                        await reasoning.focus();
+                        await page.keyboard.press("Home");
+                        await expect.poll(() => reasoning.evaluate((element) => element.scrollTop)).toBe(0);
+                        await expect(reasoningFade).toBeVisible();
+                        await page.keyboard.press("End");
+                        await expect(reasoningFade).toBeHidden();
                         const disclosure = page.getByRole("button", { name: /^(Thinking|Pondering|Analyzing|Reviewing|Reasoning)\.\.\.$/ }).last();
                         await disclosure.click();
                         await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+                        await expect(reasoning).toBeHidden();
                         await disclosure.click();
                         await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+                        await expect(reasoning).toBeVisible();
+                        await expect(reasoningFade).toBeVisible();
                         await page.setViewportSize({ width: 1280, height: 720 });
                         await page.evaluate(() => (window as Window & { finishReasoning?: () => void }).finishReasoning?.());
                     }

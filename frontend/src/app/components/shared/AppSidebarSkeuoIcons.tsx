@@ -6,7 +6,7 @@ type IconProps = Omit<
 >;
 
 const ICON_BASE_PATH = "/icons";
-const ICON_VERSION = "54";
+const ICON_VERSION = "60";
 
 function AppSidebarIcon({
   name,
@@ -60,6 +60,10 @@ export function TabularReviewSkeuoIcon(props: IconProps) {
 
 export function WorkflowSkeuoIcon(props: IconProps) {
   return <AppSidebarIcon name="features/workflow" {...props} />;
+}
+
+export function ConnectorSkeuoIcon(props: IconProps) {
+  return <AppSidebarIcon name="features/connector" {...props} />;
 }
 
 export function OrganizationSkeuoIcon(props: IconProps) {

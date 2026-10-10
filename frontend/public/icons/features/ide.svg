@@ -1,47 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" fill="none" role="img" aria-labelledby="ideTitle">
   <title id="ideTitle">Integrated Drafting Environment</title>
   <defs>
-    <linearGradient id="ideSide" x1="0" y1="0" x2="0.35" y2="1">
-      <stop offset="0" stop-color="#8D95A4"/>
-      <stop offset="0.42" stop-color="#8B93A2"/>
-      <stop offset="0.72" stop-color="#868E9E"/>
-      <stop offset="1" stop-color="#656D7D"/>
-    </linearGradient>
-    <linearGradient id="ideMid" x1="0" y1="0" x2="0.35" y2="1">
-      <stop offset="0" stop-color="#9CA3B1"/>
-      <stop offset="0.42" stop-color="#999FAE"/>
-      <stop offset="0.72" stop-color="#949CAB"/>
-      <stop offset="1" stop-color="#717988"/>
+    <linearGradient id="idePanel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C6CBD3" stop-opacity="0.96"/>
+      <stop offset="0.5" stop-color="#BFC5CE" stop-opacity="0.94"/>
+      <stop offset="1" stop-color="#AEB5C0" stop-opacity="0.96"/>
     </linearGradient>
     <linearGradient id="ideRim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.32"/>
-      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.14"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.42"/>
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#374151" stop-opacity="0.4"/>
     </linearGradient>
     <linearGradient id="ideSheen" x1="0" y1="0" x2="0.25" y2="1">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <clipPath id="ideClipLeft"><rect x="24" y="36" width="48" height="168" rx="16"/></clipPath>
-    <clipPath id="ideClipMiddle"><rect x="84" y="36" width="72" height="168" rx="16"/></clipPath>
-    <clipPath id="ideClipRight"><rect x="168" y="36" width="48" height="168" rx="16"/></clipPath>
+    <clipPath id="ideClipLeft"><rect x="24" y="36" width="36" height="168" rx="13"/></clipPath>
+    <clipPath id="ideClipMiddle"><rect x="90" y="36" width="60" height="168" rx="13"/></clipPath>
+    <clipPath id="ideClipRight"><rect x="180" y="36" width="36" height="168" rx="13"/></clipPath>
   </defs>
   <g>
-    <rect x="24" y="36" width="48" height="168" rx="16" fill="url(#ideSide)"/>
-    <path d="M24 36 H72 V96 C58 116 38 116 24 92 Z" fill="url(#ideSheen)" clip-path="url(#ideClipLeft)"/>
-    <rect x="25" y="37" width="46" height="166" rx="15" fill="none" stroke="url(#ideRim)" stroke-width="2"/>
-    <rect x="24.5" y="36.5" width="47" height="167" rx="15.5" fill="none" stroke="#4C5462" stroke-width="1" opacity="0.5"/>
+    <rect x="24" y="36" width="36" height="168" rx="13" fill="url(#idePanel)" stroke="url(#ideRim)" stroke-width="5"/>
+    <path d="M24 36 H60 V96 C49.92 116 34.08 116 24 92 Z" fill="url(#ideSheen)" clip-path="url(#ideClipLeft)"/>
+    <rect x="22" y="34" width="40" height="172" rx="15" fill="none" stroke="#6B7482" stroke-width="3" opacity="0.9"/>
   </g>
   <g>
-    <rect x="84" y="36" width="72" height="168" rx="16" fill="url(#ideMid)"/>
-    <path d="M84 36 H156 V100 C136 122 104 122 84 96 Z" fill="url(#ideSheen)" clip-path="url(#ideClipMiddle)"/>
-    <rect x="85" y="37" width="70" height="166" rx="15" fill="none" stroke="url(#ideRim)" stroke-width="2"/>
-    <rect x="84.5" y="36.5" width="71" height="167" rx="15.5" fill="none" stroke="#4C5462" stroke-width="1" opacity="0.5"/>
+    <rect x="90" y="36" width="60" height="168" rx="13" fill="url(#idePanel)" stroke="url(#ideRim)" stroke-width="5"/>
+    <path d="M90 36 H150 V100 C133.2 120 106.8 120 90 96 Z" fill="url(#ideSheen)" clip-path="url(#ideClipMiddle)"/>
+    <rect x="88" y="34" width="64" height="172" rx="15" fill="none" stroke="#6B7482" stroke-width="3" opacity="0.9"/>
   </g>
   <g>
-    <rect x="168" y="36" width="48" height="168" rx="16" fill="url(#ideSide)"/>
-    <path d="M168 36 H216 V96 C202 116 182 116 168 92 Z" fill="url(#ideSheen)" clip-path="url(#ideClipRight)"/>
-    <rect x="169" y="37" width="46" height="166" rx="15" fill="none" stroke="url(#ideRim)" stroke-width="2"/>
-    <rect x="168.5" y="36.5" width="47" height="167" rx="15.5" fill="none" stroke="#4C5462" stroke-width="1" opacity="0.5"/>
+    <rect x="180" y="36" width="36" height="168" rx="13" fill="url(#idePanel)" stroke="url(#ideRim)" stroke-width="5"/>
+    <path d="M180 36 H216 V96 C205.92 116 190.08 116 180 92 Z" fill="url(#ideSheen)" clip-path="url(#ideClipRight)"/>
+    <rect x="178" y="34" width="40" height="172" rx="15" fill="none" stroke="#6B7482" stroke-width="3" opacity="0.9"/>
   </g>
 </svg>
