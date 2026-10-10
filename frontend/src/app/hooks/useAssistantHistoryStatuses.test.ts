@@ -39,4 +39,46 @@ describe("useAssistantHistoryStatuses", () => {
             expect(result.current.statuses["chat-1"]).toBeUndefined(),
         );
     });
+
+    it("never marks the chat shown beside the active one as finished-and-unread", async () => {
+        const { result, rerender } = renderHook(
+            ({ sideChatId }) =>
+                useAssistantHistoryStatuses({
+                    activeChatId: "chat-a",
+                    sideChatId,
+                    chatIds: ["chat-a", "chat-b", "chat-c"],
+                }),
+            { initialProps: { sideChatId: "chat-b" as string | null } },
+        );
+        const begin = (chatId: string) =>
+            beginAssistantTurn(chatId, {
+                userMessage: { role: "user", content: "Question" },
+                assistant: { role: "assistant", content: "" },
+                cancel: vi.fn(),
+            });
+        let side!: ReturnType<typeof begin>;
+        let hidden!: ReturnType<typeof begin>;
+        act(() => {
+            side = begin("chat-b");
+            hidden = begin("chat-c");
+        });
+        await waitFor(() =>
+            expect(result.current.statuses["chat-b"]).toBe("loading"),
+        );
+
+        act(() => {
+            side.finish();
+            hidden.finish();
+        });
+        await waitFor(() =>
+            expect(result.current.statuses["chat-c"]).toBe("complete"),
+        );
+        expect(result.current.statuses["chat-b"]).toBeUndefined();
+
+        // Showing a finished chat beside the active one reads it.
+        rerender({ sideChatId: "chat-c" });
+        await waitFor(() =>
+            expect(result.current.statuses["chat-c"]).toBeUndefined(),
+        );
+    });
 });

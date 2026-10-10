@@ -28,6 +28,9 @@ interface ChatHistoryContextType {
   loadingMoreChats: boolean;
     currentChatId: string | null;
     setCurrentChatId: (chatId: string | null) => void;
+    /** The chat shown beside the current one, if a page shows two. */
+    sideChatId: string | null;
+    setSideChatId: (chatId: string | null) => void;
     loadChats: () => Promise<void>;
   loadMoreChats: () => Promise<void>;
     saveChat: (
@@ -68,6 +71,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
     const loadingMoreChatsRef = useRef(false);
     const nextChatCursorRef = useRef<ChatCursor | null>(null);
     const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+    const [sideChatId, setSideChatId] = useState<string | null>(null);
     const [newChatMessages, setNewChatMessages] = useState<Message[] | null>(
         null,
     );
@@ -300,6 +304,8 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
       loadingMoreChats,
             currentChatId,
             setCurrentChatId,
+            sideChatId,
+            setSideChatId,
             loadChats,
             loadMoreChats,
             saveChat,
@@ -315,6 +321,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             hasMoreChats,
       loadingMoreChats,
             currentChatId,
+            sideChatId,
             loadChats,
             loadMoreChats,
             saveChat,

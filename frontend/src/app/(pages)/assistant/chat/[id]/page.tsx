@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useChatRoute } from "@/app/hooks/useChatRoute";
 import { AssistantChatPane } from "@/app/components/assistant/AssistantChatPane";
 import {
@@ -27,6 +28,12 @@ export default function AssistantChatPage() {
         closeSideChat,
     } = useChatRoute("/assistant/chat", "/assistant");
     const documentPanel = useAssistantDocumentPanel();
+    // The sidebar treats a chat on screen as read, in either place.
+    const { setSideChatId } = useChatHistoryContext();
+    useEffect(() => {
+        setSideChatId(sideChatId || null);
+        return () => setSideChatId(null);
+    }, [sideChatId, setSideChatId]);
     const chatsRef = useRef<HTMLDivElement>(null);
     const [sideChatShare, setSideChatShare] = useState(0.5);
     const hasSideChat = sideChatId !== null;

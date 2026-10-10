@@ -23,6 +23,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
 }));
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({
+        setSideChatId: () => {},
         setCurrentChatId: vi.fn(),
         newChatMessages: null,
         setNewChatMessages: vi.fn(),

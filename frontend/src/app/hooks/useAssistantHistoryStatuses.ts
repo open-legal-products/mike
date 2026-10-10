@@ -26,14 +26,21 @@ function withAssistantHistoryStatus(
 
 export function useAssistantHistoryStatuses({
     activeChatId,
+    sideChatId = null,
     chatIds,
     onActivity,
 }: {
     activeChatId: string | null;
+    /**
+     * A second chat on screen beside the active one. Its answers are read as
+     * they arrive too, so it is never marked as finished-and-unread.
+     */
+    sideChatId?: string | null;
     chatIds: readonly string[];
     onActivity?: (chatId: string) => void;
 }) {
     const activeChatIdRef = useRef(activeChatId);
+    const sideChatIdRef = useRef(sideChatId);
     const onActivityRef = useRef(onActivity);
     const [statuses, setStatuses] = useState<
         Record<string, AssistantHistoryStatus>
@@ -41,8 +48,9 @@ export function useAssistantHistoryStatuses({
 
     useEffect(() => {
         activeChatIdRef.current = activeChatId;
+        sideChatIdRef.current = sideChatId;
         onActivityRef.current = onActivity;
-    }, [activeChatId, onActivity]);
+    }, [activeChatId, sideChatId, onActivity]);
 
     useEffect(
         () =>
@@ -55,6 +63,7 @@ export function useAssistantHistoryStatuses({
                         change === "begin"
                             ? "loading"
                             : chatId === activeChatIdRef.current ||
+                                chatId === sideChatIdRef.current ||
                                 turn.assistant.error
                               ? undefined
                               : "complete",
@@ -68,21 +77,27 @@ export function useAssistantHistoryStatuses({
         // eslint-disable-next-line react-hooks/set-state-in-effect -- reconcile persisted turn state when the visible history set or selected chat changes
         setStatuses((current) => {
             let next = current;
-            if (activeChatId) {
+            // Opening a chat, in either place, is reading its answer.
+            for (const shownChatId of [activeChatId, sideChatId]) {
+                if (!shownChatId) continue;
                 next = withAssistantHistoryStatus(
                     next,
-                    activeChatId,
-                    hasAssistantTurn(activeChatId) ? "loading" : undefined,
+                    shownChatId,
+                    hasAssistantTurn(shownChatId) ? "loading" : undefined,
                 );
             }
             for (const chatId of chatIds) {
-                if (chatId !== activeChatId && hasAssistantTurn(chatId)) {
+                if (
+                    chatId !== activeChatId &&
+                    chatId !== sideChatId &&
+                    hasAssistantTurn(chatId)
+                ) {
                     next = withAssistantHistoryStatus(next, chatId, "loading");
                 }
             }
             return next;
         });
-    }, [activeChatId, chatIds]);
+    }, [activeChatId, sideChatId, chatIds]);
 
     const clearStatus = useCallback((chatId: string) => {
         setStatuses((current) =>

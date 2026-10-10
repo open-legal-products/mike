@@ -87,7 +87,13 @@ interface AppSidebarProps {
 export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const { user, signOut } = useAuth();
     const { profile } = useUserProfile();
-    const { chats, loadingMoreChats, loadMoreChats, setCurrentChatId } =
+    const {
+        chats,
+        loadingMoreChats,
+        loadMoreChats,
+        setCurrentChatId,
+        sideChatId,
+    } =
         useChatHistoryContext();
     const [signOutWarningOpen, setSignOutWarningOpen] = useState(false);
     const router = useRouter();
@@ -109,7 +115,11 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const {
         statuses: assistantHistoryStatuses,
         clearStatus: clearAssistantHistoryStatus,
-    } = useAssistantHistoryStatuses({ activeChatId: routeChatId, chatIds });
+    } = useAssistantHistoryStatuses({
+        activeChatId: routeChatId,
+        sideChatId,
+        chatIds,
+    });
     // Fade the contents in whenever the sidebar opens, from its own toggle or
     // from a page calling setSidebarOpen, but not when it is already open on
     // first render.
