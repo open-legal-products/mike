@@ -320,7 +320,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             <div
                 className={cn(
                     isOpen
-                        ? "w-64 h-[calc(100dvh-1rem)] md:h-[calc(100dvh-1.5rem)]"
+                        ? "w-62 h-[calc(100dvh-1rem)] md:h-[calc(100dvh-1.5rem)]"
                         : "max-md:hidden w-[46px] md:h-[calc(100dvh-1.5rem)] h-auto pointer-events-none md:pointer-events-auto",
                     // Collapsed, the ends are full semicircles. The radii are
                     // lengths, not rounded-full, so the change animates with
