@@ -55,6 +55,9 @@
     background: transparent;
     border: 0;
     box-shadow: none;
+    /* EigenPal insets its toolbar by 8px 12px; the viewer's own chrome
+       already frames it, so only a little room above the page is kept. */
+    margin: 0 0 4px;
 }
 
 .host :global(.docx-toolbar) button {

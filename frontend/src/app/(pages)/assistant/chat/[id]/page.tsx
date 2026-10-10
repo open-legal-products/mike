@@ -1,205 +1,121 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useAssistantChat } from "@/app/hooks/useAssistantChat";
-import { useChatRoute } from "@/app/hooks/useChatRoute";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
-import { ChatView } from "@/app/components/assistant/ChatView";
-import { loadAssistantChat } from "@/app/lib/assistantTurns";
-import { can, roleFrom } from "@/app/lib/permissions";
-import type { Chat } from "@/app/components/shared/types";
+import { useChatRoute } from "@/app/hooks/useChatRoute";
+import { AssistantChatPane } from "@/app/components/assistant/AssistantChatPane";
+import {
+    AssistantChatDivider,
+    resizedSideChatShare,
+} from "@/app/components/assistant/AssistantChatDivider";
+import { AssistantDocumentPanelHost } from "@/app/components/assistant/AssistantDocumentPanelHost";
+import { useAssistantDocumentPanel } from "@/app/components/assistant/useAssistantDocumentPanel";
 
 // Serves `/assistant` (a new chat) as well as `/assistant/chat/:id`: the
 // first answer adopts its chat id in place, so it streams without a remount.
+// A second chat can sit beside the first (`?side=`); both open their
+// documents in the one side panel.
+
 export default function AssistantChatPage() {
-    const router = useRouter();
-    const { chatId: id, openChat, adoptChat, claimCreated } = useChatRoute(
-        "/assistant/chat",
-        "/assistant",
-    );
-
-    const { setCurrentChatId, newChatMessages, setNewChatMessages, loadChats } =
-        useChatHistoryContext();
-
-    // A workflow creates the chat itself and hands its first message over.
-    const initialMessages = newChatMessages ?? [];
     const {
-        messages,
-        isResponseLoading,
-        handleChat,
-        setMessages,
-        cancel,
-        rejectedApiKey,
-        dismissInvalidApiKey,
-        resetChat,
-    } = useAssistantChat({
-        initialMessages,
-        chatId: id || undefined,
-        onChatCreated: (createdId) => {
-            adoptChat(createdId);
-            // The server has stored the chat by now; list it right away
-            // rather than when the first answer finishes.
-            void loadChats();
-        },
-    });
-
-    const hasAutoSent = useRef(false);
-    const loadedChatId = useRef<string | null>(null);
-    // Whether the caller may write here, from the standing GET /chat/:id
-    // serves. Grant-reachable chats appear in the global sidebar since the
-    // parity change, so a project VIEWER can land on this page — dropping
-    // the served role handed them a live composer whose sends 403. A new
-    // chat, or arriving from a workflow, means the caller creates the
-    // thread: creator.
-    //
-    // Fail-closed until the served standing lands: `false` on every cold
-    // load, which used to read "Viewing only — sending needs edit access" at
-    // a chat's own owner. `accessResolved` below is what keeps that false
-    // from being shown as an accusation — the composer is not rendered at
-    // all until the answer arrives. A failed getChat leaves it false and
-    // redirects.
-    const startsFresh = !id || initialMessages.length > 0;
-    const [canSend, setCanSend] = useState<boolean>(startsFresh);
-    // Until the served role lands for the FIRST time, the standing is unknown
-    // rather than denied. Keep the composer off the page for that window so a
-    // caller who does have edit access never reads the read-only placeholder;
-    // a new chat already knows the answer.
-    const [accessResolved, setAccessResolved] = useState<boolean>(startsFresh);
-    // Separate from canSend: while this is true the composer is closed because
-    // the thread's messages have not arrived, not because the caller lacks a
-    // grant, and the composer must say that rather than blame permissions.
-    // This is the switch-to-another-thread case, where the standing is already
-    // resolved and the composer stays on the page while the history lands. An
-    // answer still streaming into the thread does not hold the load open: the
-    // history is fetched at once and the live answer is laid over it.
-    const [chatLoading, setChatLoading] = useState<boolean>(!startsFresh);
-    const [chat, setChat] = useState<Chat | null>(null);
-    const [chatModel, setChatModel] = useState<string | null | undefined>(
-        initialMessages.length > 0
-            ? (initialMessages[0]?.model ?? null)
-            : undefined,
-    );
-    const [chatReasoningLevel, setChatReasoningLevel] = useState<
-        NonNullable<(typeof initialMessages)[number]["reasoning"]> | null | undefined
-    >(
-        initialMessages.length > 0
-            ? (initialMessages[0]?.reasoning ?? null)
-            : undefined,
-    );
-
+        chatId,
+        openChat,
+        adoptChat,
+        claimCreated,
+        sideChatId,
+        openSideChat,
+        adoptSideChat,
+        closeSideChat,
+    } = useChatRoute("/assistant/chat", "/assistant");
+    const documentPanel = useAssistantDocumentPanel();
+    // The sidebar treats a chat on screen as read, in either place.
+    const { setSideChatId, sideChatRequest, requestSideChat } =
+        useChatHistoryContext();
+    // "Open in side chat" on a sidebar row.
     useEffect(() => {
-        setCurrentChatId(id || null);
-    }, [id, setCurrentChatId]);
-
+        if (!sideChatRequest) return;
+        requestSideChat(null);
+        openSideChat(sideChatRequest);
+    }, [sideChatRequest, requestSideChat, openSideChat]);
     useEffect(() => {
-        // The chat the first answer just created: its messages are on screen.
-        if (claimCreated(id)) {
-            const firstUserMessage = messages.find(
-                (message) => message.role === "user",
+        setSideChatId(sideChatId || null);
+        return () => setSideChatId(null);
+    }, [sideChatId, setSideChatId]);
+    // A passage the reader asked about in the side chat, held until that
+    // chat's composer is on the page (opening the side chat if need be).
+    const [sideChatExcerpt, setSideChatExcerpt] = useState<{
+        id: number;
+        excerpt: MessageExcerpt;
+    } | null>(null);
+    const clearSideChatExcerpt = useCallback(
+        () => setSideChatExcerpt(null),
+        [],
+    );
+    // Counted apart from the held passage: that is cleared once the side
+    // chat takes it, and an id that started over would look to that chat
+    // like the passage it already has.
+    const sideChatExcerptCount = useRef(0);
+    function askInSideChat(excerpt: MessageExcerpt) {
+        if (sideChatId === null) openSideChat("");
+        sideChatExcerptCount.current += 1;
+        setSideChatExcerpt({ id: sideChatExcerptCount.current, excerpt });
+    }
+    const chatsRef = useRef<HTMLDivElement>(null);
+    const [sideChatShare, setSideChatShare] = useState(0.5);
+    const hasSideChat = sideChatId !== null;
+
+    function resizeChats(dx: number) {
+        const pane = (id: string) =>
+            chatsRef.current?.querySelector<HTMLElement>(
+                `[data-chat-pane="${id}"]`,
             );
-            // eslint-disable-next-line react-hooks/set-state-in-effect -- each chat id selects its own view state
-            setChatModel(firstUserMessage?.model ?? null);
-            setChatReasoningLevel(firstUserMessage?.reasoning ?? null);
-            return;
-        }
-        if (!id) {
-            setChat(null);
-            setChatModel(undefined);
-            setChatReasoningLevel(undefined);
-            setMessages([]);
-            setCanSend(true);
-            setAccessResolved(true);
-            setChatLoading(false);
-            return;
-        }
-        if (initialMessages.length > 0) {
-            if (newChatMessages) setNewChatMessages(null);
-            return;
-        }
-        if (loadedChatId.current === id) return;
-        loadedChatId.current = id;
-        let cancelled = false;
-        // The composer stays closed until the load resolves, but through
-        // chatLoading rather than canSend: retiring the grant here made the
-        // read-only copy ("needs edit access") the message a reader saw while
-        // simply waiting for a thread.
-        setChatLoading(true);
-        setMessages([]);
-
-        loadAssistantChat(id)
-            .then(({ chat, messages: loaded }) => {
-                if (cancelled) return;
-                setChat(chat);
-                setChatModel(chat.model ?? null);
-                setChatReasoningLevel(chat.reasoning_level ?? null);
-                setCanSend(can(roleFrom(chat), "content.edit"));
-                setAccessResolved(true);
-                setChatLoading(false);
-                if (loaded.length > 0) {
-                    setMessages(loaded);
-                } else {
-                    router.replace("/assistant");
-                }
-            })
-            .catch(() => {
-                if (!cancelled) router.replace("/assistant");
-            });
-        return () => {
-            cancelled = true;
-            // StrictMode replays the effect, and the replacement load must
-            // be allowed after retiring the first one's callback.
-            loadedChatId.current = null;
-        };
-    }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    useEffect(() => {
-        if (
-            newChatMessages &&
-            newChatMessages.length === 1 &&
-            newChatMessages[0].role === "user" &&
-            !hasAutoSent.current &&
-            !isResponseLoading &&
-            messages.length === 1
-        ) {
-            hasAutoSent.current = true;
-            void handleChat(newChatMessages[0]);
-        }
-    }, [newChatMessages, messages.length, isResponseLoading]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // Leaving is not Stop: resetChat detaches, so the answer still streaming
-    // here finishes and is stored server-side.
-    function handleNewChat() {
-        resetChat();
-        setNewChatMessages(null);
-        openChat("");
+        const primary = pane("primary");
+        const side = pane("side");
+        if (!primary || !side) return;
+        setSideChatShare(
+            resizedSideChatShare(primary.offsetWidth, side.offsetWidth, dx),
+        );
     }
 
-    const isNewChat = !id;
-
     return (
-        <ChatView
-            chatId={id || null}
-            chat={chat}
-            onInitialSubmit={
-                isNewChat && messages.length === 0
-                    ? (message) => void handleChat(message)
-                    : undefined
-            }
-            chatModel={isNewChat ? (messages[0]?.model ?? null) : chatModel}
-            chatReasoningLevel={
-                isNewChat ? (messages[0]?.reasoning ?? null) : chatReasoningLevel
-            }
-            messages={messages}
-            rejectedApiKey={rejectedApiKey}
-            onDismissInvalidApiKey={dismissInvalidApiKey}
-            isResponseLoading={isResponseLoading}
-            handleChat={handleChat}
-            cancel={cancel}
-            onNewChat={handleNewChat}
-            canSend={canSend}
-            accessResolved={accessResolved}
-            chatLoading={chatLoading}
-        />
+        // The side panel slides in from past the right edge. Clipped here, that
+        // overhang is not something the page can be scrolled to: focusing or
+        // revealing anything in the panel mid-slide would otherwise drag the
+        // chats sideways, under the app sidebar.
+        <div
+            ref={chatsRef}
+            className="relative flex h-full w-full overflow-x-clip"
+        >
+            <AssistantChatPane
+                widthShare={hasSideChat ? 1 - sideChatShare : undefined}
+                chatId={chatId}
+                openChat={openChat}
+                adoptChat={adoptChat}
+                claimCreated={claimCreated}
+                documentPanel={documentPanel}
+                otherChatId={sideChatId}
+                onAskInSideChat={askInSideChat}
+                onOpenSideChat={
+                    sideChatId === null ? () => openSideChat("") : undefined
+                }
+            />
+            {hasSideChat && <AssistantChatDivider onResize={resizeChats} />}
+            {sideChatId !== null && (
+                <AssistantChatPane
+                    widthShare={sideChatShare}
+                    chatId={sideChatId}
+                    openChat={openSideChat}
+                    adoptChat={adoptSideChat}
+                    claimCreated={claimCreated}
+                    documentPanel={documentPanel}
+                    otherChatId={chatId}
+                    sideChat={{ onClose: closeSideChat }}
+                    incomingExcerpt={sideChatExcerpt}
+                    onIncomingExcerptAdded={clearSideChatExcerpt}
+                />
+            )}
+            <AssistantDocumentPanelHost panel={documentPanel} />
+        </div>
     );
 }

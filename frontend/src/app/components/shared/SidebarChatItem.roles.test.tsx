@@ -298,4 +298,31 @@ describe("SidebarChatItem role gates", () => {
             await screen.findByText(/could not be deleted/i),
         ).toBeInTheDocument();
     });
+
+    it("offers opening the chat beside the current one only where asked to", async () => {
+        const onOpenInSideChat = vi.fn();
+        const { unmount } = render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive={false}
+                onSelect={vi.fn()}
+            />,
+        );
+        openMenu();
+        expect(screen.queryByText("Open in side chat")).not.toBeInTheDocument();
+        unmount();
+
+        render(
+            <SidebarChatItem
+                chat={chat({ is_owner: true })}
+                isActive={false}
+                onSelect={vi.fn()}
+                onOpenInSideChat={onOpenInSideChat}
+            />,
+        );
+        openMenu();
+        fireEvent.click(await screen.findByText("Open in side chat"));
+
+        expect(onOpenInSideChat).toHaveBeenCalled();
+    });
 });

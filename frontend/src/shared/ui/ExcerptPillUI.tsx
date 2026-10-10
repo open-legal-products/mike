@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactElement } from "react";
-import { MessageSquare, TextQuote, X } from "lucide-react";
+import { TextQuote, X } from "lucide-react";
 import { LIQUID_GLASS_FLAT_CLASS } from "./LiquidGlassUI";
 import type { MessageExcerpt } from "../lib/messageExcerpts";
 
@@ -13,7 +13,7 @@ export function excerptLabel(excerpt: MessageExcerpt): string {
 /**
  * The pill for a passage quoted from an assistant response, in the composer
  * (with `onRemove`) and in a sent message (without). Clicking it opens the
- * passage; the pill itself only says whether it carries a note.
+ * passage; the pill looks the same with or without a note.
  */
 export function ExcerptPillUI({
     excerpt,
@@ -24,7 +24,6 @@ export function ExcerptPillUI({
     onOpen: () => void;
     onRemove?: () => void;
 }): ReactElement {
-    const Icon = excerpt.note ? MessageSquare : TextQuote;
     const preview = excerpt.text.slice(0, 60);
     return (
         <div
@@ -38,7 +37,7 @@ export function ExcerptPillUI({
                     onRemove ? "" : "pr-2.5"
                 }`}
             >
-                <Icon aria-hidden="true" className="h-2.5 w-2.5 shrink-0" />
+                <TextQuote aria-hidden="true" className="h-2.5 w-2.5 shrink-0" />
                 <span>{excerptLabel(excerpt)}</span>
             </button>
             {onRemove && (

@@ -74,6 +74,14 @@ export interface ChatHistoryDropdownUIProps {
 
     /** Which edge of the trigger the menu lines up with. */
     align?: "start" | "center" | "end";
+    /**
+     * False lets a press outside reach what is pressed, closing this menu on
+     * the way. Use it for a menu that sits beside other menus' buttons which
+     * stay clickable while it is open (a floating header's `pointer-events`
+     * do that): a modal menu ignores a press that opens a newer menu, so
+     * both would stay open.
+     */
+    modal?: boolean;
     /** Extra attributes for the scrolling list, such as a test id. */
     listProps?: HTMLAttributes<HTMLDivElement> & {
         [key: `data-${string}`]: string | undefined;
@@ -113,6 +121,7 @@ export function ChatHistoryDropdownUI({
     loadingMore = false,
     footer,
     align = "start",
+    modal = true,
     listProps,
 }: ChatHistoryDropdownUIProps): ReactElement {
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -130,7 +139,7 @@ export function ChatHistoryDropdownUI({
     }, [open]);
 
     return (
-        <Dropdown open={open} onOpenChange={onOpenChange}>
+        <Dropdown open={open} onOpenChange={onOpenChange} modal={modal}>
             <DropdownTrigger asChild>{trigger}</DropdownTrigger>
             <DropdownContent
                 align={align}

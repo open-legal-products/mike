@@ -87,7 +87,14 @@ interface AppSidebarProps {
 export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const { user, signOut } = useAuth();
     const { profile } = useUserProfile();
-    const { chats, loadingMoreChats, loadMoreChats, setCurrentChatId } =
+    const {
+        chats,
+        loadingMoreChats,
+        loadMoreChats,
+        setCurrentChatId,
+        sideChatId,
+        requestSideChat,
+    } =
         useChatHistoryContext();
     const [signOutWarningOpen, setSignOutWarningOpen] = useState(false);
     const router = useRouter();
@@ -106,10 +113,23 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         () => (chats ?? []).map((chat) => chat.id),
         [chats],
     );
+    const onAssistantPage =
+        pathname === "/assistant" || pathname.startsWith("/assistant/chat/");
+    function openInSideChat(chatId: string) {
+        // The assistant page, when it is the one on screen, opens the chat
+        // beside its current one without a navigation; from anywhere else
+        // the chat arrives in the URL it reads on mount.
+        if (onAssistantPage) requestSideChat(chatId);
+        else router.push(`/assistant?side=${encodeURIComponent(chatId)}`);
+    }
     const {
         statuses: assistantHistoryStatuses,
         clearStatus: clearAssistantHistoryStatus,
-    } = useAssistantHistoryStatuses({ activeChatId: routeChatId, chatIds });
+    } = useAssistantHistoryStatuses({
+        activeChatId: routeChatId,
+        sideChatId,
+        chatIds,
+    });
     // Fade the contents in whenever the sidebar opens, from its own toggle or
     // from a page calling setSidebarOpen, but not when it is already open on
     // first render.
@@ -310,7 +330,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             <div
                 className={cn(
                     isOpen
-                        ? "w-64 h-[calc(100dvh-1rem)] md:h-[calc(100dvh-1.5rem)]"
+                        ? "w-62 h-[calc(100dvh-1rem)] md:h-[calc(100dvh-1.5rem)]"
                         : "max-md:hidden w-[46px] md:h-[calc(100dvh-1.5rem)] h-auto pointer-events-none md:pointer-events-auto",
                     // Collapsed, the ends are full semicircles. The radii are
                     // lengths, not rounded-full, so the change animates with
@@ -600,6 +620,20 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                         assistantHistoryStatuses[
                                                             chat.id
                                                         ]
+                                                    }
+                                                    onOpenInSideChat={
+                                                        // Assistant chats only: a
+                                                        // project's chats open in
+                                                        // its own workspace. Not a
+                                                        // chat already on screen.
+                                                        chat.project_id ||
+                                                        chat.id === routeChatId ||
+                                                        chat.id === sideChatId
+                                                            ? undefined
+                                                            : () =>
+                                                                  openInSideChat(
+                                                                      chat.id,
+                                                                  )
                                                     }
                                                     onSelect={() => {
                                                         clearAssistantHistoryStatus(

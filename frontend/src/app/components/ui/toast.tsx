@@ -2,16 +2,21 @@
 
 /**
  * Web adapter for the shared toast system. Mount `<AppToasts />` once in the
- * root providers. It renders the viewport and raises a single offline
- * notice while the browser reports no connection.
+ * root providers. It renders the viewport, draws every error notice as a
+ * `WarningPopup`, and raises a single offline notice while the browser
+ * reports no connection.
  */
 
 import { useEffect } from "react";
 import {
+    ToastActionsUI,
     ToastViewportUI,
     dismissToast,
     showToast,
+    toastHasActions,
+    useToasts,
 } from "@/shared/ui/ToastUI";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
 
 export {
     ToastViewportUI,
@@ -65,5 +70,25 @@ export function useOfflineNotice() {
 
 export function AppToasts() {
     useOfflineNotice();
-    return <ToastViewportUI position="bottom-center" />;
+    const warnings = useToasts().filter((toast) => toast.tone === "error");
+
+    return (
+        <>
+            <ToastViewportUI showErrors={false} />
+            {warnings.map((toast) => (
+                <WarningPopup
+                    key={toast.id}
+                    open
+                    title={toast.title}
+                    message={toast.message}
+                    onClose={() => dismissToast(toast.id)}
+                    actions={
+                        toastHasActions(toast) ? (
+                            <ToastActionsUI toast={toast} />
+                        ) : undefined
+                    }
+                />
+            ))}
+        </>
+    );
 }

@@ -1,16 +1,27 @@
 "use client";
 
 import { findPendingAskInput } from "@/app/lib/pendingAskInput";
-import { useCallback, useMemo, useState, useRef, useEffect } from "react";
-import { createPortal, flushSync } from "react-dom";
+import {
+    useCallback,
+    useMemo,
+    useState,
+    useRef,
+    useEffect,
+    type CSSProperties,
+    type ReactElement,
+} from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
     ArrowDown,
+    Columns2,
+    History,
     PanelRight,
     Pencil,
     Plus,
     Trash2,
     Users,
+    X,
     Zap,
 } from "lucide-react";
 import { UserMessage } from "./UserMessage";
@@ -18,20 +29,18 @@ import { AssistantMessage } from "./AssistantMessage";
 import { ChatInput } from "./ChatInput";
 import { InitialView } from "./InitialView";
 import { QuickActionsModal } from "./QuickActionsModal";
-import { AddDocumentsModal } from "@/app/components/modals/AddDocumentsModal";
 import { useQuickActions } from "@/app/hooks/useQuickActions";
 import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatInputPrompt } from "./ChatInputPrompt";
 import { ResponseSelectionMenuUI } from "@/shared/ui/ResponseSelectionMenuUI";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
+import { assistantSidePanelTabId } from "./AssistantSidePanel";
+import { AssistantDocumentPanelHost } from "./AssistantDocumentPanelHost";
 import {
-    AssistantSidePanel,
-    assistantSidePanelTabId,
-    reorderAssistantSidePanelTabs,
-    upsertAssistantSidePanelTab,
-    type AssistantTabDropPosition,
-    type AssistantSidePanelTab,
-} from "./AssistantSidePanel";
+    useAssistantDocumentPanel,
+    type AssistantDocumentPanel,
+} from "./useAssistantDocumentPanel";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { ChatAccessModal } from "./ChatAccessModal";
 import type {
@@ -40,7 +49,6 @@ import type {
     Citation,
     EditAnnotation,
     Document,
-    PanelDocument,
     Message,
 } from "../shared/types";
 import {
@@ -48,21 +56,21 @@ import {
     panelDocumentFromCitation,
     panelDocumentType,
 } from "../shared/types";
-import { useSidebar } from "@/app/contexts/SidebarContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { usePageChrome } from "@/app/contexts/PageChromeContext";
-import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
-import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
 import { resolvePanelDocumentVersionResult } from "./panelDocumentVersion";
 import { LIQUID_GLASS_TRANSLUCENT_ACTION_CLASS } from "@/app/components/ui/liquid-surface";
-import { HeaderButtonUI, HeaderButtonsUI } from "@/shared/ui/HeaderButtonsUI";
+import {
+    HeaderButtonUI,
+    HeaderButtonsUI,
+    headerButtonClassName,
+} from "@/shared/ui/HeaderButtonsUI";
 import {
     HeaderActionsMenu,
     type HeaderActionsMenuItem,
 } from "@/app/components/shared/HeaderActionsMenu";
 import { PermissionDeniedPopup } from "@/app/components/popups/PermissionDeniedPopup";
 import { RenameModal } from "@/app/components/modals/RenameModal";
-import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ApiKeyMissingPopup } from "@/app/components/popups/ApiKeyMissingPopup";
 import {
@@ -70,12 +78,8 @@ import {
     providerLabel,
 } from "@/app/lib/modelAvailability";
 import { can, roleFrom } from "@/app/lib/permissions";
-import {
-    getDocument,
-    renameProjectDocument,
-    renameLibraryDocument,
-    deleteDocument,
-} from "@/app/lib/mikeApi";
+import { AssistantChatHistoryMenu } from "./AssistantChatHistoryMenu";
+import { cn } from "@/app/lib/utils";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 
 interface Props {
@@ -135,23 +139,59 @@ interface Props {
     onInitialSubmit?: (message: Message) => void;
     /** Leaves this chat for the new-chat view, without cancelling its answer. */
     onNewChat: () => void;
+    /** After this chat is deleted. Defaults to the assistant's new-chat page. */
+    onChatDeleted?: () => void;
 }
 
-const ASSISTANT_PANEL_TRANSITION_MS = 500;
+interface ColumnProps extends Props {
+    /** The side panel this chat opens its documents in. */
+    documentPanel: AssistantDocumentPanel;
+    /** Identifies this chat to the panel when two share the page. */
+    paneId?: string;
+    /** Offers "Open side chat" in the chat actions. */
+    onOpenSideChat?: () => void;
+    /**
+     * Shows another chat in this column. Offers the chat history: as a header
+     * button on a new chat, and as "Load chat" in the chat actions.
+     */
+    onLoadChat?: (chatId: string) => void;
+    /** The chat in the other column, which the history list leaves out. */
+    hiddenChatId?: string | null;
+    /** Makes this the side chat, and offers closing it. */
+    onCloseSideChat?: () => void;
+    /** This column's share of the width when two chats split the page. */
+    widthShare?: number;
+    /** Quotes a passage of this chat in the chat beside it. */
+    onAskInSideChat?: (excerpt: MessageExcerpt) => void;
+    /** A passage quoted from the chat beside this one, for the composer. */
+    incomingExcerpt?: { id: number; excerpt: MessageExcerpt } | null;
+    onIncomingExcerptAdded?: () => void;
+}
+
 const MOBILE_BREAKPOINT_PX = 768;
 const DEFAULT_ASSISTANT_BOTTOM_PADDING = 116;
 const CHAT_MESSAGE_TOP_PADDING = 76;
 const SCROLL_BUTTON_INPUT_GAP = 16;
 const CHAT_INPUT_BOTTOM_OFFSET = 12;
 
-function isSmallScreen() {
+/**
+ * The assistant page for one chat: the conversation with its document side
+ * panel. A page showing two chats composes `AssistantChatColumn` itself.
+ */
+export function ChatView(props: Props) {
+    const documentPanel = useAssistantDocumentPanel();
     return (
-        typeof window !== "undefined" &&
-        window.innerWidth < MOBILE_BREAKPOINT_PX
+        // Clipped so the panel sliding in from past the right edge cannot be
+        // scrolled to (see the assistant page).
+        <div className="relative flex h-full w-full overflow-x-clip">
+            <AssistantChatColumn {...props} documentPanel={documentPanel} />
+            <AssistantDocumentPanelHost panel={documentPanel} />
+        </div>
     );
 }
 
-export function ChatView({
+/** One chat's conversation, composer and header actions. */
+export function AssistantChatColumn({
     chatId,
     chat,
     chatModel,
@@ -167,8 +207,45 @@ export function ChatView({
     chatLoading,
     onInitialSubmit,
     onNewChat,
-}: Props) {
+    onChatDeleted,
+    documentPanel,
+    paneId = "primary",
+    onOpenSideChat,
+    onLoadChat,
+    hiddenChatId,
+    onCloseSideChat,
+    widthShare,
+    onAskInSideChat,
+    incomingExcerpt,
+    onIncomingExcerptAdded,
+}: ColumnProps) {
     const router = useRouter();
+    const {
+        tabs,
+        activeTabId,
+        upsertTab,
+        show: showPanel,
+        reloadingDocIds,
+        reloadingEditIds,
+        resolvedEditStatuses,
+        handleEditResolveStart,
+        handleEditResolved,
+        handleEditError,
+        handleCloseAnnotation,
+        registerPane,
+        setActivePane,
+    } = documentPanel;
+    const columnRef = useRef<HTMLDivElement>(null);
+    const isSideChat = !!onCloseSideChat;
+    // The header actions render twice (in the column, and in the page chrome
+    // on a small screen); the history menu opens on the one that asked.
+    const [historyOpenIn, setHistoryOpenIn] = useState<
+        "desktop" | "mobile" | null
+    >(null);
+    const loadChatRequestedRef = useRef<"desktop" | "mobile" | null>(null);
+    const actionsAnchorRefs = useRef<
+        Partial<Record<"desktop" | "mobile", HTMLSpanElement | null>>
+    >({});
     // The model is what we asked for, so it identifies whose key was rejected.
     const rejectedKeyProvider = useMemo(
         () =>
@@ -177,15 +254,8 @@ export function ChatView({
                 : null,
         [rejectedApiKey],
     );
-    const [deleteTarget, setDeleteTarget] = useState<PanelDocument | null>(null);
-    const [deletingDocument, setDeletingDocument] = useState(false);
-    const [tabs, setTabs] = useState<AssistantSidePanelTab[]>([]);
-    const [activeTabId, setActiveTabId] = useState<string | null>(null);
-    const [panelMounted, setPanelMounted] = useState(false);
-    const [panelVisible, setPanelVisible] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
     const [shareOpen, setShareOpen] = useState(false);
-    const [openDocumentsModalOpen, setOpenDocumentsModalOpen] = useState(false);
     const [quickActionsModalOpen, setQuickActionsModalOpen] = useState(false);
     // A new chat shows the quick actions; a started one only edits them.
     const isNewChat = !!onInitialSubmit;
@@ -210,16 +280,6 @@ export function ChatView({
     const [workflowModalInitialId, setWorkflowModalInitialId] = useState<
         string | undefined
     >();
-    const [reloadingDocIds, setReloadingDocIds] = useState<Set<string>>(
-        () => new Set(),
-    );
-    // Per-edit in-flight set — disables Accept/Reject on only the one
-    // edit currently being resolved, so sibling edits in the same message
-    // (and their twins in DocumentContent) stay clickable.
-    const [reloadingEditIds, setReloadingEditIds] = useState<Set<string>>(
-        () => new Set(),
-    );
-    const { setSidebarOpen } = useSidebar();
     const { mobileActionsContainer } = usePageChrome();
     const {
         chats,
@@ -231,124 +291,9 @@ export function ChatView({
         chat ??
         null;
     const activeChatRole = activeChat ? roleFrom(activeChat) : null;
-    const panelCloseTimerRef = useRef<number | null>(null);
     const activeTab = tabs.find((tab) => tab.id === activeTabId);
     const activeCitation =
         activeTab?.kind === "citation" ? activeTab.citation : null;
-
-    const showPanel = useCallback(() => {
-        if (panelCloseTimerRef.current !== null) {
-            window.clearTimeout(panelCloseTimerRef.current);
-            panelCloseTimerRef.current = null;
-        }
-        flushSync(() => {
-            setSidebarOpen(false);
-        });
-
-        if (panelMounted) {
-            setPanelVisible(true);
-            return;
-        }
-
-        setPanelVisible(false);
-        setPanelMounted(true);
-        requestAnimationFrame(() =>
-            requestAnimationFrame(() => setPanelVisible(true)),
-        );
-    }, [panelMounted, setSidebarOpen]);
-
-    const restoreSidebarAfterPanelClose = useCallback(() => {
-        if (!isSmallScreen()) setSidebarOpen(true);
-    }, [setSidebarOpen]);
-
-    useEffect(
-        () => () => {
-            if (panelCloseTimerRef.current !== null) {
-                window.clearTimeout(panelCloseTimerRef.current);
-            }
-        },
-        [],
-    );
-
-    const hidePanel = useCallback(
-        (afterHidden: () => void) => {
-            if (panelCloseTimerRef.current !== null) {
-                window.clearTimeout(panelCloseTimerRef.current);
-            }
-            setPanelVisible(false);
-            panelCloseTimerRef.current = window.setTimeout(() => {
-                panelCloseTimerRef.current = null;
-                afterHidden();
-            }, ASSISTANT_PANEL_TRANSITION_MS);
-        },
-        [],
-    );
-
-    const unmountPanel = useCallback(
-        (afterUnmount?: () => void) => {
-            setPanelMounted(false);
-            restoreSidebarAfterPanelClose();
-            afterUnmount?.();
-        },
-        [restoreSidebarAfterPanelClose],
-    );
-
-    const closeAllTabs = useCallback(() => {
-        hidePanel(() =>
-            unmountPanel(() => {
-                setTabs([]);
-                setActiveTabId(null);
-            }),
-        );
-    }, [hidePanel, unmountPanel]);
-
-    const closeTab = useCallback(
-        (id: string) => {
-            // Closing the last tab leaves the panel open on its "Open Documents"
-            // placeholder; only the panel's own close control dismisses it.
-            setTabs((prev) => {
-                const next = prev.filter((t) => t.id !== id);
-                if (activeTabId === id) {
-                    const idx = prev.findIndex((t) => t.id === id);
-                    const neighbour = next[idx] ?? next[idx - 1] ?? next[0];
-                    setActiveTabId(neighbour?.id ?? null);
-                }
-                return next;
-            });
-        },
-        [activeTabId],
-    );
-
-    const reorderTabs = useCallback(
-        (
-            draggedTabId: string,
-            targetTabId: string,
-            position: AssistantTabDropPosition,
-        ) => {
-            setTabs((current) =>
-                reorderAssistantSidePanelTabs(
-                    current,
-                    draggedTabId,
-                    targetTabId,
-                    position,
-                ),
-            );
-        },
-        [],
-    );
-
-    /**
-     * One tab per document. New citations, edits and version selections update
-     * that tab; changing versions resets version-specific scroll and warnings.
-     */
-    const upsertTab = useCallback(
-        (tab: AssistantSidePanelTab) => {
-            setTabs((prev) => upsertAssistantSidePanelTab(prev, tab));
-            setActiveTabId(tab.id);
-            showPanel();
-        },
-        [showPanel],
-    );
 
     /**
      * Say why a document behind this chat would not open.
@@ -530,169 +475,6 @@ export function ChatView({
             });
         },
         [openDocument],
-    );
-
-    const [resolvedEditStatuses, setResolvedEditStatuses] = useState<
-        Record<string, "accepted" | "rejected">
-    >({});
-
-    const handleEditResolveStart = useCallback(
-        (args: {
-            editId: string;
-            documentId: string;
-            verb: "accept" | "reject";
-        }) => {
-            setReloadingDocIds((prev) => {
-                if (prev.has(args.documentId)) return prev;
-                const next = new Set(prev);
-                next.add(args.documentId);
-                return next;
-            });
-            setReloadingEditIds((prev) => {
-                if (prev.has(args.editId)) return prev;
-                const next = new Set(prev);
-                next.add(args.editId);
-                return next;
-            });
-        },
-        [],
-    );
-
-    const handleEditResolved = useCallback(
-        (args: {
-            editId: string;
-            documentId: string;
-            status: "accepted" | "rejected";
-            versionId: string | null;
-            downloadUrl: string | null;
-        }) => {
-            setResolvedEditStatuses((prev) => ({
-                ...prev,
-                [args.editId]: args.status,
-            }));
-            setReloadingDocIds((prev) => {
-                if (!prev.has(args.documentId)) return prev;
-                const next = new Set(prev);
-                next.delete(args.documentId);
-                return next;
-            });
-            setReloadingEditIds((prev) => {
-                if (!prev.has(args.editId)) return prev;
-                const next = new Set(prev);
-                next.delete(args.editId);
-                return next;
-            });
-            // Propagate the new status onto any open edit-tab for this
-            // edit so DocumentContent's Accept/Reject buttons flip and disable
-            // (their sync effect keys off edit.status). Without this, a
-            // resolve triggered from the inline EditCard or BulkEditActions
-            // leaves the panel buttons looking live.
-            setTabs((prev) =>
-                prev.map((t) =>
-                    t.kind === "edit" && t.edit.edit_id === args.editId
-                        ? {
-                              ...t,
-                              edit: { ...t.edit, status: args.status },
-                          }
-                        : t,
-                ),
-            );
-            // Accept/reject mutates bytes for this document's current
-            // version; drop the cache so the next DocxView render (or an
-            // explicit re-open) fetches the fresh file.
-            invalidateDocxBytes(args.documentId);
-        },
-        [],
-    );
-
-    const patchTab = useCallback(
-        (
-            tabId: string,
-            patch: {
-                warning?: string | null;
-                initialScrollTop?: number | null;
-            },
-        ) => {
-            setTabs((prev) => {
-                const idx = prev.findIndex((t) => t.id === tabId);
-                if (idx < 0) return prev;
-                const copy = prev.slice();
-                copy[idx] = { ...copy[idx], ...patch };
-                return copy;
-            });
-        },
-        [],
-    );
-
-    const handleEditError = useCallback(
-        (args: {
-            editId?: string;
-            documentId: string;
-            versionId?: string | null;
-            message: string;
-        }) => {
-            // Surface the warning on every tab tied to this document.
-            setTabs((prev) =>
-                prev.map((t) =>
-                    t.document.document_id === args.documentId
-                        ? { ...t, warning: args.message }
-                        : t,
-                ),
-            );
-            setReloadingDocIds((prev) => {
-                if (!prev.has(args.documentId)) return prev;
-                const next = new Set(prev);
-                next.delete(args.documentId);
-                return next;
-            });
-            if (args.editId) {
-                setReloadingEditIds((prev) => {
-                    if (!prev.has(args.editId!)) return prev;
-                    const next = new Set(prev);
-                    next.delete(args.editId!);
-                    return next;
-                });
-            }
-        },
-        [],
-    );
-
-    const handleWarningDismiss = useCallback(
-        (tabId: string) => {
-            patchTab(tabId, { warning: null });
-        },
-        [patchTab],
-    );
-
-    /**
-     * Dismisses a tab's citation quote or tracked change, leaving the document
-     * open. This drops the tab to a plain document view rather than hiding the
-     * section inside the panel: reopening the same citation upserts an
-     * identical tab, which by design produces no prop change, so a panel-local
-     * dismissal would leave the user unable to get the quote back.
-     */
-    const handleCloseAnnotation = useCallback((tabId: string) => {
-        setTabs((prev) => {
-            const index = prev.findIndex((tab) => tab.id === tabId);
-            if (index < 0 || prev[index].kind === "document") return prev;
-            const { id, document, warning, initialScrollTop } = prev[index];
-            const next = prev.slice();
-            next[index] = {
-                kind: "document",
-                id,
-                document,
-                warning,
-                initialScrollTop,
-            };
-            return next;
-        });
-    }, []);
-
-    const handleScrollChange = useCallback(
-        (tabId: string, scrollTop: number) => {
-            patchTab(tabId, { initialScrollTop: scrollTop });
-        },
-        [patchTab],
     );
 
     const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -898,17 +680,6 @@ export function ChatView({
     ]);
     /* eslint-enable react-hooks/set-state-in-effect */
 
-    useEffect(() => {
-        if (panelMounted && window.innerWidth < 768) {
-            document.body.style.overflow = "hidden";
-        } else {
-            document.body.style.overflow = "unset";
-        }
-        return () => {
-            document.body.style.overflow = "unset";
-        };
-    }, [panelMounted]);
-
     const handleShareChat = () => {
         if (!activeChat) return;
         if (!can(activeChatRole, "access.manage")) {
@@ -964,7 +735,8 @@ export function ChatView({
         }
         try {
             await deleteChat(activeChat.id);
-            router.push("/assistant");
+            if (onChatDeleted) onChatDeleted();
+            else router.push("/assistant");
         } catch (error) {
             setActionError({
                 title: "Chat not deleted",
@@ -998,36 +770,130 @@ export function ChatView({
         },
     ];
 
-    const renderChatHeaderActions = () => (
-        <HeaderButtonsUI className="pointer-events-auto backdrop-blur-2xl">
-            {!isNewChat && (
-                <HeaderButtonUI
-                    iconOnly
-                    aria-label="New chat"
-                    title="New chat"
-                    onClick={onNewChat}
+    const renderChatHeaderActions = (mobile = false) => {
+        const slot = mobile ? "mobile" : "desktop";
+        const historyMenu = (trigger: ReactElement) =>
+            onLoadChat ? (
+                <AssistantChatHistoryMenu
+                    open={historyOpenIn === slot}
+                    onOpenChange={(open) => setHistoryOpenIn(open ? slot : null)}
+                    trigger={trigger}
+                    currentChatId={chatId ?? ""}
+                    hiddenChatId={hiddenChatId}
+                    onLoad={onLoadChat}
+                />
+            ) : null;
+        return (
+            <HeaderButtonsUI className="pointer-events-auto backdrop-blur-2xl">
+                {isNewChat ? (
+                    // Nothing to leave yet, so the slot offers past chats.
+                    historyMenu(
+                        <button
+                            type="button"
+                            aria-label="Chat history"
+                            title="Chat history"
+                            className={headerButtonClassName({
+                                iconOnly: true,
+                            })}
+                        >
+                            <History className="h-4 w-4" />
+                        </button>,
+                    )
+                ) : (
+                    <HeaderButtonUI
+                        iconOnly
+                        aria-label="New chat"
+                        title="New chat"
+                        onClick={onNewChat}
+                    >
+                        <Plus className="h-4 w-4" />
+                    </HeaderButtonUI>
+                )}
+                {/* "Load chat" swaps the actions for the chat history, which
+                    opens from the same button: an anchor laid over it. */}
+                <span
+                    ref={(element) => {
+                        actionsAnchorRefs.current[slot] = element;
+                    }}
+                    className="relative inline-flex"
                 >
-                    <Plus className="h-4 w-4" />
-                </HeaderButtonUI>
-            )}
-            <HeaderActionsMenu
-                title="Chat actions"
-                items={[
-                    {
-                        label: "Open side panel",
-                        icon: PanelRight,
-                        onSelect: showPanel,
-                    },
-                    {
-                        label: "Edit quick actions",
-                        icon: Zap,
-                        onSelect: () => setQuickActionsModalOpen(true),
-                    },
-                    ...(isNewChat ? [] : chatActionItems),
-                ]}
-            />
-        </HeaderButtonsUI>
-    );
+                <HeaderActionsMenu
+                    title="Chat actions"
+                    // One header menu at a time: opening another closes it.
+                    modal={false}
+                    onCloseAutoFocus={(event) => {
+                        if (loadChatRequestedRef.current !== slot) return;
+                        // The history opens once this menu has closed, and
+                        // takes the focus this would hand back.
+                        loadChatRequestedRef.current = null;
+                        event.preventDefault();
+                        setHistoryOpenIn(slot);
+                    }}
+                    items={[
+                        ...(onLoadChat && !isNewChat
+                            ? [
+                                  {
+                                      label: "Load chat",
+                                      icon: History,
+                                      onSelect: () => {
+                                          loadChatRequestedRef.current = slot;
+                                      },
+                                  },
+                              ]
+                            : []),
+                        {
+                            label: "Open side panel",
+                            icon: PanelRight,
+                            onSelect: showPanel,
+                        },
+                        // Two chats need a wide page.
+                        ...(onOpenSideChat && !mobile
+                            ? [
+                                  {
+                                      label: "Open side chat",
+                                      icon: Columns2,
+                                      onSelect: onOpenSideChat,
+                                  },
+                              ]
+                            : []),
+                        ...(onCloseSideChat
+                            ? [
+                                  {
+                                      label: "Close side chat",
+                                      icon: X,
+                                      onSelect: onCloseSideChat,
+                                  },
+                              ]
+                            : []),
+                        {
+                            label: "Edit quick actions",
+                            icon: Zap,
+                            onSelect: () => setQuickActionsModalOpen(true),
+                        },
+                        ...(isNewChat ? [] : chatActionItems),
+                    ]}
+                />
+                {!isNewChat &&
+                    historyMenu(
+                        <span
+                            aria-hidden="true"
+                            tabIndex={-1}
+                            className="pointer-events-none absolute inset-0"
+                            // The menu hands focus back to its trigger when
+                            // it closes from the keyboard or a choice, and
+                            // not when the reader pressed elsewhere. Pass it
+                            // on to the button they actually used.
+                            onFocus={() =>
+                                actionsAnchorRefs.current[slot]
+                                    ?.querySelector("button")
+                                    ?.focus()
+                            }
+                        />,
+                    )}
+                </span>
+            </HeaderButtonsUI>
+        );
+    };
 
     const renderHeaderActionSlots = () => (
         <>
@@ -1038,10 +904,11 @@ export function ChatView({
                 {renderChatHeaderActions()}
             </div>
 
-            {mobileActionsContainer
+            {/* The side chat is not shown on a small screen. */}
+            {mobileActionsContainer && !isSideChat
                 ? createPortal(
                       <div className="flex min-w-0 items-center justify-end overflow-visible py-2 -my-2">
-                          {renderChatHeaderActions()}
+                          {renderChatHeaderActions(true)}
                       </div>,
                       mobileActionsContainer,
                   )
@@ -1054,10 +921,64 @@ export function ChatView({
     const canWrite =
         accessResolved && (canSend === undefined || canSend === true);
 
+    // The composer mounts once access resolves; the passage waits for it.
+    const addedExcerptIdRef = useRef<number | null>(null);
+    useEffect(() => {
+        const input = chatInputRef.current;
+        if (!incomingExcerpt || !input || !canWrite) return;
+        if (addedExcerptIdRef.current === incomingExcerpt.id) return;
+        addedExcerptIdRef.current = incomingExcerpt.id;
+        input.addExcerpt(incomingExcerpt.excerpt);
+        onIncomingExcerptAdded?.();
+    }, [incomingExcerpt, canWrite, chatLoading, onIncomingExcerptAdded]);
+
+    // The panel keeps what it is handed, so hand it a stable way to reach
+    // the latest handler: registering on every new handler would re-render
+    // the panel, and with it this column, without end.
+    const openAttachedDocumentRef = useRef(handleAttachedDocumentClick);
+    useEffect(() => {
+        openAttachedDocumentRef.current = handleAttachedDocumentClick;
+    }, [handleAttachedDocumentClick]);
+    useEffect(
+        () =>
+            registerPane(paneId, {
+                canWrite,
+                chatLoading: !!chatLoading,
+                addDocument: (document) =>
+                    chatInputRef.current?.addDoc(document),
+                openDocument: (document) =>
+                    openAttachedDocumentRef.current(document),
+            }),
+        [registerPane, paneId, canWrite, chatLoading],
+    );
+
     return (
-        <div className="h-full w-full flex relative">
+        <>
             {/* Chat column */}
-            <div className="flex min-w-0 flex-col h-full flex-1 relative">
+            <div
+                ref={columnRef}
+                data-chat-pane={paneId}
+                onPointerDownCapture={() => setActivePane(paneId)}
+                onFocusCapture={() => setActivePane(paneId)}
+                className={cn(
+                    "min-w-0 flex-col h-full flex-1 relative",
+                    // The split applies only where both chats show; alone on
+                    // a small screen the primary chat takes the full width.
+                    widthShare !== undefined &&
+                        "md:[flex-grow:var(--chat-width-share)]",
+                    // A second chat needs the room; small screens keep one.
+                    isSideChat ? "hidden md:flex" : "flex",
+                    // Beside another chat, nothing may spill over the line.
+                    widthShare !== undefined && "overflow-x-clip",
+                )}
+                style={
+                    widthShare === undefined
+                        ? undefined
+                        : ({
+                              "--chat-width-share": widthShare,
+                          } as CSSProperties)
+                }
+            >
                 {renderHeaderActionSlots()}
                 {onInitialSubmit ? (
                     <InitialView
@@ -1319,6 +1240,8 @@ export function ChatView({
 
             <ResponseSelectionMenuUI
                 canAsk={canSend === undefined || canSend === true}
+                scopeRef={columnRef}
+                onAskInSideChat={onAskInSideChat}
                 onAddExcerpt={(excerpt) =>
                     chatInputRef.current?.addExcerpt(excerpt)
                 }
@@ -1382,121 +1305,6 @@ export function ChatView({
                 onClose={() => setActionError(null)}
             />
 
-            <ConfirmPopup
-                open={!!deleteTarget}
-                title="Delete file?"
-                message={`Delete “${deleteTarget?.title ?? "this file"}” and its versions? This cannot be undone.`}
-                confirmLabel="Delete file"
-                confirmVariant="danger"
-                confirmStatus={deletingDocument ? "loading" : "idle"}
-                onCancel={() => { if (!deletingDocument) setDeleteTarget(null); }}
-                onConfirm={() => {
-                    if (!deleteTarget || deletingDocument || !canWrite) return;
-                    const target = deleteTarget;
-                    setDeletingDocument(true);
-                    void (async () => {
-                        try {
-                            const file = await getDocument(target.document_id);
-                            if (file.can_delete !== true) {
-                                setActionError({ title: "Delete failed", message: "You do not have permission to delete this file." });
-                                return;
-                            }
-                            await deleteDocument(target.document_id);
-                            setTabs((current) => {
-                                const remaining = current.filter((tab) => tab.document.document_id !== target.document_id);
-                                setActiveTabId((id) => remaining.some((tab) => tab.id === id) ? id : remaining[0]?.id ?? null);
-                                return remaining;
-                            });
-                            setDeleteTarget(null);
-                        } catch (cause) {
-                            setActionError({ title: "Delete failed", message: userFacingApiError(cause, "This file could not be deleted. Please try again.") });
-                        } finally { setDeletingDocument(false); }
-                    })();
-                }}
-            />
-
-            {panelMounted && (
-                <div
-                    className={`fixed inset-0 z-40 flex justify-center p-3 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] md:relative md:inset-auto md:z-auto md:block md:h-full md:min-w-0 md:flex-shrink-0 md:p-0 ${panelVisible ? "translate-x-0" : "translate-x-full"}`}
-                >
-                    <AssistantSidePanel
-                        tabs={tabs}
-                        canEdit={canWrite}
-                        documentActions={(document) => ({
-                            addToChatDisabled: !canWrite || !!chatLoading,
-                            onAddToChat: async () => {
-                                const file = await getDocument(
-                                    document.document_id,
-                                );
-                                chatInputRef.current?.addDoc(file);
-                            },
-                            onRename: async (filename) => {
-                                const file = await getDocument(
-                                    document.document_id,
-                                );
-                                const updated = file.project_id
-                                    ? await renameProjectDocument(
-                                          file.project_id,
-                                          file.id,
-                                          filename,
-                                      )
-                                    : await renameLibraryDocument(
-                                          file.library_kind === "template"
-                                              ? "templates"
-                                              : "files",
-                                          file.id,
-                                          filename,
-                                      );
-                                setTabs((current) =>
-                                    current.map((tab) =>
-                                        tab.document.document_id === file.id
-                                            ? {
-                                                  ...tab,
-                                                  document: {
-                                                      ...tab.document,
-                                                      title: updated.filename,
-                                                  },
-                                              }
-                                            : tab,
-                                    ),
-                                );
-                            },
-                            onDelete: canWrite ? () => setDeleteTarget(document) : undefined,
-                        })}
-                        activeTabId={activeTabId}
-                        onActivateTab={setActiveTabId}
-                        onCloseTab={closeTab}
-                        onCloseAll={closeAllTabs}
-                        onVersionChange={(tabId, version) => setTabs((current) => current.map((tab) =>
-                            tab.id === tabId ? { id: tab.id, kind: "document", document: panelDocumentAtVersion(tab.document, version) } : tab))}
-                        onReorderTabs={reorderTabs}
-                        isEditorReloading={(documentId) =>
-                            reloadingDocIds.has(documentId)
-                        }
-                        isEditReloading={(editId) =>
-                            reloadingEditIds.has(editId)
-                        }
-                        onEditResolveStart={handleEditResolveStart}
-                        onEditResolved={handleEditResolved}
-                        onEditError={handleEditError}
-                        onWarningDismiss={handleWarningDismiss}
-                        onCloseAnnotation={handleCloseAnnotation}
-                        onScrollChange={handleScrollChange}
-                        onOpenDocuments={() => setOpenDocumentsModalOpen(true)}
-                    />
-                </div>
-            )}
-
-            <AddDocumentsModal
-                open={openDocumentsModalOpen}
-                onClose={() => setOpenDocumentsModalOpen(false)}
-                onSelect={(documents) => {
-                    setOpenDocumentsModalOpen(false);
-                    documents.forEach(handleAttachedDocumentClick);
-                }}
-                breadcrumb={["Assistant", "Open Documents"]}
-                uploadStateId="assistant-side-panel"
-            />
             <QuickActionsModal
                 open={quickActionsModalOpen}
                 onClose={() => setQuickActionsModalOpen(false)}
@@ -1504,6 +1312,6 @@ export function ChatView({
                 onSave={saveQuickAction}
                 onCreate={addQuickAction}
             />
-        </div>
+        </>
     );
 }

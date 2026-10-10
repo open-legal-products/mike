@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
     assistantSidePanelTabId,
+    defaultAssistantSidePanelWidth,
+    maxAssistantSidePanelWidth,
     mergeAssistantSidePanelTab,
     reorderAssistantSidePanelTabs,
     upsertAssistantSidePanelTab,
@@ -140,5 +142,24 @@ describe("reorderAssistantSidePanelTabs", () => {
         expect(reorderAssistantSidePanelTabs(tabs, "a", "b", "before")).toBe(
             tabs,
         );
+    });
+});
+
+describe("side panel width", () => {
+    it("opens at half the page beside one chat", () => {
+        expect(defaultAssistantSidePanelWidth(1456, 1)).toBe(700);
+    });
+
+    it("opens at two fifths of the page beside two chats", () => {
+        expect(defaultAssistantSidePanelWidth(1456, 2)).toBe(560);
+        expect(defaultAssistantSidePanelWidth(2056, 2)).toBe(800);
+    });
+
+    it("leaves every chat its minimum width", () => {
+        expect(maxAssistantSidePanelWidth(1456, 1)).toBe(1000);
+        expect(maxAssistantSidePanelWidth(1456, 2)).toBe(600);
+        // Never below the panel's own minimum, however narrow the page.
+        expect(maxAssistantSidePanelWidth(900, 2)).toBe(300);
+        expect(defaultAssistantSidePanelWidth(1100, 2)).toBe(300);
     });
 });

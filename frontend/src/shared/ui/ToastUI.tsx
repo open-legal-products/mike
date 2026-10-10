@@ -6,7 +6,10 @@
  * The store is a module singleton so any layer, including non-React code
  * such as the API client, can raise a notification with `showToast`. React
  * subscribes through `useToasts`, and `ToastViewportUI` renders the stack
- * once near the root of each client.
+ * once near the root of each client, at the top centre of the page.
+ *
+ * The viewport also owns the slot a web `WarningPopup` renders into, so
+ * popups and toasts share one column and never cover each other.
  *
  * Error toasts stay until dismissed when they carry actions, because a
  * "Retry" that vanishes mid-read is worse than none. Everything else
@@ -18,6 +21,7 @@ import {
     useEffect,
     useRef,
     useSyncExternalStore,
+    type ReactElement,
 } from "react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -55,6 +59,70 @@ export function focusToast(id: string): boolean {
     if (!node) return false;
     node.focus();
     return true;
+}
+
+let noticeStackSlot: HTMLElement | null = null;
+const noticeStackSlotListeners = new Set<() => void>();
+
+function setNoticeStackSlot(node: HTMLElement | null) {
+    if (noticeStackSlot === node) return;
+    noticeStackSlot = node;
+    for (const listener of noticeStackSlotListeners) listener();
+}
+
+function subscribeNoticeStackSlot(listener: () => void) {
+    noticeStackSlotListeners.add(listener);
+    return () => {
+        noticeStackSlotListeners.delete(listener);
+    };
+}
+
+/**
+ * The element at the head of the mounted viewport's column, or null when no
+ * viewport is mounted. `WarningPopup` portals its card here so it stacks
+ * with the toasts instead of sitting on top of them.
+ */
+export function useNoticeStackSlot(): HTMLElement | null {
+    return useSyncExternalStore(
+        subscribeNoticeStackSlot,
+        () => noticeStackSlot,
+        () => null,
+    );
+}
+
+export function toastHasActions(toast: ToastRecord): boolean {
+    return Boolean(toast.actions?.length || toast.supportHref);
+}
+
+/** A toast's "Contact support" link and action buttons, for a card's action row. */
+export function ToastActionsUI({ toast }: { toast: ToastRecord }): ReactElement {
+    const runAction = async (action: ToastAction) => {
+        if (!action.keepOpen) dismissToast(toast.id);
+        await action.onClick();
+    };
+
+    return (
+        <>
+            {toast.supportHref && (
+                <a
+                    href={toast.supportHref}
+                    className={noticeActionClassName()}
+                >
+                    {toast.supportLabel ?? "Contact support"}
+                </a>
+            )}
+            {toast.actions?.map((action) => (
+                <button
+                    key={action.label}
+                    type="button"
+                    onClick={() => void runAction(action)}
+                    className={noticeActionClassName()}
+                >
+                    {action.label}
+                </button>
+            ))}
+        </>
+    );
 }
 
 export function useToasts(): readonly ToastRecord[] {
@@ -107,13 +175,7 @@ function ToastItemUI({ toast }: { toast: ToastRecord }) {
         return clearTimer;
     }, [arm, clearTimer]);
 
-    const runAction = async (action: ToastAction) => {
-        if (!action.keepOpen) dismissToast(toast.id);
-        await action.onClick();
-    };
-
     const isError = toast.tone === "error";
-    const hasActions = Boolean(toast.actions?.length || toast.supportHref);
 
     // The card's look lives in NoticeCardUI, shared with WarningPopup. This
     // wrapper adds only toast behaviour: the timer, hover/focus pause, and
@@ -147,27 +209,8 @@ function ToastItemUI({ toast }: { toast: ToastRecord }) {
                 resume();
             }}
             actions={
-                hasActions ? (
-                    <>
-                        {toast.supportHref && (
-                            <a
-                                href={toast.supportHref}
-                                className={noticeActionClassName("white")}
-                            >
-                                {toast.supportLabel ?? "Contact support"}
-                            </a>
-                        )}
-                        {toast.actions?.map((action) => (
-                            <button
-                                key={action.label}
-                                type="button"
-                                onClick={() => void runAction(action)}
-                                className={noticeActionClassName("black")}
-                            >
-                                {action.label}
-                            </button>
-                        ))}
-                    </>
+                toastHasActions(toast) ? (
+                    <ToastActionsUI toast={toast} />
                 ) : undefined
             }
         />
@@ -175,17 +218,14 @@ function ToastItemUI({ toast }: { toast: ToastRecord }) {
 }
 
 export interface ToastViewportUIProps {
-    position?: "bottom-center" | "top-center";
+    /**
+     * Set to false when the client draws error notices itself. The web app
+     * does, with `WarningPopup`; the Word add-in has no popup and keeps the
+     * default.
+     */
+    showErrors?: boolean;
     className?: string;
 }
-
-const positionClass: Record<
-    NonNullable<ToastViewportUIProps["position"]>,
-    string
-> = {
-    "bottom-center": "bottom-5 left-1/2 -translate-x-1/2",
-    "top-center": "top-5 left-1/2 -translate-x-1/2",
-};
 
 /**
  * Renders the toast stack. Mount exactly once per client, near the root.
@@ -194,10 +234,13 @@ const positionClass: Record<
  * not to this container.
  */
 export function ToastViewportUI({
-    position = "bottom-center",
+    showErrors = true,
     className,
 }: ToastViewportUIProps) {
-    const items = useToasts();
+    const toasts = useToasts();
+    const items = showErrors
+        ? toasts
+        : toasts.filter((toast) => toast.tone !== "error");
 
     return (
         <div
@@ -208,12 +251,14 @@ export function ToastViewportUI({
             aria-label="Notifications"
             className={twMerge(
                 clsx(
-                    "pointer-events-none fixed z-[260] flex w-[min(92vw,460px)] flex-col gap-2 px-4",
-                    positionClass[position],
+                    "pointer-events-none fixed left-1/2 top-5 z-[260] flex w-[min(92vw,520px)] -translate-x-1/2 flex-col gap-2 px-4",
                 ),
                 className,
             )}
         >
+            {/* `contents`, so popups portalled in here are flex items of
+                the column and take its gap. */}
+            <div ref={setNoticeStackSlot} className="contents" />
             {items.map((toast) => (
                 <ToastItemUI key={toast.id} toast={toast} />
             ))}

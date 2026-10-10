@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, Loader2, Plus } from "lucide-react";
+import { ChevronDown, Loader2, Plus, X } from "lucide-react";
 import type { Chat } from "@/app/components/shared/types";
 import { ChatSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { FormTextInput } from "@/app/components/ui/form-field";
@@ -20,72 +20,38 @@ import { chatActivityAt, sortChatsByActivity } from "@/app/lib/chatActivity";
 const HEADER_PILL_CLASS = `flex shrink-0 items-center gap-1 rounded-full px-1 py-0.5 ${LIQUID_GLASS_SUBTLE_CLASS} backdrop-blur-xl`;
 const HEADER_PILL_BUTTON_CLASS = `flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${LIQUID_GLASS_HOVER_CLASS}`;
 
-interface ChatPanelHeaderProps {
-    chats: (Pick<Chat, "id" | "title"> &
-        Partial<Pick<Chat, "created_at" | "updated_at">>)[];
-    currentChatId: string;
-    currentTitle: string | null;
-    loading?: boolean;
-    responseStatuses?: Record<string, "loading" | "complete">;
-    newChatDisabled?: boolean;
-    actions: ReactNode;
-    onLoad: (chatId: string) => void;
-    onNewChat: () => void;
-    titleEdit?: {
-        value: string;
-        onChange: (title: string) => void;
-        onSave: () => void;
-        onCancel: () => void;
-    };
-}
+type HistoryChat = Pick<Chat, "id" | "title"> &
+    Partial<Pick<Chat, "created_at" | "updated_at">>;
 
-export function ChatPanelHeader({
+/**
+ * The rows of a chat history menu: most recently active first, narrowed to
+ * the search text, each with its answering mark and how long ago it was used.
+ */
+export function buildChatHistoryItems({
     chats,
     currentChatId,
-    currentTitle,
-    loading = false,
+    hiddenChatId,
+    query,
+    now,
     responseStatuses = {},
-    newChatDisabled = false,
-    actions,
-    onLoad,
-    onNewChat,
-    titleEdit,
-}: ChatPanelHeaderProps) {
-    const [historyOpen, setHistoryOpen] = useState(false);
-    const [query, setQuery] = useState("");
-    const [now, setNow] = useState(Date.now);
-    const titleInputRef = useRef<HTMLInputElement>(null);
-    const editingTitle = !!titleEdit;
-    const [previousEditingTitle, setPreviousEditingTitle] =
-        useState(editingTitle);
-    if (previousEditingTitle !== editingTitle) {
-        setPreviousEditingTitle(editingTitle);
-        if (editingTitle) setHistoryOpen(false);
-    }
-    const filteredChats = sortChatsByActivity(chats).filter((chat) =>
-            (chat.title ?? "New Chat")
-                .toLowerCase()
-                .includes(query.trim().toLowerCase()),
-        );
-
-    useEffect(() => {
-        if (!editingTitle) return;
-        // Wait for the actions menu to release its focus trap before focusing.
-        const timer = window.setTimeout(
-            () => titleInputRef.current?.focus(),
-            0,
-        );
-        return () => window.clearTimeout(timer);
-    }, [editingTitle]);
-
-    useEffect(() => {
-        if (!historyOpen) return;
-        const interval = window.setInterval(() => setNow(Date.now()), 60_000);
-        return () => window.clearInterval(interval);
-    }, [historyOpen]);
-
-    const historyItems: ChatHistoryDropdownItemUI[] = filteredChats.map(
-        (chat) => {
+}: {
+    chats: HistoryChat[];
+    currentChatId: string;
+    /** Left out of the list: the chat open in the other panel. */
+    hiddenChatId?: string | null;
+    query: string;
+    now: number;
+    responseStatuses?: Record<string, "loading" | "complete">;
+}): ChatHistoryDropdownItemUI[] {
+    return sortChatsByActivity(chats)
+        .filter(
+            (chat) =>
+                chat.id !== hiddenChatId &&
+                (chat.title ?? "New Chat")
+                    .toLowerCase()
+                    .includes(query.trim().toLowerCase()),
+        )
+        .map((chat) => {
             const title = chat.title ?? "New Chat";
             const activityAt = chatActivityAt(chat);
             const elapsed = formatElapsedTime(activityAt, now);
@@ -119,8 +85,80 @@ export function ChatPanelHeader({
                           }
                         : undefined,
             };
-        },
-    );
+        });
+}
+
+interface ChatPanelHeaderProps {
+    chats: HistoryChat[];
+    currentChatId: string;
+    currentTitle: string | null;
+    loading?: boolean;
+    responseStatuses?: Record<string, "loading" | "complete">;
+    newChatDisabled?: boolean;
+    actions: ReactNode;
+    onLoad: (chatId: string) => void;
+    onNewChat: () => void;
+    /** Left out of the history list: the chat open in the other panel. */
+    hiddenChatId?: string | null;
+    /** Offers a control that closes this chat panel. */
+    onClose?: () => void;
+    titleEdit?: {
+        value: string;
+        onChange: (title: string) => void;
+        onSave: () => void;
+        onCancel: () => void;
+    };
+}
+
+export function ChatPanelHeader({
+    chats,
+    currentChatId,
+    currentTitle,
+    loading = false,
+    responseStatuses = {},
+    newChatDisabled = false,
+    actions,
+    onLoad,
+    onNewChat,
+    hiddenChatId,
+    onClose,
+    titleEdit,
+}: ChatPanelHeaderProps) {
+    const [historyOpen, setHistoryOpen] = useState(false);
+    const [query, setQuery] = useState("");
+    const [now, setNow] = useState(Date.now);
+    const titleInputRef = useRef<HTMLInputElement>(null);
+    const editingTitle = !!titleEdit;
+    const [previousEditingTitle, setPreviousEditingTitle] =
+        useState(editingTitle);
+    if (previousEditingTitle !== editingTitle) {
+        setPreviousEditingTitle(editingTitle);
+        if (editingTitle) setHistoryOpen(false);
+    }
+    useEffect(() => {
+        if (!editingTitle) return;
+        // Wait for the actions menu to release its focus trap before focusing.
+        const timer = window.setTimeout(
+            () => titleInputRef.current?.focus(),
+            0,
+        );
+        return () => window.clearTimeout(timer);
+    }, [editingTitle]);
+
+    useEffect(() => {
+        if (!historyOpen) return;
+        const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+        return () => window.clearInterval(interval);
+    }, [historyOpen]);
+
+    const historyItems = buildChatHistoryItems({
+        chats,
+        currentChatId,
+        hiddenChatId,
+        query,
+        now,
+        responseStatuses,
+    });
 
     function loadChat(chatId: string) {
         setHistoryOpen(false);
@@ -160,6 +198,11 @@ export function ChatPanelHeader({
                 ) : (
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
                         <ChatHistoryDropdownUI
+                            // The header's other buttons stay clickable
+                            // while this is open, so opening another menu
+                            // has to close it. Callers do the same for the
+                            // menu they pass as `actions`.
+                            modal={false}
                             open={historyOpen}
                             onOpenChange={(open) => {
                                 if (open) setNow(Date.now());
@@ -199,7 +242,7 @@ export function ChatPanelHeader({
                 )}
             </div>
 
-            {(currentChatId || actions) && (
+            {(currentChatId || actions || onClose) && (
                 <div className="pointer-events-auto flex shrink-0 items-center">
                     <div className={cn(HEADER_PILL_CLASS, "px-0.5")}>
                         {currentChatId && (
@@ -220,6 +263,17 @@ export function ChatPanelHeader({
                             </button>
                         )}
                         {actions}
+                        {onClose && (
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                aria-label="Close chat panel"
+                                title="Close chat panel"
+                                className={HEADER_PILL_BUTTON_CLASS}
+                            >
+                                <X aria-hidden="true" className="h-3.5 w-3.5" />
+                            </button>
+                        )}
                     </div>
                 </div>
             )}

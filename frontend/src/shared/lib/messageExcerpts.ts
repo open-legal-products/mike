@@ -9,16 +9,63 @@
  *     Note: what the reader said about it
  *
  *     the rest of the message
+ *
+ * A passage asked about in another chat can bring the response it came from
+ * along as context. That chat has never seen the response, so it follows the
+ * message in a `<source_response>` block: the model reads it, on this turn
+ * and in the history of later ones, while the reader's own message shows
+ * only the passage.
  */
 export type MessageExcerpt = {
     text: string;
     note?: string;
+    /** The response the passage was taken from, sent as hidden context. */
+    context?: string;
 };
 
 /** Long enough for several paragraphs, short enough to stay a quotation. */
 export const MAX_EXCERPT_LENGTH = 4000;
 
+/** A long answer in full; beyond this the context is cut, not the passage. */
+export const MAX_EXCERPT_CONTEXT_LENGTH = 20000;
+
 const NOTE_PREFIX = "Note: ";
+const CONTEXT_OPEN = "<source_response>";
+const CONTEXT_CLOSE = "</source_response>";
+const CONTEXT_INTRO =
+    "The quoted passage above was taken from this earlier assistant response, included for context:";
+// Only a block this module wrote, which always opens with the introduction:
+// the same tags typed by a reader are part of their message and stay in it.
+const TRAILING_CONTEXT = new RegExp(
+    `\\n*${CONTEXT_INTRO}\\n${CONTEXT_OPEN}\\n[\\s\\S]*?\\n${CONTEXT_CLOSE}\\s*$`,
+);
+
+/** A source response as context: normalized, and cut to a bounded length. */
+export function normalizeExcerptContext(text: string): string {
+    const normalized = text
+        .replace(/\r\n?/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        // The block's own closing tag must not end it early.
+        .split(CONTEXT_CLOSE)
+        .join("")
+        .trim();
+    return normalized.length > MAX_EXCERPT_CONTEXT_LENGTH
+        ? `${normalized.slice(0, MAX_EXCERPT_CONTEXT_LENGTH).trimEnd()}…`
+        : normalized;
+}
+
+function serializeContext(context: string): string {
+    return `${CONTEXT_INTRO}\n${CONTEXT_OPEN}\n${context}\n${CONTEXT_CLOSE}`;
+}
+
+/** `content` without the source-response blocks that follow the message. */
+function stripContext(content: string): string {
+    let stripped = content;
+    while (TRAILING_CONTEXT.test(stripped)) {
+        stripped = stripped.replace(TRAILING_CONTEXT, "");
+    }
+    return stripped;
+}
 
 /** Selected text as an excerpt: trimmed, with runs of blank lines collapsed. */
 export function normalizeExcerptText(text: string): string {
@@ -52,7 +99,19 @@ export function serializeExcerpts(
     excerpts: readonly MessageExcerpt[],
     body: string,
 ): string {
-    return [...excerpts.map(serializeExcerpt), body]
+    // One block per distinct response, however many passages came from it.
+    const contexts = Array.from(
+        new Set(
+            excerpts.flatMap((excerpt) =>
+                excerpt.context ? [excerpt.context] : [],
+            ),
+        ),
+    );
+    return [
+        ...excerpts.map(serializeExcerpt),
+        body,
+        ...contexts.map(serializeContext),
+    ]
         .filter((part) => part.length > 0)
         .join("\n\n");
 }
@@ -60,11 +119,13 @@ export function serializeExcerpts(
 /**
  * Splits a message into its leading quoted excerpts and the text after them.
  * A message that does not start with a blockquote comes back unchanged.
+ * Source-response context is for the model, and is left out of both.
  */
-export function parseExcerpts(content: string): {
+export function parseExcerpts(rawContent: string): {
     excerpts: MessageExcerpt[];
     body: string;
 } {
+    const content = stripContext(rawContent);
     const lines = content.split("\n");
     const excerpts: MessageExcerpt[] = [];
     let index = 0;

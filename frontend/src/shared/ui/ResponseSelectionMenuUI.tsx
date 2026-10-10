@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Copy, MessageSquare, TextQuote } from "lucide-react";
+import { ArrowUp, Columns2, Copy, TextQuote } from "lucide-react";
 import { DropdownAtPoint, DropdownItem, DropdownSurface } from "./dropdown";
 import { COMPOSER_SEND_BUTTON_CLASS } from "./ComposerSendButtonUI.styles";
 import {
+    normalizeExcerptContext,
     normalizeExcerptNote,
     normalizeExcerptText,
     type MessageExcerpt,
@@ -22,7 +23,13 @@ const BUBBLE_HEIGHT_PX = 44;
 const VIEWPORT_MARGIN_PX = 8;
 
 type Point = { x: number; y: number };
-type SelectedExcerpt = { text: string; point: Point; range: Range };
+type SelectedExcerpt = {
+    text: string;
+    point: Point;
+    range: Range;
+    /** The whole response block the passage sits in. */
+    sourceText: string;
+};
 
 function excerptSourceOf(node: Node | null): Element | null {
     const element = node instanceof Element ? node : node?.parentElement;
@@ -44,19 +51,34 @@ function selectsWithinOneSource(range: Range): boolean {
     return overflow.toString().trim() === "";
 }
 
-function readSelectedExcerpt(pointer: Point | null): SelectedExcerpt | null {
+/**
+ * An element's text as it reads on screen: `innerText` keeps the breaks
+ * between paragraphs and list items that `textContent` runs together.
+ */
+function readableText(element: Element | null): string {
+    if (!element) return "";
+    const rendered = (element as HTMLElement).innerText;
+    return typeof rendered === "string" ? rendered : (element.textContent ?? "");
+}
+
+function readSelectedExcerpt(
+    pointer: Point | null,
+    scope: Element | null,
+): SelectedExcerpt | null {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
         return null;
     }
     const range = selection.getRangeAt(0).cloneRange();
     if (!selectsWithinOneSource(range)) return null;
+    if (scope && !scope.contains(range.startContainer)) return null;
     const text = normalizeExcerptText(selection.toString());
     if (!text) return null;
     return {
         text,
         range,
         point: endOfRange(range) ?? pointer ?? { x: 0, y: 0 },
+        sourceText: readableText(excerptSourceOf(range.startContainer)),
     };
 }
 
@@ -283,10 +305,23 @@ function AnnotationBubble({
 export function ResponseSelectionMenuUI({
     canAsk = true,
     onAddExcerpt,
+    onAskInSideChat,
+    scopeRef,
 }: {
     /** False leaves only Copy, for a reader who cannot send to this chat. */
     canAsk?: boolean;
     onAddExcerpt: (excerpt: MessageExcerpt) => void;
+    /**
+     * Offers quoting the passage in the chat beside this one. Leave it out
+     * where there is no second chat to ask in. That chat has not seen the
+     * response, so the excerpt carries it as `context`.
+     */
+    onAskInSideChat?: (excerpt: MessageExcerpt) => void;
+    /**
+     * Limits the menu to responses inside this element. Pass it wherever two
+     * threads share a page, so a passage is quoted into its own composer.
+     */
+    scopeRef?: RefObject<Element | null>;
 }) {
     const [menu, setMenu] = useState<SelectedExcerpt | null>(null);
     const [annotating, setAnnotating] = useState<SelectedExcerpt | null>(null);
@@ -331,7 +366,10 @@ export function ResponseSelectionMenuUI({
             if (timer !== null) window.clearTimeout(timer);
             timer = window.setTimeout(() => {
                 timer = null;
-                const selected = readSelectedExcerpt(pointer);
+                const selected = readSelectedExcerpt(
+                    pointer,
+                    scopeRef?.current ?? null,
+                );
                 if (selected) setMenu(selected);
             }, 0);
         };
@@ -348,7 +386,7 @@ export function ResponseSelectionMenuUI({
             document.removeEventListener("mouseup", onMouseUp);
             document.removeEventListener("keyup", onKeyUp);
         };
-    }, []);
+    }, [scopeRef]);
 
     return (
         <>
@@ -384,12 +422,36 @@ export function ResponseSelectionMenuUI({
                                 Ask
                             </DropdownItem>
                             <DropdownItem onSelect={() => setAnnotating(menu)}>
-                                <MessageSquare
+                                <TextQuote
                                     aria-hidden="true"
                                     className="h-3.5 w-3.5"
                                 />
                                 Annotate and ask
                             </DropdownItem>
+                            {onAskInSideChat && (
+                                <DropdownItem
+                                    onSelect={() => {
+                                        const context =
+                                            normalizeExcerptContext(
+                                                menu.sourceText,
+                                            );
+                                        onAskInSideChat({
+                                            text: menu.text,
+                                            // Nothing to add when the passage
+                                            // is the whole response.
+                                            ...(context && context !== menu.text
+                                                ? { context }
+                                                : {}),
+                                        });
+                                    }}
+                                >
+                                    <Columns2
+                                        aria-hidden="true"
+                                        className="h-3.5 w-3.5"
+                                    />
+                                    Ask in side chat
+                                </DropdownItem>
+                            )}
                         </>
                     )}
                 </DropdownAtPoint>

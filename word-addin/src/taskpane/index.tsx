@@ -54,7 +54,6 @@ Office.onReady(() => {
           does not take the notifications with it. The pane is ~320px wide,
           so the shared viewport's 460px cap is tightened to fit. */}
       <ToastViewportUI
-        position="bottom-center"
         className="w-full max-w-[min(96vw,380px)] px-2"
       />
     </div>

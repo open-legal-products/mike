@@ -85,6 +85,83 @@ describe("useChatRoute", () => {
         expect(result.current.claimCreated("c1")).toBe(false);
     });
 
+    it("opens a side chat in the query, keeping the primary chat's path", () => {
+        const { result } = renderChatRoute();
+        expect(result.current.sideChatId).toBeNull();
+
+        act(() => result.current.openChat("c1"));
+        act(() => result.current.openSideChat(""));
+        expect(result.current.sideChatId).toBe("");
+        expect(window.location.pathname).toBe("/assistant/chat/c1");
+        expect(window.location.search).toBe("?side=new");
+
+        act(() => result.current.openSideChat("c2"));
+        expect(result.current.sideChatId).toBe("c2");
+        expect(window.location.search).toBe("?side=c2");
+
+        act(() => result.current.openChat("c3"));
+        expect(window.location.pathname).toBe("/assistant/chat/c3");
+        expect(window.location.search).toBe("?side=c2");
+
+        act(() => result.current.closeSideChat());
+        expect(result.current.sideChatId).toBeNull();
+        expect(window.location.search).toBe("");
+    });
+
+    it("restores the side chat from the URL after mount", () => {
+        window.history.replaceState(null, "", "/assistant?side=c2");
+        expect(renderChatRoute().result.current.sideChatId).toBe("c2");
+    });
+
+    it("never shows one chat in both places", () => {
+        const { result, rerender } = renderChatRoute();
+        act(() => result.current.openChat("c1"));
+
+        act(() => result.current.openSideChat("c1"));
+        expect(result.current.sideChatId).toBeNull();
+
+        act(() => result.current.openSideChat("c2"));
+        act(() => result.current.openChat("c2"));
+        expect(result.current.sideChatId).toBeNull();
+        expect(window.location.search).toBe("");
+
+        act(() => result.current.openSideChat("c3"));
+        navigation.pathname = "/assistant/chat/c3";
+        rerender();
+        expect(result.current.chatId).toBe("c3");
+        expect(result.current.sideChatId).toBeNull();
+    });
+
+    it("keeps the side chat across a sidebar link, and follows back", () => {
+        const { result, rerender } = renderChatRoute();
+        act(() => result.current.openSideChat("c2"));
+
+        // A link names only the primary chat.
+        window.history.replaceState(null, "", "/assistant/chat/c1");
+        navigation.pathname = "/assistant/chat/c1";
+        rerender();
+        expect(result.current.sideChatId).toBe("c2");
+        expect(window.location.search).toBe("?side=c2");
+
+        window.history.replaceState(null, "", "/assistant/chat/c1");
+        act(() => {
+            window.dispatchEvent(new PopStateEvent("popstate"));
+        });
+        expect(result.current.sideChatId).toBeNull();
+        expect(window.location.search).toBe("");
+    });
+
+    it("claims a chat created in the side pane", () => {
+        const { result } = renderChatRoute();
+        act(() => result.current.openSideChat(""));
+
+        act(() => result.current.adoptSideChat("c2"));
+        expect(result.current.sideChatId).toBe("c2");
+        expect(result.current.chatId).toBe("");
+        expect(result.current.claimCreated("c2")).toBe(true);
+        expect(result.current.claimCreated("c2")).toBe(false);
+    });
+
     it("does not claim a chat that was opened rather than created", () => {
         const { result } = renderChatRoute();
 

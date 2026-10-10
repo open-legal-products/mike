@@ -12,7 +12,7 @@ export const Tones = () => (
             message="Mike couldn't reach the server. Check your connection and try again."
             onDismiss={() => {}}
             actions={
-                <button type="button" className={noticeActionClassName("black")}>
+                <button type="button" className={noticeActionClassName()}>
                     Retry
                 </button>
             }
