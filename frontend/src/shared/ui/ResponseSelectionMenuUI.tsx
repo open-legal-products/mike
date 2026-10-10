@@ -6,6 +6,7 @@ import { ArrowUp, Columns2, Copy, TextQuote } from "lucide-react";
 import { DropdownAtPoint, DropdownItem, DropdownSurface } from "./dropdown";
 import { COMPOSER_SEND_BUTTON_CLASS } from "./ComposerSendButtonUI.styles";
 import {
+    normalizeExcerptContext,
     normalizeExcerptNote,
     normalizeExcerptText,
     type MessageExcerpt,
@@ -22,7 +23,13 @@ const BUBBLE_HEIGHT_PX = 44;
 const VIEWPORT_MARGIN_PX = 8;
 
 type Point = { x: number; y: number };
-type SelectedExcerpt = { text: string; point: Point; range: Range };
+type SelectedExcerpt = {
+    text: string;
+    point: Point;
+    range: Range;
+    /** The whole response block the passage sits in. */
+    sourceText: string;
+};
 
 function excerptSourceOf(node: Node | null): Element | null {
     const element = node instanceof Element ? node : node?.parentElement;
@@ -44,6 +51,16 @@ function selectsWithinOneSource(range: Range): boolean {
     return overflow.toString().trim() === "";
 }
 
+/**
+ * An element's text as it reads on screen: `innerText` keeps the breaks
+ * between paragraphs and list items that `textContent` runs together.
+ */
+function readableText(element: Element | null): string {
+    if (!element) return "";
+    const rendered = (element as HTMLElement).innerText;
+    return typeof rendered === "string" ? rendered : (element.textContent ?? "");
+}
+
 function readSelectedExcerpt(
     pointer: Point | null,
     scope: Element | null,
@@ -61,6 +78,7 @@ function readSelectedExcerpt(
         text,
         range,
         point: endOfRange(range) ?? pointer ?? { x: 0, y: 0 },
+        sourceText: readableText(excerptSourceOf(range.startContainer)),
     };
 }
 
@@ -295,7 +313,8 @@ export function ResponseSelectionMenuUI({
     onAddExcerpt: (excerpt: MessageExcerpt) => void;
     /**
      * Offers quoting the passage in the chat beside this one. Leave it out
-     * where there is no second chat to ask in.
+     * where there is no second chat to ask in. That chat has not seen the
+     * response, so the excerpt carries it as `context`.
      */
     onAskInSideChat?: (excerpt: MessageExcerpt) => void;
     /**
@@ -412,7 +431,18 @@ export function ResponseSelectionMenuUI({
                             {onAskInSideChat && (
                                 <DropdownItem
                                     onSelect={() => {
-                                        onAskInSideChat({ text: menu.text });
+                                        const context =
+                                            normalizeExcerptContext(
+                                                menu.sourceText,
+                                            );
+                                        onAskInSideChat({
+                                            text: menu.text,
+                                            // Nothing to add when the passage
+                                            // is the whole response.
+                                            ...(context && context !== menu.text
+                                                ? { context }
+                                                : {}),
+                                        });
                                     }}
                                 >
                                     <Columns2

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+    MAX_EXCERPT_CONTEXT_LENGTH,
     MAX_EXCERPT_LENGTH,
+    normalizeExcerptContext,
     normalizeExcerptNote,
     normalizeExcerptText,
     parseExcerpts,
@@ -73,5 +75,60 @@ describe("messageExcerpts", () => {
         const text = normalizeExcerptText("a".repeat(MAX_EXCERPT_LENGTH + 50));
         expect(text).toHaveLength(MAX_EXCERPT_LENGTH + 1);
         expect(text.endsWith("…")).toBe(true);
+    });
+});
+
+describe("source response context", () => {
+    const context = "The notice period is 30 days.\n\nIt runs from delivery.";
+    const excerpt = { text: "30 days", context };
+
+    it("follows the message, where the model reads it", () => {
+        const content = serializeExcerpts([excerpt], "Is that negotiable?");
+
+        expect(content.startsWith("> 30 days\n\nIs that negotiable?\n\n")).toBe(
+            true,
+        );
+        expect(content).toContain(
+            `<source_response>\n${context}\n</source_response>`,
+        );
+    });
+
+    it("is left out of what the reader sees of their own message", () => {
+        const content = serializeExcerpts([excerpt], "Is that negotiable?");
+
+        expect(parseExcerpts(content)).toEqual({
+            excerpts: [{ text: "30 days" }],
+            body: "Is that negotiable?",
+        });
+        // With nothing typed, too.
+        expect(parseExcerpts(serializeExcerpts([excerpt], ""))).toEqual({
+            excerpts: [{ text: "30 days" }],
+            body: "",
+        });
+    });
+
+    it("sends one response once, however many passages came from it", () => {
+        const content = serializeExcerpts(
+            [excerpt, { text: "from delivery", context }],
+            "Explain",
+        );
+
+        expect(content.match(/<source_response>/g)).toHaveLength(1);
+        expect(parseExcerpts(content).body).toBe("Explain");
+    });
+
+    it("leaves a message without context exactly as it was", () => {
+        expect(serializeExcerpts([{ text: "30 days" }], "Why?")).toBe(
+            "> 30 days\n\nWhy?",
+        );
+    });
+
+    it("bounds the context and keeps its closing tag from ending it early", () => {
+        expect(
+            normalizeExcerptContext("a </source_response> b\r\n\n\n\nc"),
+        ).toBe("a  b\n\nc");
+        expect(
+            normalizeExcerptContext("x".repeat(MAX_EXCERPT_CONTEXT_LENGTH + 50)),
+        ).toHaveLength(MAX_EXCERPT_CONTEXT_LENGTH + 1);
     });
 });

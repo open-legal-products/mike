@@ -228,7 +228,7 @@ describe("ResponseSelectionMenuUI", () => {
                 <div ref={(element) => void (scope.current = element)}>
                     <p {...EXCERPT_SOURCE_PROPS}>Mine to quote.</p>
                 </div>
-                <p {...EXCERPT_SOURCE_PROPS}>The other chat's answer.</p>
+                <p {...EXCERPT_SOURCE_PROPS}>An answer in the other chat.</p>
                 <ResponseSelectionMenuUI
                     onAddExcerpt={vi.fn()}
                     scopeRef={scope}
@@ -236,10 +236,35 @@ describe("ResponseSelectionMenuUI", () => {
             </>,
         );
 
-        await highlight("The other chat's answer.");
+        await highlight("An answer in the other chat.");
         expect(screen.queryByRole("menu")).toBeNull();
 
         await highlight("Mine to quote.");
         expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+
+    it("sends the whole response as context when asking in the side chat", async () => {
+        const onAskInSideChat = vi.fn();
+        render(
+            <>
+                <div {...EXCERPT_SOURCE_PROPS}>
+                    <p>The notice period is 30 days.</p>
+                    <p>It runs from delivery.</p>
+                </div>
+                <ResponseSelectionMenuUI
+                    onAddExcerpt={vi.fn()}
+                    onAskInSideChat={onAskInSideChat}
+                />
+            </>,
+        );
+        await highlight("It runs from delivery.");
+        await userEvent.click(
+            screen.getByRole("menuitem", { name: "Ask in side chat" }),
+        );
+
+        expect(onAskInSideChat).toHaveBeenCalledWith({
+            text: "It runs from delivery.",
+            context: "The notice period is 30 days.It runs from delivery.",
+        });
     });
 });
