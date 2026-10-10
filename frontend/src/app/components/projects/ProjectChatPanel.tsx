@@ -58,6 +58,7 @@ import { can, roleFromLoaded } from "@/app/lib/permissions";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 
 const ICON_SIZE = 28;
 const GAP = 14;
@@ -189,6 +190,11 @@ interface Props {
     onOpenSideChat?: () => void;
     /** Offers closing this panel. */
     onClose?: () => void;
+    /** Quotes a passage of this chat in the chat beside it. */
+    onAskInSideChat?: (excerpt: MessageExcerpt) => void;
+    /** A passage quoted from the chat beside this one, for the composer. */
+    incomingExcerpt?: { id: number; excerpt: MessageExcerpt } | null;
+    onIncomingExcerptAdded?: () => void;
 }
 
 /** One of the IDE's chat panels: its thread, header, and composer. */
@@ -230,6 +236,9 @@ export function ProjectChatPanel({
     onActivate,
     onOpenSideChat,
     onClose,
+    onAskInSideChat,
+    incomingExcerpt,
+    onIncomingExcerptAdded,
 }: Props) {
     const router = useRouter();
     const { user, authLoading } = useAuth();
@@ -514,6 +523,17 @@ export function ProjectChatPanel({
     useEffect(() => {
         if (chatLoaded && isResponseLoading) return scrollLatestUserToTop();
     }, [chatLoaded, isResponseLoading, scrollLatestUserToTop]);
+
+    // The composer mounts once the role is known; the passage waits for it.
+    const addedExcerptIdRef = useRef<number | null>(null);
+    useEffect(() => {
+        const input = chatInputRef.current;
+        if (!incomingExcerpt || !input || canSendChat !== true) return;
+        if (addedExcerptIdRef.current === incomingExcerpt.id) return;
+        addedExcerptIdRef.current = incomingExcerpt.id;
+        input.addExcerpt(incomingExcerpt.excerpt);
+        onIncomingExcerptAdded?.();
+    }, [incomingExcerpt, canSendChat, composerReady, onIncomingExcerptAdded]);
 
     const handleSubmit = useCallback(
         (message: Message, options?: Parameters<typeof handleChat>[1]) => {
@@ -925,6 +945,7 @@ export function ProjectChatPanel({
                 <ResponseSelectionMenuUI
                     canAsk={canSendChat === true}
                     scopeRef={panelRef}
+                    onAskInSideChat={onAskInSideChat}
                     onAddExcerpt={(excerpt) =>
                         chatInputRef.current?.addExcerpt(excerpt)
                     }

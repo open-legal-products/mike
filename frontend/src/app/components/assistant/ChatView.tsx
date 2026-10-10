@@ -33,6 +33,7 @@ import { resolveDocumentViewType } from "@/app/lib/documentViewType";
 import type { ChatInputHandle } from "./ChatInput";
 import { ChatInputPrompt } from "./ChatInputPrompt";
 import { ResponseSelectionMenuUI } from "@/shared/ui/ResponseSelectionMenuUI";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 import { assistantSidePanelTabId } from "./AssistantSidePanel";
 import { AssistantDocumentPanelHost } from "./AssistantDocumentPanelHost";
 import {
@@ -159,6 +160,11 @@ interface ColumnProps extends Props {
     onCloseSideChat?: () => void;
     /** This column's share of the width when two chats split the page. */
     widthShare?: number;
+    /** Quotes a passage of this chat in the chat beside it. */
+    onAskInSideChat?: (excerpt: MessageExcerpt) => void;
+    /** A passage quoted from the chat beside this one, for the composer. */
+    incomingExcerpt?: { id: number; excerpt: MessageExcerpt } | null;
+    onIncomingExcerptAdded?: () => void;
 }
 
 const MOBILE_BREAKPOINT_PX = 768;
@@ -206,6 +212,9 @@ export function AssistantChatColumn({
     hiddenChatId,
     onCloseSideChat,
     widthShare,
+    onAskInSideChat,
+    incomingExcerpt,
+    onIncomingExcerptAdded,
 }: ColumnProps) {
     const router = useRouter();
     const {
@@ -909,6 +918,17 @@ export function AssistantChatColumn({
     const canWrite =
         accessResolved && (canSend === undefined || canSend === true);
 
+    // The composer mounts once access resolves; the passage waits for it.
+    const addedExcerptIdRef = useRef<number | null>(null);
+    useEffect(() => {
+        const input = chatInputRef.current;
+        if (!incomingExcerpt || !input || !canWrite) return;
+        if (addedExcerptIdRef.current === incomingExcerpt.id) return;
+        addedExcerptIdRef.current = incomingExcerpt.id;
+        input.addExcerpt(incomingExcerpt.excerpt);
+        onIncomingExcerptAdded?.();
+    }, [incomingExcerpt, canWrite, chatLoading, onIncomingExcerptAdded]);
+
     // The panel keeps what it is handed, so hand it a stable way to reach
     // the latest handler: registering on every new handler would re-render
     // the panel, and with it this column, without end.
@@ -1212,6 +1232,7 @@ export function AssistantChatColumn({
             <ResponseSelectionMenuUI
                 canAsk={canSend === undefined || canSend === true}
                 scopeRef={columnRef}
+                onAskInSideChat={onAskInSideChat}
                 onAddExcerpt={(excerpt) =>
                     chatInputRef.current?.addExcerpt(excerpt)
                 }

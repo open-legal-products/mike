@@ -109,6 +109,7 @@ import {
 import { can, roleFromLoaded } from "@/app/lib/permissions";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { cn } from "@/app/lib/utils";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 import { readDocumentDragPayload } from "@/app/lib/docTableSelection";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import {
@@ -1230,6 +1231,24 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         return () => observer.disconnect();
     }, [panelLayout]);
 
+    // A passage the reader asked about in the side chat, held until that
+    // chat's composer is on the page (opening the side chat if need be).
+    const [sideChatExcerpt, setSideChatExcerpt] = useState<{
+        id: number;
+        excerpt: MessageExcerpt;
+    } | null>(null);
+    const clearSideChatExcerpt = useCallback(
+        () => setSideChatExcerpt(null),
+        [],
+    );
+    function askInSideChat(excerpt: MessageExcerpt) {
+        if (sideChatId === null) handleOpenSideChat();
+        setSideChatExcerpt((current) => ({
+            id: (current?.id ?? 0) + 1,
+            excerpt,
+        }));
+    }
+
     function handleOpenSideChat() {
         // Two chats, the explorer and a readable document do not fit a
         // narrow workspace; the explorer is the one that folds away.
@@ -1647,6 +1666,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 }
                 onActivate={() => setActiveChatPane("primary")}
                 onOpenSideChat={sideChatOpen ? undefined : handleOpenSideChat}
+                onAskInSideChat={askInSideChat}
             />
             {sideChatId !== null && (
                 <>
@@ -1655,6 +1675,8 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         {...chatPanelProps}
                         ref={sideChatPanelRef}
                         isSideChat
+                        incomingExcerpt={sideChatExcerpt}
+                        onIncomingExcerptAdded={clearSideChatExcerpt}
                         chatId={sideChatId}
                         openChat={openSideChat}
                         adoptChat={adoptSideChat}

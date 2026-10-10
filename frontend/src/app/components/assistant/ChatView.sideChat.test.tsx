@@ -1,3 +1,4 @@
+import { useImperativeHandle, type Ref } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "@/app/components/shared/types";
@@ -32,7 +33,13 @@ vi.mock("@/app/hooks/useQuickActions", () => ({
         addQuickAction: vi.fn(),
     }),
 }));
-vi.mock("./ChatInput", () => ({ ChatInput: () => <div>Composer</div> }));
+const addExcerpt = vi.hoisted(() => vi.fn());
+vi.mock("./ChatInput", () => ({
+    ChatInput: ({ ref }: { ref?: Ref<{ addExcerpt: typeof addExcerpt }> }) => {
+        useImperativeHandle(ref, () => ({ addExcerpt }));
+        return <div>Composer</div>;
+    },
+}));
 vi.mock("./InitialView", () => ({
     InitialView: () => <div>Initial view</div>,
 }));
@@ -54,7 +61,13 @@ function Column({
     onOpenSideChat,
     onCloseSideChat,
     hiddenChatId,
+    incomingExcerpt,
+    onIncomingExcerptAdded,
+    chatLoading,
 }: {
+    incomingExcerpt?: { id: number; excerpt: { text: string } } | null;
+    onIncomingExcerptAdded?: () => void;
+    chatLoading?: boolean;
     newChat?: boolean;
     onLoadChat?: (chatId: string) => void;
     onOpenSideChat?: () => void;
@@ -76,6 +89,9 @@ function Column({
             onOpenSideChat={onOpenSideChat}
             onCloseSideChat={onCloseSideChat}
             hiddenChatId={hiddenChatId}
+            incomingExcerpt={incomingExcerpt}
+            onIncomingExcerptAdded={onIncomingExcerptAdded}
+            chatLoading={chatLoading}
         />
     );
 }
@@ -94,6 +110,7 @@ function openActions() {
 
 describe("AssistantChatColumn header", () => {
     beforeEach(() => {
+        addExcerpt.mockClear();
         vi.stubGlobal(
             "ResizeObserver",
             class {
@@ -184,5 +201,34 @@ describe("AssistantChatColumn header", () => {
             screen.getByRole("menuitem", { name: "Close side chat" }),
         );
         expect(onCloseSideChat).toHaveBeenCalled();
+    });
+
+    it("puts a passage quoted from the other chat into its composer, once", () => {
+        const onAdded = vi.fn();
+        const excerpt = { id: 1, excerpt: { text: "The notice period" } };
+        const { rerender } = render(
+            <Column incomingExcerpt={excerpt} onIncomingExcerptAdded={onAdded} />,
+        );
+
+        expect(addExcerpt).toHaveBeenCalledTimes(1);
+        expect(addExcerpt).toHaveBeenCalledWith({ text: "The notice period" });
+        expect(onAdded).toHaveBeenCalledTimes(1);
+
+        rerender(
+            <Column
+                incomingExcerpt={excerpt}
+                onIncomingExcerptAdded={onAdded}
+                chatLoading
+            />,
+        );
+        expect(addExcerpt).toHaveBeenCalledTimes(1);
+
+        rerender(
+            <Column
+                incomingExcerpt={{ id: 2, excerpt: { text: "Clause 4" } }}
+                onIncomingExcerptAdded={onAdded}
+            />,
+        );
+        expect(addExcerpt).toHaveBeenLastCalledWith({ text: "Clause 4" });
     });
 });

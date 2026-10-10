@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, Copy, MessageSquare, TextQuote } from "lucide-react";
+import { ArrowUp, Columns2, Copy, TextQuote } from "lucide-react";
 import { DropdownAtPoint, DropdownItem, DropdownSurface } from "./dropdown";
 import { COMPOSER_SEND_BUTTON_CLASS } from "./ComposerSendButtonUI.styles";
 import {
@@ -287,11 +287,17 @@ function AnnotationBubble({
 export function ResponseSelectionMenuUI({
     canAsk = true,
     onAddExcerpt,
+    onAskInSideChat,
     scopeRef,
 }: {
     /** False leaves only Copy, for a reader who cannot send to this chat. */
     canAsk?: boolean;
     onAddExcerpt: (excerpt: MessageExcerpt) => void;
+    /**
+     * Offers quoting the passage in the chat beside this one. Leave it out
+     * where there is no second chat to ask in.
+     */
+    onAskInSideChat?: (excerpt: MessageExcerpt) => void;
     /**
      * Limits the menu to responses inside this element. Pass it wherever two
      * threads share a page, so a passage is quoted into its own composer.
@@ -397,12 +403,25 @@ export function ResponseSelectionMenuUI({
                                 Ask
                             </DropdownItem>
                             <DropdownItem onSelect={() => setAnnotating(menu)}>
-                                <MessageSquare
+                                <TextQuote
                                     aria-hidden="true"
                                     className="h-3.5 w-3.5"
                                 />
                                 Annotate and ask
                             </DropdownItem>
+                            {onAskInSideChat && (
+                                <DropdownItem
+                                    onSelect={() => {
+                                        onAskInSideChat({ text: menu.text });
+                                    }}
+                                >
+                                    <Columns2
+                                        aria-hidden="true"
+                                        className="h-3.5 w-3.5"
+                                    />
+                                    Ask in side chat
+                                </DropdownItem>
+                            )}
                         </>
                     )}
                 </DropdownAtPoint>

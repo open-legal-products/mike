@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useChatRoute } from "@/app/hooks/useChatRoute";
 import { AssistantChatPane } from "@/app/components/assistant/AssistantChatPane";
@@ -34,6 +35,23 @@ export default function AssistantChatPage() {
         setSideChatId(sideChatId || null);
         return () => setSideChatId(null);
     }, [sideChatId, setSideChatId]);
+    // A passage the reader asked about in the side chat, held until that
+    // chat's composer is on the page (opening the side chat if need be).
+    const [sideChatExcerpt, setSideChatExcerpt] = useState<{
+        id: number;
+        excerpt: MessageExcerpt;
+    } | null>(null);
+    const clearSideChatExcerpt = useCallback(
+        () => setSideChatExcerpt(null),
+        [],
+    );
+    function askInSideChat(excerpt: MessageExcerpt) {
+        if (sideChatId === null) openSideChat("");
+        setSideChatExcerpt((current) => ({
+            id: (current?.id ?? 0) + 1,
+            excerpt,
+        }));
+    }
     const chatsRef = useRef<HTMLDivElement>(null);
     const [sideChatShare, setSideChatShare] = useState(0.5);
     const hasSideChat = sideChatId !== null;
@@ -61,6 +79,7 @@ export default function AssistantChatPage() {
                 claimCreated={claimCreated}
                 documentPanel={documentPanel}
                 otherChatId={sideChatId}
+                onAskInSideChat={askInSideChat}
                 onOpenSideChat={
                     sideChatId === null ? () => openSideChat("") : undefined
                 }
@@ -76,6 +95,8 @@ export default function AssistantChatPage() {
                     documentPanel={documentPanel}
                     otherChatId={chatId}
                     sideChat={{ onClose: closeSideChat }}
+                    incomingExcerpt={sideChatExcerpt}
+                    onIncomingExcerptAdded={clearSideChatExcerpt}
                 />
             )}
             <AssistantDocumentPanelHost panel={documentPanel} />

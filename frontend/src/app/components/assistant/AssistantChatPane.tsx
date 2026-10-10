@@ -9,6 +9,7 @@ import type { AssistantDocumentPanel } from "@/app/components/assistant/useAssis
 import { loadAssistantChat } from "@/app/lib/assistantTurns";
 import { can, roleFrom } from "@/app/lib/permissions";
 import type { Chat } from "@/app/components/shared/types";
+import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 
 interface Props {
     /** The chat to show, or `""` for a new one. */
@@ -31,6 +32,11 @@ interface Props {
     otherChatId?: string | null;
     /** This pane's share of the width when two chats split the page. */
     widthShare?: number;
+    /** Quotes a passage of this chat in the chat beside it. */
+    onAskInSideChat?: (excerpt: MessageExcerpt) => void;
+    /** A passage quoted from the chat beside this one, for the composer. */
+    incomingExcerpt?: { id: number; excerpt: MessageExcerpt } | null;
+    onIncomingExcerptAdded?: () => void;
 }
 
 /** One of the assistant page's chats: its thread, loading and standing. */
@@ -44,6 +50,9 @@ export function AssistantChatPane({
     sideChat,
     otherChatId,
     widthShare,
+    onAskInSideChat,
+    incomingExcerpt,
+    onIncomingExcerptAdded,
 }: Props) {
     const router = useRouter();
     const isSideChat = !!sideChat;
@@ -246,6 +255,9 @@ export function AssistantChatPane({
             onCloseSideChat={sideChat?.onClose}
             hiddenChatId={otherChatId}
             widthShare={widthShare}
+            onAskInSideChat={onAskInSideChat}
+            incomingExcerpt={incomingExcerpt}
+            onIncomingExcerptAdded={onIncomingExcerptAdded}
             // Leaving a thread is not Stop: detach so its answer still
             // finishes and is stored.
             onLoadChat={(chatId) => {
