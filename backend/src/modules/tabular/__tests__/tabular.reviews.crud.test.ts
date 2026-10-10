@@ -688,6 +688,69 @@ describe("updateTabularReview", () => {
             },
         });
 
+    it.each(["proj-9", null])(
+        "preserves populated rows and cells on a project-only move to %s",
+        async (destination) => {
+            const review = {
+                id: "rev-1", user_id: WHO.userId, project_id: "proj-1",
+                org_id: "org-1", document_ids: ["doc-1"],
+                document_grouping: "document", columns_config: [{ index: 0 }],
+            };
+            const rows = [{
+                id: "row-1", document_id: "doc-1", label: "Source.docx",
+                source_document_ids: ["doc-1"],
+            }];
+            const cells = [{
+                id: "cell-1", review_id: "rev-1", row_id: "row-1",
+                document_id: "doc-1", column_index: 0, status: "done",
+                content: '{"summary":"Extracted text","flag":"green"}',
+            }];
+            const orgId = destination ? "org-2" : null;
+            resolveContentOrgId.mockResolvedValue({ ok: true, orgId });
+            loadReviewRows.mockResolvedValue(rows);
+            filterAccessibleDocumentIds.mockResolvedValue(["doc-1"]);
+            const { db, calls } = makeFakeDb({ tables: {
+                tabular_reviews: [
+                    { data: review, error: null },
+                    { data: { ...review, project_id: destination, org_id: orgId }, error: null },
+                ],
+                tabular_cells: { data: cells, error: null },
+                documents: { data: [{ id: "doc-1" }], error: null },
+            } });
+            const result = await updateTabularReview(db, {
+                reviewId: "rev-1", ...WHO, body: { project_id: destination },
+            });
+            expect(result).toMatchObject({ ok: true, data: {
+                project_id: destination, org_id: orgId,
+            } });
+            // The fake DB does not simulate cascades: forbid every row/source/
+            // cell write, including the row delete that would cascade in SQL.
+            expect(calls.filter((call) => call.table !== "tabular_reviews")).toEqual([]);
+            expect(fetchSourceDocuments).not.toHaveBeenCalled();
+            const detail = await getTabularReviewDetail(db, { reviewId: "rev-1", ...WHO });
+            expect(detail).toMatchObject({ ok: true, data: {
+                rows, cells: [{ ...cells[0], content: {
+                    summary: "Extracted text", flag: "green",
+                } }],
+            } });
+        },
+    );
+
+    it.each([
+        { document_ids: ["doc-2"] },
+        { document_grouping: "folder" },
+        { project_id: "proj-9", document_ids: ["doc-2"] },
+        { project_id: "proj-9", document_grouping: "folder" },
+    ])("still rebuilds rows for a document/grouping update: %j", async (body) => {
+        const { db, calls } = seeded({ document_ids: ["doc-1"] });
+        const result = await updateTabularReview(db, { reviewId: "rev-1", ...WHO, body });
+        expect(result.ok).toBe(true);
+        expect(callTo(calls, "tabular_review_rows")).toMatchObject({
+            op: "delete", filters: { review_id: "rev-1" },
+        });
+        expect(fetchSourceDocuments).toHaveBeenCalled();
+    });
+
     it("rejects a project_id that is neither null nor a non-empty string", async () => {
         const { db, calls } = makeFakeDb();
         const result = await updateTabularReview(db, {
@@ -786,7 +849,7 @@ describe("updateTabularReview", () => {
             orgRole: null,
             projectRole: "owner",
         });
-        const { db } = seeded({ user_id: "someone-else" });
+        const { db, calls } = seeded({ user_id: "someone-else" });
         const result = await updateTabularReview(db, {
             reviewId: "rev-1",
             ...WHO,
@@ -797,6 +860,7 @@ describe("updateTabularReview", () => {
             kind: "forbidden",
             detail: "Only the review's creator can move a review",
         });
+        expect(calls.every((call) => call.op === "select")).toBe(true);
     });
 
     it("restamps org_id from the destination project on a move", async () => {
@@ -898,7 +962,7 @@ describe("updateTabularReview", () => {
             kind: "forbidden",
             detail: "You do not have permission to write in this project.",
         });
-        expect(calls.some((call) => call.op === "update")).toBe(false);
+        expect(calls.every((call) => call.op === "select")).toBe(true);
     });
 
     it.each([["proj-9"], [null]])(
@@ -923,7 +987,7 @@ describe("updateTabularReview", () => {
                 kind: "forbidden",
                 detail: "You do not have permission to move this review.",
             });
-            expect(calls.some((call) => call.op === "update")).toBe(false);
+            expect(calls.every((call) => call.op === "select")).toBe(true);
         },
     );
 

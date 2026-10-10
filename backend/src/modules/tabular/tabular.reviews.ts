@@ -974,9 +974,7 @@ export async function updateTabularReview(
         );
 
     const rowShapeChanged =
-        Array.isArray(body.document_ids) ||
-        body.document_grouping != null ||
-        projectIdUpdateProvided;
+        Array.isArray(body.document_ids) || body.document_grouping != null;
     try {
         const activeColumns = (updatedReview.columns_config ?? []) as Column[];
         if (rowShapeChanged) {
