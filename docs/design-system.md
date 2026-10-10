@@ -320,6 +320,7 @@ keep their own spacing and should not receive this attribute.
 | `TextButtonUI` | `shared/ui` | Background-free actions, with optional icons and loading state. Use `textButtonUIClassName` from `TextButtonUI.styles` for links. No background, border, or shadow; hover changes text color. |
 | `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. |
 | `GlassIconButtonUI` | `shared/ui` | Circular glass icon button — modal close, panel dismiss. Requires `aria-label`. |
+| `CloseButton` | `shared/ui` | The small white ✕ that dismisses a modal, side panel, toast, or `WarningPopup`. `size`: `sm` for side panels, `md` for modals and notices. |
 | `GlassCardUI` | `shared/ui` | Canonical liquid-glass card surface. |
 | `TextSlabUI` | `shared/ui` | Inset slab holding quoted or proposed text inside a card — citation quotes, tracked-change diffs, and their loading/empty states. Owns shape, padding, and fill; the caller owns typography. |
 | `ToggleSwitchUI` | `shared/ui` | `role="switch"` toggle with an optional text label. |
@@ -327,7 +328,7 @@ keep their own spacing and should not receive this attribute.
 | `InputUI` | `shared/ui` | Canonical shadcn input for the web app and Word add-in. |
 | `form-field` | `components/ui` | `FormTextInput` (glass/minimal variants) and `FieldLabel` for app forms. |
 | `NoticeCardUI` | `shared/ui` | The one card every notice is drawn with: glass surface, tone icon (error/success/info), title, message, action row, close button. Do not use it directly in a screen; use one of the two wrappers below. |
-| `WarningPopup` | `components/popups` | One `NoticeCardUI` that a component opens and closes with `open` / `onClose`. |
+| `WarningPopup` | `components/popups` | The `NoticeCardUI` for every warning. A component opens and closes it with `open` / `onClose`; `AppToasts` renders one per `notifyError`. |
 | `search-bar` | `components/ui` | Search input with clear button. Pass `label` for a meaningful accessible name. |
 | `dropdown` | `shared/ui` | The one dropdown for the web app and the Word add-in: Radix menu behaviour with the liquid-glass look. See "Dropdowns" below. |
 | `liquid-surface` | `components/ui` | Web-only shared surface class constants. |
@@ -405,23 +406,37 @@ These are the rules the primitives already follow. Match them in new work.
 Both show the same card, `NoticeCardUI`, so they always look alike. A
 change to how a notice looks goes in `NoticeCardUI.tsx`, never in one of the
 wrappers; `WarningPopup.test.tsx` fails if a popup and an error toast stop
-rendering the same card. What differs is who controls the card:
+rendering the same card. The card's dismiss control is the shared
+`CloseButton`.
 
-| | Toast (`notifyError`, `showToast`) | `WarningPopup` |
+Both appear in one column at the top centre of the page. `ToastViewportUI`
+owns that column, and a `WarningPopup` renders into it, so a popup and a
+toast stack instead of covering each other.
+
+| | Toast (`notifySuccess`, `notifyInfo`, `showToast`) | `WarningPopup` |
 | --- | --- | --- |
-| Who opens it | Any code, including code with no React component (API client, offline listener) | The component on screen, through its own `open` state |
-| How many | Up to three, stacked at the bottom; repeats collapse | One, at the top centre |
-| Closes | On a timer (paused on hover or focus); errors with actions stay until dismissed | Only when the user closes it or presses Escape |
-| Tones | error, success, info | error |
+| Used for | Success and information | Every warning and error |
+| Who opens it | Any code, including code with no React component | The component on screen through its own `open` state, or any code through `notifyError` |
+| Closes | On a timer (paused on hover or focus) | Only when the user closes it or presses Escape |
+| Tones | success, info | error |
 | Word add-in | Yes | No (web only) |
 
-Use a **`WarningPopup`** when the message is about something the user just
-did on this screen and they need to read it before moving on: a rejected
-upload, a failed save from a form, a permission refusal.
+In the web app a warning is always a **`WarningPopup`**. A component that
+reports a failure on its own screen (a rejected upload, a failed save from a
+form, a permission refusal) renders one directly. Code with no component of
+its own (the API client, a stream callback, the offline listener) calls
+`notifyError`; `AppToasts` draws what it raises with `WarningPopup`,
+including any Retry and Contact support actions.
 
-Use a **toast** when the failure comes from background work, from shared code
-with no component of its own, or when it is a short confirmation ("Changes
-saved"). Do not add a new `WarningPopup` just to report a background failure.
+Every button or link in a notice's action row is a small black pill:
+`WarningPopup`'s `primaryAction`, a toast's actions, and Contact support.
+Use `noticeActionClassName()` for a link that has to look like one.
+
+Use a **toast** only for a short confirmation ("Changes saved") or
+information.
+
+The Word add-in has no `WarningPopup`, so there `ToastViewportUI` draws
+errors as toasts in the same top column.
 
 ## Component catalog
 

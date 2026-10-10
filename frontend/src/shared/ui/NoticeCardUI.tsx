@@ -7,8 +7,9 @@
  * - `ToastViewportUI` (./ToastUI.tsx) stacks cards raised from anywhere with
  *   `showToast()`, including code that has no React component, and closes
  *   them on a timer.
- * - `WarningPopup` (app/components/popups/WarningPopup.tsx) shows one card
- *   that a component opens and closes itself with an `open` prop.
+ * - `WarningPopup` (app/components/popups/WarningPopup.tsx) shows a warning
+ *   that stays until the user closes it. The web app draws every error with
+ *   it, including the ones raised through `showToast()`.
  *
  * This file owns the look (glass surface, tone icon, title, message, action
  * row, dismiss button). It owns no behaviour: no timers, no portal, no
@@ -18,10 +19,10 @@
 import type { HTMLAttributes, ReactNode, Ref } from "react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, Info } from "lucide-react";
 import { LIQUID_GLASS_FLOAT_CLASS } from "./LiquidGlassUI";
 import { pillButtonUIClassName } from "./PillButtonUI.styles";
-import { GlassIconButtonUI } from "./GlassIconButtonUI";
+import { CloseButton } from "./CloseButton";
 import type { ToastTone } from "../lib/toastStore";
 
 /** Same three tones as the toast store, so a toast's tone is a card's tone. */
@@ -49,11 +50,11 @@ const toneTitleClass: Record<NoticeTone, string> = {
 };
 
 /**
- * Class for a button or link placed in the card's `actions` row, so callers
- * outside this file size their pills the same way the card does.
+ * Class for a button or link placed in the card's `actions` row. Every
+ * notice action is a small black pill, so it takes no tone.
  */
-export function noticeActionClassName(tone: "black" | "white" = "black") {
-    return pillButtonUIClassName({ tone, size: "sm" });
+export function noticeActionClassName() {
+    return pillButtonUIClassName({ tone: "black", size: "sm" });
 }
 
 export interface NoticeCardUIProps
@@ -88,9 +89,9 @@ export function NoticeCardUI({
 }: NoticeCardUIProps) {
     const toneIconNode = icon ?? toneIcon[tone];
 
-    // This markup reproduces main's WarningPopup card class for class, so
-    // existing popups render pixel-identically. Change it only on purpose:
-    // every popup and toast in the app moves with it.
+    // Every popup and toast in the app moves with this markup, so change it
+    // only on purpose. The dismiss control is the shared `CloseButton`, the
+    // same one modals and side panels use.
     return (
         <div
             ref={ref}
@@ -136,13 +137,12 @@ export function NoticeCardUI({
                     </div>
                 ) : null}
             </div>
-            <GlassIconButtonUI
+            <CloseButton
                 onClick={onDismiss}
-                className="absolute right-1.5 top-1.5 h-5 w-5"
-                aria-label={dismissLabel}
-            >
-                <X className="h-3 w-3" />
-            </GlassIconButtonUI>
+                label={dismissLabel}
+                size="md"
+                className="absolute right-1.5 top-1.5"
+            />
         </div>
     );
 }
