@@ -89,6 +89,36 @@ describe("resizeChatSplit", () => {
     });
 });
 
+describe("panels with nothing left to give or take", () => {
+    const atMinimum = { explorer: 160, chat: 320, sideChat: 320 };
+
+    it("leaves panels already at their minimum alone, however little room there is", () => {
+        expect(fitPanelWidths(atMinimum, 900, twoChats)).toBe(atMinimum);
+    });
+
+    it("fits a single chat beside a collapsed explorer", () => {
+        const collapsed = { explorerCollapsed: true, sideChatOpen: false };
+        // 800 - 320 (document) - 42 (collapsed explorer) = 438 for the chat.
+        expect(
+            fitPanelWidths({ ...widths, chat: 600 }, 800, collapsed).chat,
+        ).toBeCloseTo(438);
+        expect(resizePanel(widths, "chat", 900, 800, collapsed).chat).toBe(438);
+    });
+
+    it("returns the same widths when a resize changes nothing", () => {
+        expect(resizePanel(widths, "chat", 420, 1400, oneChat)).toBe(widths);
+        expect(resizeChatSplit(widths, 0)).toBe(widths);
+        // Already at its minimum: it cannot give any more to the other.
+        const sideAtMinimum = { ...widths, sideChat: 320 };
+        expect(resizeChatSplit(sideAtMinimum, 40)).toBe(sideAtMinimum);
+    });
+
+    it("does not split two chats that are both below their minimum", () => {
+        const cramped = { explorer: 160, chat: 300, sideChat: 300 };
+        expect(resizeChatSplit(cramped, 20)).toBe(cramped);
+    });
+});
+
 describe("fitsWithExplorer", () => {
     it("says when a second chat needs the explorer's room", () => {
         expect(fitsWithExplorer(1100, false)).toBe(true);

@@ -34,8 +34,10 @@ const CONTEXT_OPEN = "<source_response>";
 const CONTEXT_CLOSE = "</source_response>";
 const CONTEXT_INTRO =
     "The quoted passage above was taken from this earlier assistant response, included for context:";
+// Only a block this module wrote, which always opens with the introduction:
+// the same tags typed by a reader are part of their message and stay in it.
 const TRAILING_CONTEXT = new RegExp(
-    `\\n*(?:${CONTEXT_INTRO}\\n)?${CONTEXT_OPEN}\\n[\\s\\S]*?\\n${CONTEXT_CLOSE}\\s*$`,
+    `\\n*${CONTEXT_INTRO}\\n${CONTEXT_OPEN}\\n[\\s\\S]*?\\n${CONTEXT_CLOSE}\\s*$`,
 );
 
 /** A source response as context: normalized, and cut to a bounded length. */

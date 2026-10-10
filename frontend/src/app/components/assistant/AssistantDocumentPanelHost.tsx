@@ -82,7 +82,9 @@ export function AssistantDocumentPanelHost({
                 <div
                     className={cn(
                         // Small screens: an overlay that slides across.
-                        "fixed inset-0 z-40 p-3 transition-transform duration-300 motion-reduce:transition-none",
+                        // Both slides are `motion-safe`: a `motion-reduce`
+                        // override loses to the `md:` transition below.
+                        "fixed inset-0 z-40 p-3 motion-safe:transition-transform motion-safe:duration-300",
                         panel.panelVisible
                             ? "translate-x-0"
                             : "translate-x-full",
@@ -93,7 +95,7 @@ export function AssistantDocumentPanelHost({
                         // while the chats give way at the same pace. Moving
                         // the panel alone left its full width reserved from
                         // the first frame, so the chats jumped.
-                        "md:relative md:inset-auto md:z-auto md:grid md:h-full md:shrink-0 md:translate-x-0 md:p-0 md:transition-[grid-template-columns]",
+                        "md:relative md:inset-auto md:z-auto md:grid md:h-full md:shrink-0 md:translate-x-0 md:p-0 md:motion-safe:transition-[grid-template-columns]",
                         panel.panelVisible
                             ? "md:grid-cols-[1fr]"
                             : "md:grid-cols-[0fr]",

@@ -68,6 +68,9 @@ vi.mock("@/app/components/assistant/ChatView", () => ({
         onOpenSideChat,
         onCloseSideChat,
         onLoadChat,
+        onAskInSideChat,
+        incomingExcerpt,
+        onIncomingExcerptAdded,
     }: {
         canSend?: boolean | null;
         accessResolved?: boolean;
@@ -78,11 +81,22 @@ vi.mock("@/app/components/assistant/ChatView", () => ({
         onOpenSideChat?: () => void;
         onCloseSideChat?: () => void;
         onLoadChat?: (chatId: string) => void;
+        onAskInSideChat?: (excerpt: { text: string }) => void;
+        incomingExcerpt?: { id: number; excerpt: { text: string } } | null;
+        onIncomingExcerptAdded?: () => void;
     }) =>
         paneId === "side" ? (
             <div data-testid="side-chat">
                 <span data-testid="side-chat-id">{chatId ?? "new"}</span>
                 <span data-testid="side-hidden-chat">{hiddenChatId}</span>
+                <span data-testid="side-excerpt">
+                    {incomingExcerpt
+                        ? `${incomingExcerpt.id}:${incomingExcerpt.excerpt.text}`
+                        : "none"}
+                </span>
+                <button type="button" onClick={onIncomingExcerptAdded}>
+                    Take the passage
+                </button>
                 <button type="button" onClick={() => onLoadChat?.("chat-2")}>
                     Load chat-2 beside
                 </button>
@@ -104,6 +118,12 @@ vi.mock("@/app/components/assistant/ChatView", () => ({
                         Open side chat
                     </button>
                 )}
+                <button
+                    type="button"
+                    onClick={() => onAskInSideChat?.({ text: "a passage" })}
+                >
+                    Ask in side chat
+                </button>
             </>
         ),
 }));
@@ -176,6 +196,36 @@ describe("side chat", () => {
         expect(requestSideChat).toHaveBeenCalledWith(null);
         expect(window.location.search).toBe("?side=chat-7");
         sideChatRequest.current = null;
+    });
+
+    it("opens the side chat for a passage, and numbers each one afresh", async () => {
+        getChat.mockResolvedValue(chatDetail("owner"));
+        render(<AssistantChatPage />);
+        const ask = () =>
+            act(async () => {
+                screen.getByRole("button", { name: "Ask in side chat" }).click();
+            });
+        const take = () =>
+            act(async () => {
+                screen.getByRole("button", { name: "Take the passage" }).click();
+            });
+
+        await ask();
+        expect(window.location.search).toBe("?side=new");
+        expect(screen.getByTestId("side-excerpt")).toHaveTextContent(
+            "1:a passage",
+        );
+
+        // The side chat takes it, which clears what the page was holding.
+        await take();
+        expect(screen.getByTestId("side-excerpt")).toHaveTextContent("none");
+
+        // The next passage must not reuse the id the side chat already took,
+        // or it would be dropped as one it has.
+        await ask();
+        expect(screen.getByTestId("side-excerpt")).toHaveTextContent(
+            "2:a passage",
+        );
     });
 
     it("restores the side chat named in the URL", async () => {

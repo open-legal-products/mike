@@ -203,8 +203,9 @@ neighbours, never by clipping content:
 - **IDE.** The document view takes what the explorer and chat panels leave and
   never less than 320px. `app/lib/workspacePanelWidths.ts` owns that maths;
   route every new resizable panel through it rather than clamping inline.
-- The second chat needs a wide page: below `md` only the primary chat renders
-  and the action that opens the side chat is not offered.
+- In the Assistant the second chat needs a wide page: below `md` only the
+  primary chat renders, at full width, and the action that opens the side
+  chat is not offered. The IDE is a desktop workspace and has no such gate.
 
 
 ## Elevation and the glass surface

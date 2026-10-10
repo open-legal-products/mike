@@ -1249,12 +1249,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         () => setSideChatExcerpt(null),
         [],
     );
+    // Counted apart from the held passage: that is cleared once the side
+    // chat takes it, and an id that started over would look to that chat
+    // like the passage it already has.
+    const sideChatExcerptCount = useRef(0);
     function askInSideChat(excerpt: MessageExcerpt) {
         if (sideChatId === null) handleOpenSideChat();
-        setSideChatExcerpt((current) => ({
-            id: (current?.id ?? 0) + 1,
-            excerpt,
-        }));
+        sideChatExcerptCount.current += 1;
+        setSideChatExcerpt({ id: sideChatExcerptCount.current, excerpt });
     }
 
     function handleOpenSideChat() {

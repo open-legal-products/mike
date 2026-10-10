@@ -52,12 +52,14 @@ export default function AssistantChatPage() {
         () => setSideChatExcerpt(null),
         [],
     );
+    // Counted apart from the held passage: that is cleared once the side
+    // chat takes it, and an id that started over would look to that chat
+    // like the passage it already has.
+    const sideChatExcerptCount = useRef(0);
     function askInSideChat(excerpt: MessageExcerpt) {
         if (sideChatId === null) openSideChat("");
-        setSideChatExcerpt((current) => ({
-            id: (current?.id ?? 0) + 1,
-            excerpt,
-        }));
+        sideChatExcerptCount.current += 1;
+        setSideChatExcerpt({ id: sideChatExcerptCount.current, excerpt });
     }
     const chatsRef = useRef<HTMLDivElement>(null);
     const [sideChatShare, setSideChatShare] = useState(0.5);

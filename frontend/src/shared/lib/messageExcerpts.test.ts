@@ -131,4 +131,15 @@ describe("source response context", () => {
             normalizeExcerptContext("x".repeat(MAX_EXCERPT_CONTEXT_LENGTH + 50)),
         ).toHaveLength(MAX_EXCERPT_CONTEXT_LENGTH + 1);
     });
+
+    it("keeps the same tags when the reader typed them", () => {
+        const typed =
+            "What does this mean?\n\n<source_response>\nsome XML I pasted\n</source_response>";
+
+        expect(parseExcerpts(typed)).toEqual({ excerpts: [], body: typed });
+        expect(parseExcerpts(`> a passage\n\n${typed}`)).toEqual({
+            excerpts: [{ text: "a passage" }],
+            body: typed,
+        });
+    });
 });
