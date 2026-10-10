@@ -181,7 +181,9 @@ const CHAT_INPUT_BOTTOM_OFFSET = 12;
 export function ChatView(props: Props) {
     const documentPanel = useAssistantDocumentPanel();
     return (
-        <div className="h-full w-full flex relative">
+        // Clipped so the panel sliding in from past the right edge cannot be
+        // scrolled to (see the assistant page).
+        <div className="relative flex h-full w-full overflow-x-clip">
             <AssistantChatColumn {...props} documentPanel={documentPanel} />
             <AssistantDocumentPanelHost panel={documentPanel} />
         </div>

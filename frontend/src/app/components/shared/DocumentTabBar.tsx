@@ -63,6 +63,7 @@ export function DocumentTabBar({
     onReorder,
 }: Props) {
     const dragType = `application/mike-${idPrefix}-tab`;
+    const listRef = useRef<HTMLDivElement>(null);
     const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
     const draggedIdRef = useRef<string | null>(null);
     const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -71,13 +72,23 @@ export function DocumentTabBar({
         position: TabDropPosition;
     } | null>(null);
 
+    // Brings the active tab into view by scrolling the strip, and only the
+    // strip. `scrollIntoView` also scrolls every ancestor that can scroll, and
+    // while the panel holding this bar is still sliding in from off-screen
+    // that dragged the whole page sideways and let it spring back.
     useEffect(() => {
-        if (!activeTabId) return;
-        itemRefs.current[activeTabId]?.scrollIntoView?.({
-            behavior: "smooth",
-            block: "nearest",
-            inline: "nearest",
-        });
+        const list = listRef.current;
+        const tab = activeTabId ? itemRefs.current[activeTabId] : null;
+        if (!list || !tab) return;
+        const listRect = list.getBoundingClientRect();
+        const tabRect = tab.getBoundingClientRect();
+        const left =
+            tabRect.left < listRect.left
+                ? tabRect.left - listRect.left
+                : tabRect.right > listRect.right
+                  ? tabRect.right - listRect.right
+                  : 0;
+        if (left !== 0) list.scrollBy?.({ left, behavior: "smooth" });
     }, [activeTabId, tabs.length]);
 
     function clearDrag() {
@@ -129,6 +140,7 @@ export function DocumentTabBar({
     return (
         <div className="flex min-w-0 shrink-0 items-center">
             <div
+                ref={listRef}
                 role="tablist"
                 aria-label={label}
                 className={cn(

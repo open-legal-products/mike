@@ -12,6 +12,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { panelDocumentAtVersion } from "@/app/lib/panelDocumentAtVersion";
 import { userFacingApiError } from "@/app/lib/userFacingError";
+import { cn } from "@/app/lib/utils";
 import type { PanelDocument } from "../shared/types";
 import { AssistantSidePanel } from "./AssistantSidePanel";
 import type { AssistantDocumentPanel } from "./useAssistantDocumentPanel";
@@ -79,8 +80,28 @@ export function AssistantDocumentPanelHost({
 
             {panel.panelMounted && (
                 <div
-                    className={`fixed inset-0 z-40 flex justify-center p-3 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] md:relative md:inset-auto md:z-auto md:block md:h-full md:min-w-0 md:flex-shrink-0 md:p-0 ${panel.panelVisible ? "translate-x-0" : "translate-x-full"}`}
+                    className={cn(
+                        // Small screens: an overlay that slides across.
+                        "fixed inset-0 z-40 p-3 transition-transform duration-300 motion-reduce:transition-none",
+                        panel.panelVisible
+                            ? "translate-x-0"
+                            : "translate-x-full",
+                        // From md the panel sits in the row beside the chats,
+                        // and what slides is the room it takes there: the
+                        // column grows from nothing to the panel's width
+                        // (0fr to 1fr), carrying the panel in from the edge
+                        // while the chats give way at the same pace. Moving
+                        // the panel alone left its full width reserved from
+                        // the first frame, so the chats jumped.
+                        "md:relative md:inset-auto md:z-auto md:grid md:h-full md:shrink-0 md:translate-x-0 md:p-0 md:transition-[grid-template-columns]",
+                        panel.panelVisible
+                            ? "md:grid-cols-[1fr]"
+                            : "md:grid-cols-[0fr]",
+                    )}
                 >
+                    {/* The column: narrower than the panel while it slides,
+                        with the panel running past it and off the page. */}
+                    <div className="flex h-full w-full justify-center md:block md:w-auto md:min-w-0">
                     <AssistantSidePanel
                         tabs={tabs}
                         canEdit={canWrite}
@@ -147,6 +168,7 @@ export function AssistantDocumentPanelHost({
                         onScrollChange={panel.handleScrollChange}
                         onOpenDocuments={() => setOpenDocumentsModalOpen(true)}
                     />
+                    </div>
                 </div>
             )}
 

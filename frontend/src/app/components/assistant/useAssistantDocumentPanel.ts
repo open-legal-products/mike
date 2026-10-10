@@ -9,7 +9,6 @@ import {
     type Dispatch,
     type SetStateAction,
 } from "react";
-import { flushSync } from "react-dom";
 import { useSidebar } from "@/app/contexts/SidebarContext";
 import { invalidateDocxBytes } from "@/app/hooks/useFetchDocxBytes";
 import {
@@ -20,7 +19,12 @@ import {
 } from "./AssistantSidePanel";
 import type { Document } from "../shared/types";
 
-const ASSISTANT_PANEL_TRANSITION_MS = 500;
+/**
+ * How long the panel takes to slide in or out. The app sidebar folds away and
+ * comes back over the same time (its `duration-300`), and the panel's host
+ * uses the same class, so the three move as one.
+ */
+const ASSISTANT_PANEL_TRANSITION_MS = 300;
 const MOBILE_BREAKPOINT_PX = 768;
 
 function isSmallScreen() {
@@ -112,20 +116,22 @@ export function useAssistantDocumentPanel() {
             window.clearTimeout(panelCloseTimerRef.current);
             panelCloseTimerRef.current = null;
         }
-        flushSync(() => {
+        // The sidebar folds away as the panel slides in. Both start in the
+        // same frame, so the chats between them narrow once and steadily;
+        // started apart, the chats were squeezed and then let out again.
+        const reveal = () => {
             setSidebarOpen(false);
-        });
-
-        if (panelMounted) {
             setPanelVisible(true);
+        };
+        if (panelMounted) {
+            reveal();
             return;
         }
 
+        // Mounted closed first, or there is nothing to slide in from.
         setPanelVisible(false);
         setPanelMounted(true);
-        requestAnimationFrame(() =>
-            requestAnimationFrame(() => setPanelVisible(true)),
-        );
+        requestAnimationFrame(() => requestAnimationFrame(reveal));
     }, [panelMounted, setSidebarOpen]);
 
     useEffect(
@@ -142,10 +148,12 @@ export function useAssistantDocumentPanel() {
             window.clearTimeout(panelCloseTimerRef.current);
         }
         setPanelVisible(false);
+        // The sidebar comes back as the panel leaves, for the same reason
+        // they start together on the way in.
+        if (!isSmallScreen()) setSidebarOpen(true);
         panelCloseTimerRef.current = window.setTimeout(() => {
             panelCloseTimerRef.current = null;
             setPanelMounted(false);
-            if (!isSmallScreen()) setSidebarOpen(true);
             setTabs([]);
             setActiveTabId(null);
         }, ASSISTANT_PANEL_TRANSITION_MS);

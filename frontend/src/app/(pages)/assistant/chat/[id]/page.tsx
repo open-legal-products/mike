@@ -77,7 +77,14 @@ export default function AssistantChatPage() {
     }
 
     return (
-        <div ref={chatsRef} className="h-full w-full flex relative">
+        // The side panel slides in from past the right edge. Clipped here, that
+        // overhang is not something the page can be scrolled to: focusing or
+        // revealing anything in the panel mid-slide would otherwise drag the
+        // chats sideways, under the app sidebar.
+        <div
+            ref={chatsRef}
+            className="relative flex h-full w-full overflow-x-clip"
+        >
             <AssistantChatPane
                 widthShare={hasSideChat ? 1 - sideChatShare : undefined}
                 chatId={chatId}
