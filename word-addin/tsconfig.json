@@ -106,6 +106,24 @@
       ],
       "@mike/model-catalog": [
         "../frontend/src/shared/lib/modelCatalog.ts"
+      ],
+      "@mike/message-excerpts": [
+        "../frontend/src/shared/lib/messageExcerpts.ts"
+      ],
+      "@mike/response-selection-menu-ui": [
+        "../frontend/src/shared/ui/ResponseSelectionMenuUI.tsx"
+      ],
+      "@mike/excerpt-pill-ui": [
+        "../frontend/src/shared/ui/ExcerptPillUI.tsx"
+      ],
+      "@mike/excerpt-modal-ui": [
+        "../frontend/src/shared/ui/ExcerptModalUI.tsx"
+      ],
+      "@mike/chat-history-dropdown-ui": [
+        "../frontend/src/shared/ui/ChatHistoryDropdownUI.tsx"
+      ],
+      "@mike/composer-send-button-ui": [
+        "../frontend/src/shared/ui/ComposerSendButtonUI.styles.ts"
       ]
     },
     "jsx": "react-jsx",

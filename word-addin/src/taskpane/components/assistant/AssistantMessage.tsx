@@ -9,6 +9,7 @@ import type {
   WordThinkingEvent,
 } from "../../types";
 import { PillButtonUI as PillButton } from "@mike/pill-button-ui";
+import { EXCERPT_SOURCE_PROPS } from "@mike/response-selection-menu-ui";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { EditCardsSection } from "./message/EditCardsSection";
@@ -385,6 +386,7 @@ function AssistantMessageImpl({
               <React.Fragment key={group.key}>
                 {group.text && !holdForEdit && (
                   <div
+                    {...EXCERPT_SOURCE_PROPS}
                     className="font-serif text-base leading-7 text-gray-900"
                     onClick={handleCitationClick}
                   >

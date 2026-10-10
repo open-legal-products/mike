@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+    Check,
     Download,
     Eye,
     EyeOff,
@@ -9,6 +10,7 @@ import {
     FolderMinus,
     Hash,
     History,
+    Loader2,
     Pencil,
     Plus,
     Trash2,
@@ -30,12 +32,17 @@ import { LIQUID_GLASS_HOVER_CLASS } from "@/app/components/ui/liquid-surface";
 
 export { CLOSE_ROW_ACTIONS_EVENT, closeRowActionMenus };
 
+export type RowAddStatus = "idle" | "pending" | "complete";
+
 interface Props {
     onDeselect?: () => void;
     onView?: () => void;
     /** Copies the row into the caller's own collection; `addLabel` names it. */
     onAdd?: () => void;
     addLabel?: string;
+    /** Keep the menu open to display progress and completion of an add action. */
+    addStatus?: RowAddStatus;
+    addDisabled?: boolean;
     onDelete?: () => void | Promise<void>;
     onHide?: () => void;
     onUnhide?: () => void;
@@ -79,6 +86,8 @@ export function RowActionMenuItems({
     onView,
     onAdd,
     addLabel = "Add",
+    addStatus,
+    addDisabled = false,
     onDelete,
     onHide,
     onUnhide,
@@ -123,9 +132,24 @@ export function RowActionMenuItems({
                 </DropdownItem>
             )}
             {onAdd && (
-                <DropdownItem onSelect={run(onAdd)}>
-                    <Plus className="h-3.5 w-3.5" />
-                    {addLabel}
+                <DropdownItem
+                    disabled={addDisabled || addStatus === "pending" || addStatus === "complete"}
+                    aria-busy={addStatus === "pending" || undefined}
+                    className={addStatus === "complete" ? "data-[disabled]:opacity-100" : undefined}
+                    onSelect={(event) => {
+                        if (addStatus !== undefined) event.preventDefault();
+                        else onClose?.();
+                        onAdd();
+                    }}
+                >
+                    {addStatus === "pending" ? (
+                        <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                    ) : addStatus === "complete" ? (
+                        <Check aria-hidden="true" className="h-3.5 w-3.5 text-green-600" />
+                    ) : (
+                        <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                    )}
+                    <span aria-live={addStatus !== undefined ? "polite" : undefined}>{addLabel}</span>
                 </DropdownItem>
             )}
             {onNewSubfolder && (

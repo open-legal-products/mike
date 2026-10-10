@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkflowList } from "./WorkflowList";
@@ -91,6 +91,20 @@ vi.mock("./NewWorkflowModal", () => ({
 
 vi.mock("./WorkflowAddonPreviewModal", () => ({
   WorkflowAddonPreviewModal: () => null,
+}));
+
+const packAddons = [1, 2, 3].map((index) => ({
+  id: `pack-addon-${index}`,
+  addon_key: `workflow-${index}`,
+  pack_key: index === 3 ? "other-pack" : "starter-pack",
+  pack_title: index === 3 ? "Other pack" : "Starter pack",
+  pack_description: null,
+  title: `Pack workflow ${index}`,
+  type: "assistant",
+  description: "Test workflow",
+  language: "English",
+  practice: "General",
+  jurisdictions: ["General"],
 }));
 
 describe("WorkflowList pack toolbar", () => {
@@ -311,6 +325,57 @@ describe("WorkflowList pack toolbar", () => {
     expect(imported.querySelector("svg")).not.toBeNull();
     expect(imported).toBeDisabled();
     expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("imports a folder from its plus button and shows progress without opening it", async () => {
+    const user = userEvent.setup();
+    listWorkflowAddons.mockResolvedValue(packAddons);
+    let finish!: (value: unknown) => void;
+    importWorkflowAddon
+      .mockResolvedValueOnce({ id: "copy-1" })
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render(<WorkflowList initialTab="addons" />);
+    const folder = (await screen.findByText("Starter pack")).closest(".group") as HTMLElement;
+    const otherFolder = screen.getByText("Other pack").closest(".group") as HTMLElement;
+    const button = within(folder).getByRole("button", { name: "Import" });
+    expect(button).toHaveClass("h-6", "w-6");
+    expect(button.querySelector("svg")).toHaveClass("lucide-plus");
+    await user.click(button);
+
+    const pending = within(folder).getByRole("button", { name: "Importing…" });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+    expect(pending.querySelector("svg")).toHaveClass("animate-spin");
+    expect(within(otherFolder).getByRole("button", { name: "Import" })).toBeDisabled();
+    expect(importWorkflowAddon.mock.calls.map(([id]) => id)).toEqual(["pack-addon-1", "pack-addon-2"]);
+    expect(setActiveTab).not.toHaveBeenCalled();
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(screen.queryByText("Pack workflow 1")).not.toBeInTheDocument();
+
+    await act(async () => finish({ id: "copy-2" }));
+    const imported = within(folder).getByRole("button", { name: "Imported" });
+    expect(imported).toHaveClass("text-green-600");
+    expect(imported).toBeDisabled();
+    expect(within(otherFolder).getByRole("button", { name: "Import" })).toBeEnabled();
+  });
+
+  it("retries a partially imported folder without copying successful workflows again", async () => {
+    const user = userEvent.setup();
+    listWorkflowAddons.mockResolvedValue(packAddons);
+    importWorkflowAddon
+      .mockResolvedValueOnce({ id: "copy-1" })
+      .mockRejectedValueOnce(new Error("Import failed"));
+    render(<WorkflowList initialTab="addons" />);
+    const folder = (await screen.findByText("Starter pack")).closest(".group") as HTMLElement;
+    await user.click(within(folder).getByRole("button", { name: "Import" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Some selected add-ons could not be imported.");
+    expect(within(folder).queryByRole("button", { name: "Imported" })).not.toBeInTheDocument();
+
+    importWorkflowAddon.mockResolvedValueOnce({ id: "copy-2" });
+    await user.click(within(folder).getByRole("button", { name: "Import" }));
+    expect(await within(folder).findByRole("button", { name: "Imported" })).toBeDisabled();
+    expect(importWorkflowAddon.mock.calls.map(([id]) => id)).toEqual(["pack-addon-1", "pack-addon-2", "pack-addon-2"]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows resource access scopes in the workflows table", () => {

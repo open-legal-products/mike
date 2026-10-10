@@ -8,10 +8,15 @@ import type {
     EditAnnotation,
     PanelDocument,
 } from "../shared/types";
+import { ConnectorSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
-import { eventErrorMessage, toolCallLabel } from "./message/eventUtils";
+import {
+    connectorToolLabel,
+    eventErrorMessage,
+    toolCallLabel,
+} from "./message/eventUtils";
 import { preprocessCitations, internalCaseHref } from "./message/citationUtils";
 import { useSmoothedReveal } from "./message/useSmoothedReveal";
 import { MarkdownContent } from "./message/MarkdownContent";
@@ -418,7 +423,7 @@ export function AssistantMessage({
         if (event.type === "mcp_tool_call") {
             const isError = event.status === "error";
             const label = event.connector_name
-                ? `${event.connector_name}: ${event.tool_name}`
+                ? `${event.connector_name}: ${connectorToolLabel(event.tool_name, event.tool_title)}`
                 : toolCallLabel(event.openai_tool_name);
             return (
                 <EventBlock
@@ -427,8 +432,14 @@ export function AssistantMessage({
                     isStreaming={event.isStreaming}
                     dotColor={isError ? "red" : "green"}
                 >
-                    <span className="font-medium">
-                        {event.isStreaming ? "Using connector..." : label}
+                    <span className="flex min-w-0 items-center gap-1.5 font-medium">
+                        <ConnectorSkeuoIcon
+                            data-testid="connector-event-icon"
+                            className="h-3.5 w-3.5 shrink-0"
+                        />
+                        <span className="min-w-0 break-words">
+                            {event.isStreaming ? "Using connector..." : label}
+                        </span>
                     </span>
                     {isError && event.error && (
                         <p className="mt-0.5 text-xs text-red-600">
@@ -830,6 +841,7 @@ export function AssistantMessage({
                                 return (
                                     <div key={`c-${g.index}`}>
                                         <MarkdownContent
+                                            excerptSource
                                             text={processedTexts[g.index]}
                                             inlineCitationTargets={
                                                 inlineCitationTargets

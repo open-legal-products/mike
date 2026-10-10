@@ -10,6 +10,8 @@ import type {
   DocTableSelectionActions,
 } from "@/app/components/documents/DocTable";
 import { PageHeader } from "@/app/components/shared/PageHeader";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
+import type { RowAddStatus } from "@/app/components/shared/RowActions";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import type { Document } from "@/app/components/shared/types";
@@ -69,7 +71,7 @@ export function PresetTemplatesPage({
   const [folderBreadcrumbs, setFolderBreadcrumbs] = useState<
     Array<{ label: string; onClick: () => void }>
   >([]);
-  const [status, setStatus] = useState("");
+  const [importStatus, setImportStatus] = useState<Record<string, RowAddStatus>>({});
   const [error, setError] = useState<string | null>(null);
   const uploadRef = useRef<AbortController | null>(null);
   useEffect(() => () => uploadRef.current?.abort(), []);
@@ -83,26 +85,26 @@ export function PresetTemplatesPage({
       if (uploadRef.current) return;
       const presets = documents
         .map((document) => PRESETS_BY_ID.get(document.id))
-        .filter((preset) => !!preset && isPresetDocument(preset));
+        .filter((preset) =>
+          !!preset && isPresetDocument(preset) && importStatus[preset.id] !== "complete",
+        );
       if (presets.length === 0) return;
       const controller = new AbortController();
       uploadRef.current = controller;
       setError(null);
-      let added = 0;
+      setImportStatus((current) => ({
+        ...current,
+        ...Object.fromEntries(presets.map((preset) => [preset!.id, "pending" as const])),
+      }));
       try {
         for (const preset of presets) {
-          setStatus(
-            presets.length === 1
-              ? `Adding ${preset!.filename}…`
-              : `Adding ${added + 1} of ${presets.length}…`,
-          );
           const document = await addPresetTemplate(
             preset!,
             folderId,
             controller.signal,
           );
           if (controller.signal.aborted) return;
-          added += 1;
+          setImportStatus((current) => ({ ...current, [preset!.id]: "complete" }));
           // Only a collection that is already loaded is patched; an unloaded
           // one fetches the new copy with everything else when it opens.
           if (templatesLoaded) {
@@ -112,14 +114,8 @@ export function PresetTemplatesPage({
             ]);
           }
         }
-        setStatus(
-          presets.length === 1
-            ? `Added ${presets[0]!.filename} to templates.`
-            : `Added ${added} files to templates.`,
-        );
       } catch (caught) {
         if (controller.signal.aborted) return;
-        setStatus(added > 0 ? `Added ${added} of ${presets.length} files.` : "");
         setError(
           userFacingApiError(
             caught,
@@ -128,9 +124,14 @@ export function PresetTemplatesPage({
         );
       } finally {
         uploadRef.current = null;
+        if (!controller.signal.aborted) {
+          setImportStatus((current) => Object.fromEntries(
+            Object.entries(current).filter(([, status]) => status !== "pending"),
+          ));
+        }
       }
     },
-    [folderId, setDocumentsForKind, templatesLoaded],
+    [folderId, importStatus, setDocumentsForKind, templatesLoaded],
   );
 
   const catalog = useMemo<DocTableCatalog>(
@@ -141,11 +142,20 @@ export function PresetTemplatesPage({
       },
       canPreview: canUsePreset,
       canAdd: canUsePreset,
-      addLabel: (count) =>
-        count > 1 ? `Add ${count} to templates` : "Add to templates",
+      addLabel: (count, status) => {
+        if (status === "pending") return "Import…";
+        if (status === "complete") return "Imported";
+        return count > 1 ? `Import ${count}` : "Import";
+      },
+      addStatus: (documents) => {
+        if (documents.some((doc) => importStatus[doc.id] === "pending")) return "pending";
+        return documents.length > 0 && documents.every((doc) => importStatus[doc.id] === "complete")
+          ? "complete" : "idle";
+      },
+      addDisabled: Object.values(importStatus).includes("pending"),
       onAdd: (documents) => void handleAdd(documents),
     }),
-    [handleAdd],
+    [handleAdd, importStatus],
   );
 
   const handleFolderBackActionChange = useCallback(
@@ -201,16 +211,6 @@ export function PresetTemplatesPage({
             ) : undefined
           }
         />
-        <div className="mx-4 text-xs text-muted-foreground md:mx-8">
-          {error && (
-            <p role="alert" className="mb-2 text-destructive">
-              {error}
-            </p>
-          )}
-          <p role="status" className="mb-2 empty:hidden [overflow-wrap:anywhere]">
-            {status}
-          </p>
-        </div>
         <DocTable
           scopeKey="preset-templates"
           catalog={catalog}
@@ -231,6 +231,11 @@ export function PresetTemplatesPage({
           canDo={refuseCapability}
         />
       </div>
+      <WarningPopup
+        open={error !== null}
+        message={error}
+        onClose={() => setError(null)}
+      />
     </div>
   );
 }

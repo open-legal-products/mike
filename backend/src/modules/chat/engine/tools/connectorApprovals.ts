@@ -140,6 +140,7 @@ export function writeApprovedConnectorFrames(
         name: event.openai_tool_name,
         connector_name: event.connector_name,
         tool_name: event.tool_name,
+        tool_title: event.tool_title,
         status: event.status,
         error: event.error,
         approval_id: event.approval_id,

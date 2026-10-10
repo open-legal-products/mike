@@ -1,9 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import { Waypoints } from "lucide-react";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import type { MessageFile } from "../shared/types";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
+import {
+    parseExcerpts,
+    type MessageExcerpt,
+} from "@/shared/lib/messageExcerpts";
+import { ExcerptModalUI } from "@/shared/ui/ExcerptModalUI";
+import { ExcerptPillUI } from "@/shared/ui/ExcerptPillUI";
 
 interface Props {
     content: string;
@@ -22,13 +29,32 @@ export function UserMessage({
     onWorkflowClick,
 }: Props) {
     const hasFiles = files && files.length > 0;
+    // Passages quoted from an earlier response travel as leading blockquotes;
+    // here they are pills that open the passage, as in the composer.
+    const { excerpts, body } = parseExcerpts(content);
+    const [openExcerpt, setOpenExcerpt] = useState<MessageExcerpt | null>(
+        null,
+    );
 
     return (
         <div className="w-full flex justify-end">
             <div className="max-w-[80%] bg-gray-100 rounded-xl px-4 py-3">
-                <p className="text-sm text-gray-900 whitespace-pre-wrap">{content}</p>
-                {(workflow || hasFiles) && (
-                    <div className="flex flex-wrap justify-end gap-1.5 mt-3">
+                {body && (
+                    <p className="text-sm text-gray-900 whitespace-pre-wrap">
+                        {body}
+                    </p>
+                )}
+                {(workflow || hasFiles || excerpts.length > 0) && (
+                    <div
+                        className={`flex flex-wrap justify-end gap-1.5 ${body ? "mt-3" : ""}`}
+                    >
+                        {excerpts.map((excerpt, i) => (
+                            <ExcerptPillUI
+                                key={`excerpt-${i}`}
+                                excerpt={excerpt}
+                                onOpen={() => setOpenExcerpt(excerpt)}
+                            />
+                        ))}
                         {workflow && (
                             <div className="inline-flex items-center gap-1 pl-2 pr-2.5 py-0.5 rounded-full text-xs bg-blue-600 text-white shadow border border-blue-600">
                                 {onWorkflowClick ? (
@@ -87,6 +113,10 @@ export function UserMessage({
                     </div>
                 )}
             </div>
+            <ExcerptModalUI
+                excerpt={openExcerpt}
+                onClose={() => setOpenExcerpt(null)}
+            />
         </div>
     );
 }

@@ -1,5 +1,8 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, FileText, Waypoints } from "lucide-react";
+import { ExcerptModalUI } from "@mike/excerpt-modal-ui";
+import { ExcerptPillUI } from "@mike/excerpt-pill-ui";
+import { parseExcerpts, type MessageExcerpt } from "@mike/message-excerpts";
 
 const COLLAPSED_CONTENT_HEIGHT = 144;
 
@@ -20,6 +23,10 @@ function UserMessageImpl({
   const contentRef = useRef<HTMLParagraphElement>(null);
   const [canExpand, setCanExpand] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // Passages quoted from an earlier response travel as leading blockquotes;
+  // here they are pills that open the passage, as in the composer.
+  const { excerpts, body } = parseExcerpts(content);
+  const [openExcerpt, setOpenExcerpt] = useState<MessageExcerpt | null>(null);
 
   useLayoutEffect(() => {
     const element = contentRef.current;
@@ -50,50 +57,63 @@ function UserMessageImpl({
   return (
     <div className="w-full flex justify-end">
       <div className="max-w-[80%] bg-gray-100 rounded-xl px-4 py-3">
-        <div
-          className="relative overflow-hidden"
-          // Clamped from the very first frame (maxHeight is inert for short
-          // content): the height painted on send is final, and ChatView's
-          // pre-paint spacer measurement sees the same clamped box. Only the
-          // gradient/expand affordances wait for the post-paint overflow
-          // measurement — they don't change the box height.
-          style={expanded ? undefined : { maxHeight: COLLAPSED_CONTENT_HEIGHT }}
-          data-testid="user-message-content"
-        >
-          <p
-            ref={contentRef}
-            className={`text-sm text-gray-900 whitespace-pre-wrap break-words ${
-              canExpand ? "pb-8" : ""
-            }`}
+        {body && (
+          <div
+            className="relative overflow-hidden"
+            // Clamped from the very first frame (maxHeight is inert for short
+            // content): the height painted on send is final, and ChatView's
+            // pre-paint spacer measurement sees the same clamped box. Only the
+            // gradient/expand affordances wait for the post-paint overflow
+            // measurement — they don't change the box height.
+            style={
+              expanded ? undefined : { maxHeight: COLLAPSED_CONTENT_HEIGHT }
+            }
+            data-testid="user-message-content"
           >
-            {content}
-          </p>
-          {canExpand && !expanded && (
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-b from-transparent via-gray-100/80 to-gray-100 backdrop-blur-[2px] [mask-image:linear-gradient(to_bottom,transparent,black_55%)]"
-            />
-          )}
-          {canExpand && (
-            <button
-              type="button"
-              aria-label={
-                expanded ? "Collapse user message" : "Expand user message"
-              }
-              aria-expanded={expanded}
-              onClick={() => setExpanded((current) => !current)}
-              className="absolute bottom-0 left-1/2 z-10 inline-flex h-7 w-9 -translate-x-1/2 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-200/90 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+            <p
+              ref={contentRef}
+              className={`text-sm text-gray-900 whitespace-pre-wrap break-words ${
+                canExpand ? "pb-8" : ""
+              }`}
             >
-              {expanded ? (
-                <ChevronUp className="h-4 w-4" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-            </button>
-          )}
-        </div>
-        {(workflow || (files && files.length > 0)) && (
-          <div className="mt-3 flex flex-wrap justify-end gap-1.5">
+              {body}
+            </p>
+            {canExpand && !expanded && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-b from-transparent via-gray-100/80 to-gray-100 backdrop-blur-[2px] [mask-image:linear-gradient(to_bottom,transparent,black_55%)]"
+              />
+            )}
+            {canExpand && (
+              <button
+                type="button"
+                aria-label={
+                  expanded ? "Collapse user message" : "Expand user message"
+                }
+                aria-expanded={expanded}
+                onClick={() => setExpanded((current) => !current)}
+                className="absolute bottom-0 left-1/2 z-10 inline-flex h-7 w-9 -translate-x-1/2 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-200/90 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+              >
+                {expanded ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </button>
+            )}
+          </div>
+        )}
+        {(workflow || (files && files.length > 0) || excerpts.length > 0) && (
+          <div
+            className={`flex flex-wrap justify-end gap-1.5 ${body ? "mt-3" : ""}`}
+          >
+            {excerpts.map((excerpt, index) => (
+              <ExcerptPillUI
+                key={`excerpt-${index}`}
+                excerpt={excerpt}
+                onOpen={() => setOpenExcerpt(excerpt)}
+              />
+            ))}
             {workflow && (
               <div className="inline-flex items-center gap-1 rounded-full border border-blue-600 bg-blue-600 py-0.5 pl-2 pr-2.5 text-xs text-white shadow">
                 <Waypoints className="h-2.5 w-2.5 shrink-0" />
@@ -112,6 +132,10 @@ function UserMessageImpl({
           </div>
         )}
       </div>
+      <ExcerptModalUI
+        excerpt={openExcerpt}
+        onClose={() => setOpenExcerpt(null)}
+      />
     </div>
   );
 }

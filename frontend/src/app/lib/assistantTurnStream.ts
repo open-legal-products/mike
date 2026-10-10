@@ -644,6 +644,10 @@ export async function consumeAssistantTurnStream(
                 typeof data.tool_name === "string"
                   ? (data.tool_name as string)
                   : openaiToolName,
+              tool_title:
+                typeof data.tool_title === "string" && data.tool_title
+                  ? (data.tool_title as string)
+                  : undefined,
               openai_tool_name: openaiToolName,
               status: data.status === "error" ? "error" : "ok",
               error:

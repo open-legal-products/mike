@@ -211,11 +211,18 @@ export function DropdownAtPoint({
     point,
     onClose,
     children,
+    followPoint = false,
     ...contentProps
 }: {
     point: { x: number; y: number };
     onClose: () => void;
     children: React.ReactNode;
+    /**
+     * Treat a changed point as the same menu moving (it is anchored to
+     * something that reflows, like highlighted text) rather than as a new
+     * menu opened somewhere else.
+     */
+    followPoint?: boolean;
 } & Omit<
     React.ComponentPropsWithoutRef<typeof DropdownPrimitive.Content>,
     "children"
@@ -224,7 +231,7 @@ export function DropdownAtPoint({
         <Dropdown
             // A new point is a new menu. Without the remount, a right-click
             // while one is open can leave it positioned at the old point.
-            key={`${point.x},${point.y}`}
+            key={followPoint ? undefined : `${point.x},${point.y}`}
             open
             modal={false}
             onOpenChange={(open) => {
@@ -255,6 +262,9 @@ export function DropdownAtPoint({
                 sideOffset={0}
                 // There is no real trigger to hand focus back to.
                 onCloseAutoFocus={(event) => event.preventDefault()}
+                // A zero-size trigger gives the positioner nothing to watch
+                // for movement, so a followed point is re-read every frame.
+                updatePositionStrategy={followPoint ? "always" : undefined}
                 {...contentProps}
             >
                 {children}

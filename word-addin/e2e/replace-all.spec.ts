@@ -201,7 +201,7 @@ test("a replace-all card survives a task-pane reload and still resolves all occu
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Replace all occurrences/ })
+    .getByRole("menuitem", { name: /Replace all occurrences/ })
     .click();
 
   const accept = page.getByRole("button", { name: "Accept", exact: true });

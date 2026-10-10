@@ -43,6 +43,7 @@ import {
     RowActionMenuItems,
     RowActions,
     ROW_ACTION_MENU_CLASS,
+    type RowAddStatus,
 } from "@/app/components/shared/RowActions";
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { DropdownAtPoint } from "@/shared/ui/dropdown";
@@ -273,7 +274,9 @@ export interface DocTableCatalog {
     /** False for a file the side panel cannot render; it downloads instead. */
     canPreview?: (doc: Document) => boolean;
     canAdd?: (doc: Document) => boolean;
-    addLabel: (count: number) => string;
+    addLabel: (count: number, status?: RowAddStatus) => string;
+    addStatus?: (documents: Document[]) => RowAddStatus;
+    addDisabled?: boolean;
     onAdd: (documents: Document[]) => void;
 }
 
@@ -2464,6 +2467,17 @@ export function DocTable({
         setViewingDoc(doc);
     }
 
+    function catalogAddActions(targets: Document[]) {
+        const addable = targets.filter((doc) => catalog?.canAdd?.(doc) !== false);
+        const addStatus = catalog?.addStatus?.(addable);
+        return {
+            onAdd: addable.length > 0 ? () => catalog?.onAdd(addable) : undefined,
+            addLabel: catalog?.addLabel(addable.length, addStatus),
+            addStatus,
+            addDisabled: catalog?.addDisabled,
+        };
+    }
+
     function catalogDocumentActions(doc: Document) {
         return {
             onView:
@@ -2473,11 +2487,7 @@ export function DocTable({
                           setViewingDocVersion(null);
                           setViewingDoc(doc);
                       },
-            onAdd:
-                catalog?.canAdd?.(doc) === false
-                    ? undefined
-                    : () => catalog?.onAdd([doc]),
-            addLabel: catalog?.addLabel(1),
+            ...catalogAddActions([doc]),
             onDownload: () => void downloadDoc(doc.id),
         };
     }
@@ -2493,9 +2503,7 @@ export function DocTable({
         return {
             onView: () => openFolderView(folderId),
             viewLabel: "Open",
-            onAdd:
-                addable.length > 0 ? () => catalog?.onAdd(addable) : undefined,
-            addLabel: catalog?.addLabel(addable.length),
+            ...catalogAddActions(addable),
         };
     }
 
@@ -3851,12 +3859,7 @@ export function DocTable({
                     <RowActionMenuItems
                         onClose={onClose}
                         onDeselect={clearCollectionSelection}
-                        onAdd={
-                            addable.length > 0
-                                ? () => catalog.onAdd(addable)
-                                : undefined
-                        }
-                        addLabel={catalog.addLabel(addable.length)}
+                        {...catalogAddActions(addable)}
                     />
                 );
             }
@@ -3994,8 +3997,10 @@ export function DocTable({
     ]);
 
     useEffect(() => {
-        onSelectionActionsChange?.(selectionActions);
-    }, [onSelectionActionsChange, selectionActions]);
+        // Republish when catalog progress changes so an open toolbar menu
+        // reads the latest renderer, just like row and right-click menus.
+        onSelectionActionsChange?.(selectionActions ? { ...selectionActions } : null);
+    }, [onSelectionActionsChange, selectionActions, catalog]);
 
     useEffect(() => {
         return () => onSelectionActionsChange?.(null);

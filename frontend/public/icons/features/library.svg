@@ -1,32 +1,32 @@
 <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="leatherBrown" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#6A391E"/>
-      <stop offset="0.18" stop-color="#A8643B"/>
-      <stop offset="0.52" stop-color="#BC7E55"/>
-      <stop offset="0.82" stop-color="#93512F"/>
-      <stop offset="1" stop-color="#562A15"/>
+      <stop offset="0" stop-color="#805740"/>
+      <stop offset="0.18" stop-color="#B57B58"/>
+      <stop offset="0.52" stop-color="#C6916E"/>
+      <stop offset="0.82" stop-color="#A36B4E"/>
+      <stop offset="1" stop-color="#6F4A38"/>
     </linearGradient>
     <linearGradient id="leatherBlue" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#173D74"/>
-      <stop offset="0.18" stop-color="#2B6EB7"/>
-      <stop offset="0.52" stop-color="#4D8CCB"/>
-      <stop offset="0.82" stop-color="#205DA4"/>
-      <stop offset="1" stop-color="#103261"/>
+      <stop offset="0" stop-color="#3A5A89"/>
+      <stop offset="0.18" stop-color="#4B84C2"/>
+      <stop offset="0.52" stop-color="#689DD3"/>
+      <stop offset="0.82" stop-color="#4175B2"/>
+      <stop offset="1" stop-color="#345179"/>
     </linearGradient>
     <linearGradient id="leatherRed" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#751D24"/>
-      <stop offset="0.18" stop-color="#BC313A"/>
-      <stop offset="0.52" stop-color="#CE6267"/>
-      <stop offset="0.82" stop-color="#A22831"/>
-      <stop offset="1" stop-color="#5E1119"/>
+      <stop offset="0" stop-color="#8A3F45"/>
+      <stop offset="0.18" stop-color="#C65058"/>
+      <stop offset="0.52" stop-color="#D57A7E"/>
+      <stop offset="0.82" stop-color="#B04850"/>
+      <stop offset="1" stop-color="#76353C"/>
     </linearGradient>
     <linearGradient id="leatherGreen" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#114633"/>
-      <stop offset="0.2" stop-color="#1C7452"/>
-      <stop offset="0.5" stop-color="#329A6E"/>
-      <stop offset="0.82" stop-color="#186847"/>
-      <stop offset="1" stop-color="#0D3C2A"/>
+      <stop offset="0" stop-color="#356252"/>
+      <stop offset="0.2" stop-color="#3E896C"/>
+      <stop offset="0.5" stop-color="#51A984"/>
+      <stop offset="0.82" stop-color="#3B7F63"/>
+      <stop offset="1" stop-color="#31594A"/>
     </linearGradient>
     <linearGradient id="spineGloss" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.08"/>

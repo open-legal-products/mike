@@ -60,6 +60,8 @@ interface FloatingHeaderProps {
   wordDocumentId: string;
   wordChatStorage: WordChatStorageMode;
   wordChatOwnerId: string;
+  /** The chat on screen, marked in the history menu. */
+  currentChatId?: string | null;
 }
 
 const SECTIONS = [
@@ -96,6 +98,7 @@ export function FloatingHeader({
   wordDocumentId,
   wordChatStorage,
   wordChatOwnerId,
+  currentChatId,
 }: FloatingHeaderProps): React.ReactElement {
   const [menuOpen, setMenuOpen] = useState(false);
   const [workflowActionsOpen, setWorkflowActionsOpen] = useState(false);
@@ -207,6 +210,7 @@ export function FloatingHeader({
             documentId={wordDocumentId}
             ownerId={wordChatOwnerId}
             storageMode={wordChatStorage}
+            currentChatId={currentChatId}
           />
         </HeaderButtonsUI>
       ) : workflowDetailOpen ? (

@@ -6,6 +6,12 @@ import React, {
   useState,
 } from "react";
 import { Library, X } from "lucide-react";
+import { ExcerptModalUI } from "@mike/excerpt-modal-ui";
+import { ExcerptPillUI } from "@mike/excerpt-pill-ui";
+import {
+  serializeExcerpts,
+  type MessageExcerpt,
+} from "@mike/message-excerpts";
 import { WorkflowModal } from "../workflows/WorkflowModal";
 import { ChatInput as ChatInputShell } from "../../../shared/chat/ChatInput";
 import {
@@ -61,6 +67,8 @@ import {
 export interface ChatInputHandle {
   setDraft: (prompt: string) => void;
   requestDocuments: () => void;
+  /** Quotes a passage of an assistant response above the next message. */
+  addExcerpt: (excerpt: MessageExcerpt) => void;
 }
 
 interface ChatInputProps {
@@ -113,6 +121,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
   ): React.ReactElement {
     const [input, setInput] = useState("");
     const [attachedDocuments, setAttachedDocuments] = useState<Document[]>([]);
+    const [excerpts, setExcerpts] = useState<MessageExcerpt[]>([]);
+    const [openExcerpt, setOpenExcerpt] = useState<MessageExcerpt | null>(null);
+    // An annotated excerpt already says what is being asked about it.
+    const hasAnnotatedExcerpt = excerpts.some((excerpt) => excerpt.note);
     const [documentsModalOpen, setDocumentsModalOpen] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
     const [uploadingLocalFiles, setUploadingLocalFiles] = useState(false);
@@ -187,6 +199,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       () => ({
         setDraft: (prompt: string): void => setInput(prompt),
         requestDocuments: (): void => setDocumentsModalOpen(true),
+        addExcerpt: (excerpt: MessageExcerpt): void =>
+          setExcerpts((current) =>
+            current.some(
+              (item) => item.text === excerpt.text && item.note === excerpt.note,
+            )
+              ? current
+              : [...current, excerpt],
+          ),
       }),
       [],
     );
@@ -407,7 +427,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         selectSlashWorkflow(exactSlashWorkflow);
         return;
       }
-      if (!content || isResponseLoading) return;
+      if ((!content && !hasAnnotatedExcerpt) || isResponseLoading) return;
       if (!model) {
         setModelError("Select a model before sending your message.");
         return;
@@ -423,7 +443,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       }));
       void onSubmit(
         {
-          content,
+          content: serializeExcerpts(excerpts, content),
           files: files.length > 0 ? files : undefined,
           workflow: selectedWorkflow ?? undefined,
           model,
@@ -433,6 +453,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           onAccepted: () => {
             setInput("");
             setAttachedDocuments([]);
+            setExcerpts([]);
             onSelectedWorkflowChange(null);
           },
           onTurnReady,
@@ -541,8 +562,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               onCancel={onCancel}
               disabled={false}
               placeholder="How can I help?"
+              canSubmitEmpty={hasAnnotatedExcerpt}
               attachments={
-                selectedWorkflow || attachedDocuments.length > 0 ? (
+                selectedWorkflow ||
+                attachedDocuments.length > 0 ||
+                excerpts.length > 0 ? (
                   <>
                     {selectedWorkflow && (
                       <div className="inline-flex items-center gap-1 rounded-full border border-white/20 bg-blue-600 py-0.5 pl-2.5 pr-1 text-xs text-white shadow">
@@ -585,6 +609,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                           <X className="h-2.5 w-2.5" />
                         </button>
                       </div>
+                    ))}
+                    {excerpts.map((excerpt, index) => (
+                      <ExcerptPillUI
+                        key={`${index}-${excerpt.text}`}
+                        excerpt={excerpt}
+                        onOpen={() => setOpenExcerpt(excerpt)}
+                        onRemove={() =>
+                          setExcerpts((current) =>
+                            current.filter((_, i) => i !== index),
+                          )
+                        }
+                      />
                     ))}
                   </>
                 ) : undefined
@@ -643,6 +679,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             />
           </div>
         </div>
+        <ExcerptModalUI
+          excerpt={openExcerpt}
+          onClose={() => setOpenExcerpt(null)}
+        />
         <AddDocumentsModal
           open={documentsModalOpen}
           onClose={() => setDocumentsModalOpen(false)}

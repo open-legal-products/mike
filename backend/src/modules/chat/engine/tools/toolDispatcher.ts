@@ -540,6 +540,7 @@ export async function runToolCalls(
           name: tc.function.name,
           connector_name: event.connector_name,
           tool_name: event.tool_name,
+          tool_title: event.tool_title,
           status: event.status,
           error: event.error,
         })}\n\n`,

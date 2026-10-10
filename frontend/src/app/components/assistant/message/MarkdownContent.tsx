@@ -17,6 +17,7 @@ import {
     citationVerificationPillClassName,
 } from "./citationVerification";
 import { internalCaseHref } from "./citationUtils";
+import { EXCERPT_SOURCE_PROPS } from "@/shared/ui/ResponseSelectionMenuUI";
 
 export function MarkdownContent({
     text,
@@ -27,7 +28,10 @@ export function MarkdownContent({
     onCitationClick,
     onCaseClick,
     divRef,
+    excerptSource = false,
 }: {
+    /** Lets a reader highlight this text to quote it in the composer. */
+    excerptSource?: boolean;
     text: string;
     inlineCitationTargets: Citation[];
     caseCitations: Map<
@@ -49,6 +53,7 @@ export function MarkdownContent({
     return (
         <div
             ref={divRef}
+            {...(excerptSource ? EXCERPT_SOURCE_PROPS : {})}
             className="text-gray-900 mb-4 text-base prose prose-sm max-w-none font-serif"
         >
             <ReactMarkdown

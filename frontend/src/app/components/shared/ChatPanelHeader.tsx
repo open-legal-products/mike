@@ -1,17 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, Loader2, Plus, Search } from "lucide-react";
+import { ChevronDown, Loader2, Plus } from "lucide-react";
 import type { Chat } from "@/app/components/shared/types";
 import { ChatSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { FormTextInput } from "@/app/components/ui/form-field";
 import {
-    DROPDOWN_ROWS_CLASS,
-    Dropdown,
-    DropdownContent,
-    DropdownItem,
-    DropdownTrigger,
-} from "@/shared/ui/dropdown";
+    ChatHistoryDropdownUI,
+    type ChatHistoryDropdownItemUI,
+} from "@/shared/ui/ChatHistoryDropdownUI";
 import {
     LIQUID_GLASS_HOVER_CLASS,
     LIQUID_GLASS_SUBTLE_CLASS,
@@ -57,8 +54,6 @@ export function ChatPanelHeader({
     const [historyOpen, setHistoryOpen] = useState(false);
     const [query, setQuery] = useState("");
     const [now, setNow] = useState(Date.now);
-    const searchInputRef = useRef<HTMLInputElement>(null);
-    const listRef = useRef<HTMLDivElement>(null);
     const titleInputRef = useRef<HTMLInputElement>(null);
     const editingTitle = !!titleEdit;
     const [previousEditingTitle, setPreviousEditingTitle] =
@@ -89,16 +84,43 @@ export function ChatPanelHeader({
         return () => window.clearInterval(interval);
     }, [historyOpen]);
 
-    // Typing starts in the search field, not on the menu or its first chat.
-    // The menu takes focus as it opens, so this runs just after.
-    useEffect(() => {
-        if (!historyOpen) return;
-        const timer = window.setTimeout(
-            () => searchInputRef.current?.focus(),
-            0,
-        );
-        return () => window.clearTimeout(timer);
-    }, [historyOpen]);
+    const historyItems: ChatHistoryDropdownItemUI[] = filteredChats.map(
+        (chat) => {
+            const title = chat.title ?? "New Chat";
+            const activityAt = chatActivityAt(chat);
+            const elapsed = formatElapsedTime(activityAt, now);
+            const responseStatus = responseStatuses[chat.id];
+            return {
+                id: chat.id,
+                title,
+                current: chat.id === currentChatId,
+                icon:
+                    responseStatus === "loading" ? (
+                        <Loader2
+                            role="status"
+                            aria-label={`${title} response loading`}
+                            className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600 motion-reduce:animate-none"
+                        />
+                    ) : (
+                        <ChatSkeuoIcon
+                            aria-hidden="true"
+                            tone={
+                                responseStatus === "complete" ? "green" : "blue"
+                            }
+                            className="h-3.5 w-3.5 shrink-0"
+                        />
+                    ),
+                time:
+                    elapsed && activityAt
+                        ? {
+                              label: elapsed,
+                              dateTime: activityAt,
+                              description: `Updated ${new Date(activityAt).toLocaleString()}`,
+                          }
+                        : undefined,
+            };
+        },
+    );
 
     function loadChat(chatId: string) {
         setHistoryOpen(false);
@@ -137,14 +159,13 @@ export function ChatPanelHeader({
                     </div>
                 ) : (
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
-                        <Dropdown
+                        <ChatHistoryDropdownUI
                             open={historyOpen}
                             onOpenChange={(open) => {
                                 if (open) setNow(Date.now());
                                 setHistoryOpen(open);
                             }}
-                        >
-                            <DropdownTrigger asChild>
+                            trigger={
                                 <button
                                     type="button"
                                     className={cn(
@@ -162,130 +183,18 @@ export function ChatPanelHeader({
                                         )}
                                     />
                                 </button>
-                            </DropdownTrigger>
-                            <DropdownContent
-                                align="start"
-                                sideOffset={8}
-                                className="w-64 gap-0 overflow-hidden p-0"
-                            >
-                                <div className="flex items-center gap-1.5 border-b border-white/40 px-3 py-2">
-                                    <Search className="h-3 w-3 shrink-0 text-gray-400" />
-                                    <input
-                                        ref={searchInputRef}
-                                        type="search"
-                                        aria-label="Search chats"
-                                        placeholder="Search chats…"
-                                        data-dropdown-input="flush"
-                                        value={query}
-                                        onChange={(event) =>
-                                            setQuery(event.target.value)
-                                        }
-                                        onKeyDown={(event) => {
-                                            if (event.key === "ArrowDown") {
-                                                event.preventDefault();
-                                                listRef.current
-                                                    ?.querySelector<HTMLElement>(
-                                                        '[role="menuitem"]',
-                                                    )
-                                                    ?.focus();
-                                            }
-                                            // Keep the menu's type-ahead from
-                                            // moving focus while typing here.
-                                            if (event.key !== "Escape")
-                                                event.stopPropagation();
-                                        }}
-                                        className="min-w-0 flex-1 bg-transparent text-xs text-gray-700 outline-none placeholder:text-gray-400"
-                                    />
-                                </div>
-                                <div
-                                    ref={listRef}
-                                    className={cn(
-                                        "max-h-48 overflow-y-auto p-1",
-                                        DROPDOWN_ROWS_CLASS,
-                                    )}
-                                >
-                                    {loading ? (
-                                        <p className="px-2 py-1.5 text-xs text-gray-400">
-                                            Loading chats…
-                                        </p>
-                                    ) : filteredChats.length === 0 ? (
-                                        <p className="px-2 py-1.5 text-xs text-gray-400">
-                                            {chats.length === 0
-                                                ? "No chats yet."
-                                                : "No matches."}
-                                        </p>
-                                    ) : (
-                                        filteredChats.map((chat) => {
-                                            const activityAt =
-                                                chatActivityAt(chat);
-                                            const elapsed = formatElapsedTime(
-                                                activityAt,
-                                                now,
-                                            );
-                                            const updatedLabel =
-                                                elapsed && activityAt
-                                                    ? `Updated ${new Date(activityAt).toLocaleString()}`
-                                                    : undefined;
-                                            const responseStatus =
-                                                responseStatuses[chat.id];
-                                            const isCurrent =
-                                                chat.id === currentChatId;
-                                            return (
-                                                <DropdownItem
-                                                    key={chat.id}
-                                                    selected={isCurrent}
-                                                    aria-current={
-                                                        isCurrent
-                                                            ? "page"
-                                                            : undefined
-                                                    }
-                                                    onSelect={() =>
-                                                        loadChat(chat.id)
-                                                    }
-                                                    className="min-w-0 px-2"
-                                                >
-                                                    {responseStatus ===
-                                                    "loading" ? (
-                                                        <Loader2
-                                                            role="status"
-                                                            aria-label={`${chat.title ?? "New Chat"} response loading`}
-                                                            className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600 motion-reduce:animate-none"
-                                                        />
-                                                    ) : (
-                                                        <ChatSkeuoIcon
-                                                            aria-hidden="true"
-                                                            tone={
-                                                                responseStatus ===
-                                                                "complete"
-                                                                    ? "green"
-                                                                    : "blue"
-                                                            }
-                                                            className="h-3.5 w-3.5 shrink-0"
-                                                        />
-                                                    )}
-                                                    <span className="min-w-0 flex-1 truncate">
-                                                        {chat.title ??
-                                                            "New Chat"}
-                                                    </span>
-                                                    {elapsed ? (
-                                                        <time
-                                                            dateTime={activityAt}
-                                                            title={updatedLabel}
-                                                            aria-label={
-                                                                updatedLabel
-                                                            }
-                                                            className="shrink-0 text-xs tabular-nums text-muted-foreground"
-                                                        >
-                                                            {elapsed}
-                                                        </time>
-                                                    ) : null}
-                                                </DropdownItem>
-                                            );
-                                        })
-                                    )}
-                                </div>
-                            </DropdownContent>
-                        </Dropdown>
+                            }
+                            query={query}
+                            onQueryChange={setQuery}
+                            loading={loading}
+                            emptyLabel={
+                                chats.length === 0
+                                    ? "No chats yet."
+                                    : "No matches."
+                            }
+                            items={historyItems}
+                            onSelect={loadChat}
+                        />
                     </div>
                 )}
             </div>
