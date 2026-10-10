@@ -77,13 +77,38 @@ export const DropdownRadioGroup = React.forwardRef<
 export const DropdownContent = React.forwardRef<
     React.ElementRef<typeof DropdownPrimitive.Content>,
     React.ComponentPropsWithoutRef<typeof DropdownPrimitive.Content>
->(function DropdownContent({ className, sideOffset = 4, ...props }, ref) {
+>(function DropdownContent(
+    { className, sideOffset = 4, onPointerDownOutside, ...props },
+    ref,
+) {
+    const contentRef = React.useRef<HTMLDivElement | null>(null);
     return (
         <DropdownPrimitive.Portal>
             <DropdownPrimitive.Content
-                ref={ref}
+                ref={(node) => {
+                    contentRef.current = node;
+                    if (typeof ref === "function") ref(node);
+                    else if (ref) ref.current = node;
+                }}
                 data-slot="dropdown-content"
                 sideOffset={sideOffset}
+                onPointerDownOutside={(event) => {
+                    onPointerDownOutside?.(event);
+                    // A press on the menu's own trigger is the trigger's to
+                    // answer: it toggles the menu. Counting it as a press
+                    // outside as well dismisses a menu the same press just
+                    // reopened, which happens whenever the trigger is
+                    // pressed while the menu is still animating shut (it
+                    // can be, in a non-modal menu).
+                    const triggerId =
+                        contentRef.current?.getAttribute("aria-labelledby");
+                    const trigger = triggerId
+                        ? document.getElementById(triggerId)
+                        : null;
+                    if (trigger?.contains(event.target as Node)) {
+                        event.preventDefault();
+                    }
+                }}
                 className={mergeClasses(
                     DROPDOWN_CHROME_CLASS,
                     DROPDOWN_Z_INDEX_CLASS,
