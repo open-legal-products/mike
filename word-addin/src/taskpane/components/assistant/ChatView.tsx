@@ -11,6 +11,7 @@ import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import { InitialView } from "./InitialView";
 import { UserMessage } from "./UserMessage";
+import { ResponseSelectionMenuUI } from "@mike/response-selection-menu-ui";
 import type {
     EditDecision,
     ReasoningLevel,
@@ -791,6 +792,11 @@ export function ChatView({
                 </div>
             )}
 
+            <ResponseSelectionMenuUI
+                onAddExcerpt={(excerpt) =>
+                    chatInputRef.current?.addExcerpt(excerpt)
+                }
+            />
             <ChatInput
                 ref={chatInputRef}
                 containerRef={composerRef}

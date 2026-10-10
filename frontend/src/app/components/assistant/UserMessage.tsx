@@ -1,15 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { MessageSquare, TextQuote, Waypoints } from "lucide-react";
+import { Waypoints } from "lucide-react";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import type { MessageFile } from "../shared/types";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/shared/ui/LiquidGlassUI";
 import {
     parseExcerpts,
     type MessageExcerpt,
-} from "@/app/lib/messageExcerpts";
-import { ExcerptModal } from "./ExcerptModal";
+} from "@/shared/lib/messageExcerpts";
+import { ExcerptModalUI } from "@/shared/ui/ExcerptModalUI";
+import { ExcerptPillUI } from "@/shared/ui/ExcerptPillUI";
 
 interface Props {
     content: string;
@@ -48,26 +49,11 @@ export function UserMessage({
                         className={`flex flex-wrap justify-end gap-1.5 ${body ? "mt-3" : ""}`}
                     >
                         {excerpts.map((excerpt, i) => (
-                            <button
+                            <ExcerptPillUI
                                 key={`excerpt-${i}`}
-                                type="button"
-                                onClick={() => setOpenExcerpt(excerpt)}
-                                aria-label={`View excerpt: ${excerpt.text.slice(0, 60)}`}
-                                className={`inline-flex cursor-pointer items-center gap-1 rounded-[10px] py-0.5 pl-2 pr-2.5 text-xs text-gray-800 transition-colors hover:bg-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 ${LIQUID_GLASS_FLAT_CLASS}`}
-                            >
-                                {excerpt.note ? (
-                                    <MessageSquare
-                                        aria-hidden="true"
-                                        className="h-2.5 w-2.5 shrink-0"
-                                    />
-                                ) : (
-                                    <TextQuote
-                                        aria-hidden="true"
-                                        className="h-2.5 w-2.5 shrink-0"
-                                    />
-                                )}
-                                {excerpt.note ? "Annotated Excerpt" : "Excerpt"}
-                            </button>
+                                excerpt={excerpt}
+                                onOpen={() => setOpenExcerpt(excerpt)}
+                            />
                         ))}
                         {workflow && (
                             <div className="inline-flex items-center gap-1 pl-2 pr-2.5 py-0.5 rounded-full text-xs bg-blue-600 text-white shadow border border-blue-600">
@@ -127,7 +113,7 @@ export function UserMessage({
                     </div>
                 )}
             </div>
-            <ExcerptModal
+            <ExcerptModalUI
                 excerpt={openExcerpt}
                 onClose={() => setOpenExcerpt(null)}
             />

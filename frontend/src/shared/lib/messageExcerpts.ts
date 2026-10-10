@@ -70,25 +70,32 @@ export function parseExcerpts(content: string): {
     let index = 0;
     let bodyStart = 0;
 
+    const isBlank = (line: string | undefined): boolean =>
+        line === undefined || line.trim() === "";
+
     while (index < lines.length) {
         const quoted: string[] = [];
-        while (index < lines.length && lines[index].startsWith(">")) {
-            quoted.push(lines[index].replace(/^> ?/, ""));
-            index++;
+        for (
+            let line = lines[index];
+            line !== undefined && line.startsWith(">");
+            line = lines[++index]
+        ) {
+            quoted.push(line.replace(/^> ?/, ""));
         }
         if (quoted.length === 0) break;
 
         let note: string | undefined;
-        if (index < lines.length && lines[index].startsWith(NOTE_PREFIX)) {
-            note = lines[index].slice(NOTE_PREFIX.length).trim();
+        const noteLine = lines[index];
+        if (noteLine !== undefined && noteLine.startsWith(NOTE_PREFIX)) {
+            note = noteLine.slice(NOTE_PREFIX.length).trim();
             index++;
         }
         // An excerpt ends at a blank line or the end of the message; quoted
         // lines running straight into prose are the writer's own Markdown.
-        if (index < lines.length && lines[index].trim() !== "") break;
+        if (!isBlank(lines[index])) break;
 
         excerpts.push({ text: quoted.join("\n"), ...(note ? { note } : {}) });
-        while (index < lines.length && lines[index].trim() === "") index++;
+        while (index < lines.length && isBlank(lines[index])) index++;
         bodyStart = index;
     }
 

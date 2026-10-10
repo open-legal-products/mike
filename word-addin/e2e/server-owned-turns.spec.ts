@@ -207,7 +207,7 @@ async function openChatFromHistory(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByTestId("chat-history-list-10")
-    .getByRole("button", { name: /Unfinished answer/ })
+    .getByRole("menuitem", { name: /Unfinished answer/ })
     .click();
 }
 
@@ -347,7 +347,7 @@ test("a finished local turn is not advertised as running when the chat is reopen
 
   await page.getByRole("button", { name: "New chat" }).click();
   await page.getByRole("button", { name: "Chat history" }).click();
-  await page.getByRole("menu").getByRole("button", { name: /Quick local question 0/ }).click();
+  await page.getByRole("menu").getByRole("menuitem", { name: /Quick local question 0/ }).click();
   await expect(page.getByText("Done in one frame.").first()).toBeVisible();
   await page.waitForTimeout(1500);
   expect(resumeUrls).toHaveLength(0);
@@ -427,7 +427,7 @@ test("a local turn remains resumable after transport retries are exhausted", asy
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Resume this answer/ })
+    .getByRole("menuitem", { name: /Resume this answer/ })
     .click();
 
   await expect.poll(() => resumeCount).toBe(3);

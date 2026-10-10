@@ -323,9 +323,9 @@ test("history button loads and opens a previous chat", async ({
   await historyButton.click();
   const dropdown = page.getByRole("menu");
   await expect(
-    dropdown.getByPlaceholder("Search recent chats..."),
+    dropdown.getByPlaceholder("Search chats…"),
   ).toBeVisible();
-  await dropdown.getByRole("button", { name: /Lease review/ }).click();
+  await dropdown.getByRole("menuitem", { name: /Lease review/ }).click();
 
   await expect(page.getByText("Review this lease")).toBeVisible();
   await expect(page.getByText("The lease has three risks.")).toBeVisible();
@@ -383,7 +383,7 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Long document review/ })
+    .getByRole("menuitem", { name: /Long document review/ })
     .click();
 
   // Restored history positions asynchronously. Establish the user-scrolled-up
@@ -511,7 +511,7 @@ test("history preserves assistant event order and stored errors", async ({
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Ordered response/ })
+    .getByRole("menuitem", { name: /Ordered response/ })
     .click();
 
   const intro = page.getByText("I’ll inspect the document.", { exact: true });

@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     EXCERPT_SOURCE_PROPS,
-    ResponseSelectionMenu,
-} from "./ResponseSelectionMenu";
+    ResponseSelectionMenuUI,
+} from "./ResponseSelectionMenuUI";
 
 function renderThread(canAsk = true) {
     const onAddExcerpt = vi.fn();
@@ -12,7 +12,7 @@ function renderThread(canAsk = true) {
         <>
             <p {...EXCERPT_SOURCE_PROPS}>The notice period is 30 days.</p>
             <p>Text outside any response.</p>
-            <ResponseSelectionMenu
+            <ResponseSelectionMenuUI
                 canAsk={canAsk}
                 onAddExcerpt={onAddExcerpt}
             />
@@ -31,7 +31,7 @@ async function highlight(text: string) {
     });
 }
 
-describe("ResponseSelectionMenu", () => {
+describe("ResponseSelectionMenuUI", () => {
     beforeEach(() => {
         window.getSelection()?.removeAllRanges();
     });
@@ -53,6 +53,37 @@ describe("ResponseSelectionMenu", () => {
         await highlight("Text outside any response.");
 
         expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("stays closed for a selection that runs on past the response", async () => {
+        renderThread();
+        const response = screen.getByText("The notice period is 30 days.");
+        const outside = screen.getByText("Text outside any response.");
+        window
+            .getSelection()
+            ?.setBaseAndExtent(response.firstChild!, 4, outside.firstChild!, 4);
+        fireEvent.mouseUp(outside, { clientX: 40, clientY: 60 });
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("opens for a whole paragraph whose selection ends just after it", async () => {
+        renderThread();
+        const response = screen.getByText("The notice period is 30 days.");
+        const outside = screen.getByText("Text outside any response.");
+        // A triple-click ends the range at the start of the next block.
+        window
+            .getSelection()
+            ?.setBaseAndExtent(response.firstChild!, 0, outside, 0);
+        fireEvent.mouseUp(response, { clientX: 40, clientY: 60 });
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(screen.getAllByRole("menuitem")).toHaveLength(3);
     });
 
     it("copies the highlighted text", async () => {

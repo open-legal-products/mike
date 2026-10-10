@@ -17,7 +17,7 @@ import {
     citationVerificationPillClassName,
 } from "./citationVerification";
 import { internalCaseHref } from "./citationUtils";
-import { EXCERPT_SOURCE_PROPS } from "../ResponseSelectionMenu";
+import { EXCERPT_SOURCE_PROPS } from "@/shared/ui/ResponseSelectionMenuUI";
 
 export function MarkdownContent({
     text,

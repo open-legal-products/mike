@@ -234,6 +234,20 @@ module.exports = async (_env, options) => {
         // One model catalog (routers, picker rows, key-based availability)
         // for the web app and the add-in.
         "@mike/model-catalog": frontendShared("lib", "modelCatalog.ts"),
+        // Quoting and annotating a passage of a response: one wire format,
+        // menu, pill and modal for the web app and the add-in.
+        "@mike/message-excerpts": frontendShared("lib", "messageExcerpts.ts"),
+        "@mike/response-selection-menu-ui": frontendSharedUi(
+          "ResponseSelectionMenuUI.tsx",
+        ),
+        "@mike/excerpt-pill-ui": frontendSharedUi("ExcerptPillUI.tsx"),
+        "@mike/excerpt-modal-ui": frontendSharedUi("ExcerptModalUI.tsx"),
+        "@mike/chat-history-dropdown-ui": frontendSharedUi(
+          "ChatHistoryDropdownUI.tsx",
+        ),
+        "@mike/composer-send-button-ui": frontendSharedUi(
+          "ComposerSendButtonUI.styles.ts",
+        ),
       },
     },
     module: {

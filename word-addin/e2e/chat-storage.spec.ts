@@ -95,9 +95,9 @@ test("cloud is default and local mode persists document chats in IndexedDB", asy
   await page.getByRole("button", { name: "Chat history" }).click();
   const menu = page.getByRole("menu");
   await expect(
-    menu.getByRole("button", { name: /Keep this chat local/ }),
+    menu.getByRole("menuitem", { name: /Keep this chat local/ }),
   ).toBeVisible();
-  await menu.getByRole("button", { name: /Keep this chat local/ }).click();
+  await menu.getByRole("menuitem", { name: /Keep this chat local/ }).click();
   await expect(
     page.getByTestId("user-message-content").getByText("Keep this chat local"),
   ).toBeVisible();
@@ -178,7 +178,7 @@ test("device-only history restores accepted and rejected edit outcomes", async (
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Correct both drafting issues/ })
+    .getByRole("menuitem", { name: /Correct both drafting issues/ })
     .click();
 
   await expect(page.locator('[data-edit-status="accepted"]')).toHaveCount(1);
@@ -283,7 +283,7 @@ test("stopping a local edit stream preserves the assistant turn for reload", asy
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Correct the supplier typo/ })
+    .getByRole("menuitem", { name: /Correct the supplier typo/ })
     .click();
 
   await expect(
@@ -385,7 +385,7 @@ test("a clean SSE cancellation finalizes and persists a partial local turn", asy
   await page.getByRole("button", { name: "Chat history" }).click();
   await page
     .getByRole("menu")
-    .getByRole("button", { name: /Finish this change locally/ })
+    .getByRole("menuitem", { name: /Finish this change locally/ })
     .click();
 
   await expect(page.getByText("Historical change.")).toHaveCount(0);

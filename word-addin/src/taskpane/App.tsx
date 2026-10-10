@@ -217,6 +217,7 @@ export default function App(): React.ReactElement {
         onSectionChange={changeSection}
         onNewChat={startNewChat}
         hasActiveChat={chatInSession}
+        currentChatId={chatId}
         onSelectHistoryChat={openSelectedChat}
         workflowDetailOpen={
           selectedSection === "workflows" && !!workflowPageSelection

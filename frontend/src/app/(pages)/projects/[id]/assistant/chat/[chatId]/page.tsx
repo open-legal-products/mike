@@ -65,7 +65,7 @@ import { UserMessage } from "@/app/components/assistant/UserMessage";
 import { AssistantMessage } from "@/app/components/assistant/AssistantMessage";
 import { ChatInput } from "@/app/components/assistant/ChatInput";
 import { ChatInputPrompt } from "@/app/components/assistant/ChatInputPrompt";
-import { ResponseSelectionMenu } from "@/app/components/assistant/ResponseSelectionMenu";
+import { ResponseSelectionMenuUI } from "@/shared/ui/ResponseSelectionMenuUI";
 import type { ChatInputHandle } from "@/app/components/assistant/ChatInput";
 import {
     ProjectExplorer,
@@ -2334,7 +2334,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 )}
 
                 {/* ChatInput */}
-                <ResponseSelectionMenu
+                <ResponseSelectionMenuUI
                     canAsk={canSendChat === true}
                     onAddExcerpt={(excerpt) =>
                         chatInputRef.current?.addExcerpt(excerpt)

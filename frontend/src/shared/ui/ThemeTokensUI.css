@@ -19,6 +19,7 @@
     --pdf-selection-background: rgba(0, 136, 255, 0.25);
     --docx-highlight-background: rgba(37, 99, 235, 0.35);
     --case-highlight-background: rgb(191, 219, 254);
+    --excerpt-selection-background: rgb(191, 219, 254);
     --citation-selected-background: rgba(0, 136, 255, 0.09);
     --citation-selected-text: #172554;
     --citation-selected-muted-text: #1e3a8a;
@@ -67,6 +68,7 @@
     --pdf-selection-background: rgba(96, 165, 250, 0.35);
     --docx-highlight-background: rgba(96, 165, 250, 0.34);
     --case-highlight-background: rgba(59, 130, 246, 0.34);
+    --excerpt-selection-background: rgb(30, 64, 175);
     --citation-selected-background: rgba(59, 130, 246, 0.2);
     --citation-selected-text: #dbeafe;
     --citation-selected-muted-text: #93c5fd;
@@ -281,4 +283,15 @@
         black calc(100% - 8rem),
         transparent 100%
     );
+}
+
+/* Highlighted response text keeps one colour from the drag through the menu
+   and the note: the browser's own selection while it lasts, then the
+   ResponseSelectionMenuUI mark (CSS Custom Highlight API) once focus moving
+   into the menu or note field has taken the selection away. The colour is
+   opaque so the two can overlap without darkening. */
+[data-excerpt-source]::selection,
+[data-excerpt-source] ::selection,
+::highlight(response-excerpt) {
+    background-color: var(--excerpt-selection-background);
 }

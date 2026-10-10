@@ -15,16 +15,15 @@ import {
     ArrowRight,
     Check,
     Loader2,
-    MessageSquare,
     Square,
-    TextQuote,
     Waypoints,
     X,
 } from "lucide-react";
 import { AddDocButton } from "./AddDocButton";
 import { UploadOverlay } from "./UploadOverlay";
-import { COMPOSER_SEND_BUTTON_CLASS } from "./composerStyles";
-import { ExcerptModal } from "./ExcerptModal";
+import { COMPOSER_SEND_BUTTON_CLASS } from "@/shared/ui/ComposerSendButtonUI.styles";
+import { ExcerptModalUI } from "@/shared/ui/ExcerptModalUI";
+import { ExcerptPillUI } from "@/shared/ui/ExcerptPillUI";
 import { FileTypeIcon } from "../shared/FileTypeIcon";
 import { AddDocumentsModal } from "../modals/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
@@ -74,7 +73,7 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 import {
     serializeExcerpts,
     type MessageExcerpt,
-} from "@/app/lib/messageExcerpts";
+} from "@/shared/lib/messageExcerpts";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import {
     routerSelections,
@@ -803,48 +802,16 @@ function ChatInputForChatImpl(
                                 );
                             })}
                             {excerpts.map((excerpt, index) => (
-                                <div
+                                <ExcerptPillUI
                                     key={`${index}-${excerpt.text}`}
-                                    className={`inline-flex max-w-full items-center rounded-[10px] text-xs text-gray-800 ${LIQUID_GLASS_FLAT_CLASS}`}
-                                >
-                                    <button
-                                        type="button"
-                                        onClick={() => setOpenExcerpt(excerpt)}
-                                        aria-label={`View excerpt: ${excerpt.text.slice(0, 60)}`}
-                                        className="inline-flex min-w-0 cursor-pointer items-center gap-1 rounded-[10px] py-0.5 pl-2 transition-colors hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-                                    >
-                                        {excerpt.note ? (
-                                            <MessageSquare
-                                                aria-hidden="true"
-                                                className="h-2.5 w-2.5 shrink-0"
-                                            />
-                                        ) : (
-                                            <TextQuote
-                                                aria-hidden="true"
-                                                className="h-2.5 w-2.5 shrink-0"
-                                            />
-                                        )}
-                                        <span>
-                                            {excerpt.note
-                                                ? "Annotated Excerpt"
-                                                : "Excerpt"}
-                                        </span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() =>
-                                            setExcerpts((prev) =>
-                                                prev.filter(
-                                                    (_, i) => i !== index,
-                                                ),
-                                            )
-                                        }
-                                        aria-label={`Remove excerpt: ${excerpt.text.slice(0, 60)}`}
-                                        className="mx-1 rounded-full p-0.5 text-gray-400 transition-colors hover:bg-gray-900/5 hover:text-gray-700"
-                                    >
-                                        <X className="h-2.5 w-2.5" />
-                                    </button>
-                                </div>
+                                    excerpt={excerpt}
+                                    onOpen={() => setOpenExcerpt(excerpt)}
+                                    onRemove={() =>
+                                        setExcerpts((prev) =>
+                                            prev.filter((_, i) => i !== index),
+                                        )
+                                    }
+                                />
                             ))}
                         </div>
                     )}
@@ -977,7 +944,7 @@ function ChatInputForChatImpl(
                                 }
                                 className={cn(
                                     COMPOSER_SEND_BUTTON_CLASS,
-                                    "h-7.5 w-7.5",
+                                    "h-7.5 w-7.5 rounded-full",
                                 )}
                                 onClick={handleActionClick}
                                 disabled={
@@ -1017,7 +984,7 @@ function ChatInputForChatImpl(
                     if (files.length) void handleDroppedFiles(files);
                 }}
             />
-            <ExcerptModal
+            <ExcerptModalUI
                 excerpt={openExcerpt}
                 onClose={() => setOpenExcerpt(null)}
             />
