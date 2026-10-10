@@ -179,17 +179,46 @@ interface Props {
      * nothing; with it the panel stays open on an "Open Documents" placeholder.
      */
     onOpenDocuments?: () => void;
+    /**
+     * How many chats share the page with the panel. Each keeps its minimum
+     * width, and beside two chats the panel opens narrow rather than at half
+     * the page.
+     */
+    chatCount?: number;
 }
 
 const MIN_WIDTH = 300;
 const MAX_WIDTH_OFFSET = 56; // sidebar width
 const MIN_CHAT_WIDTH = 400;
-function maxPanelWidth() {
-    if (typeof window === "undefined") return 600;
+const TWO_CHAT_WIDTH = 360;
+
+/** The widest the panel may be while every chat keeps its minimum width. */
+export function maxAssistantSidePanelWidth(
+    viewportWidth: number,
+    chatCount: number,
+): number {
     return Math.max(
         MIN_WIDTH,
-        window.innerWidth - MAX_WIDTH_OFFSET - MIN_CHAT_WIDTH,
+        viewportWidth - MAX_WIDTH_OFFSET - MIN_CHAT_WIDTH * chatCount,
     );
+}
+
+/** The width the panel opens at: half the page, or narrow beside two chats. */
+export function defaultAssistantSidePanelWidth(
+    viewportWidth: number,
+    chatCount: number,
+): number {
+    return Math.min(
+        maxAssistantSidePanelWidth(viewportWidth, chatCount),
+        chatCount > 1
+            ? TWO_CHAT_WIDTH
+            : Math.round((viewportWidth - MAX_WIDTH_OFFSET) / 2),
+    );
+}
+
+function maxPanelWidth(chatCount: number) {
+    if (typeof window === "undefined") return 600;
+    return maxAssistantSidePanelWidth(window.innerWidth, chatCount);
 }
 
 export function AssistantSidePanel({
@@ -211,18 +240,23 @@ export function AssistantSidePanel({
     onCloseAnnotation,
     onScrollChange,
     onOpenDocuments,
+    chatCount = 1,
 }: Props) {
     const panelRef = useRef<HTMLDivElement>(null);
     const permissions = useDocumentPermissions(tabs.filter((tab) => !["case", "legislation"].includes(tab.document.type)).map((tab) => tab.document.document_id), canEdit);
     const viewers = useDocumentViewers();
-    const [panelWidth, setPanelWidth] = useState(() =>
+    // One width beside a single chat and another beside two, so closing the
+    // second chat gives the panel back the width it had before.
+    const split = chatCount > 1;
+    const [panelWidths, setPanelWidths] = useState(() =>
         typeof window !== "undefined"
-            ? Math.min(
-                  maxPanelWidth(),
-                  Math.round((window.innerWidth - MAX_WIDTH_OFFSET) / 2),
-              )
-            : 600,
+            ? {
+                  single: defaultAssistantSidePanelWidth(window.innerWidth, 1),
+                  split: defaultAssistantSidePanelWidth(window.innerWidth, 2),
+              }
+            : { single: 600, split: TWO_CHAT_WIDTH },
     );
+    const panelWidth = split ? panelWidths.split : panelWidths.single;
 
     const dragStartX = useRef<number>(0);
     const dragStartWidth = useRef<number>(0);
@@ -235,11 +269,14 @@ export function AssistantSidePanel({
 
             const onMouseMove = (ev: MouseEvent) => {
                 const delta = dragStartX.current - ev.clientX;
-                setPanelWidth(
-                    Math.min(
-                        maxPanelWidth(),
-                        Math.max(MIN_WIDTH, dragStartWidth.current + delta),
-                    ),
+                const width = Math.min(
+                    maxPanelWidth(chatCount),
+                    Math.max(MIN_WIDTH, dragStartWidth.current + delta),
+                );
+                setPanelWidths((current) =>
+                    split
+                        ? { ...current, split: width }
+                        : { ...current, single: width },
                 );
             };
             const onMouseUp = () => {
@@ -254,14 +291,23 @@ export function AssistantSidePanel({
             document.body.style.cursor = "col-resize";
             document.body.style.userSelect = "none";
         },
-        [panelWidth],
+        [panelWidth, chatCount, split],
     );
 
     useEffect(() => {
+        const fit = (width: number, chats: number) =>
+            Math.min(maxPanelWidth(chats), Math.max(MIN_WIDTH, width));
         const onResize = () => {
-            setPanelWidth((width) =>
-                Math.min(maxPanelWidth(), Math.max(MIN_WIDTH, width)),
-            );
+            setPanelWidths((current) => {
+                const next = {
+                    single: fit(current.single, 1),
+                    split: fit(current.split, 2),
+                };
+                return next.single === current.single &&
+                    next.split === current.split
+                    ? current
+                    : next;
+            });
         };
         window.addEventListener("resize", onResize);
         onResize();

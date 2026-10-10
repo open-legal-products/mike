@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUp, Copy, MessageSquare, TextQuote } from "lucide-react";
 import { DropdownAtPoint, DropdownItem, DropdownSurface } from "./dropdown";
@@ -44,13 +44,17 @@ function selectsWithinOneSource(range: Range): boolean {
     return overflow.toString().trim() === "";
 }
 
-function readSelectedExcerpt(pointer: Point | null): SelectedExcerpt | null {
+function readSelectedExcerpt(
+    pointer: Point | null,
+    scope: Element | null,
+): SelectedExcerpt | null {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
         return null;
     }
     const range = selection.getRangeAt(0).cloneRange();
     if (!selectsWithinOneSource(range)) return null;
+    if (scope && !scope.contains(range.startContainer)) return null;
     const text = normalizeExcerptText(selection.toString());
     if (!text) return null;
     return {
@@ -283,10 +287,16 @@ function AnnotationBubble({
 export function ResponseSelectionMenuUI({
     canAsk = true,
     onAddExcerpt,
+    scopeRef,
 }: {
     /** False leaves only Copy, for a reader who cannot send to this chat. */
     canAsk?: boolean;
     onAddExcerpt: (excerpt: MessageExcerpt) => void;
+    /**
+     * Limits the menu to responses inside this element. Pass it wherever two
+     * threads share a page, so a passage is quoted into its own composer.
+     */
+    scopeRef?: RefObject<Element | null>;
 }) {
     const [menu, setMenu] = useState<SelectedExcerpt | null>(null);
     const [annotating, setAnnotating] = useState<SelectedExcerpt | null>(null);
@@ -331,7 +341,10 @@ export function ResponseSelectionMenuUI({
             if (timer !== null) window.clearTimeout(timer);
             timer = window.setTimeout(() => {
                 timer = null;
-                const selected = readSelectedExcerpt(pointer);
+                const selected = readSelectedExcerpt(
+                    pointer,
+                    scopeRef?.current ?? null,
+                );
                 if (selected) setMenu(selected);
             }, 0);
         };
@@ -348,7 +361,7 @@ export function ResponseSelectionMenuUI({
             document.removeEventListener("mouseup", onMouseUp);
             document.removeEventListener("keyup", onKeyUp);
         };
-    }, []);
+    }, [scopeRef]);
 
     return (
         <>

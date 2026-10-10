@@ -40,26 +40,66 @@ vi.mock("@/app/hooks/useAssistantChat", () => ({
             handleChat: vi.fn(),
             setMessages: vi.fn(),
             cancel: vi.fn(),
+            detach: vi.fn(),
             resetChat: vi.fn(),
         };
     },
 }));
+vi.mock("@/app/components/assistant/useAssistantDocumentPanel", () => ({
+    useAssistantDocumentPanel: () => ({}),
+}));
+vi.mock("@/app/components/assistant/AssistantDocumentPanelHost", () => ({
+    AssistantDocumentPanelHost: () => null,
+}));
 vi.mock("@/app/components/assistant/ChatView", () => ({
-    ChatView: ({
+    AssistantChatColumn: ({
         canSend,
         accessResolved,
         chat,
+        chatId,
+        paneId,
+        hiddenChatId,
+        onOpenSideChat,
+        onCloseSideChat,
+        onLoadChat,
     }: {
         canSend?: boolean | null;
         accessResolved?: boolean;
         chat?: { access_role?: string } | null;
-    }) => (
-        <>
-            <span data-testid="can-send">{String(canSend)}</span>
-            <span data-testid="access-resolved">{String(accessResolved)}</span>
-            <span data-testid="chat-role">{chat?.access_role ?? "unknown"}</span>
-        </>
-    ),
+        chatId?: string | null;
+        paneId?: string;
+        hiddenChatId?: string | null;
+        onOpenSideChat?: () => void;
+        onCloseSideChat?: () => void;
+        onLoadChat?: (chatId: string) => void;
+    }) =>
+        paneId === "side" ? (
+            <div data-testid="side-chat">
+                <span data-testid="side-chat-id">{chatId ?? "new"}</span>
+                <span data-testid="side-hidden-chat">{hiddenChatId}</span>
+                <button type="button" onClick={() => onLoadChat?.("chat-2")}>
+                    Load chat-2 beside
+                </button>
+                <button type="button" onClick={onCloseSideChat}>
+                    Close side chat
+                </button>
+            </div>
+        ) : (
+            <>
+                <span data-testid="can-send">{String(canSend)}</span>
+                <span data-testid="access-resolved">
+                    {String(accessResolved)}
+                </span>
+                <span data-testid="chat-role">
+                    {chat?.access_role ?? "unknown"}
+                </span>
+                {onOpenSideChat && (
+                    <button type="button" onClick={onOpenSideChat}>
+                        Open side chat
+                    </button>
+                )}
+            </>
+        ),
 }));
 
 import AssistantChatPage from "./page";
@@ -81,6 +121,57 @@ function chatDetail(access_role: "owner" | "editor" | "viewer") {
 beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState(null, "", "/assistant/chat/chat-1");
+});
+
+describe("side chat", () => {
+    it("opens a second chat beside the first, and closes it again", async () => {
+        getChat.mockResolvedValue(chatDetail("owner"));
+        render(<AssistantChatPage />);
+        expect(screen.queryByTestId("side-chat")).not.toBeInTheDocument();
+
+        await act(async () => {
+            screen.getByRole("button", { name: "Open side chat" }).click();
+        });
+        expect(screen.getByTestId("side-chat-id")).toHaveTextContent("new");
+        expect(window.location.search).toBe("?side=new");
+        // Only one side chat: the primary no longer offers another.
+        expect(
+            screen.queryByRole("button", { name: "Open side chat" }),
+        ).not.toBeInTheDocument();
+        // The history list beside it leaves out the primary chat.
+        expect(screen.getByTestId("side-hidden-chat")).toHaveTextContent(
+            "chat-1",
+        );
+
+        await act(async () => {
+            screen.getByRole("button", { name: "Load chat-2 beside" }).click();
+        });
+        expect(screen.getByTestId("side-chat-id")).toHaveTextContent("chat-2");
+        expect(window.location.pathname).toBe("/assistant/chat/chat-1");
+        expect(window.location.search).toBe("?side=chat-2");
+
+        await act(async () => {
+            screen.getByRole("button", { name: "Close side chat" }).click();
+        });
+        expect(screen.queryByTestId("side-chat")).not.toBeInTheDocument();
+        expect(window.location.search).toBe("");
+    });
+
+    it("restores the side chat named in the URL", async () => {
+        getChat.mockResolvedValue(chatDetail("owner"));
+        window.history.replaceState(
+            null,
+            "",
+            "/assistant/chat/chat-1?side=chat-2",
+        );
+        render(<AssistantChatPage />);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("side-chat-id")).toHaveTextContent(
+                "chat-2",
+            ),
+        );
+    });
 });
 
 describe("global new chat", () => {

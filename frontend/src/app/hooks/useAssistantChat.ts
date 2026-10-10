@@ -46,6 +46,11 @@ interface UseAssistantChatOptions {
   projectId?: string;
   /** Adopts the server id as soon as it arrives, without navigation. */
   onChatCreated?: (chatId: string) => void;
+  /**
+   * Whether this is the chat the app shell treats as current (the sidebar's
+   * highlighted row). False for a chat shown beside the primary one.
+   */
+  tracksCurrentChat?: boolean;
 }
 
 
@@ -54,16 +59,20 @@ export function useAssistantChat({
   chatId: initialChatId,
   projectId,
   onChatCreated,
+  tracksCurrentChat = true,
 }: UseAssistantChatOptions = {}) {
   const router = useRouter();
   const {
     replaceChatId,
     loadChats,
-    setCurrentChatId,
+    setCurrentChatId: setHistoryCurrentChatId,
     saveChat,
     setNewChatMessages,
     updateChatTitle,
   } = useChatHistoryContext();
+  const setCurrentChatId = (id: string | null) => {
+    if (tracksCurrentChat) setHistoryCurrentChatId(id);
+  };
 
   const [messages, setRawMessages] = useState<Message[]>(initialMessages);
   // Mirrors `messages` for the async send path: a turn started from a toast

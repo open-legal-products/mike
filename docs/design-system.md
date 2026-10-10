@@ -190,6 +190,23 @@ Truncation is appropriate only when the omitted text is genuinely secondary and
 the user has an accessible way to inspect it. Account identity and permissions
 in connector cards are essential information.
 
+### Side-by-side chats
+
+The Assistant and the IDE can each show two chats at once (`?side=<chatId>` in
+the URL; see `useChatRoute`). Both keep their widths honest by shrinking the
+neighbours, never by clipping content:
+
+- **Assistant.** The two chat columns share the page and are split by a
+  hairline (`AssistantChatDivider`) that drags or moves with the arrow keys.
+  The document side panel reserves 400px for each chat and opens at 360px
+  beside two chats rather than at half the page.
+- **IDE.** The document view takes what the explorer and chat panels leave and
+  never less than 320px. `app/lib/workspacePanelWidths.ts` owns that maths;
+  route every new resizable panel through it rather than clamping inline.
+- The second chat needs a wide page: below `md` only the primary chat renders
+  and the action that opens the side chat is not offered.
+
+
 ## Elevation and the glass surface
 
 The signature surface combines a light fill, hairline border, inset highlight
