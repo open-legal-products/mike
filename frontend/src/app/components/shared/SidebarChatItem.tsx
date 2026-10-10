@@ -1,7 +1,14 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { MoreHorizontal, Pencil, Trash2, Users, Loader2 } from "lucide-react";
+import {
+    Columns2,
+    MoreHorizontal,
+    Pencil,
+    Trash2,
+    Users,
+    Loader2,
+} from "lucide-react";
 import {
     Dropdown,
     DropdownContent,
@@ -35,6 +42,8 @@ interface Props {
     onSelect: () => void;
     projectName?: string;
     responseStatus?: "loading" | "complete";
+    /** Offers showing this chat beside the one on screen. */
+    onOpenInSideChat?: () => void;
 }
 
 export function SidebarChatItem({
@@ -43,6 +52,7 @@ export function SidebarChatItem({
     onSelect,
     projectName,
     responseStatus,
+    onOpenInSideChat,
 }: Props) {
     const { renameChat, deleteChat } = useChatHistoryContext();
     const [renameOpen, setRenameOpen] = useState(false);
@@ -253,6 +263,16 @@ export function SidebarChatItem({
                         </button>
                     </DropdownTrigger>
                     <DropdownContent align="end">
+                        {onOpenInSideChat && (
+                            // Two chats need a wide page.
+                            <DropdownItem
+                                onSelect={onOpenInSideChat}
+                                className="max-md:hidden"
+                            >
+                                <Columns2 className="mr-2 h-4 w-4" />
+                                Open in side chat
+                            </DropdownItem>
+                        )}
                         <DropdownItem
                             onSelect={() => {
                                 if (!canShare) {

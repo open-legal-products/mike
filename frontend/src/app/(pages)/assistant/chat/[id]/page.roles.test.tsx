@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // the caller's standing; this file pins that the page actually consumes it
 // — dropping it handed a viewer a live composer whose sends 403.
 
-const { getChat, loadChats, chatOptions } = vi.hoisted(() => ({
+const { getChat, loadChats, chatOptions, sideChatRequest, requestSideChat } =
+    vi.hoisted(() => ({
+    sideChatRequest: { current: null as string | null },
+    requestSideChat: vi.fn(),
     getChat: vi.fn(),
     loadChats: vi.fn(),
     chatOptions: {
@@ -24,6 +27,8 @@ vi.mock("@/app/lib/mikeApi", () => ({
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     useChatHistoryContext: () => ({
         setSideChatId: () => {},
+        sideChatRequest: sideChatRequest.current,
+        requestSideChat,
         setCurrentChatId: vi.fn(),
         newChatMessages: null,
         setNewChatMessages: vi.fn(),
@@ -156,6 +161,21 @@ describe("side chat", () => {
         });
         expect(screen.queryByTestId("side-chat")).not.toBeInTheDocument();
         expect(window.location.search).toBe("");
+    });
+
+    it("opens the chat a sidebar row asked for, and clears the request", async () => {
+        getChat.mockResolvedValue(chatDetail("owner"));
+        sideChatRequest.current = "chat-7";
+        render(<AssistantChatPage />);
+
+        await waitFor(() =>
+            expect(screen.getByTestId("side-chat-id")).toHaveTextContent(
+                "chat-7",
+            ),
+        );
+        expect(requestSideChat).toHaveBeenCalledWith(null);
+        expect(window.location.search).toBe("?side=chat-7");
+        sideChatRequest.current = null;
     });
 
     it("restores the side chat named in the URL", async () => {

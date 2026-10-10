@@ -30,7 +30,14 @@ export default function AssistantChatPage() {
     } = useChatRoute("/assistant/chat", "/assistant");
     const documentPanel = useAssistantDocumentPanel();
     // The sidebar treats a chat on screen as read, in either place.
-    const { setSideChatId } = useChatHistoryContext();
+    const { setSideChatId, sideChatRequest, requestSideChat } =
+        useChatHistoryContext();
+    // "Open in side chat" on a sidebar row.
+    useEffect(() => {
+        if (!sideChatRequest) return;
+        requestSideChat(null);
+        openSideChat(sideChatRequest);
+    }, [sideChatRequest, requestSideChat, openSideChat]);
     useEffect(() => {
         setSideChatId(sideChatId || null);
         return () => setSideChatId(null);
