@@ -227,14 +227,22 @@ export default function ProjectAssistantChatPage({ params }: Props) {
     // reader last used.
     const primaryChatPanelRef = useRef<ProjectChatPanelHandle>(null);
     const sideChatPanelRef = useRef<ProjectChatPanelHandle>(null);
-    const [activeChatPane, setActiveChatPane] = useState<"primary" | "side">(
-        "primary",
-    );
+    // A ref, not state: it is set as a press begins, and a render between the
+    // press and its click would replace the control being clicked (a citation
+    // pill) and lose the click.
+    const activeChatPaneRef = useRef<"primary" | "side">("primary");
     const addDocToChat = (document: Document) =>
         (
-            (activeChatPane === "side" ? sideChatPanelRef.current : null) ??
-            primaryChatPanelRef.current
+            (activeChatPaneRef.current === "side"
+                ? sideChatPanelRef.current
+                : null) ?? primaryChatPanelRef.current
         )?.addDoc(document);
+    const activatePrimaryChat = useCallback(() => {
+        activeChatPaneRef.current = "primary";
+    }, []);
+    const activateSideChat = useCallback(() => {
+        activeChatPaneRef.current = "side";
+    }, []);
     const [explorerCollapsed, setExplorerCollapsed] = useState(false);
     const workspaceRef = useRef<HTMLDivElement>(null);
 
@@ -1664,7 +1672,7 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                 roundedClassName={
                     sideChatOpen ? "rounded-lg" : "rounded-l-lg rounded-r-2xl"
                 }
-                onActivate={() => setActiveChatPane("primary")}
+                onActivate={activatePrimaryChat}
                 onOpenSideChat={sideChatOpen ? undefined : handleOpenSideChat}
                 onAskInSideChat={askInSideChat}
             />
@@ -1683,9 +1691,9 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                         hiddenChatId={activeChatId || null}
                         width={panelWidths.sideChat}
                         roundedClassName="rounded-l-lg rounded-r-2xl"
-                        onActivate={() => setActiveChatPane("side")}
+                        onActivate={activateSideChat}
                         onClose={() => {
-                            setActiveChatPane("primary");
+                            activatePrimaryChat();
                             closeSideChat();
                         }}
                     />

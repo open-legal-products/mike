@@ -34,7 +34,7 @@ export function AssistantDocumentPanelHost({
         title: string;
         message: string;
     } | null>(null);
-    const { tabs, setTabs, setActiveTabId, targetPane, canWrite } = panel;
+    const { tabs, setTabs, setActiveTabId, getTargetPane, canWrite } = panel;
 
     return (
         <>
@@ -86,14 +86,12 @@ export function AssistantDocumentPanelHost({
                         canEdit={canWrite}
                         chatCount={Math.max(1, panel.paneCount)}
                         documentActions={(document) => ({
-                            addToChatDisabled:
-                                !targetPane?.canWrite ||
-                                !!targetPane.chatLoading,
+                            addToChatDisabled: !panel.canAddToChat,
                             onAddToChat: async () => {
                                 const file = await getDocument(
                                     document.document_id,
                                 );
-                                targetPane?.addDocument(file);
+                                getTargetPane(true)?.addDocument(file);
                             },
                             onRename: async (filename) => {
                                 const file = await getDocument(
@@ -158,7 +156,7 @@ export function AssistantDocumentPanelHost({
                 onSelect={(documents) => {
                     setOpenDocumentsModalOpen(false);
                     documents.forEach((document) =>
-                        targetPane?.openDocument(document),
+                        getTargetPane()?.openDocument(document),
                     );
                 }}
                 breadcrumb={["Assistant", "Open Documents"]}

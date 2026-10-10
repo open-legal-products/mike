@@ -181,7 +181,7 @@ interface Props {
     onOpenDocuments?: () => void;
     /**
      * How many chats share the page with the panel. Each keeps its minimum
-     * width, and beside two chats the panel opens at a third of the page
+     * width, and beside two chats the panel opens at two fifths of the page
      * rather than half.
      */
     chatCount?: number;
@@ -202,7 +202,7 @@ export function maxAssistantSidePanelWidth(
     );
 }
 
-/** The width the panel opens at: half the page, or a third beside two chats. */
+/** The width the panel opens at: half the page, or two fifths beside two chats. */
 export function defaultAssistantSidePanelWidth(
     viewportWidth: number,
     chatCount: number,
@@ -210,7 +210,7 @@ export function defaultAssistantSidePanelWidth(
     return Math.min(
         maxAssistantSidePanelWidth(viewportWidth, chatCount),
         Math.round(
-            (viewportWidth - MAX_WIDTH_OFFSET) / (chatCount > 1 ? 3 : 2),
+            (viewportWidth - MAX_WIDTH_OFFSET) * (chatCount > 1 ? 2 / 5 : 1 / 2),
         ),
     );
 }

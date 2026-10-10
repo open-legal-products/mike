@@ -7,6 +7,7 @@ import {
     useState,
     useRef,
     useEffect,
+    type CSSProperties,
     type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
@@ -959,6 +960,10 @@ export function AssistantChatColumn({
                 onFocusCapture={() => setActivePane(paneId)}
                 className={cn(
                     "min-w-0 flex-col h-full flex-1 relative",
+                    // The split applies only where both chats show; alone on
+                    // a small screen the primary chat takes the full width.
+                    widthShare !== undefined &&
+                        "md:[flex-grow:var(--chat-width-share)]",
                     // A second chat needs the room; small screens keep one.
                     isSideChat ? "hidden md:flex" : "flex",
                     // Beside another chat, nothing may spill over the line.
@@ -967,7 +972,9 @@ export function AssistantChatColumn({
                 style={
                     widthShare === undefined
                         ? undefined
-                        : { flexGrow: widthShare }
+                        : ({
+                              "--chat-width-share": widthShare,
+                          } as CSSProperties)
                 }
             >
                 {renderHeaderActionSlots()}

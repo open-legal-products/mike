@@ -70,7 +70,41 @@ export function useAssistantDocumentPanel() {
     const [panes, setPanes] = useState<
         Record<string, AssistantDocumentPanelPane>
     >({});
-    const [activePaneId, setActivePaneId] = useState<string | null>(null);
+    // Which chat the reader last used. A ref, not state: it is set as a press
+    // begins, and a render between the press and its click would replace the
+    // control being clicked (a citation pill) and lose the click.
+    const activePaneIdRef = useRef<string | null>(null);
+    const panesRef = useRef(panes);
+    useEffect(() => {
+        panesRef.current = panes;
+    }, [panes]);
+    const setActivePane = useCallback((paneId: string) => {
+        activePaneIdRef.current = paneId;
+    }, []);
+    /**
+     * The chat that "Add to chat" and "Open Documents" act on: the one the
+     * reader last used, or another that can take the document if it cannot.
+     */
+    const getTargetPane = useCallback(
+        (needsWrite = false): AssistantDocumentPanelPane | null => {
+            const all = Object.values(panesRef.current);
+            const usable = (pane: AssistantDocumentPanelPane | undefined) =>
+                pane && (!needsWrite || (pane.canWrite && !pane.chatLoading))
+                    ? pane
+                    : null;
+            const active = activePaneIdRef.current
+                ? panesRef.current[activePaneIdRef.current]
+                : undefined;
+            return (
+                usable(active) ??
+                all.find((pane) => usable(pane)) ??
+                active ??
+                all[0] ??
+                null
+            );
+        },
+        [],
+    );
     const panelCloseTimerRef = useRef<number | null>(null);
 
     const show = useCallback(() => {
@@ -351,8 +385,6 @@ export function useAssistantDocumentPanel() {
     );
 
     const paneList = Object.values(panes);
-    const targetPane =
-        (activePaneId ? panes[activePaneId] : undefined) ?? paneList[0] ?? null;
 
     return useMemo(
         () => ({
@@ -379,14 +411,17 @@ export function useAssistantDocumentPanel() {
             handleCloseAnnotation,
             handleScrollChange,
             registerPane,
-            setActivePane: setActivePaneId,
-            /** The chat that "Add to chat" and "Open Documents" act on. */
-            targetPane,
+            setActivePane,
+            getTargetPane,
             /** Whether any chat on the page lets the reader change documents. */
             canWrite: paneList.some((pane) => pane.canWrite),
+            /** Whether any chat on the page can take a document right now. */
+            canAddToChat: paneList.some(
+                (pane) => pane.canWrite && !pane.chatLoading,
+            ),
             paneCount: paneList.length,
         }),
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- paneList and targetPane derive from panes and activePaneId
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- paneList derives from panes
         [
             tabs,
             activeTabId,
@@ -407,8 +442,9 @@ export function useAssistantDocumentPanel() {
             handleCloseAnnotation,
             handleScrollChange,
             registerPane,
+            setActivePane,
+            getTargetPane,
             panes,
-            activePaneId,
         ],
     );
 }
