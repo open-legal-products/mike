@@ -772,10 +772,7 @@ export function AssistantChatColumn({
 
     const renderChatHeaderActions = (mobile = false) => {
         const slot = mobile ? "mobile" : "desktop";
-        const historyMenu = (
-            trigger: ReactElement,
-            onCloseAutoFocus?: (event: Event) => void,
-        ) =>
+        const historyMenu = (trigger: ReactElement) =>
             onLoadChat ? (
                 <AssistantChatHistoryMenu
                     open={historyOpenIn === slot}
@@ -784,7 +781,6 @@ export function AssistantChatColumn({
                     currentChatId={chatId ?? ""}
                     hiddenChatId={hiddenChatId}
                     onLoad={onLoadChat}
-                    onCloseAutoFocus={onCloseAutoFocus}
                 />
             ) : null;
         return (
@@ -823,6 +819,8 @@ export function AssistantChatColumn({
                 >
                 <HeaderActionsMenu
                     title="Chat actions"
+                    // One header menu at a time: opening another closes it.
+                    modal={false}
                     onCloseAutoFocus={(event) => {
                         if (loadChatRequestedRef.current !== slot) return;
                         // The history opens once this menu has closed, and
@@ -881,14 +879,16 @@ export function AssistantChatColumn({
                             aria-hidden="true"
                             tabIndex={-1}
                             className="pointer-events-none absolute inset-0"
+                            // The menu hands focus back to its trigger when
+                            // it closes from the keyboard or a choice, and
+                            // not when the reader pressed elsewhere. Pass it
+                            // on to the button they actually used.
+                            onFocus={() =>
+                                actionsAnchorRefs.current[slot]
+                                    ?.querySelector("button")
+                                    ?.focus()
+                            }
                         />,
-                        (event) => {
-                            // Back to the button the reader actually used.
-                            event.preventDefault();
-                            actionsAnchorRefs.current[slot]
-                                ?.querySelector("button")
-                                ?.focus();
-                        },
                     )}
                 </span>
             </HeaderButtonsUI>

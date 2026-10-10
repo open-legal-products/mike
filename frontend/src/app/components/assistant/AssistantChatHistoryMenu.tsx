@@ -16,7 +16,6 @@ export function AssistantChatHistoryMenu({
     currentChatId,
     hiddenChatId,
     onLoad,
-    onCloseAutoFocus,
 }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
@@ -25,7 +24,6 @@ export function AssistantChatHistoryMenu({
     /** The chat shown in the other pane, which cannot be opened twice. */
     hiddenChatId?: string | null;
     onLoad: (chatId: string) => void;
-    onCloseAutoFocus?: (event: Event) => void;
 }) {
     const { chats, hasMoreChats, loadingMoreChats, loadMoreChats } =
         useChatHistoryContext();
@@ -48,7 +46,8 @@ export function AssistantChatHistoryMenu({
             }}
             trigger={trigger}
             align="end"
-            onCloseAutoFocus={onCloseAutoFocus}
+            // Its neighbours in the header stay clickable while it is open.
+            modal={false}
             query={query}
             onQueryChange={setQuery}
             loading={chats === null}

@@ -75,10 +75,13 @@ export interface ChatHistoryDropdownUIProps {
     /** Which edge of the trigger the menu lines up with. */
     align?: "start" | "center" | "end";
     /**
-     * Runs as the menu closes, before focus returns to the trigger. Prevent
-     * the event to send focus somewhere else.
+     * False lets a press outside reach what is pressed, closing this menu on
+     * the way. Use it for a menu that sits beside other menus' buttons which
+     * stay clickable while it is open (a floating header's `pointer-events`
+     * do that): a modal menu ignores a press that opens a newer menu, so
+     * both would stay open.
      */
-    onCloseAutoFocus?: (event: Event) => void;
+    modal?: boolean;
     /** Extra attributes for the scrolling list, such as a test id. */
     listProps?: HTMLAttributes<HTMLDivElement> & {
         [key: `data-${string}`]: string | undefined;
@@ -118,7 +121,7 @@ export function ChatHistoryDropdownUI({
     loadingMore = false,
     footer,
     align = "start",
-    onCloseAutoFocus,
+    modal = true,
     listProps,
 }: ChatHistoryDropdownUIProps): ReactElement {
     const searchInputRef = useRef<HTMLInputElement>(null);
@@ -136,12 +139,11 @@ export function ChatHistoryDropdownUI({
     }, [open]);
 
     return (
-        <Dropdown open={open} onOpenChange={onOpenChange}>
+        <Dropdown open={open} onOpenChange={onOpenChange} modal={modal}>
             <DropdownTrigger asChild>{trigger}</DropdownTrigger>
             <DropdownContent
                 align={align}
                 sideOffset={8}
-                onCloseAutoFocus={onCloseAutoFocus}
                 // One size everywhere, so the menu is the same menu in the web
                 // header and in the Word pane (it fits the narrowest pane).
                 className="flex w-64 max-w-[calc(100vw-1.5rem)] flex-col gap-0 overflow-hidden p-0"

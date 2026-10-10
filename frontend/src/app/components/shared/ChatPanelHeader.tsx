@@ -198,6 +198,11 @@ export function ChatPanelHeader({
                 ) : (
                     <div className={cn(HEADER_PILL_CLASS, "min-w-0")}>
                         <ChatHistoryDropdownUI
+                            // The header's other buttons stay clickable
+                            // while this is open, so opening another menu
+                            // has to close it. Callers do the same for the
+                            // menu they pass as `actions`.
+                            modal={false}
                             open={historyOpen}
                             onOpenChange={(open) => {
                                 if (open) setNow(Date.now());

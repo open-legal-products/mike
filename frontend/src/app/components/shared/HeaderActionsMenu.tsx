@@ -23,14 +23,23 @@ export function HeaderActionsMenu({
     title = "Actions",
     triggerClassName,
     onCloseAutoFocus,
+    modal = true,
 }: {
     items: HeaderActionsMenuItem[];
     title?: string;
     triggerClassName?: string;
     onCloseAutoFocus?: (event: Event) => void;
+    /**
+     * False lets a press outside reach what is pressed, closing this menu on
+     * the way. Use it for a menu that sits beside other menus' buttons which
+     * stay clickable while it is open (a floating header's `pointer-events`
+     * do that): a modal menu ignores a press that opens a newer menu, so
+     * both would stay open.
+     */
+    modal?: boolean;
 }) {
     return (
-        <Dropdown>
+        <Dropdown modal={modal}>
             <DropdownTrigger asChild>
                 <button
                     type="button"

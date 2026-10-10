@@ -761,6 +761,9 @@ export function ProjectChatPanel({
                         actions={
                             <HeaderActionsMenu
                                 triggerClassName="h-6 w-6"
+                                // One header menu at a time: opening the
+                                // chat history closes this, and the reverse.
+                                modal={false}
                                 onCloseAutoFocus={(event) => {
                                     if (editingChatTitle)
                                         event.preventDefault();
