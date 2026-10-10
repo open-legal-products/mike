@@ -150,8 +150,9 @@ describe("side panel width", () => {
         expect(defaultAssistantSidePanelWidth(1456, 1)).toBe(700);
     });
 
-    it("opens narrow beside two chats", () => {
-        expect(defaultAssistantSidePanelWidth(1456, 2)).toBe(360);
+    it("opens at a third of the page beside two chats", () => {
+        expect(defaultAssistantSidePanelWidth(1456, 2)).toBe(467);
+        expect(defaultAssistantSidePanelWidth(1856, 2)).toBe(600);
     });
 
     it("leaves every chat its minimum width", () => {

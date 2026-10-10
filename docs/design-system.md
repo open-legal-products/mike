@@ -198,8 +198,8 @@ neighbours, never by clipping content:
 
 - **Assistant.** The two chat columns share the page and are split by a
   hairline (`AssistantChatDivider`) that drags or moves with the arrow keys.
-  The document side panel reserves 400px for each chat and opens at 360px
-  beside two chats rather than at half the page.
+  The document side panel reserves 400px for each chat and opens at a third
+  of the page beside two chats rather than at half.
 - **IDE.** The document view takes what the explorer and chat panels leave and
   never less than 320px. `app/lib/workspacePanelWidths.ts` owns that maths;
   route every new resizable panel through it rather than clamping inline.
