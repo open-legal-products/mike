@@ -93,6 +93,39 @@ function useRangeHighlight(range: Range | null) {
     }, [range]);
 }
 
+/**
+ * Calls `onChange` whenever the passage in `range` may have moved on screen:
+ * the window resized, something scrolled, or its column reflowed without the
+ * window changing size (a side panel opening). A resize event can arrive
+ * before the new layout does; the observer reports once it has.
+ */
+function useLayoutChange(range: Range | null, onChange: () => void) {
+    const onChangeRef = useRef(onChange);
+    useEffect(() => {
+        onChangeRef.current = onChange;
+    });
+    useEffect(() => {
+        if (!range) return;
+        const notify = () => onChangeRef.current();
+        window.addEventListener("resize", notify);
+        document.addEventListener("scroll", notify, true);
+        const container = range.commonAncestorContainer;
+        const passage =
+            container instanceof Element ? container : container.parentElement;
+        const observer =
+            typeof ResizeObserver === "undefined"
+                ? null
+                : new ResizeObserver(notify);
+        observer?.observe(document.documentElement);
+        if (passage) observer?.observe(passage);
+        return () => {
+            window.removeEventListener("resize", notify);
+            document.removeEventListener("scroll", notify, true);
+            observer?.disconnect();
+        };
+    }, [range]);
+}
+
 /** Below the end of the passage, pulled in from any viewport edge. */
 function placeBubble(range: Range, fallback: Point) {
     const anchor = endOfRange(range) ?? fallback;
@@ -146,28 +179,7 @@ function AnnotationBubble({
     const [{ left, top }, setPlacement] = useState(() =>
         placeBubble(range, point),
     );
-    useEffect(() => {
-        const reposition = () => setPlacement(placeBubble(range, point));
-        window.addEventListener("resize", reposition);
-        document.addEventListener("scroll", reposition, true);
-        // The passage also moves when its column reflows without the window
-        // changing size (a side panel opening), and a resize event can arrive
-        // before the new layout does; an observer reports once it has.
-        const container = range.commonAncestorContainer;
-        const passage =
-            container instanceof Element ? container : container.parentElement;
-        const observer =
-            typeof ResizeObserver === "undefined"
-                ? null
-                : new ResizeObserver(reposition);
-        observer?.observe(document.documentElement);
-        if (passage) observer?.observe(passage);
-        return () => {
-            window.removeEventListener("resize", reposition);
-            document.removeEventListener("scroll", reposition, true);
-            observer?.disconnect();
-        };
-    }, [range, point]);
+    useLayoutChange(range, () => setPlacement(placeBubble(range, point)));
 
     const trimmed = normalizeExcerptNote(note);
 
@@ -232,6 +244,16 @@ export function ResponseSelectionMenu({
     const [menu, setMenu] = useState<SelectedExcerpt | null>(null);
     const [annotating, setAnnotating] = useState<SelectedExcerpt | null>(null);
     useRangeHighlight(annotating?.range ?? null);
+    // The menu stays under the end of the passage as it moves, like the note.
+    useLayoutChange(menu?.range ?? null, () =>
+        setMenu((current) => {
+            const point = current && endOfRange(current.range);
+            if (!current || !point) return current;
+            return point.x === current.point.x && point.y === current.point.y
+                ? current
+                : { ...current, point };
+        }),
+    );
 
     useEffect(() => {
         let timer: number | null = null;
@@ -271,6 +293,7 @@ export function ResponseSelectionMenu({
             {menu && (
                 <DropdownAtPoint
                     point={menu.point}
+                    followPoint
                     onClose={() => setMenu(null)}
                     aria-label="Selected text"
                     className="w-44"
