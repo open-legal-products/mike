@@ -7,6 +7,8 @@
 #
 # Usage:  supabase start   # in the repo, once
 #         npm run test:stack        (from backend/)
+# Set DB_JOB_TEST_REDIS_URL to a disposable Redis for real worker-process tests.
+# Those tests skip when Redis is absent; stack CI always supplies it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,7 +36,7 @@ if [[ -z "$SUPABASE_TEST_URL" || -z "$SUPABASE_TEST_SERVICE_ROLE_KEY" || -z "$SU
     echo "Could not read API_URL/DB_URL/SERVICE_ROLE_KEY/ANON_KEY from 'supabase status'." >&2
     exit 1
 fi
-export SUPABASE_TEST_URL SUPABASE_TEST_SERVICE_ROLE_KEY SUPABASE_TEST_ANON_KEY
+export SUPABASE_TEST_URL SUPABASE_TEST_SERVICE_ROLE_KEY SUPABASE_TEST_ANON_KEY SUPABASE_TEST_DB_URL
 
 if ! command -v psql >/dev/null 2>&1; then
     echo "psql not found. Install PostgreSQL's client tools before running stack tests." >&2
@@ -57,4 +59,5 @@ fi
 
 echo "Running stack integration tests against $SUPABASE_TEST_URL"
 cd "$BACKEND_DIR"
-exec npx vitest run src/__tests__/integration/*.supabase.test.ts "$@"
+# Batch claim RPCs share one queue: suites must not claim each other's fixtures.
+exec npx vitest run src/__tests__/integration/*.supabase.test.ts --fileParallelism=false "$@"

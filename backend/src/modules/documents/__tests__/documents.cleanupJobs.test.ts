@@ -29,7 +29,7 @@ const job = (keys: unknown[]) => ({ payload: { keys } });
 
 /** scriptedDb plus `rpc`, for the handler's sibling-claim pass. */
 type RpcStep = { rpc: string; data?: unknown; error?: unknown };
-type TableStep = { table: string; data?: unknown; error?: unknown };
+type TableStep = { table: string; data?: unknown; error?: unknown; reject?: unknown };
 type Recorded = {
   table?: string;
   rpc?: string;
@@ -46,8 +46,9 @@ function coalescingDb(steps: Array<RpcStep | TableStep>) {
     calls.push(call);
     const step = steps[cursor++];
     expect(step, `Unexpected call ${JSON.stringify(call)}`).toBeDefined();
+    if ("reject" in step) return Promise.reject(step.reject);
     return Promise.resolve({
-      data: step.data ?? null,
+      data: step.data ?? (call.op === "update" ? [{ id: call.filters.find(([op, col]) => op === "eq" && col === "id")?.[2] }] : null),
       error: step.error ?? null,
     });
   };
@@ -346,4 +347,21 @@ describe("document cleanup job", () => {
     ]);
     fake.done();
   });
+});
+
+
+it("contains a sibling settlement transport failure and still settles other siblings once", async () => {
+  const fake = coalescingDb([
+    { rpc: "claim_db_jobs", data: [sibling("j2", ["b"]), sibling("j3", ["c"])] },
+    { rpc: "document_cleanup_referenced_keys", data: [] },
+    { table: "db_jobs", reject: new Error("private-object-path-and-token") },
+    { table: "db_jobs", data: [{ id: "j3" }] },
+  ]);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await handleDocumentCleanup(fake.db, { id: "j1", payload: { keys: ["a"] } });
+    fake.done();
+    expect(fake.calls.filter(call => call.op === "update")).toHaveLength(2);
+    expect(JSON.stringify(error.mock.calls)).not.toContain("private-object-path-and-token");
+  } finally { error.mockRestore(); }
 });

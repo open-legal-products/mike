@@ -4775,13 +4775,17 @@ create table if not exists public.db_jobs (
   last_error text,
   dedupe_key text,
   result jsonb,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  heartbeat_at timestamptz
 );
 create index if not exists db_jobs_claim_idx
   on public.db_jobs (run_at)
   where status = 'pending';
 create index if not exists db_jobs_running_idx
   on public.db_jobs (claimed_at)
+  where status = 'running';
+create index if not exists db_jobs_running_heartbeat_idx
+  on public.db_jobs (coalesce(heartbeat_at, claimed_at))
   where status = 'running';
 create unique index if not exists db_jobs_dedupe_live_idx
   on public.db_jobs (dedupe_key)
@@ -7159,7 +7163,7 @@ as $$
              'abandoned: worker died mid-run and attempts are exhausted'
            )
      where status = 'running'
-       and claimed_at < now() - make_interval(secs => p_stale_seconds)
+       and coalesce(heartbeat_at, claimed_at) < now() - make_interval(secs => p_stale_seconds)
        and attempts >= max_attempts
        and kind not in ('storage.cleanup', 'document.cleanup')
     returning id
@@ -7174,7 +7178,7 @@ as $$
             and kind in ('storage.cleanup', 'document.cleanup')
             and run_at <= now())
         or (status = 'running'
-            and claimed_at < now() - make_interval(secs => p_stale_seconds)
+            and coalesce(heartbeat_at, claimed_at) < now() - make_interval(secs => p_stale_seconds)
             and (
               attempts < max_attempts
               or kind in ('storage.cleanup', 'document.cleanup')
@@ -7186,6 +7190,7 @@ as $$
   update public.db_jobs j
      set status = 'running',
          claimed_at = now(),
+         heartbeat_at = now(),
          finished_at = null,
          attempts = case
            when j.kind in ('storage.cleanup', 'document.cleanup')
@@ -7244,6 +7249,7 @@ as $$
   update public.db_jobs j
      set status = 'running',
          claimed_at = now(),
+         heartbeat_at = now(),
          finished_at = null,
          attempts = case
            when j.kind in ('storage.cleanup', 'document.cleanup')
@@ -7276,7 +7282,7 @@ as $$
            and j.kind in ('storage.cleanup', 'document.cleanup')
            and j.run_at <= now())
        or (j.status = 'running'
-           and j.claimed_at < now() - make_interval(secs => p_stale_seconds)
+           and coalesce(j.heartbeat_at, j.claimed_at) < now() - make_interval(secs => p_stale_seconds)
            and (
              j.attempts < j.max_attempts
              or j.kind in ('storage.cleanup', 'document.cleanup')
@@ -7286,6 +7292,79 @@ $$;
 revoke all on function public.claim_db_job(uuid, integer)
   from public, anon, authenticated;
 grant execute on function public.claim_db_job(uuid, integer)
+  to service_role;
+
+-- Evaluate wall time only AFTER acquiring the claim lock: transaction-start
+-- now() could admit a claim which expired while waiting behind another writer.
+create or replace function public.heartbeat_db_job(
+  p_id uuid, p_attempts integer, p_claimed_at timestamptz
+)
+returns table (id uuid, heartbeat_at timestamptz)
+language plpgsql security invoker set search_path = ''
+as $$
+declare
+  v_job public.db_jobs%rowtype;
+  v_now timestamptz;
+begin
+  select j.* into v_job from public.db_jobs j
+   where j.id = p_id and j.status = 'running'
+     and j.attempts = p_attempts and j.claimed_at = p_claimed_at
+   for update;
+  if not found then return; end if;
+  v_now := clock_timestamp();
+  if coalesce(v_job.heartbeat_at, v_job.claimed_at) is null
+     or coalesce(v_job.heartbeat_at, v_job.claimed_at) < v_now - interval '600 seconds'
+  then return; end if;
+  return query update public.db_jobs j set heartbeat_at = v_now
+    where j.id = p_id returning j.id, j.heartbeat_at;
+end;
+$$;
+revoke all on function public.heartbeat_db_job(uuid, integer, timestamptz)
+  from public, anon, authenticated;
+grant execute on function public.heartbeat_db_job(uuid, integer, timestamptz)
+  to service_role;
+
+create or replace function public.settle_live_db_job(
+  p_id uuid, p_attempts integer, p_claimed_at timestamptz,
+  p_outcome text, p_result jsonb, p_last_error text, p_run_at timestamptz,
+  p_refund_attempt boolean default false
+)
+returns table (id uuid)
+language plpgsql security invoker set search_path = ''
+as $$
+declare
+  v_job public.db_jobs%rowtype;
+  v_now timestamptz;
+begin
+  if p_outcome is null or p_outcome not in ('done', 'pending', 'failed') then
+    raise exception 'invalid settlement outcome' using errcode = '22023';
+  end if;
+  if p_outcome = 'pending' and (p_run_at is null or not isfinite(p_run_at)) then
+    raise exception 'pending settlement requires finite run_at' using errcode = '22023';
+  end if;
+  if p_refund_attempt is null or (p_refund_attempt and p_outcome <> 'pending') then
+    raise exception 'refund requires pending settlement' using errcode = '22023';
+  end if;
+  select j.* into v_job from public.db_jobs j
+   where j.id = p_id and j.status = 'running'
+     and j.attempts = p_attempts and j.claimed_at = p_claimed_at
+   for update;
+  if not found then return; end if;
+  v_now := clock_timestamp();
+  if coalesce(v_job.heartbeat_at, v_job.claimed_at) is null
+     or coalesce(v_job.heartbeat_at, v_job.claimed_at) < v_now - interval '600 seconds'
+  then return; end if;
+  return query update public.db_jobs j
+     set status = p_outcome, result = p_result, last_error = p_last_error,
+         run_at = case when p_outcome = 'pending' then p_run_at else j.run_at end,
+         finished_at = case when p_outcome = 'pending' then null else v_now end,
+         attempts = case when p_refund_attempt then greatest(j.attempts - 1, 0) else j.attempts end
+   where j.id = p_id returning j.id;
+end;
+$$;
+revoke all on function public.settle_live_db_job(uuid, integer, timestamptz, text, jsonb, text, timestamptz, boolean)
+  from public, anon, authenticated;
+grant execute on function public.settle_live_db_job(uuid, integer, timestamptz, text, jsonb, text, timestamptz, boolean)
   to service_role;
 
 drop index if exists public.db_jobs_failed_cleanup_run_at_idx;
@@ -7688,5 +7767,6 @@ insert into public.schema_migrations (filename) values
   ('20261008_03_bedrock_azure_user_api_keys.sql'),
   ('20261009_01_vertex_foundry_xai_custom_user_api_keys.sql'),
   ('20261009_02_user_api_key_enabled.sql'),
-  ('20261009_03_schema_migrations.sql')
+  ('20261009_03_schema_migrations.sql'),
+  ('20261013_01_db_job_claim_liveness.sql')
 on conflict (filename) do nothing;

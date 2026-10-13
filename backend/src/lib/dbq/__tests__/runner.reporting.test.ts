@@ -30,13 +30,13 @@ const MISSING_RPC = {
     hint: null,
 };
 
-function makeDb(rpc: () => Promise<{ data: unknown; error: unknown }>) {
+function makeDb(rpc: () => Promise<{ data: unknown; error: unknown }>, settlement = { data: [{ id: "job-1" }] as unknown, error: null as unknown }) {
     const builder: Record<string, unknown> = {};
     for (const method of ["update", "delete", "select", "eq", "neq", "lt", "limit"]) {
         builder[method] = () => builder;
     }
     builder.then = (resolve: (value: unknown) => unknown) =>
-        Promise.resolve({ data: null, error: null }).then(resolve);
+        Promise.resolve(settlement).then(resolve);
     return { from: () => builder, rpc };
 }
 
@@ -49,6 +49,7 @@ const JOB = (over: Partial<DbJob> = {}): DbJob => ({
     max_attempts: 3,
     run_at: "2026-08-21T00:00:00Z",
     claimed_at: "2026-08-21T00:00:01Z",
+    heartbeat_at: null,
     finished_at: null,
     last_error: null,
     dedupe_key: null,
@@ -237,4 +238,19 @@ describe("processClaimedJob console lines", () => {
             expect.objectContaining({ id: "job-1" }),
         );
     });
+});
+
+
+it("never includes dependency text or payloads in new settlement diagnostics", async () => {
+    const secret = "private-document-token-and-object-path";
+    const db = makeDb(async () => ({ data: [], error: null }), {
+        data: null, error: new Error(secret),
+    });
+    await processClaimedJob(db as never, { "test.kind": async () => ({ text: secret }) },
+        JOB({ payload: { text: secret } }));
+    expect(mocks.reportError).toHaveBeenCalledOnce();
+    const [reported, context] = mocks.reportError.mock.calls[0];
+    expect(String(reported)).toBe("Error: db_job_settlement_operation_failed");
+    expect(JSON.stringify(context)).not.toContain(secret);
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(secret);
 });

@@ -5,7 +5,7 @@ import { handleDocumentCleanup, handleDocumentPrecomputeText, handleConversionCo
 import { handleExtractionExtract, markExtractionJobFailed } from "../modules/tabular/tabular.service";
 import { handleMemoryConsolidation, markMemoryConsolidationFailed } from "../modules/memory/memory.service";
 import { handleStorageCleanup } from "../lib/dbq/storageCleanup";
-import { type DbJobHandlers } from "../lib/dbq/types";
+import { type DbJobExecutionPolicies, type DbJobHandlers } from "../lib/dbq/types";
 import { type DbJobFailureHook } from "../lib/dbq/runner";
 
 export const DB_JOB_HANDLERS: DbJobHandlers = {
@@ -34,3 +34,6 @@ export {
   handleStorageCleanup,
 };
 export { MAX_ZIP_EXPORT_DOCUMENTS, MCP_TOKEN_REFRESH_WINDOW_MS } from "../modules/user/user.service";
+
+/** Empty until an adopter has proven domain-side effect fencing and cancellation. */
+export const DB_JOB_EXECUTION_POLICIES: DbJobExecutionPolicies = {};

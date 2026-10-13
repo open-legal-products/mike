@@ -73,7 +73,7 @@ const JOB = (kind: string, payload: Record<string, unknown>): DbJob => ({
     attempts: 1,
     max_attempts: 3,
     run_at: "",
-    claimed_at: null,
+    claimed_at: null, heartbeat_at: null,
     finished_at: null,
     last_error: null,
     dedupe_key: null,

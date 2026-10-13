@@ -11,6 +11,7 @@
 # without SUPABASE_TEST_* env vars, which is why the plain CI workflow never
 # exercised it — this workflow is the trigger that finally does.
 #
+# Redis additionally exercises the real-process claim/renewal/recovery suite.
 # Everything runs locally on the runner: no secrets, no external services.
 # The keys used are the Supabase CLI's well-known local development keys.
 name: Stack tests
@@ -34,6 +35,17 @@ jobs:
     name: Supabase stack integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: [6379:6379]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DB_JOB_TEST_REDIS_URL: redis://127.0.0.1:6379
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -101,4 +113,5 @@ jobs:
       - name: Run stack integration tests
         working-directory: backend
         run: |
-          npx vitest run src/__tests__/integration/*.supabase.test.ts
+          # Global batch claims must not consume another suite's fixtures.
+          npx vitest run src/__tests__/integration/*.supabase.test.ts --fileParallelism=false

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 
+const delivery = vi.hoisted(() => ({ enabled: false, enqueue: vi.fn() }));
+vi.mock("../driver", () => ({ redisEnabled: () => delivery.enabled }));
+vi.mock("../../queue/appJobsQueue", () => ({ enqueueAppJobDelivery: delivery.enqueue }));
 vi.mock("../../supabase", () => ({ createServerSupabase: vi.fn() }));
 vi.mock("../../storage", () => ({ deleteFile: vi.fn() }));
 
@@ -23,6 +26,7 @@ type Update = {
 function makeDb(opts?: {
     rpc?: () => Promise<{ data: unknown; error: { message: string } | null }>;
     selectData?: unknown[];
+    settle?: () => Promise<{ data: unknown; error: unknown }>;
 }) {
     const updates: Update[] = [];
     const deletes: Record<string, unknown>[] = [];
@@ -67,7 +71,7 @@ function makeDb(opts?: {
             limit() {
                 return b;
             },
-            then(onF: (v: unknown) => unknown) {
+            then(onF: (v: unknown) => unknown, onR: (e: unknown) => unknown) {
                 if (state.op === "update")
                     updates.push({
                         table,
@@ -77,10 +81,11 @@ function makeDb(opts?: {
                     });
                 if (state.op === "delete")
                     deletes.push({ table, ...state.filters });
+                if (state.op === "update" && opts?.settle) return opts.settle().then(onF, onR);
                 const value =
                     state.op === "select"
                         ? { data: opts?.selectData ?? [], error: null }
-                        : { data: null, error: null };
+                        : { data: [{ id: state.filters.id }], error: null };
                 return Promise.resolve(value).then(onF);
             },
         };
@@ -105,6 +110,7 @@ const JOB = (over: Partial<DbJob> = {}): DbJob => ({
     max_attempts: 3,
     run_at: "2026-08-21T00:00:00Z",
     claimed_at: "2026-08-21T00:00:01Z",
+    heartbeat_at: null,
     finished_at: null,
     last_error: null,
     dedupe_key: null,
@@ -448,5 +454,63 @@ describe("explicit failure hooks", () => {
         );
         expect(receiptPurge).toBeDefined();
         expect(receiptPurge?.["lt:created_at"]).toEqual(expect.any(String));
+    });
+});
+
+
+describe("confirmed settlement before side effects", () => {
+    it.each([
+        ["lost", async () => ({ data: [], error: null })],
+        ["returned error", async () => ({ data: null, error: { message: "database unavailable" } })],
+        ["thrown error", async () => { throw new Error("transport unavailable"); }],
+    ] as const)("suppresses hooks and retry delivery after %s settlement", async (_name, settle) => {
+        delivery.enabled = true;
+        delivery.enqueue.mockClear();
+        const hook = vi.fn();
+        try {
+            for (const attempts of [1, 3]) {
+                const db = makeDb({ settle });
+                await processClaimedJob(db as never, {
+                    "test.kind": async () => { throw new Error("handler failed"); },
+                }, JOB({ attempts }), { "test.kind": hook });
+                expect(db.updates).toHaveLength(1);
+            }
+            expect(hook).not.toHaveBeenCalled();
+            expect(delivery.enqueue).not.toHaveBeenCalled();
+        } finally { delivery.enabled = false; }
+    });
+
+    it("does not turn a success persistence exception into a handler retry", async () => {
+        const db = makeDb({ settle: async () => { throw new Error("lost response"); } });
+        const handler = vi.fn(async () => ({ value: 42 }));
+        await processClaimedJob(db as never, { "test.kind": handler }, JOB());
+        expect(handler).toHaveBeenCalledOnce();
+        expect(db.updates).toHaveLength(1);
+        expect(db.updates[0].payload.status).toBe("done");
+    });
+
+    it("redelivers only a confirmed retry", async () => {
+        delivery.enabled = true;
+        delivery.enqueue.mockClear();
+        try {
+            await processClaimedJob(makeDb() as never, {
+                "test.kind": async () => { throw new Error("transient"); },
+            }, JOB());
+            expect(delivery.enqueue).toHaveBeenCalledOnce();
+        } finally { delivery.enabled = false; }
+    });
+});
+
+
+it("captures the immutable claim before invoking a mutable legacy handler", async () => {
+    const db = makeDb();
+    await processClaimedJob(db as never, { "test.kind": async (_db, job) => {
+        job.id = "other-job";
+        job.attempts = 99;
+        job.claimed_at = "other-claim";
+    } }, JOB());
+    expect(db.updates[0].filters).toEqual({
+        id: "job-1", status: "running", attempts: 1,
+        claimed_at: "2026-08-21T00:00:01Z",
     });
 });

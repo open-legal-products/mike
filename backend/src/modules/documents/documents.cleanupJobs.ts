@@ -1,4 +1,6 @@
 import { type Db, type DbJob, DbJobDeferredError } from "../../lib/dbq/types";
+import { claimIdentity, settleClaim, type SettlementPatch } from "../../lib/dbq/claim";
+import { safeError } from "../../lib/safeError";
 import { jobErrorMessage } from "../../lib/dbq/jobError";
 import { retryDelayMs, STALE_SECONDS } from "../../lib/dbq/runner";
 import { requestDocumentCleanupDelivery } from "../../lib/dbq/enqueue";
@@ -25,6 +27,7 @@ type ClaimedCleanupJob = Pick<
   "id" | "payload" | "attempts" | "claimed_at"
 >;
 
+/** Deduplicate valid storage keys while ignoring malformed entries in a cleanup payload. */
 function cleanupKeys(payload: DbJob["payload"] | undefined): string[] {
   const raw = payload?.keys;
   return [
@@ -48,7 +51,7 @@ async function settleCoalescedJob(
     | { done: true }
     | { done: false; message: string; runAt: string; refundAttempt?: boolean },
 ): Promise<void> {
-  const patch = outcome.done
+  const patch: SettlementPatch = outcome.done
     ? {
         status: "done",
         finished_at: new Date().toISOString(),
@@ -62,15 +65,12 @@ async function settleCoalescedJob(
           ? { attempts: Math.max(0, row.attempts - 1) }
           : {}),
       };
-  const { error } = await db
-    .from("db_jobs")
-    .update(patch)
-    .eq("id", row.id)
-    .eq("status", "running")
-    .eq("attempts", row.attempts)
-    .eq("claimed_at", row.claimed_at);
-  // Losing this write only costs one duplicate (idempotent) delete later.
-  if (error) logError("dbq/document-cleanup", error, { jobId: row.id });
+  const settlement = await settleClaim(db, claimIdentity(row), patch);
+  // A transport exception is contained here, not caught by the surrounding
+  // cleanup body and misclassified as another delete/retry for every sibling.
+  if (settlement.kind === "outcome_unknown")
+    logError("dbq/document-cleanup", new Error(`settlement_${safeError(settlement.error).category}`), { jobId: row.id });
+
 }
 
 /** Claim the pending cleanup backlog so one run can drain all of it. */

@@ -1,3 +1,4 @@
+import { stopAppJobIntake } from "./appJobsWorker";
 import { WORKER_REGISTRY } from "./registry";
 import { closeRedisConnection } from "../lib/queue/connection";
 
@@ -21,8 +22,19 @@ export function startWorkers(): void {
     }
 }
 
+/** Close app-job claim intake synchronously before any worker drain is awaited. */
+export function stopWorkerIntake(): void {
+    stopAppJobIntake();
+}
+
+/** Await every worker and resource closure before propagating aggregate shutdown failures. */
 export async function stopWorkers(): Promise<void> {
-    for (const w of WORKER_REGISTRY) await w.stop();
-    for (const w of WORKER_REGISTRY) await w.closeQueue();
-    await closeRedisConnection();
+    stopWorkerIntake();
+    const stops = await Promise.allSettled(WORKER_REGISTRY.map((w) => w.stop()));
+    const queues = await Promise.allSettled(WORKER_REGISTRY.map((w) => w.closeQueue()));
+    const connection = await Promise.allSettled([closeRedisConnection()]);
+    const failures = [...stops, ...queues, ...connection]
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Worker shutdown failed");
 }

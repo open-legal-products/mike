@@ -22,7 +22,7 @@ import { handleDocumentPrecomputeText } from "../documents.textJobs";
 const job = {
   payload: { versionId: "v", storagePath: "old-source", fileType: "doc" },
   id: "text-job", kind: "document.precompute_text", status: "running", attempts: 1,
-  max_attempts: 3, run_at: "", claimed_at: null, finished_at: null, last_error: null,
+  max_attempts: 3, run_at: "", claimed_at: null, heartbeat_at: null, finished_at: null, last_error: null,
   dedupe_key: null, result: null, created_at: "",
 } satisfies DbJob;
 beforeEach(() => {

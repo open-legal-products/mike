@@ -15,6 +15,9 @@
 
 import { createServerSupabase } from "../supabase";
 import { jobErrorMessage } from "./jobError";
+import { claimIdentity, settleClaim, type Settlement, type SettlementPatch } from "./claim";
+import { executeWithClaim, CLAIM_STALE_SECONDS, assertValidExecutionPolicies } from "./execution";
+import { safeError } from "../safeError";
 import { deleteFile } from "../storage";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
@@ -23,6 +26,8 @@ import {
     type Db,
     type DbJob,
     type DbJobHandlers,
+    type DbJobExecutionOptions,
+    type DbJobExecutionPolicies,
 } from "./types";
 import { reportError } from "../observability/sentry";
 import {
@@ -68,7 +73,7 @@ const CLAIM_BATCH = 5;
  * document.cleanup coalescer) has to use the same stale threshold this loop
  * does, or the two disagree about who owns a row.
  */
-export const STALE_SECONDS = 600;
+export const STALE_SECONDS = CLAIM_STALE_SECONDS;
 /** Retention: how long finished rows are kept for inspection. */
 const DONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -127,42 +132,31 @@ export async function processClaimedJob(
     handlers: DbJobHandlers,
     job: DbJob,
     failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
+    options: DbJobExecutionOptions = {},
 ): Promise<void> {
-    /**
-     * FENCING TOKEN. Every write below is addressed to "the job as THIS claim
-     * left it", not merely to the row id.
-     *
-     * A job whose worker went quiet past the stale threshold is reclaimed —
-     * that is the crash-recovery design, and it is also how two live runners
-     * end up holding the same job. The zombie is not necessarily dead: a paused
-     * VM, a long GC, a wedged network call can all come back. When it does, an
-     * `.eq("id", job.id)` write lands on top of whatever the current claimant
-     * has since done — marking `done` a job that is running right now, or
-     * dragging a finished job back to `pending` and running it a second time.
-     *
-     * `claimed_at` and `attempts` are both set by the claim, so together they
-     * name one specific claim of one specific row; with `status = 'running'`
-     * they let exactly one claimant finalize.
-     */
-    const fence = <T extends { eq(column: string, value: unknown): T }>(
-        query: T,
-    ): T =>
-        query
-            .eq("id", job.id)
-            .eq("status", "running")
-            .eq("attempts", job.attempts)
-            .eq("claimed_at", job.claimed_at);
+    if (options.signal?.aborted) return;
+    const policy = options.policies?.[job.kind];
+    if (policy && RETRY_UNTIL_SUCCESS_KINDS.has(job.kind))
+        throw new Error("cleanup_claim_renewal_not_supported");
+    const claim = Object.freeze(claimIdentity(job));
+    /** Persist once using the captured fence and report unknown writes without retrying them. */
+    const settle = async (patch: SettlementPatch): Promise<Settlement> => {
+        const outcome = await settleClaim(db, claim, policy ? { result: job.result, ...patch } : patch, Boolean(policy));
+        if (outcome.kind === "outcome_unknown") {
+            reportInfrastructureFailure(job.id, "settlement", outcome.error);
+        }
+        return outcome;
+    };
 
     const retryUntilSuccess = RETRY_UNTIL_SUCCESS_KINDS.has(job.kind);
     const handler = handlers[job.kind];
     if (!handler && !retryUntilSuccess) {
-        await fence(
-            db.from("db_jobs").update({
-                status: "failed",
-                finished_at: new Date().toISOString(),
-                last_error: `unknown job kind: ${job.kind}`,
-            }),
-        );
+        const outcome = await settle({
+            status: "failed",
+            finished_at: new Date().toISOString(),
+            last_error: `unknown job kind: ${job.kind}`,
+        });
+        if (outcome.kind !== "committed") return;
         const unknownKind = new Error(`Unknown db_jobs kind: ${job.kind}`);
         reportError(unknownKind, {
             tags: { component: "dbq", job_kind: job.kind },
@@ -178,18 +172,37 @@ export async function processClaimedJob(
         return;
     }
 
-    try {
-        if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
-        const result = await handler(db, job);
-        await fence(
-            db.from("db_jobs").update({
-                status: "done",
-                finished_at: new Date().toISOString(),
-                last_error: null,
-                ...(result ? { result } : {}),
-            }),
-        );
-    } catch (err) {
+    let execution: { ok: true; result: Record<string, unknown> | void } | { ok: false; error: unknown };
+    if (policy && handler) {
+        const outcome = await executeWithClaim(db, job, claim, handler, policy, options.signal);
+        if (outcome.kind === "closed") {
+            console.log("[dbq] execution closed", { id: claim.id, reason: outcome.reason });
+            return;
+        }
+        execution = outcome.kind === "completed"
+            ? { ok: true, result: outcome.result }
+            : { ok: false, error: outcome.error };
+    } else {
+        try {
+            if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
+            execution = { ok: true, result: await handler(db, job) };
+        } catch (error) {
+            execution = { ok: false, error };
+        }
+    }
+    // A database exception here is NOT a handler failure. Never retry a
+    // possibly committed success or invoke a domain hook on its behalf.
+    if (execution.ok) {
+        await settle({
+            status: "done",
+            finished_at: new Date().toISOString(),
+            last_error: null,
+            ...(execution.result ? { result: execution.result } : {}),
+        });
+        return;
+    }
+    {
+        const err = execution.error;
         const message = jobErrorMessage(err);
         // Destructive memory operations remove version metadata only after a
         // cleanup job owns the object path. That job is the last durable
@@ -211,8 +224,7 @@ export async function processClaimedJob(
                       Date.now(),
               )
             : retryDelayMs(job.attempts);
-        await fence(
-            db.from("db_jobs").update(
+        const settlement = await settle(
                 spent
                     ? {
                           status: "failed",
@@ -232,9 +244,8 @@ export async function processClaimedJob(
                               ? { max_attempts: 2_147_483_647 }
                               : {}),
                       },
-            ),
         );
-        if (spent) {
+        if (settlement.kind === "committed" && spent) {
             const hook = failureHooks[job.kind];
             if (hook) {
                 try {
@@ -251,7 +262,7 @@ export async function processClaimedJob(
                     });
                 }
             }
-        } else if (redisEnabled()) {
+        } else if (settlement.kind === "committed" && redisEnabled()) {
             // Redeliver the retry at its backoff time so it doesn't wait for
             // the (slow, backstop-cadence) poller. Best-effort — the poller
             // covers a failed redelivery.
@@ -281,16 +292,24 @@ export async function processClaimedJob(
         const reportable = asReportableError(err, processClaimedJob);
         if (!deferred) {
             reportError(reportable, {
-                level: spent ? "error" : "warning",
+                level: spent && settlement.kind === "committed" ? "error" : "warning",
                 tags: {
                     component: "dbq",
                     job_kind: job.kind,
                     attempt: job.attempts,
                     max_attempts: job.max_attempts,
-                    terminal: spent,
+                    terminal: spent && settlement.kind === "committed",
                 },
                 extra: { job_id: job.id, dedupe_key: job.dedupe_key ?? null },
             });
+        }
+        if (settlement.kind !== "committed") {
+            // The handler failed, but no terminal/retry state was confirmed.
+            // Do not print provider/database free text on this new path.
+            console.log("[dbq] handler outcome not settled", {
+                id: job.id, outcome: settlement.kind,
+            });
+            return;
         }
         const summary = { id: job.id, kind: job.kind, attempts: job.attempts, message };
         if (deferred) {
@@ -311,13 +330,22 @@ export async function processClaimedJob(
     }
 }
 
+/** New infrastructure diagnostics contain categories, never dependency free text. */
+function reportInfrastructureFailure(id: string, stage: "settlement" | "dispatch", error: unknown): void {
+    const failure = new Error(`db_job_${stage}_${safeError(error).category}`);
+    reportError(failure, { tags: { component: "dbq", stage }, extra: { job_id: id } });
+    console.error("[dbq] infrastructure operation failed", { id, stage, error: failure });
+}
+
 /** One poll tick: claim a batch and run every claimed job to completion. */
 export async function runDbJobTick(
     db: Db,
     handlers: DbJobHandlers,
     failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
     claimGate: PollFailureGate = defaultClaimGate,
+    options: DbJobExecutionOptions = {},
 ): Promise<number> {
+    if (options.signal?.aborted) return 0;
     const { data, error } = await db.rpc("claim_db_jobs", {
         p_limit: CLAIM_BATCH,
         p_stale_seconds: STALE_SECONDS,
@@ -342,12 +370,17 @@ export async function runDbJobTick(
         return 0;
     }
     claimGate.success();
+    if (options.signal?.aborted) return 0;
     const jobs = (data ?? []) as DbJob[];
     // allSettled defensively: processClaimedJob handles its own errors, but
     // one job's unexpected rejection must never abandon the rest of a batch.
-    await Promise.allSettled(
-        jobs.map((job) => processClaimedJob(db, handlers, job, failureHooks)),
+    const outcomes = await Promise.allSettled(
+        jobs.map((job) => processClaimedJob(db, handlers, job, failureHooks, options)),
     );
+    outcomes.forEach((outcome, index) => {
+        if (outcome.status === "rejected")
+            reportInfrastructureFailure(jobs[index].id, "dispatch", outcome.reason);
+    });
     return jobs.length;
 }
 
@@ -429,64 +462,73 @@ export async function runDbJobRetentionSweep(
         .lt("created_at", doneCutoff);
 }
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let sweepTimer: ReturnType<typeof setInterval> | null = null;
-let inFlight: Promise<unknown> | null = null;
+type RunnerGeneration = {
+    controller: AbortController;
+    timers: ReturnType<typeof setTimeout>[];
+    tick: Promise<unknown> | null;
+    sweep: Promise<unknown> | null;
+};
+let generation: RunnerGeneration | null = null;
 
+/** Respect the operational queue switch shared by producers and consumers. */
 export function dbJobsEnabled(): boolean {
     return process.env.DB_JOBS_ENABLED !== "false";
 }
 
-/**
- * Start the poll loop (idempotent). Ticks never overlap: a tick that is
- * still running when the next interval fires simply skips that interval.
- */
-export function startDbJobRunner(handlers: DbJobHandlers, failureHooks: Readonly<Record<string, DbJobFailureHook>> = {}): void {
+/** Each start owns its timers and signal; an older drain cannot stop a restart. */
+export function startDbJobRunner(
+    handlers: DbJobHandlers,
+    failureHooks: Readonly<Record<string, DbJobFailureHook>> = {},
+    policies: DbJobExecutionPolicies = {},
+): void {
     if (!dbJobsEnabled()) {
         console.log("[dbq] disabled via DB_JOBS_ENABLED=false");
         return;
     }
-    if (pollTimer) return;
+    if (generation && !generation.controller.signal.aborted) return;
+    assertValidExecutionPolicies(policies);
+    const current: RunnerGeneration = {
+        controller: new AbortController(), timers: [], tick: null, sweep: null,
+    };
+    generation = current;
     const db = createServerSupabase();
-
+    const signal = current.controller.signal;
+    /** Run at most one claim batch for this generation, respecting stop and claim backoff. */
     const tick = () => {
-        // While claims keep failing, skip ticks until the backed-off retry
-        // time instead of hitting the broken dependency every interval.
-        if (inFlight || !defaultClaimGate.ready()) return;
-        inFlight = runDbJobTick(db, handlers, failureHooks)
+        if (signal.aborted || current.tick || !defaultClaimGate.ready()) return;
+        current.tick = runDbJobTick(db, handlers, failureHooks, defaultClaimGate, { policies, signal })
             .catch((err) => {
                 reportError(err, { tags: { component: "dbq", stage: "tick" } });
                 console.error("[dbq] tick failed", err);
-            })
-            .finally(() => {
-                inFlight = null;
-            });
+            }).finally(() => { current.tick = null; });
     };
-    pollTimer = setInterval(tick, pollMs());
-    pollTimer.unref();
-    // First tick shortly after boot so work queued before a restart resumes
-    // without waiting a full interval.
-    setTimeout(tick, 1_000).unref();
-
-    const sweep = () =>
-        void runDbJobRetentionSweep(db).catch((err) => {
+    /** Track one retention sweep so shutdown can await its outstanding storage work. */
+    const sweep = () => {
+        if (signal.aborted || current.sweep) return;
+        current.sweep = runDbJobRetentionSweep(db).catch((err) => {
             reportError(err, { tags: { component: "dbq", stage: "retention" } });
             console.error("[dbq] retention sweep failed", err);
-        });
-    sweepTimer = setInterval(sweep, SWEEP_EVERY_MS);
-    sweepTimer.unref();
-    setTimeout(sweep, 60_000).unref();
-
-    console.log(
-        `[dbq] runner started (poll ${pollMs()}ms, driver ${redisEnabled() ? "redis" : "postgres"})`,
-    );
+        }).finally(() => { current.sweep = null; });
+    };
+    current.timers = [setInterval(tick, pollMs()), setTimeout(tick, 1_000),
+        setInterval(sweep, SWEEP_EVERY_MS), setTimeout(sweep, 60_000)];
+    current.timers.forEach((timer) => timer.unref());
+    console.log(`[dbq] runner started (poll ${pollMs()}ms, driver ${redisEnabled() ? "redis" : "postgres"})`);
 }
 
-/** Stop polling and wait for the in-flight tick to finish (shutdown path). */
+/** Close intake synchronously, before waiting for any other worker to drain. */
+export function stopDbJobIntake(): void {
+    if (!generation) return;
+    generation.controller.abort();
+    generation.timers.forEach(clearTimeout);
+    generation.timers = [];
+}
+
+/** Stop intake and drain this generation without clearing a newer runner on restart. */
 export async function stopDbJobRunner(): Promise<void> {
-    if (pollTimer) clearInterval(pollTimer);
-    if (sweepTimer) clearInterval(sweepTimer);
-    pollTimer = null;
-    sweepTimer = null;
-    if (inFlight) await inFlight;
+    const current = generation;
+    stopDbJobIntake();
+    if (!current) return;
+    await Promise.allSettled([current.tick, current.sweep]);
+    if (generation === current) generation = null;
 }

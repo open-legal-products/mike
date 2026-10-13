@@ -46,7 +46,8 @@ const CLAIMED: DbJob = {
     attempts: 1,
     max_attempts: 3,
     run_at: "",
-    claimed_at: "",
+    claimed_at: "2026-10-13T00:00:00Z",
+    heartbeat_at: null,
     finished_at: null,
     last_error: null,
     dedupe_key: null,
@@ -87,7 +88,7 @@ function makeDb(opts: {
                         error: null,
                     }),
                 then: (onF: (v: unknown) => unknown) =>
-                    Promise.resolve({ data: null, error: null }).then(onF),
+                    Promise.resolve({ data: [{ id: "row-1" }], error: null }).then(onF),
             };
             return b;
         },
