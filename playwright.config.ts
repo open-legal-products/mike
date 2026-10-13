@@ -9,6 +9,7 @@ const SYNTHETIC_SPECS = [
     /assistant-streaming\.spec\.ts/,
     /tabular-chat-lifecycle\.spec\.ts/,
     /settings-search-latency\.spec\.ts/,
+    /legal-data-hunter\.spec\.ts/,
 ];
 
 export default defineConfig({

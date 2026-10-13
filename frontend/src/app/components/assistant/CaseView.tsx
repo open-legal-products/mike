@@ -5,6 +5,7 @@ import DOMPurify from "dompurify";
 import { Loader2 } from "lucide-react";
 import { PillButtonUI, LIQUID_GLASS_FLAT_CLASS } from "@mike/ui";
 import { cn } from "@/app/lib/utils";
+import { isEmbeddedMcpDocument } from "../shared/types";
 import type {
     PanelDocument,
     PanelDocumentQuote,
@@ -121,6 +122,7 @@ export function CaseView({
             null,
     );
     const contentRef = useRef<HTMLElement | null>(null);
+    const isEmbeddedSource = isEmbeddedMcpDocument(document);
 
     useEffect(() => {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- synchronize the first opinion when a new document is supplied
@@ -151,7 +153,10 @@ export function CaseView({
         ) {
             return;
         }
-        const match = highlightDocxQuote(root, activeQuote.quote);
+        const quoteRoot = isEmbeddedSource
+            ? root.querySelector<HTMLElement>("[data-case-text-body]") : root;
+        if (!quoteRoot) return;
+        const match = highlightDocxQuote(quoteRoot, activeQuote.quote, true, isEmbeddedSource);
         if (!match) return;
         root.querySelectorAll(`.${QUOTE_HIGHLIGHT_CLASS}`).forEach((element) =>
             element.classList.add("case-quote-highlight"),
@@ -160,7 +165,7 @@ export function CaseView({
             match.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 50);
         return () => window.clearTimeout(timer);
-    }, [activeQuote, activeSubdocument, quoteFocusKey]);
+    }, [activeQuote, activeSubdocument, isEmbeddedSource, quoteFocusKey]);
 
     const surfaceClassName = LIQUID_GLASS_FLAT_CLASS;
     const visibleLoading = isLoading && subdocuments.length === 0;
@@ -286,7 +291,7 @@ function CaseSubdocument({
                     dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
                 />
             ) : (
-                <div className="whitespace-pre-wrap font-serif text-sm leading-7 text-gray-900 [&_p]:my-3">
+                <div data-case-text-body className="whitespace-pre-wrap font-serif text-sm leading-7 text-gray-900 [&_p]:my-3">
                     {subdocument.text || "No document text returned."}
                 </div>
             )}
