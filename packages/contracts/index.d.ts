@@ -14,7 +14,8 @@ export type SourceDocumentType =
   | "pdf"
   | "spreadsheet"
   | "case"
-  | "legislation";
+  | "legislation"
+  | "legal_research";
 
 export type SourceDocumentMetadata = {
   label: string;

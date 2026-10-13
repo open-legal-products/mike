@@ -14,6 +14,7 @@ vi.mock("../../../../lib/integrations/googleDrive", () => ({ buildGoogleDriveToo
 vi.mock("../../../../lib/integrations/googleWorkspace", () => ({ buildGoogleWorkspaceTools: async () => [] }));
 
 import { runLLMStream } from "../streaming";
+import { MAX_PARSED_CITATIONS } from "../citations";
 
 describe("runLLMStream citation streaming", () => {
   it("parses each streamed citation once and replays only the newest snapshot", async () => {
@@ -61,11 +62,13 @@ describe("runLLMStream citation streaming", () => {
       parse.mockRestore();
     }
     // Rescanning the whole buffer per delta parses each citation once per
-    // later delta: thousands of parses for 60 citations.
-    expect(citationParses).toBe(count);
+    // later delta: thousands of parses for 60 citations. Streaming stops at
+    // the citation cap, so the citations past it are never parsed.
+    const streamed = Math.min(count, MAX_PARSED_CITATIONS);
+    expect(citationParses).toBe(streamed);
 
     const citationFrames = frames.filter((f) => f.line.includes('"type":"citations"'));
-    expect(citationFrames).toHaveLength(count + 2); // started, one per citation, final
+    expect(citationFrames).toHaveLength(streamed + 2); // started, one per citation, final
     // What a client attaching after the answer would be replayed.
     const replayed = citationFrames.filter((f) => f.replay?.() ?? true);
     expect(replayed.map((f) => JSON.parse(f.line.slice(6)).status)).toEqual(["final"]);

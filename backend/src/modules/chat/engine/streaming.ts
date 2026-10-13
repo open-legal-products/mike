@@ -61,6 +61,7 @@ import {
   type ToolCall,
   devLog,
   createDocLabelResolver,
+  resolveDocLabel,
   TOOL_ERROR_MESSAGE,
 } from "./types";
 import {
@@ -76,6 +77,7 @@ import {
   createPartialCitationParser,
   createCitation,
   CITATIONS_OPEN_TAG,
+  limitCitationPayload,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
 import {
@@ -581,18 +583,29 @@ export async function runLLMStream(params: {
   const streamHiddenCitationContent = (delta: string) => {
     if (buildCitations || !delta) return;
     const completed = citationParser.push(delta);
-    if (completed.length === 0) return;
+    let added = false;
     for (const c of completed) {
-      streamedCitations.push(
-        createCitation(
-          c,
-          docIndex,
-          courtlistenerTurnState.casesByClusterId,
-          docStore,
-        ),
+      // External legal sources are verified only against the final block.
+      if (
+        c.kind === "document" &&
+        (c.doc_id.startsWith("mcp:") ||
+          docStore.get(resolveDocLabel(c.doc_id, docStore, docIndex) ?? c.doc_id)
+            ?.panel_document)
+      ) {
+        continue;
+      }
+      const citation = createCitation(
+        c,
+        docIndex,
+        courtlistenerTurnState.casesByClusterId,
+        docStore,
       );
+      if (!citation) continue;
+      streamedCitations.push(citation);
+      added = true;
     }
-    emitCitationStreamSnapshot("partial", streamedCitations);
+    if (!added) return;
+    emitCitationStreamSnapshot("partial", limitCitationPayload(streamedCitations));
   };
 
   const streamVisibleContent = (delta: string) => {
@@ -1240,14 +1253,14 @@ export async function runLLMStream(params: {
     // Custom builders (tabular) bypass document-citation verification.
     citations = buildCitations(fullText);
   } else {
-    const rawCitations = parsedCitations.map((c) =>
+    const rawCitations = limitCitationPayload(parsedCitations.map((c) =>
       createCitation(
         c,
         docIndex,
         courtlistenerTurnState.casesByClusterId,
         docStore,
       ),
-    );
+    ));
     // Server-side quote verification. Fetch each document's extracted source
     // text at most once per turn (memoized by doc_id), reading only bytes
     // already in storage with emitEvents:false. Case citations are matched
@@ -1274,6 +1287,7 @@ export async function runLLMStream(params: {
         getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
     );
   }
+  citations = limitCitationPayload(citations);
   devLog("[chat/stream] final citations", {
     hasCitationsBlock: citationDiagnostics.hasBlock,
     citationsBlockLength: citationDiagnostics.rawLength,

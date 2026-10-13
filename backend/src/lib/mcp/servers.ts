@@ -49,6 +49,14 @@ import {
     type ToolCacheRow,
 } from "./types";
 
+import { extractLegalDataHunterSource, type LegalDataHunterSource } from "./sourceDocuments";
+
+type McpCallResult = {
+    content: string;
+    event: McpToolEvent;
+    legalSource: LegalDataHunterSource | null;
+};
+
 export { startUserMcpConnectorOAuth };
 
 async function withMcpClient<T>(
@@ -541,9 +549,10 @@ function stringifyMcpResult(result: unknown): string {
 function unavailableTool(
     openaiToolName: string,
     error = "MCP tool is not available or is disabled.",
-): { content: string; event: McpToolEvent } {
+): McpCallResult {
     return {
         content: JSON.stringify({ ok: false, error }),
+        legalSource: null,
         event: {
             type: "mcp_tool_call",
             connector_id: "",
@@ -618,10 +627,7 @@ export async function executeMcpToolCall(
     openaiToolName: string,
     args: Record<string, unknown>,
     db: Db = createServerSupabase(),
-): Promise<{
-    content: string;
-    event: McpToolEvent;
-}> {
+): Promise<McpCallResult> {
     const resolved = await resolveCallableTool(owner, openaiToolName, db);
     if (!resolved) return unavailableTool(openaiToolName);
     return callResolvedTool(
@@ -642,7 +648,7 @@ export async function executeApprovedMcpToolCall(
     owner: ConnectorOwner,
     item: ConnectorApprovalItem,
     db: Db = createServerSupabase(),
-): Promise<{ content: string; event: McpToolEvent }> {
+): Promise<McpCallResult> {
     const resolved =
         item.binding.type === "mcp"
             ? await resolveCallableTool(owner, item.tool_name, db)
@@ -689,7 +695,7 @@ async function callResolvedTool(
     args: Record<string, unknown>,
     db: Db,
     approvedFingerprint?: string,
-): Promise<{ content: string; event: McpToolEvent }> {
+): Promise<McpCallResult> {
     const started = Date.now();
     try {
         const fingerprint =
@@ -777,6 +783,7 @@ async function callResolvedTool(
             });
             return {
                 content,
+                legalSource: null,
                 event: {
                     type: "mcp_tool_call",
                     connector_id: connector.id,
@@ -790,6 +797,14 @@ async function callResolvedTool(
             };
         }
         const content = stringifyMcpResult(result);
+        // The serializer appends a marker beyond the cap when truncating.
+        // Never promote bytes the model did not receive as a complete result.
+        const legalSource = content.length > MAX_MCP_RESULT_CHARS ? null : extractLegalDataHunterSource(result, {
+            connectorId: connector.id,
+            serverUrl: connector.server_url,
+            toolName: tool.tool_name,
+            arguments: args,
+        });
         await insertMcpAuditLog(db, {
             user_id: owner.userId,
             connector_id: connector.id,
@@ -802,6 +817,7 @@ async function callResolvedTool(
         });
         return {
             content,
+            legalSource,
             event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,
@@ -867,6 +883,7 @@ async function callResolvedTool(
         });
         return {
             content,
+            legalSource: null,
             event: {
                 type: "mcp_tool_call",
                 connector_id: connector.id,
