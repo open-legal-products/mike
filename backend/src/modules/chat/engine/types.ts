@@ -1,3 +1,5 @@
+import type { SourceDocument } from "@mike/contracts";
+
 // Re-exported so the chat modules that already import it from here keep
 // working; the definition lives in lib/log.ts.
 export { devLog } from "../../../lib/log";
@@ -20,6 +22,8 @@ export type DocStore = Map<
      * the model when it chooses to read them.
      */
     inline_text?: string;
+    /** Complete request-scoped source for the shared citation panel. */
+    panel_document?: SourceDocument;
   }
 >;
 

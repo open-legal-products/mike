@@ -513,6 +513,59 @@ describe("ConnectorsPage suggested connectors", () => {
         cleanup();
     });
 
+    it("adds Legal Data Hunter through Discover and the existing OAuth flow", async () => {
+        const connector = makeSummary({
+            id: "ldh-1",
+            name: "Legal Data Hunter",
+            serverUrl: "https://legaldatahunter.com/mcp",
+            authType: "oauth",
+        });
+        vi.mocked(createMcpConnector).mockResolvedValue({ connector, oauthRequired: true });
+        vi.mocked(refreshMcpConnectorTools).mockResolvedValue({ ...connector, oauthConnected: true });
+        vi.mocked(getMcpConnector).mockResolvedValue({ ...connector, oauthConnected: true });
+
+        render(<ConnectorsPage />);
+        await act(async () => { await flushMicrotasks(); });
+        await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Add Legal Data Hunter connector" }));
+            await flushMicrotasks();
+        });
+
+        expect(createMcpConnector).toHaveBeenCalledWith({
+            name: "Legal Data Hunter",
+            serverUrl: "https://legaldatahunter.com/mcp",
+            bearerToken: null,
+        });
+        expect(startMcpConnectorOAuth).toHaveBeenCalledWith("ldh-1");
+        expect(refreshMcpConnectorTools).toHaveBeenCalledWith("ldh-1");
+        expect(screen.queryByRole("button", { name: "Add Legal Data Hunter connector" })).toBeNull();
+        expect(screen.getByRole("switch", { name: "Legal Data Hunter connector" })).toBeInTheDocument();
+        expect(screen.queryByText("New Custom Connector")).toBeNull();
+        expect(screen.getByRole("region", { name: "Legal Data Hunter connector" }).querySelector(".lucide-scale")).not.toBeNull();
+
+        await act(async () => {
+            fireEvent.click(screen.getByText("Legal Data Hunter"));
+            await flushMicrotasks();
+        });
+        expect(getMcpConnector).toHaveBeenCalledWith("ldh-1");
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).getByRole("switch", { name: "Read-only" })).toBeInTheDocument();
+        expect(within(dialog).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+        expect(within(dialog).queryByRole("button", { name: "Details" })).toBeNull();
+    });
+
+    it("recognizes an existing Legal Data Hunter connector without reprovisioning it", async () => {
+        vi.mocked(listMcpConnectors).mockResolvedValue([
+            makeSummary({ name: "My legal research", serverUrl: "https://legaldatahunter.com/mcp/" }),
+        ]);
+        render(<ConnectorsPage />);
+        await act(async () => { await flushMicrotasks(); });
+        expect(screen.queryByRole("button", { name: "Add Legal Data Hunter connector" })).toBeNull();
+        expect(screen.getByRole("switch", { name: "My legal research connector" })).toBeInTheDocument();
+        expect(createMcpConnector).not.toHaveBeenCalled();
+        expect(startMcpConnectorOAuth).not.toHaveBeenCalled();
+    });
+
     it("adds the Notion preset with one click", async () => {
         const notion = makeSummary({
             id: "notion-1",

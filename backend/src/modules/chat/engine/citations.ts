@@ -1,4 +1,4 @@
-import { type DocIndex, type DocStore, resolveDoc } from "./types";
+import { type DocIndex, type DocStore, resolveDoc, resolveDocLabel } from "./types";
 import {
   normalizeCaseDocument,
   sourceDocumentType,
@@ -185,6 +185,28 @@ function normalizeCaseCitationQuotes(c: Record<string, unknown>) {
 export const CITATIONS_BLOCK_RE = /<CITATIONS>\s*([\s\S]*?)\s*<\/CITATIONS>/;
 export const CITATIONS_OPEN_TAG = "<CITATIONS>";
 export const CITATIONS_CLOSE_TAG = "</CITATIONS>";
+export const MAX_PARSED_CITATIONS = 50;
+export const MAX_CITATION_PAYLOAD_BYTES = 5_000_000;
+
+export function limitCitationPayload(citations: unknown[]): unknown[] {
+  const limited: unknown[] = [];
+  let totalBytes = 2; // JSON array brackets.
+  for (const citation of citations) {
+    if (citation == null) continue;
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(citation);
+    } catch {
+      continue;
+    }
+    if (serialized === undefined) continue;
+    const bytes = Buffer.byteLength(serialized, "utf8") + (limited.length ? 1 : 0);
+    if (totalBytes + bytes > MAX_CITATION_PAYLOAD_BYTES) continue;
+    limited.push(citation);
+    totalBytes += bytes;
+  }
+  return limited;
+}
 
 type CitationParseDiagnostics = {
   hasBlock: boolean;
@@ -210,7 +232,7 @@ export function parseCitationsWithDiagnostics(text: string): {
       };
     }
     return {
-      citations: parsed.map(normalizeCitation).filter((c): c is ParsedCitation => c !== null),
+      citations: parsed.slice(0, MAX_PARSED_CITATIONS).map(normalizeCitation).filter((c): c is ParsedCitation => c !== null),
       diagnostics: { hasBlock: true, rawLength: raw.length, error: null },
     };
   } catch (error) {
@@ -257,6 +279,7 @@ export function parsePartialCitationObjects(text: string): ParsedCitation[] {
           const raw = JSON.parse(beforeClose.slice(objectStart, i + 1));
           const citation = normalizeCitation(raw);
           if (citation) parsed.push(citation);
+          if (parsed.length >= MAX_PARSED_CITATIONS) break;
         } catch { /* ignore incomplete/malformed partial object */ }
         objectStart = -1;
       }
@@ -307,14 +330,31 @@ export function createCitation(
     };
   }
 
+  // Alternate IDs must resolve through the same request-scoped source, not
+  // fall through to the tolerant uploaded-document citation path.
+  const sourceLabel = docStore ? resolveDocLabel(citation.doc_id, docStore, docIndex) : null;
+  if (sourceLabel && docStore?.get(sourceLabel)?.panel_document) {
+    citation = { ...citation, doc_id: sourceLabel };
+  }
   const docInfo = resolveDoc(citation.doc_id, docIndex);
   const requestScopedDocument = docStore?.get(citation.doc_id);
   const documentId = docInfo?.document_id ?? citation.doc_id;
   const filename =
     docInfo?.filename ?? requestScopedDocument?.filename ?? citation.doc_id;
+  const panelDocument = requestScopedDocument?.panel_document;
+  if (!panelDocument && (citation.doc_id.startsWith("mcp:") || docInfo?.document_id.startsWith("mcp:"))) return null;
+  const canonicalText = panelDocument?.subdocuments?.[0]?.text;
+  // External sources are not uploads: no fuzzy correction, omissions, or
+  // cross-page matching may turn a changed legal quote into a verified one.
+  if (panelDocument && (typeof canonicalText !== "string" ||
+      citation.quotes.some(({ quote }) => !quote.trim() || !canonicalText.includes(quote)))) {
+    return null;
+  }
+  const subdocumentId = panelDocument?.subdocuments?.[0]?.document_id;
   const quotes: SourceDocumentQuote[] = citation.quotes.map((quote) => ({
     quote: quote.quote,
-    target: {
+    ...(panelDocument ? { verification: { verified: true } } : {}),
+    target: subdocumentId ? { subdocument_id: subdocumentId } : {
       page: quote.page,
       ...(quote.sheet ? { sheet: quote.sheet } : {}),
       ...(quote.cell ? { cell: quote.cell } : {}),
@@ -324,7 +364,7 @@ export function createCitation(
     type: "citation_data",
     kind: "document",
     ref: citation.ref,
-    document: {
+    document: panelDocument ? { ...panelDocument, quotes } : {
       document_id: documentId,
       title: filename,
       type: sourceDocumentType(filename),
@@ -338,6 +378,7 @@ export function createCitation(
     version_id: docInfo?.version_id ?? null,
     version_number: docInfo?.version_number ?? null,
     filename,
+    ...(panelDocument ? { verified: true } : {}),
     page: citation.page,
     quote: citation.quote,
     sheet: citation.sheet,

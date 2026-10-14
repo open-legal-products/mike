@@ -16,6 +16,7 @@ import { BookOpenText } from "lucide-react";
 import { DocumentContent, type DocumentContentMode } from "@/app/components/shared/DocumentContent";
 import { DocumentTabBar } from "../shared/DocumentTabBar";
 import type { Citation, EditAnnotation, PanelDocument } from "../shared/types";
+import { isEmbeddedMcpDocument } from "../shared/types";
 import { cn } from "@/app/lib/utils";
 import { LIQUID_GLASS_FLOAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { reorderTabs, type TabDropPosition } from "@/app/lib/reorderTabs";
@@ -242,7 +243,7 @@ export function AssistantSidePanel({
     chatCount = 1,
 }: Props) {
     const panelRef = useRef<HTMLDivElement>(null);
-    const permissions = useDocumentPermissions(tabs.filter((tab) => !["case", "legislation"].includes(tab.document.type)).map((tab) => tab.document.document_id), canEdit);
+    const permissions = useDocumentPermissions(tabs.filter((tab) => !isEmbeddedMcpDocument(tab.document) && !["case", "legislation"].includes(tab.document.type)).map((tab) => tab.document.document_id), canEdit);
     const viewers = useDocumentViewers();
     // One width beside a single chat and another beside two, so closing the
     // second chat gives the panel back the width it had before.
@@ -353,6 +354,7 @@ export function AssistantSidePanel({
                 onReorder={onReorderTabs}
                 tabs={tabs.map((tab) => {
                     const isLegalSource =
+                        isEmbeddedMcpDocument(tab.document) ||
                         tab.document.type === "case" ||
                         tab.document.type === "legislation";
                     const actions = isLegalSource

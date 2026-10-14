@@ -34,6 +34,7 @@ import {
   parsePartialCitationObjects,
   createCitation,
   CITATIONS_OPEN_TAG,
+  limitCitationPayload,
 } from "./citations";
 import { runToolCalls } from "./tools/toolDispatcher";
 import {
@@ -402,7 +403,10 @@ export async function runLLMStream(params: {
     const partial = parsePartialCitationObjects(streamingCitationsBuffer);
     if (partial.length <= streamedCitationCount) return;
     streamedCitationCount = partial.length;
-    const citations = partial.map((c) =>
+    const citations = partial.filter((c) =>
+      c.kind !== "document" || (!c.doc_id.startsWith("mcp:") &&
+        !docStore.get(resolveDocLabel(c.doc_id, docStore, docIndex) ?? c.doc_id)?.panel_document),
+    ).map((c) =>
       createCitation(
         c,
         docIndex,
@@ -410,7 +414,7 @@ export async function runLLMStream(params: {
         docStore,
       ),
     );
-    emitCitationStreamSnapshot("partial", citations);
+    emitCitationStreamSnapshot("partial", limitCitationPayload(citations));
   };
 
   const streamVisibleContent = (delta: string) => {
@@ -803,14 +807,14 @@ export async function runLLMStream(params: {
     // Custom builders (tabular) bypass document-citation verification.
     citations = buildCitations(fullText);
   } else {
-    const rawCitations = parsedCitations.map((c) =>
+    const rawCitations = limitCitationPayload(parsedCitations.map((c) =>
       createCitation(
         c,
         docIndex,
         courtlistenerTurnState.casesByClusterId,
         docStore,
       ),
-    );
+    ));
     // Server-side quote verification. Fetch each document's extracted source
     // text at most once per turn (memoized by doc_id), reading only bytes
     // already in storage with emitEvents:false. Case citations are matched
@@ -836,6 +840,7 @@ export async function runLLMStream(params: {
         getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
     );
   }
+  citations = limitCitationPayload(citations);
   devLog("[chat/stream] final citations", {
     hasCitationsBlock: citationDiagnostics.hasBlock,
     citationsBlockLength: citationDiagnostics.rawLength,

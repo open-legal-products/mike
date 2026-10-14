@@ -12,7 +12,7 @@ remote server can be added with **+ Custom**.
 Most hosted MCP servers support OAuth Dynamic Client Registration (DCR). A
 user clicks **Add** in Discover and completes the provider's consent screen;
 the Mike deployment does not need provider-specific credentials. Airtable,
-Lawve, Linear, and Notion use this pathway.
+Lawve, Legal Data Hunter, Linear, and Notion use this pathway.
 
 Servers that use a bearer token or custom headers can be added through
 **+ Custom**. Credentials are encrypted at rest. Failed registration does not
@@ -94,6 +94,30 @@ pre-configured OAuth client.
 Google MCP endpoint paths may be versioned. Use the provider's documented URL;
 for example, the Drive endpoint is
 `https://drivemcp.googleapis.com/mcp/v1`, not `/mcp`.
+
+## Legal Data Hunter
+
+In **Settings > Connectors > Discover**, choose **Add Legal Data Hunter** and
+complete LDH's OAuth consent. It uses `https://legaldatahunter.com/mcp` and the
+standard MCP callback above; do not put an LDH token in frontend configuration.
+Manage the connection, individual tools, and Read-only/approval settings in the
+same **Installed > Manage** dialog as other connectors.
+
+For a citation with a readable source, retrieve the document with
+`get_document(source, source_id, include_full_text: true)`, using identifiers
+returned by LDH search. The default response may be truncated and is not eligible
+for an inline source. A complete, matching response from the canonical LDH
+endpoint becomes a request-scoped source with its title, text, and official link.
+Case law, legislation, and doctrine use Mike's existing citation and source panel;
+there is no uploaded-document version to fetch. Exact-quote verification still
+runs against the retrieved text. Treat source content as untrusted, not as
+instructions to execute connector actions.
+
+For a live smoke test on a non-production Mike instance: authorize your own LDH
+account, retrieve one public document in full, cite an exact excerpt, and open
+both the citation and its source title. Confirm the panel shows the retrieved
+text and official link without a document-version request. Automated fixtures
+cannot establish live provider authorization, retrieval, or model accuracy.
 
 ## Security and tool controls
 

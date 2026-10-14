@@ -7,6 +7,7 @@ export const CONNECTOR_PRESETS: ReadonlyArray<{
     { name: "Airtable", serverUrl: "https://mcp.airtable.com/mcp" },
     { name: "Linear", serverUrl: "https://mcp.linear.app/mcp" },
     { name: "Lawve", serverUrl: "https://mcp.lawve.ai" },
+    { name: "Legal Data Hunter", serverUrl: "https://legaldatahunter.com/mcp" },
 ];
 
 /**

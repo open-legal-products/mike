@@ -29,6 +29,40 @@ describe("CaseView", () => {
         Element.prototype.scrollIntoView = vi.fn();
     });
 
+    it.each([
+        ["This is a fixture provision, not an actual legal authority.", "This is a fixture provision, not an actual legal authority.\n\n<script>literal</script>"],
+        ["Le créancier peut exiger l’exécution…", "Le créancier peut exiger l’exécution…\nAutre texte."],
+        ["The court considers this long common prefix and grants relief.", "The court considers this long common prefix and denies relief. The court considers this long common prefix and grants relief."],
+    ])("highlights only the exact embedded source quote: %s", (text, body) => {
+        const quote = { quote: text, verification: { verified: true }, target: { subdocument_id: "mcp:test:text" } };
+        const { container } = render(<CaseView document={{ ...document,
+            document_id: "mcp:test", type: "legislation", quotes: [quote],
+            subdocuments: [{ document_id: "mcp:test:text", title: "Synthetic source", type: "html", text: body }],
+        }} activeQuote={quote} />);
+        expect(container.querySelector(".case-quote-highlight")?.textContent).toBe(text);
+    });
+
+    it("highlights source body rather than identical provider title metadata", () => {
+        const quote = { quote: "Synthetic source", target: { subdocument_id: "mcp:test:text" } };
+        const { container } = render(<CaseView document={{ ...document,
+            document_id: "mcp:test", quotes: [quote], subdocuments: [{
+                document_id: "mcp:test:text", title: quote.quote, type: "html", text: `${quote.quote}. The actual body.`,
+            }],
+        }} activeQuote={quote} />);
+        expect(container.querySelector(".case-quote-highlight")?.textContent).toBe(quote.quote);
+        expect(container.querySelector(".case-quote-highlight")?.closest("h3")).toBeNull();
+    });
+
+    it("does not highlight a punctuation-mismatched embedded source quote", () => {
+        const quote = { quote: "Is relief denied?", target: { subdocument_id: "mcp:test:text" } };
+        const { container } = render(<CaseView document={{ ...document,
+            document_id: "mcp:test", quotes: [quote], subdocuments: [{
+                document_id: "mcp:test:text", title: "Synthetic source", type: "html", text: "Is relief denied!",
+            }],
+        }} activeQuote={quote} />);
+        expect(container.querySelector(".case-quote-highlight")).toBeNull();
+    });
+
     it("renders already-hydrated subdocuments and sanitizes their HTML", () => {
         const { container } = render(<CaseView document={document} />);
 

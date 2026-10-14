@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import Image from "next/image";
-import { Plus } from "lucide-react";
+import { Plus, Scale } from "lucide-react";
 import { ConnectorSetupGuideLink } from "@/app/components/settings/ConnectorSetupGuideLink";
 import { NewCustomMcpModal } from "@/app/components/settings/NewCustomMcpModal";
 import { ConnectorCard } from "@/app/components/settings/ConnectorCard";
@@ -197,6 +197,9 @@ function connectorPlaceholderClassName(connector: McpConnectorSummary) {
 }
 
 function ConnectorBrandIcon({ name }: { name: string }) {
+  if (name === "Legal Data Hunter") {
+    return <Scale className="h-5 w-5 text-foreground" aria-hidden="true" />;
+  }
   if (name === "Slack") {
     return (
       <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden="true">

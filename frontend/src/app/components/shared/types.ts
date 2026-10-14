@@ -129,6 +129,12 @@ export type PanelDocumentQuote = SourceDocumentQuote;
 export type PanelSubdocument = SourceSubdocument;
 export type PanelDocument = SourceDocument;
 
+/** MCP citation bodies are embedded sources, not uploaded/versioned files. */
+export function isEmbeddedMcpDocument(document: PanelDocument): boolean {
+  return document.document_id.startsWith("mcp:") &&
+    !!document.subdocuments?.some((source) => typeof source.text === "string");
+}
+
 export function isPanelDocument(value: unknown): value is PanelDocument {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -137,7 +143,7 @@ export function isPanelDocument(value: unknown): value is PanelDocument {
   return (
     typeof document.document_id === "string" &&
     typeof document.title === "string" &&
-    ["docx", "pdf", "spreadsheet", "case", "legislation"].includes(
+    ["docx", "pdf", "spreadsheet", "case", "legislation", "legal_research"].includes(
       String(document.type),
     ) &&
     Array.isArray(document.metadata) &&

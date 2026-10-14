@@ -12,7 +12,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { DocumentVersionPicker } from "./DocumentVersionPicker";
 import type { DocumentVersion } from "@/app/lib/mikeApi";
 import { VersionChip } from "./VersionChip";
-import type { PanelDocument } from "./types";
+import { isEmbeddedMcpDocument, type PanelDocument } from "./types";
 import type { DocxSaveState } from "./views/DocxRenderer.types";
 import { DocxSaveErrorPopup } from "./views/DocxSaveErrorPopup";
 
@@ -21,6 +21,15 @@ type ExternalSourceLink = {
     label: string;
     title: string;
 };
+
+function isSafeMcpSourceUrl(value: string): boolean {
+    try {
+        const url = new URL(value);
+        return url.protocol === "https:" && !url.username && !url.password;
+    } catch {
+        return false;
+    }
+}
 
 export function DocumentTitleRow({
     document,
@@ -42,10 +51,14 @@ export function DocumentTitleRow({
     toolbarVisible?: boolean;
     onToggleToolbar?: () => void;
 }) {
-    const isFile =
+    const isEmbeddedSource = isEmbeddedMcpDocument(document);
+    const isFile = !isEmbeddedSource && (
         document.type === "docx" ||
         document.type === "pdf" ||
-        document.type === "spreadsheet";
+        document.type === "spreadsheet");
+    const actions = (document.actions ?? []).filter((action) =>
+        !isEmbeddedSource || (action.type === "link" && isSafeMcpSourceUrl(action.url)),
+    );
     const versionNumber = document.version_number;
 
     return (
@@ -133,7 +146,7 @@ export function DocumentTitleRow({
                             onDownload={onDownload}
                         />
                     )}
-                    {(document.actions ?? []).map((action, index) =>
+                    {actions.map((action, index) =>
                         action.type === "download" ? (
                             <UrlDownloadButton
                                 key={`${action.type}:${action.url}:${index}`}
