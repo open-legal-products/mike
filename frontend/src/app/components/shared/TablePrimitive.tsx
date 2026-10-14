@@ -131,6 +131,7 @@ export function TableFilters<T extends string>({
     options,
     onChange,
     widthClassName = "w-52",
+    contentClassName,
     align = "left",
 }: {
     label: string;
@@ -139,6 +140,7 @@ export function TableFilters<T extends string>({
     options: TableFilterOption<T>[];
     onChange: (value: T | null) => void;
     widthClassName?: string;
+    contentClassName?: string;
     /**
      * Which side the menu opens toward. "left" (default) anchors the menu's
      * right edge to the button and extends leftward; "right" anchors the menu's
@@ -171,7 +173,7 @@ export function TableFilters<T extends string>({
             </DropdownTrigger>
             <DropdownContent
                 align={align === "right" ? "start" : "end"}
-                className={`overflow-hidden ${widthClassName}`}
+                className={cn("overflow-hidden", widthClassName, contentClassName)}
             >
                 <DropdownItem
                     selected={value === null}

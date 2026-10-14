@@ -474,6 +474,21 @@ export interface OrgMemberHandover {
     documents: number;
 }
 
+export type OrgPrivateContentKind = "project" | "workflow" | "chat" | "tabular_review" | "document";
+export interface OrgPrivateContentItem {
+    kind: OrgPrivateContentKind;
+    item_id: string;
+    title: string | null;
+    user_id: string | null;
+    display_name: string | null;
+    email: string | null;
+    has_access: boolean;
+}
+export interface OrgPrivateContentPage {
+    items: OrgPrivateContentItem[];
+    nextOffset: number | null;
+}
+
 /** Owner-only recovery list; these items are excluded from normal access. */
 export interface OrgDepartureArchive {
     id: string;

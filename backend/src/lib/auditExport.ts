@@ -5,7 +5,7 @@
 // worker where importing an Express router would drag in the whole HTTP
 // surface.
 
-import { getOrgRole, isOrgAdmin, listAccessibleProjectIds } from "./access";
+import { getOrgRole, isOrgAdmin } from "./access";
 import { normalizeDisplayName } from "./userLookup";
 import type { Db } from "./supabase";
 
@@ -16,9 +16,12 @@ export const AUDIT_EXPORT_LIMIT = 2000;
 // page keeps the offset well inside Postgres' integer range.
 const MAX_PAGE = 100_000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AuditQuery = {
     orgId?: string;
+    userName?: string;
+    eventIds?: string[];
     q?: string;
     action?: string;
     status?: string;
@@ -60,8 +63,22 @@ export function parseQuery(
     const parsedPage = Number.parseInt(String(raw.page ?? "1"), 10) || 1;
     const page = Math.min(Math.max(parsedPage, 1), MAX_PAGE);
     const orgId = str(raw.org_id);
-    if (raw.org_id !== undefined && (!orgId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)))
+    if (raw.org_id !== undefined && (!orgId || !UUID_RE.test(orgId)))
         return { ok: false, error: "Invalid organization id" };
+    if (raw.username !== undefined && typeof raw.username !== "string")
+        return { ok: false, error: "Invalid username filter" };
+    const userName = str(raw.username)?.slice(0, 200);
+    if (userName && !orgId)
+        return { ok: false, error: "Username filtering requires an organization" };
+    let eventIds: string[] | undefined;
+    if (raw.event_ids !== undefined) {
+        if (!Array.isArray(raw.event_ids) || raw.event_ids.length === 0 ||
+            raw.event_ids.length > AUDIT_EXPORT_LIMIT ||
+            raw.event_ids.some((id) => typeof id !== "string" || !UUID_RE.test(id))) {
+            return { ok: false, error: `Select between 1 and ${AUDIT_EXPORT_LIMIT} valid audit events` };
+        }
+        eventIds = [...new Set(raw.event_ids.map((id: string) => id.toLowerCase()))];
+    }
     const from = str(raw.from);
     const to = str(raw.to);
     const requestedSortBy = str(raw.sort_by);
@@ -90,6 +107,8 @@ export function parseQuery(
         ok: true,
         query: {
             ...(orgId ? { orgId } : {}),
+            ...(userName ? { userName } : {}),
+            ...(eventIds ? { eventIds } : {}),
             q: str(raw.q)?.slice(0, 200),
             action: str(raw.action)?.slice(0, 60),
             status: str(raw.status)?.slice(0, 20),
@@ -107,17 +126,8 @@ export function parseQuery(
     };
 }
 
-/**
- * How many accessible project ids go into ONE PostgREST filter.
- *
- * The scope used to be a single `or=(user_id.eq.<id>,project_id.in.(<every
- * accessible project id>))`, spliced into the query STRING. Each uuid costs
- * 37 characters, so a few hundred matters pushed the request line past the
- * proxy/PostgREST limit and the audit page answered 500 — and it degraded
- * with the size of the firm, which is exactly the deployment that needs the
- * audit trail most.
- */
-const PROJECT_FILTER_CHUNK = 200;
+/** Total selected-event and matching-user ids per request, below proxy URL limits. */
+const ID_FILTER_CHUNK = 200;
 
 /**
  * Deepest page the chunked read will assemble in memory.
@@ -151,7 +161,6 @@ type EventsResult = {
 type EventsQuery = {
     eq(column: string, value: unknown): EventsQuery;
     in(column: string, values: unknown[]): EventsQuery;
-    or(filter: string): EventsQuery;
     ilike(column: string, pattern: string): EventsQuery;
     gte(column: string, value: unknown): EventsQuery;
     lte(column: string, value: unknown): EventsQuery;
@@ -226,21 +235,38 @@ export async function queryEvents(
     q: AuditQuery,
     resolveDisplayNames = true,
 ) {
-    // The scope helper THROWS when one of its access reads fails, so that a
-    // walled matter can never leak through an unreadable override table. The
-    // GET /audit handler has no try/catch of its own (an unhandled rejection
-    // in an Express 4 handler hangs the request), so the throw is turned into
-    // the same `{ error }` shape a failed events query already returns and
-    // the route answers its generic 500.
-    let projectIds: string[];
+    // Organization access and username lookups must fail closed. Personal
+    // activity is scoped directly to its actor, independent of project access.
+    let matchingUserIds: string[] | undefined;
     try {
-        // Shared with the chat/document listings: one definition of
-        // "projects this user can see" for everything that scopes a
-        // collection query.
         if (q.orgId && !(await canReadOrgAudit(db, userId, q.orgId))) {
             return { data: null, error: { message: "Organization audit access denied" }, count: null } satisfies EventsResult;
         }
-        projectIds = q.orgId ? [] : await listAccessibleProjectIds(userId, email, db);
+        if (q.orgId && q.userName) {
+            // Resolve names and emails, including former members. These
+            // ids only narrow the authorized, redacted organization query.
+            const matches = new Set<string>();
+            // Separate literal predicates avoid interpolating user input into
+            // PostgREST's OR grammar. A person may match both columns.
+            for (const column of ["display_name", "email"] as const) {
+                let offset = 0;
+                while (true) {
+                    const { data, error, count } = await db.from("user_profiles")
+                        .select("user_id", { count: "exact" })
+                        .ilike(column, `%${escapeLikePattern(q.userName)}%`)
+                        .order("user_id")
+                        .range(offset, offset + AUDIT_READ_PAGE_SIZE - 1);
+                    if (error) return { data: null, error, count: null } satisfies EventsResult;
+                    if (!data?.length) break;
+                    for (const profile of data) matches.add(profile.user_id as string);
+                    offset += data.length;
+                    if (count !== null && offset >= count) break;
+                }
+            }
+            matchingUserIds = [...matches];
+            if (!matchingUserIds.length)
+                return { data: [], error: null, count: 0 } satisfies EventsResult;
+        }
     } catch (err) {
         // Hand back the underlying PostgREST error when there is one, so the
         // route's log and the CSV job's retry see code/details/hint exactly
@@ -287,41 +313,36 @@ export async function queryEvents(
     const offset = (q.page - 1) * q.limit;
     let result: EventsResult;
 
-    if (q.orgId) {
-        result = await readEventWindow(
-            () => applyFilters(base().eq("org_id", q.orgId)), offset, q.limit,
-        );
-    } else if (projectIds.length === 0) {
-        result = await readEventWindow(
-            () => applyFilters(base().eq("user_id", userId)),
-            offset,
-            q.limit,
-        );
+    // Selected ids can share a URL with username ids. Budget the
+    // lists together, not separately, to stay within proxy request limits.
+    const idChunkSize = q.eventIds && matchingUserIds
+        ? ID_FILTER_CHUNK / 2
+        : ID_FILTER_CHUNK;
+    const scope = (query: EventsQuery) => q.orgId
+        ? query.eq("org_id", q.orgId)
+        : query.eq("user_id", userId);
+    // Keep all id lists below proxy URL limits. Every partition retains its
+    // visibility scope and every requested filter; ids never grant access.
+    const eventChunks = q.eventIds ? chunk(q.eventIds, idChunkSize) : [undefined];
+    const userChunks = matchingUserIds ? chunk(matchingUserIds, idChunkSize) : [undefined];
+    const queries = eventChunks.flatMap((eventIds) =>
+        userChunks.map((userIds) => () => {
+            let query = scope(base());
+            if (eventIds) query = query.in("id", eventIds);
+            if (userIds) query = query.in("user_id", userIds);
+            return applyFilters(query);
+        }),
+    );
+
+    if (queries.length === 1) {
+        result = await readEventWindow(queries[0], offset, q.limit);
     } else {
-        // The caller's OWN events and the events of projects they can reach
-        // are read as separate queries and merged here. Splitting on
-        // `user_id` keeps the two sides DISJOINT, which is what makes the
-        // exact counts summable and stops a row the caller wrote inside an
-        // accessible project appearing twice.
+        // Distinct selected-event and matching-user partitions are disjoint,
+        // so their exact counts can be summed before merging the sorted rows.
         const window = Math.min(offset + q.limit, MERGE_WINDOW_ROWS);
-        const notTheCaller = `user_id.is.null,user_id.neq.${userId}`;
-        const responses: EventsResult[] = await Promise.all([
-            readEventWindow(
-                () => applyFilters(base().eq("user_id", userId)),
-                0,
-                window,
-            ),
-            ...chunk(projectIds, PROJECT_FILTER_CHUNK).map((ids) =>
-                readEventWindow(
-                    () =>
-                        applyFilters(
-                            base().in("project_id", ids).or(notTheCaller),
-                        ),
-                    0,
-                    window,
-                ),
-            ),
-        ]);
+        const responses = await Promise.all(queries.map((makeQuery) =>
+            readEventWindow(makeQuery, 0, window),
+        ));
 
         const failed = responses.find((response) => response.error);
         if (failed) return failed;
@@ -402,7 +423,7 @@ export function csvCell(v: unknown): string {
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export const AUDIT_CSV_FILENAME = "history-export.csv";
+export const AUDIT_CSV_FILENAME = "my-activity.csv";
 
 /**
  * Render the caller's visible audit events as a CSV document. Throws on a

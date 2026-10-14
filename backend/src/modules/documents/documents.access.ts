@@ -22,6 +22,7 @@ type DocRow = {
     // combine it with the returned `canEdit`.
     workflow_id?: string | null;
     current_version_id?: string | null;
+    archived_at?: string | null;
 };
 
 /**
@@ -40,18 +41,22 @@ export async function ensureDocumentAccess(
     opts: { select?: string } = {},
 ): Promise<
     | { ok: true; doc: DocRow; isCreator: boolean; projectRole: ProjectRole }
-    | { ok: false }
+    | { ok: false; kind: "not_found" | "forbidden" }
+    | { ok: false; kind: "error"; error: unknown }
 > {
-    const { data: doc } = await db
+    const { data: doc, error } = await db
         .from("documents")
         .select(opts.select ?? "id, user_id, project_id, org_id, workflow_id")
         .eq("id", documentId)
         .single();
-    if (!doc) return { ok: false };
+    if (error && error.code !== "PGRST116")
+        return { ok: false, kind: "error", error };
+    if (!doc) return { ok: false, kind: "not_found" };
     // `select` is a dynamic string, so supabase-js can't derive the row type.
     const d = doc as unknown as DocRow;
+    if (d.archived_at) return { ok: false, kind: "not_found" };
     const access = await ensureDocAccess(d, userId, userEmail, db);
-    if (!access.ok) return { ok: false };
+    if (!access.ok) return { ok: false, kind: "forbidden" };
     return {
         ok: true,
         doc: d,
@@ -91,12 +96,13 @@ export async function getDocument(
     db: Db,
 ): Promise<
     | { ok: true; doc: Record<string, unknown> }
-    | { ok: false; kind: "not_found" }
+    | { ok: false; kind: "not_found" | "forbidden" }
+    | { ok: false; kind: "error"; error: unknown }
 > {
     const access = await ensureDocumentAccess(documentId, userId, userEmail, db, {
         select: "*",
     });
-    if (!access.ok) return { ok: false, kind: "not_found" };
+    if (!access.ok) return access;
 
     const docs = [access.doc] as unknown as {
         id: string;

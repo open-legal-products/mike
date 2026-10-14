@@ -344,38 +344,10 @@ describe("audit pagination across capped partitions", () => {
         expect(ranges).toContainEqual([1000, 1049]);
     });
 
-    it("merges later pages from multiple project chunks and counts each event once", async () => {
-        const events = eventRows(2200).map((event, index) => ({
-            ...event,
-            user_id: index % 2 ? null : "colleague",
-            project_id: index % 2 ? "p200" : "p000",
-        }));
-        const { db } = makePagedAuditDb(events, {
-            projectIds: Array.from(
-                { length: 201 },
-                (_, i) => `p${String(i).padStart(3, "0")}`,
-            ),
-        });
-        const result = await queryEvents(
-            db,
-            "u1",
-            undefined,
-            { ...PAGE_QUERY, page: 43 },
-            false,
-        );
-        expect(result.count).toBe(2200);
-        expect(result.data?.map((row) => row.id)).toEqual(
-            events.slice(2100, 2150).map((row) => row.id),
-        );
-    });
-
-    it.each([true, false])(
-        "exports 2,000 rows under the cap (accessible project: %s)",
-        async (hasProject) => {
-            const { db } = makePagedAuditDb(eventRows(2100), {
-                projectIds: hasProject ? ["project"] : [],
-                maxRows: 500,
-            });
+    it.each([500, 1000])(
+        "exports 2,000 own events under a %s-row response cap",
+        async (maxRows) => {
+            const { db } = makePagedAuditDb(eventRows(2100), { maxRows });
             const csv = await buildAuditCsv(db, "u1", undefined, query);
             expect(csv.split("\n")).toHaveLength(AUDIT_EXPORT_LIMIT + 1);
         },
@@ -394,7 +366,7 @@ describe("audit pagination across capped partitions", () => {
         expect(result.data).toBeNull();
     });
 
-    it("preserves the 10,000-row merge window and exact total", async () => {
+    it("pages personal activity past 10,000 rows without the old project-merge limit", async () => {
         const { db } = makePagedAuditDb(eventRows(10050));
         const last = await queryEvents(
             db,
@@ -411,7 +383,7 @@ describe("audit pagination across capped partitions", () => {
             { ...PAGE_QUERY, page: 201 },
             false,
         );
-        expect(beyond.data).toEqual([]);
+        expect(beyond.data?.map((row) => row.id)).toEqual(eventRows(10050).slice(10000).map((row) => row.id));
         expect(beyond.count).toBe(10050);
     });
 });

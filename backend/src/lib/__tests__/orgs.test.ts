@@ -149,6 +149,7 @@ function makeDb(initial: Record<string, Row[]>) {
                 if (org) { org.deleted_at = new Date().toISOString(); org.purge_after = new Date(Date.now() + 30 * 86400000).toISOString(); }
                 return { data: null, error: null };
             })() : null) ??
+            (name === "list_org_private_content_access" ? { data: [], error: null } : null) ??
             ownerlessRpcResult(tables, name, args) ??
             handoverRpcResult(tables, name, args) ?? {
                 data: null,

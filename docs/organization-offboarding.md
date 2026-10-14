@@ -125,3 +125,38 @@ runtime must be running to perform expiry and drain cleanup jobs.
 Apply `20261014_01_organization_audit_lifecycle.sql` before deploying these
 API/UI changes. The complete fresh-install schema includes the same changes.
 No additional service or production dependency is required.
+
+
+## Access to active private organization content
+
+Owners open active private organization items from **Org Settings → Audit log →
+Event details**, using the footer's Open button. There is no separate Private
+Content page; its former URL redirects to the audit log. Projects, workflows,
+chats, reviews and documents are supported. Personal workspaces are excluded.
+Admins do not receive private access automatically; existing explicit private
+content permissions continue to apply.
+
+Permission allows discovery of organization item names and their owners. It
+does not grant ordinary content access until the event's **Open** button is
+selected. That action atomically saves a read-only opening and an audit event;
+an audit failure leaves no opening. Existing sharing rights continue to apply.
+Referenced documents are included only while they remain in the same
+organization. Archived items still require the separate offboarding recovery
+process.
+
+**End access** removes the explicit opening. Permission revocation, demotion,
+departure, item archival or ownership/scope changes and organization deletion
+also remove openings; restoring a role or item does not restore old openings.
+The server rechecks membership, permission and item scope on every read. Audit
+entries record permission changes, openings and voluntary endings. Admins
+without permission cannot see other actors' private-item titles in those events.
+
+Apply `20261014_02_org_private_content_access.sql` and
+`20261014_03_audit_private_content_access.sql` before deploying the backend.
+The fresh schema includes the same changes. Verify the database rules in a
+disposable local database:
+
+```bash
+MIKE_TEST_POSTGRES_CONTAINER=supabase_db_backend npm test --prefix backend -- \
+  src/modules/orgs/__tests__/orgs.privateContent.postgres.test.ts
+```

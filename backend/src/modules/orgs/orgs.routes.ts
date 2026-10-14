@@ -19,6 +19,9 @@ import { isPersonalOrg } from "../../lib/personalOrgs";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
+    listPrivateContent,
+    setPrivateContentPermission,
+    changePrivateContentAccess,
     listDeletedOrganizations,
     restoreOrganization,
     listMyOrgs,
@@ -70,6 +73,42 @@ function refusePersonalOrg(req: Request, res: Response, next: NextFunction) {
     );
 }
 const requireOrgAuth = [requireAuth, refusePersonalOrg];
+
+orgsRouter.get("/:orgId/private-content", requireOrgAuth, asyncRoute(async (req, res) => {
+    const result = await listPrivateContent(createServerSupabase(), {
+        orgId: req.params.orgId, userId: res.locals.userId,
+        ...parsePaginationQuery(req.query), search: req.query.search,
+    });
+    if (!result.ok) return sendServiceFailure(res, result);
+    res.json(result.data);
+}));
+
+orgsRouter.put("/:orgId/members/:userId/private-content-permission", requireOrgAuth, asyncRoute(async (req, res) => {
+    const result = await setPrivateContentPermission(createServerSupabase(), {
+        orgId: req.params.orgId, userId: res.locals.userId,
+        targetUserId: req.params.userId, enabled: req.body?.enabled,
+    });
+    if (!result.ok) return sendServiceFailure(res, result);
+    res.status(204).send();
+}));
+
+orgsRouter.post("/:orgId/private-content/:kind/:itemId/open", requireOrgAuth, asyncRoute(async (req, res) => {
+    const result = await changePrivateContentAccess(createServerSupabase(), {
+        orgId: req.params.orgId, userId: res.locals.userId,
+        kind: req.params.kind, itemId: req.params.itemId, open: true,
+    });
+    if (!result.ok) return sendServiceFailure(res, result);
+    res.status(204).send();
+}));
+
+orgsRouter.delete("/:orgId/private-content/:kind/:itemId", requireOrgAuth, asyncRoute(async (req, res) => {
+    const result = await changePrivateContentAccess(createServerSupabase(), {
+        orgId: req.params.orgId, userId: res.locals.userId,
+        kind: req.params.kind, itemId: req.params.itemId, open: false,
+    });
+    if (!result.ok) return sendServiceFailure(res, result);
+    res.status(204).send();
+}));
 
 orgsRouter.get("/deleted", requireAuth, asyncRoute(async (_req, res) => {
     const result = await listDeletedOrganizations(createServerSupabase(), res.locals.userId);

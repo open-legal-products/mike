@@ -34,8 +34,8 @@ export type AuditPage = {
 };
 
 /**
- * One page of audit history: the caller's own events plus events in projects
- * they own or that are shared with their email.
+ * One page of the caller's own activity, or the requested organization's
+ * audit log when the caller is an organization owner or admin.
  */
 export async function listAuditEvents(
   db: Db,

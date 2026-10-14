@@ -1,7 +1,5 @@
-"use client";
-
-import { AuditHistory } from "@/app/components/history/AuditHistory";
+import { redirect } from "next/navigation";
 
 export default function HistoryPage() {
-  return <AuditHistory />;
+  redirect("/settings/my-activity");
 }

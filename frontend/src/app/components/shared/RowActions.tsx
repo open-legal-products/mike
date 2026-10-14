@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
     Check,
     Download,
@@ -248,7 +248,25 @@ export function RowActionMenuItems({
 /** Width shared by the row button menu and the right-click menu. */
 export const ROW_ACTION_MENU_CLASS = "w-48";
 
-export function RowActions(props: Props) {
+function CustomRowActionItems({
+    renderItems,
+    onActionChosen,
+}: {
+    renderItems: (onActionChosen: () => void) => ReactNode;
+    onActionChosen: () => void;
+}) {
+    return renderItems(onActionChosen);
+}
+
+export function RowActions({
+    renderItems,
+    ariaLabel = "Open row actions",
+    ...props
+}: Props & {
+    /** Reuse these items in selection and right-click menus as well. */
+    renderItems?: (onActionChosen: () => void) => ReactNode;
+    ariaLabel?: string;
+}) {
     const [open, setOpen] = useState(false);
     // An action often opens something that takes focus itself (an inline
     // rename field, a modal). Returning focus to the button afterwards would
@@ -274,7 +292,7 @@ export function RowActions(props: Props) {
             <DropdownTrigger asChild>
                 <button
                     type="button"
-                    aria-label="Open row actions"
+                    aria-label={ariaLabel}
                     // The row itself is clickable; opening its menu must not
                     // also activate the row.
                     onClick={(event) => event.stopPropagation()}
@@ -293,12 +311,21 @@ export function RowActions(props: Props) {
                     actionChosenRef.current = false;
                 }}
             >
-                <RowActionMenuItems
-                    {...props}
-                    onClose={() => {
-                        actionChosenRef.current = true;
-                    }}
-                />
+                {renderItems ? (
+                    <CustomRowActionItems
+                        renderItems={renderItems}
+                        onActionChosen={() => {
+                            actionChosenRef.current = true;
+                        }}
+                    />
+                ) : (
+                    <RowActionMenuItems
+                        {...props}
+                        onClose={() => {
+                            actionChosenRef.current = true;
+                        }}
+                    />
+                )}
             </DropdownContent>
         </Dropdown>
     );

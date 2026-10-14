@@ -1,4 +1,8 @@
 import type { Db } from "./supabase";
+import {
+    hasOrgPrivateContentAccess,
+    listOrgPrivateContentAccess,
+} from "./orgPrivateContent";
 
 /**
  * Project / document access helpers.
@@ -12,7 +16,7 @@ import type { Db } from "./supabase";
  * The creator is Owner. For personal content, access otherwise comes from one
  * role-aware direct grant. Projects and workflows may instead belong to an
  * organization, where they are PRIVATE BY DEFAULT: reachable by the creator,
- * by the organization's Owners, and by the members they have been shared with
+ * and by the members they have been shared with
  * (a per-resource override of Owner, Editor, Viewer — or Deny, which walls a
  * member off). Making one public gives every member Editor. Sharing never
  * reaches outside the organization. A chat or review in a project inherits
@@ -55,9 +59,9 @@ export {
  * Organizations have three roles, strongest first. Owners are accountable for
  * the organization: they alone delete it and appoint or remove admins and
  * other owners. Admins run it day to day (members, invitations, settings).
- * Members collaborate. Only Owners have standing on content they did not
- * create and were not given: they can open every project and workflow, so no
- * matter is ever orphaned. An Admin is a Member as far as content goes.
+ * Members collaborate. Owners manage public and ownerless projects/workflows.
+ * For private items still owned by another member, owners and permitted admins
+ * must explicitly open read-only access through the audited private-content path.
  */
 export type OrgRole = "owner" | "admin" | "member";
 
@@ -411,7 +415,7 @@ export async function checkProjectAccess(
         // Fail closed: an unreadable override table must not admit a member
         // who may have been walled off.
         if (!override.ok) return { ok: false };
-        const projectRole = resolveOrgContentRole({
+        let projectRole = resolveOrgContentRole({
             isCreator: false,
             orgRole,
             override: override.role,
@@ -423,6 +427,10 @@ export async function checkProjectAccess(
                     ? await isOrgItemOwnerless(db, "project", proj.id)
                     : false,
         });
+        if (
+            !projectRole && isOrgAdmin(orgRole) &&
+            await hasOrgPrivateContentAccess(db, proj.org_id, userId, "project", proj.id)
+        ) projectRole = "viewer";
         if (!projectRole) return { ok: false };
         return {
             ok: true,
@@ -523,7 +531,7 @@ async function organizationResourceAccess(
         userId,
     );
     if (!override.ok) return { ok: false };
-    const role = resolveOrgContentRole({
+    let role = resolveOrgContentRole({
         isCreator: false,
         orgRole,
         override: override.role,
@@ -533,6 +541,10 @@ async function organizationResourceAccess(
                 ? await isOrgItemOwnerless(db, kind, row.id)
                 : false,
     });
+    if (
+        !role && isOrgAdmin(orgRole) &&
+        await hasOrgPrivateContentAccess(db, row.org_id, userId, kind, row.id)
+    ) role = "viewer";
     return role ? resourceAccessFor(role, orgRole, false) : { ok: false };
 }
 
@@ -626,6 +638,7 @@ export async function checkWorkflowAccess(
  */
 export async function ensureDocAccess(
     doc: {
+        id?: string;
         user_id: string | null;
         project_id: string | null;
         org_id?: string | null;
@@ -671,7 +684,11 @@ export async function ensureDocAccess(
     // implicit access. Departure transfers referenced files or archives
     // unshared files. In a team organization the uploader must still be a member.
     const isCreator = !!doc.user_id && doc.user_id === userId;
-    if (!isCreator) return { ok: false };
+    if (!isCreator) {
+        return await hasOrgPrivateContentAccess(db, doc.org_id, userId, "document", doc.id)
+            ? resourceAccessFor("viewer", null, false)
+            : { ok: false };
+    }
     const teamOrgId = await teamOrgIdOf(db, doc.org_id);
     if (!teamOrgId) return resourceAccessFor("owner", null, true);
     const orgRole = await getOrgRole(userId, teamOrgId, db);
@@ -733,8 +750,10 @@ async function ensureSharedRowAccess(
             row.id,
             userEmail,
         );
-        return granted
-            ? resourceAccessFor(granted, orgRole, false)
+        const privateAccess = !granted && isOrgAdmin(orgRole)
+            && await hasOrgPrivateContentAccess(db, orgId, userId, kind, row.id);
+        return granted || privateAccess
+            ? resourceAccessFor(granted || "viewer", orgRole, false)
             : { ok: false };
     }
     if (isCreator) return resourceAccessFor("owner", null, true);
@@ -904,8 +923,7 @@ export async function listAccessibleProjectIds(
 ): Promise<string[]> {
     const normalizedEmail = normalizeEmail(userEmail);
 
-    // Roles, not just ids: an organization's OWNER can open every project in
-    // it, which the per-project verdict below has to honour.
+    // Roles decide ordinary sharing and eligibility for explicitly logged access.
     const { data: membershipRows, error: membershipError } = await db
         .from("org_members")
         .select("org_id, role, organizations!inner(id)")
@@ -1014,6 +1032,11 @@ export async function listAccessibleProjectIds(
         orgIds.filter((orgId) => orgRoleByOrgId.get(orgId) === "owner"),
     );
 
+    const privateAccess = await listOrgPrivateContentAccess(
+        db,
+        orgIds.filter(id => ["owner", "admin"].includes(orgRoleByOrgId.get(id) ?? "")),
+        userId,
+    );
     const ids = new Set<string>();
     for (const project of personalOwned) ids.add(project.id);
     for (const project of personalGranted) ids.add(project.id);
@@ -1029,7 +1052,7 @@ export async function listAccessibleProjectIds(
             visibility: project.visibility,
             ownerless: ownerless.projects.has(project.id),
         });
-        if (role) ids.add(project.id);
+        if (role || privateAccess.get("project")?.has(project.id)) ids.add(project.id);
     }
     return [...ids];
 }

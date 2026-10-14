@@ -77,11 +77,7 @@ export function organizationSettingsHref(
 }
 
 type OrganizationSettingsSection =
-  | "general"
-  | "members"
-  | "audit"
-  | "providers"
-  | "privacy-data";
+  "general" | "members" | "audit" | "providers" | "privacy-data";
 
 export function OrganizationSettingsProvider({
   orgId,
@@ -164,7 +160,7 @@ export function OrganizationSettingsProvider({
           tone="error"
           action={
             <PillButtonUI
-              tone="white"
+              tone="black"
               size="sm"
               onClick={() => {
                 setLoadError(null);

@@ -1,0 +1,431 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+    AUDIT_EXPORT_LIMIT,
+    buildAuditCsv,
+    parseQuery,
+    queryEvents,
+} from "../auditExport";
+
+const access = vi.hoisted(() => ({ role: "admin" as string | null }));
+vi.mock("../access", () => ({
+    getOrgRole: vi.fn(async () => access.role),
+    isOrgAdmin: (role: string) => role === "admin" || role === "owner",
+    listAccessibleProjectIds: vi.fn(async () => ["visible-project"]),
+}));
+
+const orgId = "00000000-0000-4000-8000-000000000010";
+const eventId = (n: number) =>
+    `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const parsed = parseQuery({}, AUDIT_EXPORT_LIMIT);
+const query = parsed.ok ? parsed.query : (undefined as never);
+type Row = Record<string, unknown>;
+
+// Apply scope and id predicates before pagination, as PostgREST does. A low
+// response cap checks that matching users and selected events are all read.
+function database(
+    events: Row[],
+    profiles: Row[] = [],
+    maxRows = 1000,
+    profileError = false,
+) {
+    const calls: unknown[][] = [];
+    function builder(table: string) {
+        calls.push(["read", table]);
+        let rows = [...(table === "user_profiles" ? profiles : events)];
+        let filterIdCount = 0;
+        const orders: { column: string; ascending: boolean }[] = [];
+        const q = {
+            select: () => q,
+            eq(column: string, value: unknown) {
+                rows = rows.filter((row) => row[column] === value);
+                return q;
+            },
+            in(column: string, values: unknown[]) {
+                filterIdCount += values.length;
+                calls.push([table, "in", column, values]);
+                rows = rows.filter((row) => values.includes(row[column]));
+                return q;
+            },
+            or() {
+                rows = rows.filter((row) => row.user_id !== "actor");
+                return q;
+            },
+            ilike(column: string, pattern: string) {
+                calls.push([table, "ilike", column, pattern]);
+                const literal = pattern
+                    .slice(1, -1)
+                    .replace(/\\([\\%_])/g, "$1")
+                    .toLowerCase();
+                rows = rows.filter((row) =>
+                    String(row[column] ?? "")
+                        .toLowerCase()
+                        .includes(literal),
+                );
+                return q;
+            },
+            order(column: string, options?: { ascending: boolean }) {
+                orders.push({ column, ascending: options?.ascending ?? true });
+                return q;
+            },
+            range(from: number, to: number) {
+                calls.push([table, "filter-id-count", filterIdCount]);
+                calls.push([table, "range", from, to]);
+                const sorted = [...rows].sort((a, b) => {
+                    for (const { column, ascending } of orders) {
+                        if (a[column] === b[column]) continue;
+                        return (
+                            (String(a[column]) < String(b[column]) ? -1 : 1) *
+                            (ascending ? 1 : -1)
+                        );
+                    }
+                    return 0;
+                });
+                return Promise.resolve(
+                    profileError && table === "user_profiles"
+                        ? {
+                              data: null,
+                              error: { message: "profile unavailable" },
+                              count: null,
+                          }
+                        : {
+                              data: sorted.slice(
+                                  from,
+                                  Math.min(to + 1, from + maxRows),
+                              ),
+                              error: null,
+                              count: rows.length,
+                          },
+                );
+            },
+            then(resolve: (result: unknown) => unknown) {
+                return Promise.resolve({ data: rows, error: null }).then(
+                    resolve,
+                );
+            },
+        };
+        return q;
+    }
+    return {
+        db: {
+            from: builder,
+            rpc: () => builder("organization_audit_events"),
+        } as never,
+        calls,
+    };
+}
+
+beforeEach(() => {
+    access.role = "admin";
+});
+
+describe("audit selection and username validation", () => {
+    it("trims the username and normalizes duplicate selected ids", () => {
+        expect(
+            parseQuery(
+                {
+                    org_id: orgId,
+                    username: "  Alex  ",
+                    event_ids: [eventId(1), eventId(1)],
+                },
+                50,
+            ),
+        ).toMatchObject({
+            ok: true,
+            query: { orgId, userName: "Alex", eventIds: [eventId(1)] },
+        });
+    });
+
+    it("rejects malformed, empty, or oversized selections instead of exporting all rows", () => {
+        for (const event_ids of [
+            null,
+            "all",
+            [],
+            ["invalid"],
+            [null],
+            Array(2001).fill(eventId(1)),
+        ]) {
+            expect(parseQuery({ event_ids }, AUDIT_EXPORT_LIMIT)).toMatchObject(
+                { ok: false },
+            );
+        }
+        expect(
+            parseQuery(
+                {
+                    event_ids: Array.from({ length: 2000 }, (_, i) =>
+                        eventId(i),
+                    ),
+                },
+                AUDIT_EXPORT_LIMIT,
+            ),
+        ).toMatchObject({ ok: true });
+    });
+
+    it("rejects username filtering without an organization or with non-text input", () => {
+        expect(parseQuery({ username: "Alex" }, 50)).toMatchObject({
+            ok: false,
+        });
+        expect(
+            parseQuery({ org_id: orgId, username: ["Alex"] }, 50),
+        ).toMatchObject({ ok: false });
+    });
+});
+
+describe("personal activity", () => {
+    it("lists and exports only the caller's actions across personal and organization projects", async () => {
+        const events = [
+            { id: eventId(1), user_id: "actor", title: "Own personal action" },
+            { id: eventId(2), user_id: "actor", project_id: "visible-project", title: "Own shared-project action" },
+            { id: eventId(3), user_id: "actor", org_id: orgId, title: "Own organization action" },
+            { id: eventId(4), user_id: "colleague", project_id: "visible-project", title: "Colleague action" },
+            { id: eventId(5), user_id: null, project_id: "visible-project", title: "Unattributed action" },
+        ];
+        const { db, calls } = database(events);
+        const out = await queryEvents(db, "actor", undefined, { ...query, limit: 2 }, false);
+        expect(out.count).toBe(3);
+        expect(out.data?.map((row) => row.id)).toEqual([eventId(1), eventId(2)]);
+        const next = await queryEvents(db, "actor", undefined, { ...query, page: 2, limit: 2 }, false);
+        expect(next.count).toBe(3);
+        expect(next.data?.map((row) => row.id)).toEqual([eventId(3)]);
+        const csv = await buildAuditCsv(db, "actor", undefined, query);
+        expect(csv.split("\n")).toHaveLength(4);
+        expect(csv).toContain("Own personal action");
+        expect(csv).toContain("Own shared-project action");
+        expect(csv).toContain("Own organization action");
+        expect(csv).not.toContain("Colleague action");
+        expect(csv).not.toContain("Unattributed action");
+        expect(calls.filter((call) => call[0] === "read").every((call) => call[1] === "audit_events")).toBe(true);
+    });
+});
+
+describe("selected audit exports", () => {
+    it("exports only the caller's selected events, even in shared projects", async () => {
+        const { db } = database([
+            { id: eventId(1), user_id: "actor", title: "Own" },
+            {
+                id: eventId(2),
+                user_id: "colleague",
+                project_id: "visible-project",
+                title: "Shared",
+            },
+            {
+                id: eventId(3),
+                user_id: "colleague",
+                project_id: "private-project",
+                title: "Private",
+            },
+            { id: eventId(4), user_id: "actor", title: "Unselected" },
+        ]);
+        const csv = await buildAuditCsv(db, "actor", undefined, {
+            ...query,
+            eventIds: [eventId(1), eventId(2), eventId(3)],
+        });
+        expect(csv.split("\n")).toHaveLength(2);
+        expect(csv).toContain("Own");
+        expect(csv).not.toContain("Shared");
+        expect(csv).not.toContain("Private");
+        expect(csv).not.toContain("Unselected");
+    });
+
+    it("batches large selections and merges them in the requested order", async () => {
+        const events = Array.from({ length: 251 }, (_, i) => ({
+            id: eventId(i),
+            user_id: "actor",
+            title: String(i).padStart(3, "0"),
+        }));
+        const { db, calls } = database(events, [], 30);
+        const out = await queryEvents(
+            db,
+            "actor",
+            undefined,
+            {
+                ...query,
+                eventIds: events.slice(0, 250).map((event) => event.id),
+                sortBy: "title",
+                sortDirection: "desc",
+            },
+            false,
+        );
+        expect(out.count).toBe(250);
+        expect(out.data?.map((row) => row.id)).toEqual(
+            events
+                .slice(0, 250)
+                .reverse()
+                .map((event) => event.id),
+        );
+        expect(
+            calls
+                .filter((call) => call[1] === "in" && call[2] === "id")
+                .every((call) => (call[3] as string[]).length <= 200),
+        ).toBe(true);
+        expect(
+            calls
+                .filter((call) => call[1] === "filter-id-count")
+                .every((call) => Number(call[2]) <= 200),
+        ).toBe(true);
+    });
+});
+
+describe("organization username filtering", () => {
+    it("matches either name or email without duplicating actors or crossing organizations", async () => {
+        const { db } = database([
+            { id: eventId(1), org_id: orgId, user_id: "both" },
+            { id: eventId(2), org_id: orgId, user_id: "email-only" },
+            { id: eventId(3), org_id: "other-org", user_id: "email-only" },
+        ], [
+            { user_id: "both", display_name: "Alex", email: "alex@example.com" },
+            { user_id: "email-only", display_name: "Jane", email: "jane.alex@example.com" },
+        ]);
+        const result = await queryEvents(db, "actor", undefined, { ...query, orgId, userName: "aLeX" }, false);
+        expect(result.data?.map((row) => row.id)).toEqual([eventId(1), eventId(2)]);
+        expect(result.count).toBe(2);
+    });
+
+    it("continues to include other actors in the requested organization's log", async () => {
+        const { db } = database([
+            { id: eventId(1), org_id: orgId, user_id: "actor" },
+            { id: eventId(2), org_id: orgId, user_id: "colleague" },
+            { id: eventId(3), org_id: "other-org", user_id: "colleague" },
+        ]);
+        const out = await queryEvents(db, "actor", undefined, { ...query, orgId }, false);
+        expect(out.count).toBe(2);
+        expect(out.data?.map((row) => row.id)).toEqual([eventId(1), eventId(2)]);
+    });
+    it("matches names case-insensitively, includes former members, and preserves org scope in CSV", async () => {
+        const { db } = database(
+            [
+                {
+                    id: eventId(1),
+                    org_id: orgId,
+                    user_id: "former-member",
+                    title: "Matched",
+                },
+                {
+                    id: eventId(2),
+                    org_id: orgId,
+                    user_id: "pat",
+                    title: "Different user",
+                },
+                {
+                    id: eventId(3),
+                    org_id: "other-org",
+                    user_id: "former-member",
+                    title: "Other org",
+                },
+            ],
+            [
+                { user_id: "former-member", display_name: "Alex Lawyer" },
+                { user_id: "pat", display_name: "Pat" },
+            ],
+        );
+        const csv = await buildAuditCsv(db, "actor", undefined, {
+            ...query,
+            orgId,
+            userName: "aLeX",
+            eventIds: [eventId(1), eventId(2), eventId(3)],
+        });
+        expect(csv.split("\n")).toHaveLength(2);
+        expect(csv).toContain("Matched");
+        expect(csv).not.toContain("Different user");
+        expect(csv).not.toContain("Other org");
+    });
+
+    it("reads all matching profiles across capped pages and batches the user filter", async () => {
+        const profiles = Array.from({ length: 205 }, (_, i) => ({
+            user_id: `user-${i}`,
+            display_name: "Alex",
+        }));
+        const events = profiles.map((profile, i) => ({
+            id: eventId(i),
+            org_id: orgId,
+            user_id: profile.user_id,
+        }));
+        const { db, calls } = database(events, profiles, 50);
+        const out = await queryEvents(
+            db,
+            "actor",
+            undefined,
+            {
+                ...query,
+                orgId,
+                userName: "Alex",
+                eventIds: events.map((event) => event.id),
+                sortBy: "title",
+                sortDirection: "asc",
+            },
+            false,
+        );
+        expect(out.count).toBe(205);
+        expect(out.data?.map((row) => row.id)).toEqual(
+            events.map((row) => row.id),
+        );
+        expect(
+            calls
+                .filter(
+                    (call) =>
+                        call[0] === "user_profiles" && call[1] === "range",
+                )
+                .map((call) => call[2]),
+        ).toEqual([0, 50, 100, 150, 200, 0]);
+        expect(
+            calls
+                .filter((call) => call[1] === "in" && call[2] === "user_id")
+                .every((call) => (call[3] as string[]).length <= 200),
+        ).toBe(true);
+        expect(
+            calls
+                .filter((call) => call[1] === "filter-id-count")
+                .every((call) => Number(call[2]) <= 200),
+        ).toBe(true);
+    });
+
+    it("escapes wildcard characters and returns an empty result for no match", async () => {
+        const { db, calls } = database(
+            [],
+            [{ user_id: "someone", display_name: "Alex" }],
+        );
+        expect(
+            await queryEvents(db, "actor", undefined, {
+                ...query,
+                orgId,
+                userName: "A%_",
+            }),
+        ).toMatchObject({ data: [], count: 0, error: null });
+        expect(calls).toContainEqual([
+            "user_profiles",
+            "ilike",
+            "display_name",
+            "%A\\%\\_%",
+        ]);
+        expect(
+            calls.some((call) => call[1] === "organization_audit_events"),
+        ).toBe(false);
+    });
+
+    it("fails closed when the profile lookup fails", async () => {
+        const { db } = database([], [], 1000, true);
+        await expect(
+            buildAuditCsv(db, "actor", undefined, {
+                ...query,
+                orgId,
+                userName: "Alex",
+            }),
+        ).rejects.toThrow("profile unavailable");
+    });
+
+    it.each(["member", null])(
+        "checks access before looking up usernames for role %s",
+        async (role) => {
+            access.role = role;
+            const { db, calls } = database([]);
+            await expect(
+                buildAuditCsv(db, "actor", undefined, {
+                    ...query,
+                    orgId,
+                    userName: "Alex",
+                    eventIds: [eventId(1)],
+                }),
+            ).rejects.toThrow("access denied");
+            expect(calls).toEqual([]);
+        },
+    );
+});

@@ -64,3 +64,4 @@ export {
 } from "./orgs.retention";
 
 export { listDeletedOrganizations, restoreOrganization, purgeExpiredOrganizations } from "./orgs.lifecycle";
+export { listPrivateContent, setPrivateContentPermission, changePrivateContentAccess } from "./orgs.privateContent";

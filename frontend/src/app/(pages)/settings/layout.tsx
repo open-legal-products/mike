@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useOrganizationInvitationCount } from "@/app/hooks/useOrganizationInvitationCount";
@@ -24,6 +24,11 @@ const TABS: SettingsShellTab[] = [
         id: "privacy-data",
         label: "Privacy & Data",
         href: "/settings/privacy-data",
+    },
+    {
+        id: "my-activity",
+        label: "My Activity",
+        href: "/settings/my-activity",
     },
     { id: "security", label: "Security", href: "/settings/security" },
     { id: "models", label: "Model Preferences", href: "/settings/models" },
@@ -49,6 +54,7 @@ export default function SettingsLayout({
     children: React.ReactNode;
 }) {
     const router = useRouter();
+    const pathname = usePathname();
     const { user, isAuthenticated, authLoading } = useAuth();
     const invitationCount = useOrganizationInvitationCount(
         isAuthenticated && !authLoading ? user?.id : undefined,
@@ -70,6 +76,11 @@ export default function SettingsLayout({
 
     if (!isAuthenticated) {
         return null;
+    }
+
+    // My Activity is linked from Settings but uses the full table-page layout.
+    if (pathname === "/settings/my-activity") {
+        return children;
     }
 
     return (

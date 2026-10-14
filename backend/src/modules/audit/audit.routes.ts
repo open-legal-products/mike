@@ -3,8 +3,8 @@
 //
 // Handlers read the caller off res.locals, pass the raw query string through
 // to audit.service, and map its `ServiceResult` onto a status code, headers,
-// and body. Visibility (own events plus events in accessible projects) is
-// enforced in the service.
+// and body. Personal activity is restricted to the caller's actions;
+// organization audit visibility is enforced in the service.
 
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";

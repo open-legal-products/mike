@@ -64,6 +64,13 @@ beforeEach(() => {
 });
 
 describe("organization audit authorization", () => {
+    it("preserves username and selected ids in durable export jobs", () => {
+        const eventIds = ["00000000-0000-4000-8000-000000000011"];
+        expect(validateExportRequest({
+            userId: "actor", userEmail: undefined,
+            body: { type: "audit-csv", params: { org_id: orgId, username: "Alex", event_ids: eventIds } },
+        })).toMatchObject({ ok: true, payload: { query: { orgId, userName: "Alex", eventIds } } });
+    });
     it.each(["owner", "admin"])(
         "lets %s list only the requested organization and applies filters",
         async (role) => {

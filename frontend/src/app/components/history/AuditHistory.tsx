@@ -3,28 +3,49 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
-  type CSSProperties,
+  type ReactNode,
 } from "react";
 import Link from "next/link";
 import {
   CalendarDays,
+  ChevronDown,
   Download,
+  Eye,
   ExternalLink,
   Loader2,
   MoreHorizontal,
+  X,
 } from "lucide-react";
-import { DayPicker, type Matcher } from "@daypicker/react";
-import dayPickerStyles from "@daypicker/react/style.module.css";
 import { getAuditHistory, type AuditEvent } from "@/app/lib/mikeApi";
 import { runUserExport } from "@/app/lib/asyncExport";
 import { appendUniqueRows } from "@/app/lib/paginatedRows";
 import { Modal } from "@/app/components/modals/Modal";
+import { ModalSelect } from "@/app/components/modals/ModalSelect";
+import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
+import { WarningPopup } from "@/app/components/popups/WarningPopup";
+import {
+  RowActions,
+  closeRowActionMenus,
+} from "@/app/components/shared/RowActions";
+import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
+import {
+  HistoryDatePicker,
+  localDateValue,
+  parseHistoryDate,
+} from "./HistoryDatePicker";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/app/components/ui/popover";
 import { PageHeader } from "@/app/components/shared/PageHeader";
-import { PAGE_HEADER_TITLE_CLASS } from "@/app/components/shared/pageHeaderStyles";
 import {
   SkeletonLine,
+  SkeletonCheckbox,
+  TABLE_CHECKBOX_CLASS,
   TableBody,
   TableCell,
   TableEmptyState,
@@ -36,9 +57,26 @@ import {
   TableScrollArea,
   type TableSortDirection,
   TableStickyCell,
+  TablePrimaryCell,
 } from "@/app/components/shared/TablePrimitive";
 import { TableToolbar } from "@/app/components/shared/TableToolbar";
 import { TableLoadMoreRow } from "@/app/components/shared/TableLoadMoreRow";
+import { HistorySubjectIcon } from "./HistorySubjectIcon";
+import {
+  HISTORY_APPLICATION_ICONS,
+  HistoryApplicationIcon,
+} from "./HistoryApplicationIcon";
+import { HistoryEventModal } from "./HistoryEventModal";
+import {
+  ACTION_LABELS,
+  SURFACE_LABELS,
+  auditAction,
+  auditActor,
+  auditSubject,
+  auditTimestamp,
+  auditDestination,
+  auditPrivateAccess,
+} from "./auditPresentation";
 import { HistorySkeuoIcon } from "@/app/components/shared/HistorySkeuoIcon";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
@@ -48,50 +86,9 @@ import {
   Dropdown,
   DropdownContent,
   DropdownItem,
+  DropdownSurface,
   DropdownTrigger,
 } from "@/shared/ui/dropdown";
-import { cn } from "@/app/lib/utils";
-
-const ACTION_LABELS: Record<string, string> = {
-  "org.api_key.saved": "Provider key saved",
-  "org.api_key.removed": "Provider key removed",
-  "org.api_key.enabled": "Provider key enabled",
-  "org.api_key.disabled": "Provider key disabled",
-  "org.personal_api_keys.allowed": "Personal keys allowed",
-  "org.personal_api_keys.blocked": "Personal keys blocked",
-  "org.created": "Organization created",
-  "org.deleted": "Organization deleted",
-  "org.restored": "Organization restored",
-  "org.purged": "Organization permanently deleted",
-  "org.invite.created": "Invitation created",
-  "org.invite.accepted": "Invitation accepted",
-  "org.invite.declined": "Invitation declined",
-  "org.invite.cancelled": "Invitation cancelled",
-  "org.invite.resent": "Invitation renewed",
-  "org.member.role_changed": "Member role changed",
-  "org.logo.updated": "Logo updated",
-  "org.logo.removed": "Logo removed",
-  "org.router_models.updated": "Models updated",
-  "org.departure.item.transferred": "Departed work transferred",
-  "org.departure.item.archived": "Departed work archived",
-  "org.departure.item.recovered": "Departed work recovered",
-  "org.departure.item.deleted": "Departed work deleted",
-  "org.departure.item.expired": "Departed work expired",
-  "org.departure.member.departed": "Member departed",
-  "org.member.removed": "Member removed",
-  "org.member.left": "Member left",
-  "org.data.deleted": "Organization data deleted",
-  "chat.message": "Chat",
-  "document.uploaded": "Document upload",
-  "document.generated": "Generated document",
-  "document.edited": "Document edit",
-  "workflow.applied": "Workflow",
-  "tabular.created": "Tabular review",
-  "tabular.generated": "Tabular run",
-  "export.chats": "Chat export",
-  "export.account": "Account export",
-  "export.tabular": "Review export",
-};
 
 const STATUS_DOT_STYLES: Record<string, string> = {
   completed: "bg-green-400/80",
@@ -99,24 +96,8 @@ const STATUS_DOT_STYLES: Record<string, string> = {
   failed: "bg-red-400/80",
 };
 
-const STATUS_TEXT_STYLES: Record<string, string> = {
-  completed: "text-green-600",
-  cancelled: "text-amber-600",
-  failed: "text-red-600",
-};
-
 const GLASS_DOT =
   "h-2.5 w-2.5 shrink-0 rounded-full border border-white/80 shadow-[0_1px_2px_rgba(15,23,42,0.08),inset_0_1px_1px_rgba(255,255,255,0.55)]";
-
-const SURFACE_LABELS: Record<string, string> = {
-  assistant: "Assistant",
-  project: "Project",
-  word: "Word",
-  tabular: "Tabular",
-  workflows: "Workflows",
-  account: "Account",
-  organization: "Organization",
-};
 
 const STATUS_OPTIONS = [
   { value: "completed", label: "Completed" },
@@ -130,40 +111,62 @@ const ACTION_OPTIONS = Object.entries(ACTION_LABELS).map(([value, label]) => ({
 }));
 
 const SURFACE_OPTIONS = Object.entries(SURFACE_LABELS).map(
-  ([value, label]) => ({ value, label }),
+  ([value, label]) => ({ value, label, icon: HISTORY_APPLICATION_ICONS[value] }),
 );
 
-type AuditSortKey = "created_at" | "user_email" | "title" | "model";
+type AuditSortKey = "created_at" | "title";
 
-function eventHref(event: AuditEvent): string | null {
-  if (event.chat_id) {
-    return event.project_id
-      ? `/projects/${event.project_id}/assistant/chat/${event.chat_id}`
-      : `/assistant/chat/${event.chat_id}`;
-  }
-  if (event.review_id) return `/tabular-reviews/${event.review_id}`;
-  if (event.project_id) return `/projects/${event.project_id}`;
-  return null;
-}
+type HistoryDateRange = { from: string; to: string };
 
-function localDateValue(date: Date): string {
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
-}
+const DATE_RANGE_PRESETS = [
+  { value: "today", label: "Today" },
+  { value: "last7", label: "Last 7 days" },
+  { value: "last30", label: "Last 30 days" },
+  { value: "thisMonth", label: "This month" },
+  { value: "lastMonth", label: "Last month" },
+  { value: "custom", label: "Custom range" },
+] as const;
 
-function dateFromLocalValue(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
+type HistoryDatePreset = (typeof DATE_RANGE_PRESETS)[number]["value"];
 
-function defaultDateRange(): {
-  from: string;
-  to: string;
-} {
-  const end = new Date();
+function presetDateRange(
+  preset: Exclude<HistoryDatePreset, "custom">,
+): HistoryDateRange {
+  let end = new Date();
   const start = new Date(end);
-  start.setDate(end.getDate() - 30);
+  if (preset === "last7" || preset === "last30") {
+    // Both endpoints are inclusive: today plus the preceding 6 or 29 days.
+    start.setDate(end.getDate() - (preset === "last7" ? 6 : 29));
+  } else if (preset === "thisMonth" || preset === "lastMonth") {
+    start.setDate(1);
+    if (preset === "lastMonth") {
+      start.setMonth(start.getMonth() - 1);
+      end = new Date(end.getFullYear(), end.getMonth(), 0);
+    }
+  }
   return { from: localDateValue(start), to: localDateValue(end) };
+}
+
+function matchingDatePreset(range: HistoryDateRange): HistoryDatePreset {
+  return (
+    DATE_RANGE_PRESETS.find(({ value }) => {
+      if (value === "custom") return false;
+      const preset = presetDateRange(value);
+      return range.from === preset.from && range.to === preset.to;
+    })?.value ?? "custom"
+  );
+}
+
+function dateRangeError(range: HistoryDateRange): string | null {
+  if (!range.from || !range.to) return "Choose a start and end date.";
+  if (!parseHistoryDate(range.from) || !parseHistoryDate(range.to)) {
+    return "Enter a valid date in YYYY-MM-DD format.";
+  }
+  if (range.from > range.to) return "End date must be on or after start date.";
+  if (range.to > localDateValue(new Date())) {
+    return "Dates cannot be in the future.";
+  }
+  return null;
 }
 
 function formatRangeDate(value: string): string {
@@ -172,13 +175,6 @@ function formatRangeDate(value: string): string {
     day: "numeric",
     month: "short",
     year: "numeric",
-  });
-}
-
-function formatCreatedAt(value: string): string {
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
   });
 }
 
@@ -195,7 +191,7 @@ export function AuditHistory({
   orgId?: string;
   onBack?: () => void;
 }) {
-  const title = orgId ? "Audit log" : "History";
+  const title = orgId ? "Audit log" : "My Activity";
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(1);
@@ -205,7 +201,12 @@ export function AuditHistory({
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportError, setExportError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const exportingRef = useRef(false);
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
+  const [previewDocument, setPreviewDocument] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [username, setUsername] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [action, setAction] = useState<string | null>(null);
@@ -215,7 +216,9 @@ export function AuditHistory({
     key: AuditSortKey;
     direction: TableSortDirection;
   } | null>(null);
-  const [{ from, to }, setDateRange] = useState(defaultDateRange);
+  const [{ from, to }, setDateRange] = useState(() =>
+    presetDateRange("last30"),
+  );
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -236,6 +239,8 @@ export function AuditHistory({
       setLoadingMore(append);
       setLoading(!append);
       if (!append) {
+        closeRowActionMenus();
+        setSelectedIds(new Set());
         setEvents([]);
         setHasMore(false);
         setPage(1);
@@ -244,6 +249,7 @@ export function AuditHistory({
         const out = await getAuditHistory(
           {
             ...(orgId ? { orgId } : {}),
+            username: orgId && username ? username : undefined,
             q: debouncedSearch || undefined,
             action: action || undefined,
             status: status || undefined,
@@ -280,7 +286,7 @@ export function AuditHistory({
         }
       }
     },
-    [orgId, action, debouncedSearch, from, sort, status, surface, to],
+    [orgId, username, action, debouncedSearch, from, sort, status, surface, to],
   );
 
   useEffect(() => {
@@ -290,32 +296,47 @@ export function AuditHistory({
 
   // The CSV is built by a background job rather than in the request: a wide
   // filter can sweep thousands of events, and the artifact outlives the tab.
-  const handleExport = async (range: { from: string; to: string }) => {
-    if (exporting) return;
+  const handleExport = async (range: HistoryDateRange, eventIds?: string[]) => {
+    if (exportingRef.current) return;
+    if (eventIds && eventIds.length > 2000) {
+      setActionError("Select up to 2,000 entries to export at once.");
+      return;
+    }
+    exportingRef.current = true;
     setExporting(true);
     setExportError(false);
+    setActionError(null);
     try {
       const { blob, filename } = await runUserExport("audit-csv", {
         ...(orgId ? { org_id: orgId } : {}),
-        q: search.trim() || undefined,
-        action: action || undefined,
-        status: status || undefined,
-        surface: surface || undefined,
-        from: range.from,
-        to: range.to,
+        ...(eventIds
+          ? { event_ids: eventIds }
+          : {
+              username: orgId && username ? username : undefined,
+              q: search.trim() || undefined,
+              action: action || undefined,
+              status: status || undefined,
+              surface: surface || undefined,
+              from: range.from,
+              to: range.to,
+            }),
         sort_by: sort?.key,
         sort_dir: sort?.direction,
       });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = filename ?? "history-export.csv";
+      anchor.download =
+        filename ?? (orgId ? "organization-audit.csv" : "my-activity.csv");
       anchor.click();
       URL.revokeObjectURL(url);
-      setExportOpen(false);
+      if (!eventIds) setExportOpen(false);
     } catch {
-      setExportError(true);
+      if (eventIds)
+        setActionError("Your export could not be created. Please try again.");
+      else setExportError(true);
     } finally {
+      exportingRef.current = false;
       setExporting(false);
     }
   };
@@ -339,24 +360,122 @@ export function AuditHistory({
   );
 
   const initialLoading = loading && events.length === 0;
+  const selectedEvents = events.filter((event) => selectedIds.has(event.id));
+  const allSelected =
+    events.length > 0 && selectedEvents.length === events.length;
+  const toggleSelection = (id: string) =>
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  // Selected rows share their actions across the toolbar, ellipsis, and
+  // right-click menus. An unselected row acts only on that entry.
+  const renderActions = (
+    targets: AuditEvent[],
+    selection: boolean,
+    close: () => void,
+  ) => {
+    const single = targets.length === 1 ? targets[0] : null;
+    const privateAccess = single && orgId ? auditPrivateAccess(single) : null;
+    const destination = single && !privateAccess ? auditDestination(single) : null;
+    return (
+      <>
+        {selection && (
+          <DropdownItem
+            onSelect={() => {
+              close();
+              setSelectedIds(new Set());
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+            Deselect rows
+          </DropdownItem>
+        )}
+        {single && (
+          <DropdownItem
+            onSelect={() => {
+              close();
+              setPreviewDocument(false);
+              setSelectedEvent(single);
+            }}
+          >
+            <Eye className="h-3.5 w-3.5" />
+            View details
+          </DropdownItem>
+        )}
+        {single?.document_id && !privateAccess && (
+          <DropdownItem
+            onSelect={() => {
+              close();
+              setPreviewDocument(true);
+              setSelectedEvent(single);
+            }}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open document
+          </DropdownItem>
+        )}
+        {destination && (
+          <DropdownItem asChild onSelect={close}>
+            <Link href={destination.href}>
+              <ExternalLink className="h-3.5 w-3.5" />
+              {destination.label}
+            </Link>
+          </DropdownItem>
+        )}
+        <DropdownItem
+          disabled={exporting}
+          onSelect={() => {
+            close();
+            void handleExport(
+              { from, to },
+              targets.map((event) => event.id),
+            );
+          }}
+        >
+          {exporting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          {selection ? "Export selected" : "Export this entry"}
+        </DropdownItem>
+      </>
+    );
+  };
+  const createdHeader = (
+    <>
+      <span className="mr-1">Date &amp; time</span>
+      {!initialLoading && (
+        <TableSortFilter
+          label="Sort by date and time"
+          value={sortValue("created_at")}
+          onChange={(direction) => setSortDirection("created_at", direction)}
+          widthClassName="w-52"
+        />
+      )}
+    </>
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <PageHeader
-        breadcrumbs={
-          orgId
-            ? [
-                { label: "Organization Settings", onClick: onBack },
-                { label: "Audit log" },
-              ]
-            : undefined
-        }
+        shrink
+        breadcrumbs={[
+          {
+            label: orgId ? "Organization Settings" : "Settings",
+            onClick: onBack,
+          },
+          { label: title },
+        ]}
         actions={[
           {
             type: "search",
             value: search,
             onChange: setSearch,
-            placeholder: orgId ? "Search audit log…" : "Search history…",
+            placeholder: orgId ? "Search audit log…" : "Search my activity…",
           },
           {
             type: "custom",
@@ -386,107 +505,113 @@ export function AuditHistory({
             ),
           },
         ]}
-      >
-        <h1 className={`${PAGE_HEADER_TITLE_CLASS} text-gray-900`}>{title}</h1>
-      </PageHeader>
+      />
 
-      <TableToolbar leading={dateSelector} />
+      <TableToolbar
+        leading={dateSelector}
+        actions={
+          selectedEvents.length > 0 && (
+            <SelectionActionsMenu
+              renderItems={(close) =>
+                renderActions(selectedEvents, true, close)
+              }
+            />
+          )
+        }
+      />
 
       <TableScrollArea
         header={
           <TableHeaderRow>
             <TableStickyCell header widthClassName="w-52 shrink-0">
-              <span>Username</span>
+              <input
+                type="checkbox"
+                className={TABLE_CHECKBOX_CLASS}
+                aria-label="Select all loaded entries"
+                checked={allSelected}
+                disabled={!events.length}
+                ref={(input) => {
+                  if (input)
+                    input.indeterminate =
+                      selectedEvents.length > 0 && !allSelected;
+                }}
+                onChange={() =>
+                  setSelectedIds(
+                    allSelected
+                      ? new Set()
+                      : new Set(events.map((event) => event.id)),
+                  )
+                }
+              />
+              {createdHeader}
             </TableStickyCell>
-            <TableHeaderCell className="ml-auto w-52">
-              <span className="mr-1">Email</span>
+            {orgId && (
+              <TableHeaderCell className="w-48 pr-4">
+                <span className="mr-1">Performed by</span>
+                {!initialLoading && (
+                  <HistoryUsernameFilter
+                    value={username}
+                    onChange={setUsername}
+                  />
+                )}
+              </TableHeaderCell>
+            )}
+            <TableHeaderCell className="w-48 pr-4">
+              <span className="mr-1">Action</span>
               {!initialLoading && (
-                <TableSortFilter
-                  label="Sort by email"
-                  value={sortValue("user_email")}
-                  align="right"
-                  onChange={(direction) =>
-                    setSortDirection("user_email", direction)
-                  }
+                <TableFilters
+                  label="Filter by action"
+                  value={action}
+                  allLabel="All actions"
+                  options={ACTION_OPTIONS}
+                  onChange={setAction}
+                  contentClassName="max-h-[min(20rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto"
                 />
               )}
             </TableHeaderCell>
-            <TableHeaderCell className="w-40">
-              <span className="mr-1">Created</span>
+            <TableHeaderCell className="w-64 pr-6">
+              <span className="mr-1">Affected</span>
               {!initialLoading && (
                 <TableSortFilter
-                  label="Sort by created date"
-                  value={sortValue("created_at")}
-                  onChange={(direction) =>
-                    setSortDirection("created_at", direction)
-                  }
-                  widthClassName="w-52"
-                />
-              )}
-            </TableHeaderCell>
-            <TableHeaderCell className="w-72">
-              <span className="mr-1">Title</span>
-              {!initialLoading && (
-                <TableSortFilter
-                  label="Sort by title"
+                  label="Sort by affected"
                   value={sortValue("title")}
                   onChange={(direction) => setSortDirection("title", direction)}
                   widthClassName="w-52"
                 />
               )}
             </TableHeaderCell>
-            <TableHeaderCell className="w-28">
-              <span className="mr-1">Status</span>
-              {!initialLoading && (
-                <TableFilters
-                  label="Filter by status"
-                  value={status}
-                  allLabel="All Statuses"
-                  options={STATUS_OPTIONS}
-                  onChange={setStatus}
-                />
-              )}
-            </TableHeaderCell>
-            <TableHeaderCell className="w-44">
-              <span className="mr-1">Type</span>
-              {!initialLoading && (
-                <TableFilters
-                  label="Filter by type"
-                  value={action}
-                  allLabel="All Types"
-                  options={ACTION_OPTIONS}
-                  onChange={setAction}
-                />
-              )}
-            </TableHeaderCell>
-            <TableHeaderCell className="w-32">
+            <TableHeaderCell className="w-32 pr-4">
               <span className="mr-1">Application</span>
               {!initialLoading && (
                 <TableFilters
                   label="Filter by application"
                   value={surface}
-                  allLabel="All Applications"
+                  allLabel="All applications"
                   options={SURFACE_OPTIONS}
                   onChange={setSurface}
                 />
               )}
             </TableHeaderCell>
-            <TableHeaderCell className="w-28">
-              <span className="mr-1">Model</span>
+            <TableHeaderCell className="ml-auto w-28">
+              <span className="mr-1">Status</span>
               {!initialLoading && (
-                <TableSortFilter
-                  label="Sort by model"
-                  value={sortValue("model")}
-                  onChange={(direction) => setSortDirection("model", direction)}
-                  widthClassName="w-52"
+                <TableFilters
+                  label="Filter by status"
+                  value={status}
+                  allLabel="All statuses"
+                  options={STATUS_OPTIONS}
+                  onChange={setStatus}
                 />
               )}
+            </TableHeaderCell>
+            <TableHeaderCell className="w-10">
+              <span className="sr-only">Actions</span>
             </TableHeaderCell>
           </TableHeaderRow>
         }
       >
         {initialLoading ? (
-          <HistoryLoadingRows />
+          <HistoryLoadingRows organization={Boolean(orgId)} />
         ) : error && events.length === 0 ? (
           <TableBody className="flex">
             <TableEmptyState>
@@ -513,7 +638,7 @@ export function AuditHistory({
                 className="mb-4 h-14 w-14"
               />
               <p className="font-serif text-2xl font-medium text-gray-900">
-                {orgId ? "No audit events yet" : "No history yet"}
+                {orgId ? "No audit events yet" : "No activity yet"}
               </p>
               <p className="mt-1 text-xs text-gray-400">
                 Actions appear here as you use the app.
@@ -523,46 +648,98 @@ export function AuditHistory({
         ) : (
           <TableBody>
             {events.map((event) => {
+              const selected = selectedIds.has(event.id);
+              const subject = auditSubject(event);
+              const actor = auditActor(event);
+              const rowActions = (close: () => void) =>
+                renderActions(
+                  selected ? selectedEvents : [event],
+                  selected,
+                  close,
+                );
               return (
                 <TableRow
                   key={event.id}
+                  selected={selected}
+                  rightClickDropdown={rowActions}
                   role="button"
                   tabIndex={0}
                   aria-haspopup="dialog"
-                  aria-label={`View details for ${event.title ?? ACTION_LABELS[event.action] ?? event.action}`}
-                  className="h-auto min-h-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
+                  aria-label={`View details for ${event.title ?? auditAction(event)}`}
+                  className="h-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
                   onClick={(click) => {
                     click.currentTarget.focus();
+                    setPreviewDocument(false);
                     setSelectedEvent(event);
                   }}
                   onKeyDown={(key) => {
+                    if (key.target !== key.currentTarget) return;
                     if (key.key === "Enter" || key.key === " ") {
                       key.preventDefault();
+                      setPreviewDocument(false);
                       setSelectedEvent(event);
                     }
                   }}
                 >
-                  <TableStickyCell
+                  <TablePrimaryCell
                     widthClassName="w-52 shrink-0"
                     className="items-center"
+                    selected={selected}
+                    onSelectionChange={() => toggleSelection(event.id)}
+                    checkboxTitle={`Select ${event.title ?? auditAction(event)}`}
                   >
-                    <span className="min-w-0 text-xs text-gray-700 [overflow-wrap:anywhere]">
-                      {event.user_display_name ?? "—"}
-                    </span>
-                  </TableStickyCell>
-                  <TableCell className="ml-auto w-52 overflow-visible whitespace-normal py-2 pr-4 text-xs [overflow-wrap:anywhere]">
-                    {event.user_email ?? "—"}
-                  </TableCell>
-                  <TableCell className="w-40 text-xs">
-                    {formatCreatedAt(event.created_at)}
-                  </TableCell>
-                  <TableCell className="w-72 pr-6 text-xs text-gray-800">
-                    {event.title ?? "—"}
-                  </TableCell>
-                  <TableCell className="w-28 text-xs">
-                    <span
-                      className={`inline-flex items-center gap-2 ${STATUS_TEXT_STYLES[event.status] ?? "text-gray-500"}`}
+                    <time
+                      dateTime={event.created_at}
+                      title={auditTimestamp(event.created_at, true)}
+                      className="whitespace-nowrap text-xs text-gray-700"
                     >
+                      {auditTimestamp(event.created_at)}
+                    </time>
+                  </TablePrimaryCell>
+                  {orgId && (
+                    <TableCell
+                      className="w-48 pr-4 text-xs text-gray-700"
+                      title={[
+                        actor,
+                        event.user_email !== actor ? event.user_email : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    >
+                      {actor}
+                    </TableCell>
+                  )}
+                  <TableCell
+                    className="w-48 pr-4 text-xs text-gray-700"
+                    title={auditAction(event)}
+                  >
+                    {auditAction(event)}
+                  </TableCell>
+                  <TableCell
+                    className="w-64 pr-6 text-xs text-gray-800"
+                    title={`${subject.type}: ${subject.name}`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      {subject.name !== "-" && (
+                        <HistorySubjectIcon event={event} />
+                      )}
+                      <span className="truncate">{subject.name}</span>
+                    </span>
+                  </TableCell>
+                  <TableCell className="w-32 pr-4 text-xs text-gray-700">
+                    {event.surface ? (
+                      <span className="flex min-w-0 items-center gap-2">
+                        <HistoryApplicationIcon surface={event.surface} />
+                        <span className="truncate">
+                          {SURFACE_LABELS[event.surface] ?? event.surface}
+                        </span>
+                      </span>
+                    ) : (
+                      "-"
+                    )}
+                  </TableCell>
+                  <TableCell className="ml-auto w-28 text-xs text-gray-700">
+                    <span className="inline-flex items-center gap-2">
                       <span
                         aria-hidden="true"
                         data-testid={`status-dot-${event.id}`}
@@ -571,16 +748,11 @@ export function AuditHistory({
                       {formatStatus(event.status)}
                     </span>
                   </TableCell>
-                  <TableCell className="w-44 text-xs text-gray-700">
-                    {ACTION_LABELS[event.action] ?? event.action}
-                  </TableCell>
-                  <TableCell className="w-32 text-xs">
-                    {event.surface
-                      ? (SURFACE_LABELS[event.surface] ?? event.surface)
-                      : "—"}
-                  </TableCell>
-                  <TableCell className="w-28 pr-4 text-xs">
-                    {event.model ?? "—"}
+                  <TableCell className="w-10">
+                    <RowActions
+                      ariaLabel={`Actions for ${event.title ?? auditAction(event)}`}
+                      renderItems={rowActions}
+                    />
                   </TableCell>
                 </TableRow>
               );
@@ -597,10 +769,20 @@ export function AuditHistory({
           </TableBody>
         )}
       </TableScrollArea>
+      <WarningPopup
+        open={Boolean(actionError)}
+        title="Export unavailable"
+        message={actionError}
+        onClose={() => setActionError(null)}
+      />
       {selectedEvent && (
         <HistoryEventModal
+          key={selectedEvent.id}
           title={title}
+          personal={!orgId}
+          initialPreview={previewDocument}
           event={selectedEvent}
+          onAccessChange={() => void load(1, false)}
           onClose={() => setSelectedEvent(null)}
         />
       )}
@@ -619,94 +801,78 @@ export function AuditHistory({
   );
 }
 
-function HistoryEventModal({
-  title,
-  event,
-  onClose,
+function HistoryUsernameFilter({
+  value,
+  onChange,
 }: {
-  title: string;
-  event: AuditEvent;
-  onClose: () => void;
+  value: string;
+  onChange: (value: string) => void;
 }) {
-  const href = eventHref(event);
-  const fields = [
-    ["Username", event.user_display_name ?? "—"],
-    ["Email", event.user_email ?? "—"],
-    ["Created", formatCreatedAt(event.created_at)],
-    ["Status", formatStatus(event.status)],
-    ["Type", ACTION_LABELS[event.action] ?? event.action],
-    [
-      "Application",
-      event.surface ? (SURFACE_LABELS[event.surface] ?? event.surface) : "—",
-    ],
-    ["Model", event.model ?? "—"],
-  ];
-  const details = Object.entries(event.detail ?? {});
-
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputId = useId();
   return (
-    <Modal
-      open
-      onClose={onClose}
-      size="md"
-      className="h-auto max-h-[calc(100dvh-2rem)]"
-      breadcrumbs={[title, "Event details"]}
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) setDraft(value);
+      }}
     >
-      <div
-        data-modal-scroll="vertical"
-        className="min-h-0 overflow-y-auto pb-5"
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Filter by person"
+          aria-pressed={Boolean(value)}
+          title={value ? `Name or email contains ${value}` : "Filter by person"}
+          className={textButtonUIClassName({
+            className: `h-[18px] w-[22px] p-0 ${value ? "text-blue-600" : "text-gray-400"}`,
+          })}
+        >
+          <ChevronDown className="h-3 w-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        aria-label="Filter by person"
+        className="w-64 border-0 bg-transparent p-0 shadow-none"
       >
-        <h2 className="mb-5 font-serif text-2xl text-gray-900 [overflow-wrap:anywhere]">
-          {event.title ?? ACTION_LABELS[event.action] ?? event.action}
-        </h2>
-        <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {fields.map(([label, value]) => (
-            <div key={label} className="min-w-0">
-              <dt className="mb-1 text-xs text-gray-500">{label}</dt>
-              <dd className="whitespace-pre-wrap text-sm text-gray-800 [overflow-wrap:anywhere]">
-                {value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-        {details.length > 0 && (
-          <section className="mt-5" aria-label="Additional details">
-            <h3 className="mb-3 text-sm font-medium text-gray-800">
-              Additional details
-            </h3>
-            <dl className="space-y-3">
-              {details.map(([key, value]) => (
-                <div key={key} className="min-w-0">
-                  <dt className="mb-1 text-xs text-gray-500 [overflow-wrap:anywhere]">
-                    {formatStatus(key)}
-                  </dt>
-                  <dd className="whitespace-pre-wrap text-sm text-gray-800 [overflow-wrap:anywhere]">
-                    {value == null
-                      ? "—"
-                      : typeof value === "boolean"
-                        ? value
-                          ? "Yes"
-                          : "No"
-                        : typeof value === "object"
-                          ? JSON.stringify(value, null, 2)
-                          : String(value)}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        )}
-        {href && (
-          <Link
-            href={href}
-            className={textButtonUIClassName({ className: "mt-5 px-0" })}
+        <DropdownSurface className="p-3">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              onChange(draft.trim());
+              setOpen(false);
+            }}
           >
-            Open{" "}
-            {event.chat_id ? "chat" : event.review_id ? "review" : "project"}
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Link>
-        )}
-      </div>
-    </Modal>
+            <FieldLabel htmlFor={inputId}>Name or email contains</FieldLabel>
+            <FormTextInput
+              id={inputId}
+              value={draft}
+              maxLength={200}
+              autoComplete="off"
+              placeholder="Enter a name or email"
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <PillButtonUI
+                type="button"
+                tone="white"
+                onClick={() => {
+                  onChange("");
+                  setOpen(false);
+                }}
+              >
+                Clear
+              </PillButtonUI>
+              <PillButtonUI type="submit" tone="black">
+                Apply
+              </PillButtonUI>
+            </div>
+          </form>
+        </DropdownSurface>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -728,8 +894,7 @@ function HistoryExportModal({
   onExport: (range: { from: string; to: string }) => void;
 }) {
   const [range, setRange] = useState({ from, to });
-  const validRange =
-    range.from <= range.to && range.to <= localDateValue(new Date());
+  const validRange = !dateRangeError(range);
 
   return (
     <Modal
@@ -739,7 +904,7 @@ function HistoryExportModal({
       className="h-auto max-h-[calc(100dvh-2rem)]"
       breadcrumbs={[
         title,
-        title === "History" ? "Export history" : "Export audit log",
+        title === "My Activity" ? "Export My Activity" : "Export audit log",
       ]}
       cancelAction={{ label: "Cancel", onClick: onClose }}
       primaryAction={{
@@ -758,20 +923,18 @@ function HistoryExportModal({
         className="min-h-0 overflow-y-auto pb-5"
       >
         <p className="mb-4 text-sm text-gray-500">
-          Choose the period to export. Your current search and filters will
-          apply. Exports include up to 2,000 events; narrow the period for
-          larger logs.
+          Current search and filters apply. Up to 2,000 events per export.
         </p>
         <fieldset disabled={exporting}>
-          <HistoryDateRangeFields range={range} onChange={setRange} />
+          <HistoryDateRangeFields
+            range={range}
+            onChange={setRange}
+            disabled={exporting}
+          />
         </fieldset>
-        <p className="mt-4 text-xs text-gray-500">
-          {formatRangeDate(range.from)} – {formatRangeDate(range.to)}{" "}
-          (inclusive)
-        </p>
         {error && (
           <p role="alert" className="mt-3 text-sm text-red-600">
-            Your history could not be exported. Please try again.
+            Your activity could not be exported. Please try again.
           </p>
         )}
       </div>
@@ -782,29 +945,76 @@ function HistoryExportModal({
 function HistoryDateRangeFields({
   range,
   onChange,
+  disabled = false,
+  onPresetSelect,
+  customAction,
 }: {
-  range: { from: string; to: string };
-  onChange: (range: { from: string; to: string }) => void;
+  range: HistoryDateRange;
+  onChange: (range: HistoryDateRange) => void;
+  disabled?: boolean;
+  onPresetSelect?: (range: HistoryDateRange) => void;
+  customAction?: ReactNode;
 }) {
+  const id = useId();
+  const [preset, setPreset] = useState(() => matchingDatePreset(range));
+  const error = dateRangeError(range);
+  const today = localDateValue(new Date());
+
   return (
-    <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-[14rem_14rem]">
-      <HistoryDatePicker
-        label="Start date"
-        testId="start-date-picker"
-        selected={dateFromLocalValue(range.from)}
-        disabled={{ after: dateFromLocalValue(range.to) }}
-        onSelect={(date) => onChange({ ...range, from: localDateValue(date) })}
-      />
-      <HistoryDatePicker
-        label="End date"
-        testId="end-date-picker"
-        selected={dateFromLocalValue(range.to)}
-        disabled={[
-          { before: dateFromLocalValue(range.from) },
-          { after: new Date() },
-        ]}
-        onSelect={(date) => onChange({ ...range, to: localDateValue(date) })}
-      />
+    <div className="space-y-3 [&_label]:mb-1.5 [&_label]:text-xs">
+      <div>
+        <FieldLabel htmlFor={`${id}-preset`}>Date range</FieldLabel>
+        <ModalSelect
+          variant="flat"
+          className="h-8 rounded-lg px-2.5 text-xs"
+          id={`${id}-preset`}
+          aria-label={`Date range: ${DATE_RANGE_PRESETS.find(({ value }) => value === preset)?.label}`}
+          value={preset}
+          options={DATE_RANGE_PRESETS}
+          disabled={disabled}
+          onChange={(value) => {
+            const selected = DATE_RANGE_PRESETS.find(
+              (option) => option.value === value,
+            );
+            if (!selected) return;
+            setPreset(selected.value);
+            if (selected.value !== "custom") {
+              const nextRange = presetDateRange(selected.value);
+              onChange(nextRange);
+              onPresetSelect?.(nextRange);
+            }
+          }}
+        />
+      </div>
+      {preset === "custom" && (
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-3">
+          <HistoryDatePicker
+            id={`${id}-from`}
+            label="From"
+            disabled={disabled}
+            value={range.from}
+            max={range.to && range.to < today ? range.to : today}
+            errorId={error ? `${id}-error` : undefined}
+            onChange={(from) => onChange({ ...range, from })}
+          />
+          <HistoryDatePicker
+            id={`${id}-to`}
+            label="To"
+            disabled={disabled}
+            value={range.to}
+            min={range.from || undefined}
+            max={today}
+            errorId={error ? `${id}-error` : undefined}
+            onChange={(to) => onChange({ ...range, to })}
+          />
+        </div>
+      )}
+      {error && (
+        <p id={`${id}-error`} role="alert" className="text-xs text-red-600">
+          {error}
+        </p>
+      )}
+      {preset === "custom" && customAction}
     </div>
   );
 }
@@ -828,152 +1038,95 @@ function DateRangeDropdown({
   };
 
   const handleConfirm = () => {
-    if (!hasChanges) return;
+    if (!hasChanges || dateRangeError(draftRange)) return;
     onChange(draftRange);
     setOpen(false);
   };
 
   return (
-    <Dropdown open={open} onOpenChange={handleOpenChange}>
-      <DropdownTrigger asChild>
-        <TabPillButtonUI active aria-label="Select date range">
-          <CalendarDays className="h-3.5 w-3.5" />
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <TabPillButtonUI
+          active
+          data-icon-position="right"
+          className="pl-2.5 pr-2"
+          aria-label={`Select date range: ${formatRangeDate(from)} – ${formatRangeDate(to)}`}
+        >
+          <CalendarDays aria-hidden="true" className="h-3.5 w-3.5" />
           {formatRangeDate(from)} – {formatRangeDate(to)}
+          <ChevronDown
+            aria-hidden="true"
+            className={`h-3.5 w-3.5 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}
+          />
         </TabPillButtonUI>
-      </DropdownTrigger>
-      <DropdownContent
+      </PopoverTrigger>
+      <PopoverContent
+        asChild
         align="start"
-        className="w-auto p-3"
-        onKeyDown={(event) => event.stopPropagation()}
+        aria-label="Filter by date range"
+        collisionPadding={16}
+        className="w-80 max-w-[calc(100vw-2rem)] rounded-2xl"
       >
-        <HistoryDateRangeFields range={draftRange} onChange={setDraftRange} />
-        <div className="flex justify-end pt-3">
-          <PillButtonUI
-            tone="black"
-            disabled={!hasChanges}
-            onClick={handleConfirm}
-          >
-            Confirm
-          </PillButtonUI>
-        </div>
-      </DropdownContent>
-    </Dropdown>
+        <DropdownSurface>
+          <HistoryDateRangeFields
+            range={draftRange}
+            onChange={setDraftRange}
+            onPresetSelect={(range) => {
+              onChange(range);
+              setOpen(false);
+            }}
+            customAction={
+              <div className="flex justify-end">
+                <PillButtonUI
+                  tone="black"
+                  disabled={!hasChanges || Boolean(dateRangeError(draftRange))}
+                  onClick={handleConfirm}
+                >
+                  Apply
+                </PillButtonUI>
+              </div>
+            }
+          />
+        </DropdownSurface>
+      </PopoverContent>
+    </Popover>
   );
 }
 
-function HistoryDatePicker({
-  label,
-  testId,
-  selected,
-  disabled,
-  onSelect,
-}: {
-  label: string;
-  testId: string;
-  selected: Date;
-  disabled: Matcher | Matcher[];
-  onSelect: (date: Date) => void;
-}) {
-  return (
-    <section data-testid={testId} aria-label={label} className="w-56 min-w-0">
-      <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-gray-400">
-        {label}
-      </p>
-      <DayPicker
-        mode="single"
-        required
-        selected={selected}
-        onSelect={onSelect}
-        defaultMonth={selected}
-        endMonth={new Date()}
-        disabled={disabled}
-        showOutsideDays
-        style={HISTORY_DATE_PICKER_STYLE}
-        classNames={HISTORY_DATE_PICKER_CLASS_NAMES}
-      />
-    </section>
-  );
-}
-
-const HISTORY_DATE_PICKER_STYLE = {
-  "--rdp-accent-color": "#111827",
-  "--rdp-accent-background-color": "#e5e7eb",
-  "--rdp-day-height": "2rem",
-  "--rdp-day-width": "2rem",
-  "--rdp-day_button-height": "1.75rem",
-  "--rdp-day_button-width": "1.75rem",
-  "--rdp-day_button-border": "0 solid transparent",
-  "--rdp-selected-border": "0 solid transparent",
-  "--rdp-nav-height": "2rem",
-  "--rdp-nav_button-height": "2rem",
-  "--rdp-nav_button-width": "2rem",
-  "--rdp-outside-opacity": "0.35",
-} as CSSProperties;
-
-const HISTORY_DATE_PICKER_CLASS_NAMES = {
-  ...dayPickerStyles,
-  root: cn(dayPickerStyles.root, "m-0 w-56 text-xs text-gray-700"),
-  caption_label: cn(
-    dayPickerStyles.caption_label,
-    "!text-xs !font-semibold text-gray-800",
-  ),
-  month: "w-56",
-  month_grid: cn(dayPickerStyles.month_grid, "w-56 table-fixed"),
-  button_previous: cn(
-    dayPickerStyles.button_previous,
-    "rounded-full text-gray-500 hover:bg-white/70 hover:text-gray-900",
-  ),
-  button_next: cn(
-    dayPickerStyles.button_next,
-    "rounded-full text-gray-500 hover:bg-white/70 hover:text-gray-900",
-  ),
-  chevron: cn(dayPickerStyles.chevron, "h-3.5 w-3.5 fill-gray-500"),
-  weekday: cn(
-    dayPickerStyles.weekday,
-    "!p-0 !text-[10px] !font-medium text-gray-400",
-  ),
-  day_button: cn(
-    dayPickerStyles.day_button,
-    "text-xs font-normal hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500/40",
-  ),
-  selected: cn(
-    dayPickerStyles.selected,
-    "!text-xs !font-medium [&>button]:!bg-gray-200 [&>button]:!text-gray-900",
-  ),
-  today: cn(dayPickerStyles.today, "font-semibold text-gray-900"),
-};
-
-function HistoryLoadingRows() {
+function HistoryLoadingRows({ organization }: { organization: boolean }) {
   return (
     <TableBody>
       {[1, 2, 3, 4, 5].map((row) => (
-        <TableRow key={row} interactive={false} className="h-auto min-h-10">
+        <TableRow key={row} interactive={false} className="h-10">
           <TableStickyCell
             widthClassName="w-52 shrink-0"
             className="items-center"
           >
+            <SkeletonCheckbox className="mr-3" />
             <SkeletonLine className="w-32" />
           </TableStickyCell>
-          <TableCell className="ml-auto w-52">
+          {organization && (
+            <TableCell className="w-48 pr-4">
+              <SkeletonLine className="w-28" />
+            </TableCell>
+          )}
+          <TableCell className="w-48 pr-4">
             <SkeletonLine className="w-36" />
           </TableCell>
-          <TableCell className="w-40">
-            <SkeletonLine className="w-24" />
-          </TableCell>
-          <TableCell className="w-72">
+          <TableCell className="w-64 pr-6">
             <SkeletonLine className="w-44" />
           </TableCell>
-          <TableCell className="w-28">
+          <TableCell className="w-32 pr-4">
+            <span className="flex items-center gap-2">
+              <SkeletonLine className="h-4 w-4 shrink-0" />
+              <SkeletonLine className="w-16" />
+            </span>
+          </TableCell>
+          <TableCell className="ml-auto w-28">
             <SkeletonLine className="w-16" />
           </TableCell>
-          <TableCell className="w-44">
-            <SkeletonLine className="w-24" />
-          </TableCell>
-          <TableCell className="w-32">
-            <SkeletonLine className="w-20" />
-          </TableCell>
-          <TableCell className="w-28 pr-4">
-            <SkeletonLine className="w-24" />
+          <TableCell className="w-10">
+            <SkeletonLine className="w-6" />
           </TableCell>
         </TableRow>
       ))}

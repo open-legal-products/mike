@@ -244,6 +244,7 @@ export function OrganizationGeneralSettings() {
     <div className="space-y-8">
       <section aria-labelledby="org-general-details" className="space-y-3">
         <SettingsHeading id="org-general-details">General</SettingsHeading>
+        <p className="text-sm text-gray-500">Private organization content can be accessed by org owners and authorized admins. Their access is recorded in the audit log. Your personal workspace remains separate.</p>
         <GlassCardUI>
           <SettingsRow layout="stacked">
             {!org ? (

@@ -11,9 +11,9 @@
 //   admin  — runs the organization day to day: settings, invitations, and
 //            removing members.
 //   member — reads the organization and its roster. No org mutations.
-// Organization content is private by default. Owners can open every project
-// and workflow; an admin or member reaches what they created, what was shared
-// with them, and what has been made public (resolveOrgContentRole).
+// Organization content is private by default. Ordinary access follows
+// creation, sharing, public visibility and ownerless recovery. Owners and
+// permitted admins can also explicitly open audited read-only private access.
 //
 // Nobody acts on a peer or a superior, owners excepted (canManageOrgRole): an
 // admin cannot appoint a second admin, promote themselves or remove an owner.
@@ -29,6 +29,7 @@
 // recipient's consent, not just the inviter's intent.
 
 import type { OrgMemberHandover } from "@mike/contracts";
+import { listOrgPrivateContentAccess } from "./orgPrivateContent";
 import type { Db } from "./supabase";
 import { recordAudit } from "./audit";
 import {
@@ -227,7 +228,21 @@ export async function getOrg(
         .eq("id", params.orgId)
         .maybeSingle();
     if (error || !org) return { ok: false, kind: "not_found" };
-    return { ok: true, org: { ...org, role } };
+    const { data: membership, error: permissionError } = await db
+        .from("org_members")
+        .select("can_access_private_content")
+        .eq("org_id", params.orgId)
+        .eq("user_id", params.userId)
+        .maybeSingle();
+    if (permissionError) return { ok: false, kind: "db_error", detail: permissionError.message };
+    return {
+        ok: true,
+        org: {
+            ...org, role,
+            can_access_private_content: role === "owner" ||
+                (role === "admin" && membership?.can_access_private_content === true),
+        },
+    };
 }
 
 export async function updateOrg(
@@ -254,7 +269,7 @@ export async function updateOrg(
             kind: "db_error",
             detail: error?.message ?? "Failed to update organization",
         };
-    return { ok: true, org: { ...org, role } };
+    return getOrg(db, params);
 }
 
 /** Owner-only soft deletion. Content stays recoverable for 30 days. */
@@ -358,12 +373,17 @@ export async function listOrgResources(
         isOrgOwner(role) ? [params.orgId] : [],
     );
 
+    const privateAccess = await listOrgPrivateContentAccess(
+        db, isOrgAdmin(role) ? [params.orgId] : [], params.userId,
+    );
+
     const visible = <
         T extends { id?: unknown; user_id?: unknown; visibility?: unknown },
     >(
         rows: T[],
         overrideById: Map<string, unknown>,
         ownerlessIds: Set<string>,
+        privateIds?: Set<string>,
     ) =>
         rows.filter((row) => {
             const override =
@@ -378,7 +398,7 @@ export async function listOrgResources(
                     visibility: row.visibility,
                     ownerless:
                         typeof row.id === "string" && ownerlessIds.has(row.id),
-                }) !== null
+                }) !== null || (typeof row.id === "string" && privateIds?.has(row.id) === true)
             );
         });
 
@@ -389,11 +409,13 @@ export async function listOrgResources(
             (projectsResult.data ?? []) as Row[],
             projectOverrideById,
             ownerless.projects,
+            privateAccess.get("project"),
         ),
         workflows: visible(
             (workflowsResult.data ?? []) as Row[],
             workflowOverrideById,
             ownerless.workflows,
+            privateAccess.get("workflow"),
         ),
     };
 }
@@ -445,7 +467,7 @@ export async function listMembers(
 
     const { data, error } = await db
         .from("org_members")
-        .select("id, user_id, role, created_at")
+        .select("id, user_id, role, created_at, can_access_private_content")
         .eq("org_id", params.orgId);
     if (error) return { ok: false, kind: "db_error", detail: error.message };
 
