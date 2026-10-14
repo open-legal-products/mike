@@ -23,6 +23,7 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 import { GlassCardUI } from "@/shared/ui/GlassCardUI";
 import { LIQUID_GLASS_SUBTLE_CLASS } from "@/shared/ui/LiquidGlassUI";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { DeletedOrganizations } from "./DeletedOrganizations";
 import { CreateOrganizationModal } from "./OrganizationModals";
 import { organizationSettingsHref } from "./OrganizationSettingsShell";
 
@@ -299,6 +300,7 @@ export function OrganizationsOverview() {
         </section>
       ) : null}
 
+      <DeletedOrganizations onRestored={load} />
       <CreateOrganizationModal
         open={createOpen}
         // A partly failed creation ("created, but some invitations could not

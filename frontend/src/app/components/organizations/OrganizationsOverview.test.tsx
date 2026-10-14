@@ -43,6 +43,7 @@ vi.mock("@/app/contexts/WorkspaceContext", () => ({
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
   listOrgs: mocks.listOrgs,
+  listDeletedOrganizations: vi.fn(async () => []),
   listMyOrgInvitations: mocks.listMyOrgInvitations,
   createOrg: mocks.createOrg,
   createOrgInvitation: mocks.createOrgInvitation,

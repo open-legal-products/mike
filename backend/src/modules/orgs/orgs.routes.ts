@@ -19,6 +19,8 @@ import { isPersonalOrg } from "../../lib/personalOrgs";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { sendServiceFailure } from "../../lib/serviceResult";
 import {
+    listDeletedOrganizations,
+    restoreOrganization,
     listMyOrgs,
     createOrg,
     getOrg,
@@ -68,6 +70,18 @@ function refusePersonalOrg(req: Request, res: Response, next: NextFunction) {
     );
 }
 const requireOrgAuth = [requireAuth, refusePersonalOrg];
+
+orgsRouter.get("/deleted", requireAuth, asyncRoute(async (_req, res) => {
+    const result = await listDeletedOrganizations(createServerSupabase(), res.locals.userId);
+    if (!result.ok) return sendServiceFailure(res, result);
+    res.json(result.data);
+}));
+
+orgsRouter.post("/:orgId/restore", requireOrgAuth, requireMfaIfEnrolled, asyncRoute(async (req, res) => {
+    const result = await restoreOrganization(createServerSupabase(), req.params.orgId, res.locals.userId);
+    if (!result.ok) return sendServiceFailure(res, result);
+    res.status(204).send();
+}));
 
 orgsRouter.get("/:orgId/archives", requireOrgAuth, asyncRoute(async (req, res) => {
     const result = await listDepartureArchives(createServerSupabase(), {
@@ -137,7 +151,7 @@ orgsRouter.get("/", requireAuth, asyncRoute(async (_req, res) => {
 orgsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
-    const result = await createOrg(db, { userId, name: req.body?.name });
+    const result = await createOrg(db, { userId, userEmail: res.locals.userEmail, name: req.body?.name });
     if (!result.ok) return sendOrgFailure(res, result);
     res.status(201).json(result.org);
 }));

@@ -1,4 +1,4 @@
-import { setUserProfilePhoto } from "./mikeApi";
+import { setUserProfilePhoto, listDeletedOrganizations, restoreOrganization } from "./mikeApi";
 import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArchives } from "./mikeApi";
 import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -681,6 +681,11 @@ describe("blob requests (downloadUserExport)", () => {
 });
 
 describe("audit history", () => {
+    it("includes the organization scope in audit requests", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
+        await getAuditHistory({ orgId: "org-1" });
+        expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1");
+    });
     it("serializes server-side filters, sorting, pagination, and the abort signal", async () => {
         fetchMock.mockResolvedValue(
             jsonResponse({ events: [], total: 0, page: 3, pageSize: 50 }),
@@ -3054,6 +3059,8 @@ describe("thin endpoint wrappers", () => {
             method: "POST",
             body: { name: "Firm matter", org_id: "org-1" },
         },
+        { name: "listDeletedOrganizations", call: () => listDeletedOrganizations(), url: "/orgs/deleted" },
+        { name: "restoreOrganization", call: () => restoreOrganization("org-1"), url: "/orgs/org-1/restore", method: "POST" },
         {
             name: "listOrgs",
             call: () => listOrgs(),

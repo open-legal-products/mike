@@ -517,3 +517,11 @@ export interface OrgDepartureResolution {
     resolved: number;
     unresolved: number;
 }
+
+/** A team organization still inside its owner-only recovery period. */
+export interface DeletedOrganization {
+    id: string;
+    name: string;
+    deleted_at: string;
+    purge_after: string;
+}

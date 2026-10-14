@@ -5,7 +5,7 @@
 // worker where importing an Express router would drag in the whole HTTP
 // surface.
 
-import { listAccessibleProjectIds } from "./access";
+import { getOrgRole, isOrgAdmin, listAccessibleProjectIds } from "./access";
 import { normalizeDisplayName } from "./userLookup";
 import type { Db } from "./supabase";
 
@@ -18,6 +18,7 @@ const MAX_PAGE = 100_000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export type AuditQuery = {
+    orgId?: string;
     q?: string;
     action?: string;
     status?: string;
@@ -58,6 +59,9 @@ export function parseQuery(
     // Clamp page into [1, MAX_PAGE] so a huge ?page= can't overflow the offset.
     const parsedPage = Number.parseInt(String(raw.page ?? "1"), 10) || 1;
     const page = Math.min(Math.max(parsedPage, 1), MAX_PAGE);
+    const orgId = str(raw.org_id);
+    if (raw.org_id !== undefined && (!orgId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)))
+        return { ok: false, error: "Invalid organization id" };
     const from = str(raw.from);
     const to = str(raw.to);
     const requestedSortBy = str(raw.sort_by);
@@ -85,6 +89,7 @@ export function parseQuery(
     return {
         ok: true,
         query: {
+            ...(orgId ? { orgId } : {}),
             q: str(raw.q)?.slice(0, 200),
             action: str(raw.action)?.slice(0, 60),
             status: str(raw.status)?.slice(0, 20),
@@ -127,7 +132,7 @@ const PROJECT_FILTER_CHUNK = 200;
 const MERGE_WINDOW_ROWS = 10_000;
 
 const AUDIT_EVENT_COLUMNS =
-    "id, created_at, user_id, user_email, action, status, title, surface, project_id, chat_id, document_id, review_id, model, detail";
+    "id, org_id, created_at, user_id, user_email, action, status, title, surface, project_id, chat_id, document_id, review_id, model, detail";
 
 type AuditRow = Record<string, unknown>;
 
@@ -209,6 +214,11 @@ function compareRows(a: AuditRow, b: AuditRow, q: AuditQuery): number {
     return String(a.id).localeCompare(String(b.id));
 }
 
+export async function canReadOrgAudit(db: Db, userId: string, orgId: string): Promise<boolean> {
+    const role = await getOrgRole(userId, orgId, db);
+    return role !== null && isOrgAdmin(role);
+}
+
 export async function queryEvents(
     db: Db,
     userId: string,
@@ -227,7 +237,10 @@ export async function queryEvents(
         // Shared with the chat/document listings: one definition of
         // "projects this user can see" for everything that scopes a
         // collection query.
-        projectIds = await listAccessibleProjectIds(userId, email, db);
+        if (q.orgId && !(await canReadOrgAudit(db, userId, q.orgId))) {
+            return { data: null, error: { message: "Organization audit access denied" }, count: null } satisfies EventsResult;
+        }
+        projectIds = q.orgId ? [] : await listAccessibleProjectIds(userId, email, db);
     } catch (err) {
         // Hand back the underlying PostgREST error when there is one, so the
         // route's log and the CSV job's retry see code/details/hint exactly
@@ -264,17 +277,21 @@ export async function queryEvents(
         }).order("id", { ascending: true, nullsFirst: false });
     };
 
-    const base = () =>
-        db
-            .from("audit_events")
-            .select(AUDIT_EVENT_COLUMNS, {
-                count: "exact",
-            }) as unknown as EventsQuery;
+    const base = () => (q.orgId
+        ? db.rpc("organization_audit_events", {
+            p_org_id: q.orgId, p_actor_id: userId, p_actor_email: email ?? null,
+          }, { count: "exact" }).select(AUDIT_EVENT_COLUMNS)
+        : db.from("audit_events").select(AUDIT_EVENT_COLUMNS, { count: "exact" })
+    ) as unknown as EventsQuery;
 
     const offset = (q.page - 1) * q.limit;
     let result: EventsResult;
 
-    if (projectIds.length === 0) {
+    if (q.orgId) {
+        result = await readEventWindow(
+            () => applyFilters(base().eq("org_id", q.orgId)), offset, q.limit,
+        );
+    } else if (projectIds.length === 0) {
         result = await readEventWindow(
             () => applyFilters(base().eq("user_id", userId)),
             offset,
@@ -411,7 +428,7 @@ export async function buildAuditCsv(
     // sync route can log it exactly as it did before this helper existed.
     if (error) throw new Error(error.message, { cause: error });
     const header =
-        "created_at,user,action,status,title,application,project_id,model";
+        "created_at,user,action,status,title,application,project_id,model" + (query.orgId ? ",organization_id" : "");
     const rows = ((data ?? []) as Record<string, unknown>[]).map((e) =>
         [
             e.created_at,
@@ -422,6 +439,7 @@ export async function buildAuditCsv(
             e.surface,
             e.project_id,
             e.model,
+            ...(query.orgId ? [e.org_id] : []),
         ]
             .map(csvCell)
             .join(","),

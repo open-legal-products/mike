@@ -92,6 +92,7 @@ function makeDb(
     function query(table: string) {
         const filters: (
             | { type: "eq"; col: string; val: unknown }
+            | { type: "is"; col: string; val: unknown }
             | { type: "neq"; col: string; val: unknown }
             | { type: "in"; col: string; vals: unknown[] }
         )[] = [];
@@ -105,6 +106,9 @@ function makeDb(
         const matches = (rows: Row[]) =>
             rows.filter((r) =>
                 filters.every((f) => {
+                    if (f.type === "is") return (f.col === "organizations.deleted_at"
+                        ? tables.organizations?.find((org) => org.id === r.org_id)?.deleted_at ?? null
+                        : r[f.col] ?? null) === f.val;
                     if (f.type === "eq") return r[f.col] === f.val;
                     if (f.type === "neq") return r[f.col] !== f.val;
                     return f.vals.includes(r[f.col]);
@@ -188,6 +192,7 @@ function makeDb(
 
         const builder: Record<string, unknown> = {
             select: () => builder,
+            is: (col: string, val: unknown) => { filters.push({ type: "is", col, val }); return builder; },
             eq: (col: string, val: unknown) => {
                 filters.push({ type: "eq", col, val });
                 return builder;

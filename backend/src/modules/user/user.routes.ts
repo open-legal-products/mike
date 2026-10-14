@@ -1369,7 +1369,7 @@ userRouter.post(
             payload: parsed.payload,
         });
         if (!result.ok)
-            return void res.status(500).json({ detail: result.detail });
+            return void res.status(result.forbidden ? 403 : 500).json({ detail: result.detail });
         res.status(202).json({ export_id: result.exportId });
     }),
 );

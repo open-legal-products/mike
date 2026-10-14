@@ -46,7 +46,7 @@ describe("buildMemoryArchive", () => {
         const builder: Record<string, unknown> = {
           then: (resolve: (value: typeof result) => unknown) => resolve(result),
         };
-        for (const name of ["select", "eq", "not", "in"])
+        for (const name of ["select", "eq", "is", "not", "in"])
           builder[name] = () => builder;
         return builder;
       }),

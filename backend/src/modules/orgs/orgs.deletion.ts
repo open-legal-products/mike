@@ -8,7 +8,6 @@ import { deleteOrg as deleteOrgRow, type OrgResult } from "../../lib/orgs";
 import type { Db } from "../../lib/supabase";
 import {
     deleteOrgChats,
-    deleteOrgContent,
     deleteOrgMemories,
     deleteOrgProjects,
     deleteOrgTabularReviews,
@@ -22,9 +21,9 @@ interface OrgActor {
     orgId: string;
 }
 
-/** Delete the organization together with everything it owns. */
+/** Suspend the organization for its 30-day recovery period. */
 export function deleteOrg(db: Db, params: OrgActor): Promise<Done> {
-    return deleteOrgRow(db, { ...params, purgeContent: deleteOrgContent });
+    return deleteOrgRow(db, params);
 }
 
 export const ORG_DATA_KINDS = [

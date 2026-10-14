@@ -245,7 +245,8 @@ export async function searchProjectDirectory(
   // member the matter's name, cm_number and its document filenames.
   const { data: membershipRows, error: membershipError } = await db
     .from("org_members")
-    .select("org_id, role")
+    .select("org_id, role, organizations!inner(id)")
+    .is("organizations.deleted_at", null)
     .eq("user_id", userId);
   if (membershipError) return { ok: false, error: membershipError };
   const orgRoleByOrgId = new Map<string, string>();

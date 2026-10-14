@@ -87,6 +87,7 @@ function organizationDb() {
                 );
             const query = {
                 select: () => query,
+                is: () => query,
                 order: () => query,
                 eq(column: string, value: unknown) {
                     filters.push([column, value]);

@@ -827,6 +827,7 @@ export interface UserLookupResult {
 // ---------------------------------------------------------------------------
 
 export interface AuditEvent {
+    org_id?: string | null;
     id: string;
     created_at: string;
     user_display_name: string | null;
@@ -845,6 +846,7 @@ export interface AuditEvent {
 
 export async function getAuditHistory(
     params: {
+        orgId?: string;
         q?: string;
         action?: string;
         status?: string;
@@ -863,6 +865,7 @@ export async function getAuditHistory(
     pageSize: number;
 }> {
     const qs = new URLSearchParams();
+    if (params.orgId) qs.set("org_id", params.orgId);
     if (params.q) qs.set("q", params.q);
     if (params.action) qs.set("action", params.action);
     if (params.status) qs.set("status", params.status);
@@ -1621,6 +1624,16 @@ export async function listOrgs(): Promise<Org[]> {
     return apiRequest<Org[]>("/orgs");
 }
 
+export type { DeletedOrganization } from "@mike/contracts";
+
+export async function listDeletedOrganizations(): Promise<import("@mike/contracts").DeletedOrganization[]> {
+    return apiRequest("/orgs/deleted");
+}
+
+export async function restoreOrganization(orgId: string): Promise<void> {
+    await apiRequest(`/orgs/${orgId}/restore`, { method: "POST" });
+}
+
 export async function createOrg(name: string): Promise<Org> {
     return apiRequest<Org>("/orgs", {
         method: "POST",
@@ -1641,7 +1654,7 @@ export async function updateOrg(orgId: string, name: string): Promise<Org> {
     });
 }
 
-/** Deletes the organization together with everything it owns. Owner only. */
+/** Soft-delete an organization for 30 days. Owner only. */
 export async function deleteOrg(orgId: string): Promise<void> {
     await apiRequest(`/orgs/${orgId}`, { method: "DELETE" });
 }

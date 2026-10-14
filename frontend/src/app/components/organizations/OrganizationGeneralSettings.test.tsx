@@ -371,7 +371,7 @@ describe("deleting", () => {
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
   });
 
-  it("warns that all content goes with it, and suggests exporting first", async () => {
+  it("explains the 30-day owner recovery period before confirming deletion", async () => {
     const user = userEvent.setup();
     render(<OrganizationGeneralSettings />);
 
@@ -379,12 +379,12 @@ describe("deleting", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveTextContent(
-      "permanently deletes the organization and all of its content for every member",
+      "removes access to the organization for all members",
     );
     expect(dialog).toHaveTextContent(
-      "Consider exporting anything you need to keep first.",
+      "Its content and memberships are kept for 30 days.",
     );
-    expect(dialog).toHaveTextContent("This action cannot be undone.");
+    expect(dialog).toHaveTextContent("An owner can restore it from Settings → Organizations");
     // Nothing is deleted until it is confirmed.
     expect(mocks.deleteOrg).not.toHaveBeenCalled();
   });

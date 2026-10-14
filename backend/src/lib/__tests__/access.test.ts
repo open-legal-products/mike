@@ -62,7 +62,9 @@ function makeDb(
                     return query;
                 },
                 is: (column: string, value: unknown) => {
-                    rows = rows.filter((row) => row[column] === value);
+                    rows = rows.filter((row) => (column === "organizations.deleted_at"
+                        ? tables.organizations?.find((org) => org.id === row.org_id)?.deleted_at ?? null
+                        : row[column]) === value);
                     return query;
                 },
                 neq: (column: string, value: unknown) => {

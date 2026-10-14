@@ -104,6 +104,7 @@ describe("the sections each role is offered", () => {
     expect(sections()).toEqual([
       "General",
       "Members",
+      "Audit log",
       "Bring Your Own Keys",
       "Privacy & Data",
     ]);
@@ -113,7 +114,7 @@ describe("the sections each role is offered", () => {
     mocks.role = "admin";
     renderShell();
     await screen.findByText("section for Elite Law LLP");
-    expect(sections()).toEqual(["General", "Members", "Bring Your Own Keys"]);
+    expect(sections()).toEqual(["General", "Members", "Audit log", "Bring Your Own Keys"]);
   });
 
   it("offers a member General and Members only", async () => {

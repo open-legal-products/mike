@@ -247,7 +247,8 @@ export async function getOrgRole(
     if (!orgId) return null;
     const { data } = await db
         .from("org_members")
-        .select("role")
+        .select("role, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("org_id", orgId)
         .eq("user_id", userId)
         .maybeSingle();
@@ -907,7 +908,8 @@ export async function listAccessibleProjectIds(
     // it, which the per-project verdict below has to honour.
     const { data: membershipRows, error: membershipError } = await db
         .from("org_members")
-        .select("org_id, role")
+        .select("org_id, role, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("user_id", userId);
     if (membershipError)
         throw accessReadFailed("org membership read", membershipError);

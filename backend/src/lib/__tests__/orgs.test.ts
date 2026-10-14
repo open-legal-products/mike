@@ -144,6 +144,11 @@ function makeDb(initial: Record<string, Row[]>) {
         // Whether an item has an Owner left is the database's to say.
         // ... and so is what a departing member alone owns.
         rpc: async (name: string, args?: Record<string, unknown>) =>
+            (name === "soft_delete_organization" ? (() => {
+                const org = tables.organizations.find((row) => row.id === args?.p_org_id);
+                if (org) { org.deleted_at = new Date().toISOString(); org.purge_after = new Date(Date.now() + 30 * 86400000).toISOString(); }
+                return { data: null, error: null };
+            })() : null) ??
             ownerlessRpcResult(tables, name, args) ??
             handoverRpcResult(tables, name, args) ?? {
                 data: null,
@@ -170,6 +175,9 @@ describe("orgs.service roles", () => {
         const members = db._tables.org_members as Row[];
         expect(members).toHaveLength(1);
         expect(members[0]).toMatchObject({ user_id: "u1", role: "owner" });
+        expect(db._tables.audit_events).toEqual([expect.objectContaining({
+            user_id: "u1", org_id: result.org.id, action: "org.created", title: "Acme", surface: "organization",
+        })]);
     });
 
     it("rejects a blank org name", async () => {
@@ -1532,36 +1540,28 @@ const roleOf = (db: any, userId: string) =>
 describe("owner and admin tiers", () => {
     it("lets only an owner delete the organization", async () => {
         const db = seedTiers();
-        const purgeContent = vi.fn(async () => {});
         await expect(
-            deleteOrg(db, { userId: "member1", orgId: "o1", purgeContent }),
+            deleteOrg(db, { userId: "member1", orgId: "o1" }),
         ).resolves.toMatchObject({ ok: false, kind: "forbidden" });
         await expect(
-            deleteOrg(db, { userId: "orgadmin1", orgId: "o1", purgeContent }),
+            deleteOrg(db, { userId: "orgadmin1", orgId: "o1" }),
         ).resolves.toMatchObject({ ok: false, kind: "owner_required" });
         expect(db._tables.organizations).toHaveLength(1);
         // Nobody's content is touched on behalf of someone who may not delete.
-        expect(purgeContent).not.toHaveBeenCalled();
 
         await expect(
-            deleteOrg(db, { userId: "owner1", orgId: "o1", purgeContent }),
+            deleteOrg(db, { userId: "owner1", orgId: "o1" }),
         ).resolves.toMatchObject({ ok: true });
-        expect(purgeContent).toHaveBeenCalledWith(db, "o1");
-        expect(db._tables.organizations).toHaveLength(0);
+        expect(db._tables.organizations[0].deleted_at).toBeTruthy();
+        expect(db._tables.org_members).toHaveLength(5);
     });
 
-    it("keeps the organization when its content could not be deleted", async () => {
+    it("reports lifecycle database failures without purging content", async () => {
         const db = seedTiers();
-        await expect(
-            deleteOrg(db, {
-                userId: "owner1",
-                orgId: "o1",
-                purgeContent: async () => {
-                    throw new Error("Failed to delete organization documents");
-                },
-            }),
-        ).resolves.toMatchObject({ ok: false, kind: "db_error" });
-        expect(db._tables.organizations).toHaveLength(1);
+        db.rpc = vi.fn().mockResolvedValue({ error: { message: "write failed" } });
+        await expect(deleteOrg(db, { userId: "owner1", orgId: "o1" })).resolves.toMatchObject({ ok: false, kind: "db_error" });
+        expect(db._tables.organizations[0].deleted_at).toBeUndefined();
+        expect(db._tables.org_members).toHaveLength(5);
     });
 
     it.each(["admin", "owner"])(

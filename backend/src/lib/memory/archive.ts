@@ -32,6 +32,7 @@ async function loadProjectLabels(
     const { data, error } = await db
       .from("projects")
       .select("id, name")
+    .is("deleted_at", null)
       .in("id", batch);
     if (error) throw new Error("Failed to load projects for memory export");
     projects.push(...((data ?? []) as ProjectLabel[]));
@@ -67,6 +68,7 @@ async function loadWorkspaceMemories(
   const { data: organizations, error: organizationsError } = await db
     .from("organizations")
     .select("id, name")
+    .is("deleted_at", null)
     .in(
       "id",
       files.map((file) => file.org_id),
@@ -79,6 +81,7 @@ async function loadWorkspaceMemories(
     ),
   );
   return files
+    .filter((file) => nameById.has(file.org_id))
     .map((file) => ({
       orgId: file.org_id,
       name: nameById.get(file.org_id) ?? null,

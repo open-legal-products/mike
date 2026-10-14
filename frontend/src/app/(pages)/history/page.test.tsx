@@ -1,3 +1,4 @@
+import { AuditHistory } from "@/app/components/history/AuditHistory";
 import {
   act,
   fireEvent,
@@ -83,6 +84,15 @@ function observeLoadMore() {
 }
 
 describe("HistoryPage", () => {
+  it("scopes the reused organization history page to its organization", async () => {
+    render(<AuditHistory orgId="org-a" onBack={() => {}} />);
+    await waitFor(() => expect(mockedGetAuditHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ orgId: "org-a", page: 1 }), expect.anything(),
+    ));
+    expect(screen.getByRole("button", { name: "Audit log actions" })).toBeInTheDocument();
+    expect(screen.getAllByText("Organization Settings").length).toBeGreaterThan(0);
+  });
+
   beforeEach(() => {
     // Pin the clock — Date only, so user-event's real timers keep working.
     // These tests derive calendar expectations from "today": the default

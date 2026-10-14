@@ -254,6 +254,12 @@ vi.mock("../../lib/supabase", () => ({
     createServerSupabase: vi.fn(() => ({
         from: (t: string) => query(t),
         rpc: vi.fn((name?: string, args?: Record<string, unknown>) => {
+            if (name === "soft_delete_organization") {
+                if (writeErrors.organizations) return Promise.resolve({ data: null, error: writeErrors.organizations });
+                const org = tables.organizations.find((row) => row.id === args?.p_org_id);
+                if (org) org.deleted_at = new Date().toISOString();
+                return Promise.resolve({ data: null, error: null });
+            }
             // Whether an item has an Owner left is the database's to say.
             const ownerless = ownerlessRpcResult(tables, name ?? "", args);
             if (ownerless) return Promise.resolve(ownerless);
@@ -675,35 +681,20 @@ describe("organization workspace", () => {
         expect(res.status).toBe(404);
     });
 
-    it("lets an owner delete an organization together with everything it owns", async () => {
-        const ownedByOrg = (table: string) =>
-            (tables[table] ?? []).filter((row) => row.org_id === "org-1");
-        expect(ownedByOrg("projects").length).toBeGreaterThan(0);
-
-        const res = await request(app)
-            .delete("/orgs/org-1")
-            .set(...AUTH);
+    it("soft-deletes a nonempty organization without purging its content", async () => {
+        const before = JSON.stringify(tables.projects);
+        const res = await request(app).delete("/orgs/org-1").set(...AUTH);
         expect(res.status).toBe(204);
-        expect(tables.organizations).toEqual([]);
-        for (const table of [
-            "projects",
-            "documents",
-            "chats",
-            "tabular_reviews",
-            "workflows",
-        ]) {
-            expect(ownedByOrg(table)).toEqual([]);
-        }
+        expect(tables.organizations[0].deleted_at).toBeTruthy();
+        expect(JSON.stringify(tables.projects)).toBe(before);
     });
 
-    it("keeps the organization when deleting its content fails", async () => {
-        writeErrors.workflows = { message: "boom" };
-        const res = await request(app)
-            .delete("/orgs/org-1")
-            .set(...AUTH);
+    it("reports a failed lifecycle transaction as an error", async () => {
+        writeErrors.organizations = { message: "boom" };
+        const res = await request(app).delete("/orgs/org-1").set(...AUTH);
         expect(res.status).toBe(500);
         expect(JSON.stringify(res.body)).not.toContain("boom");
-        expect(tables.organizations).toHaveLength(1);
+        expect(tables.organizations[0].deleted_at).toBeUndefined();
     });
 
     it.each([

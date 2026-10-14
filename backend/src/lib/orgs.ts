@@ -147,7 +147,8 @@ export async function listMyOrgs(
     const { data: allOrgs, error: orgsError } = await db
         .from("organizations")
         .select("*")
-        .in("id", orgIds);
+        .in("id", orgIds)
+        .is("deleted_at", null);
     if (orgsError)
         return { ok: false, kind: "db_error", detail: orgsError.message };
     // A person's own organization is not one of "their organizations".
@@ -177,7 +178,7 @@ export async function listMyOrgs(
 
 export async function createOrg(
     db: Db,
-    params: { userId: string; name: unknown },
+    params: { userId: string; name: unknown; userEmail?: string | null },
 ): Promise<OrgResult<{ org: Record<string, unknown> }>> {
     const name = typeof params.name === "string" ? params.name.trim() : "";
     if (!name)
@@ -206,6 +207,10 @@ export async function createOrg(
         return { ok: false, kind: "db_error", detail: memberError.message };
     }
 
+    await recordAudit(db, {
+        userId: params.userId, userEmail: params.userEmail,
+        orgId: String(org.id), action: "org.created", title: name, surface: "organization",
+    });
     return { ok: true, org: { ...org, role: "owner", member_count: 1 } };
 }
 
@@ -252,63 +257,19 @@ export async function updateOrg(
     return { ok: true, org: { ...org, role } };
 }
 
-/**
- * Delete an organization and everything it owns. Owner only.
- *
- * Deleting the content is the caller's to supply: it needs the documents and
- * projects modules, which lib/ may not import, so modules/orgs passes
- * `purgeContent` in. It runs after the owner check and before the row goes,
- * because every `org_id` foreign key on a content table is ON DELETE
- * RESTRICT.
- */
+/** Owner-only soft deletion. Content stays recoverable for 30 days. */
 export async function deleteOrg(
     db: Db,
-    params: {
-        userId: string;
-        userEmail?: string | null;
-        orgId: string;
-        purgeContent: (db: Db, orgId: string) => Promise<void>;
-    },
+    params: { userId: string; userEmail?: string | null; orgId: string },
 ): Promise<OrgResult<Record<never, never>>> {
     const role = await getOrgRole(params.userId, params.orgId, db);
     if (!role) return { ok: false, kind: "not_found" };
     if (!isOrgAdmin(role)) return { ok: false, kind: "forbidden" };
     if (!isOrgOwner(role)) return { ok: false, kind: "owner_required" };
-
-    const { data: org } = await db
-        .from("organizations")
-        .select("id, name")
-        .eq("id", params.orgId)
-        .maybeSingle();
-    if (!org) return { ok: false, kind: "not_found" };
-
-    try {
-        await params.purgeContent(db, params.orgId);
-    } catch (error) {
-        return {
-            ok: false,
-            kind: "db_error",
-            detail:
-                error instanceof Error
-                    ? error.message
-                    : "Failed to delete organization content",
-        };
-    }
-
-    const { error } = await db
-        .from("organizations")
-        .delete()
-        .eq("id", params.orgId);
-    if (error)
-        return { ok: false, kind: "db_error", detail: error.message };
-
-    await recordAudit(db, {
-        userId: params.userId,
-        userEmail: params.userEmail ?? null,
-        action: "org.deleted",
-        title: typeof org.name === "string" ? org.name : null,
-        detail: { org_id: params.orgId },
-    });
+    const { error } = await db.rpc("soft_delete_organization", { p_org_id: params.orgId, p_actor_id: params.userId });
+    if (error?.code === "P0002" || error?.code === "22P02") return { ok: false, kind: "not_found" };
+    if (error?.code === "42501") return { ok: false, kind: "owner_required" };
+    if (error) return { ok: false, kind: "db_error", detail: error.message };
     return { ok: true };
 }
 
@@ -1175,7 +1136,8 @@ export async function listMyInvitations(
     const { data: orgs } = await db
         .from("organizations")
         .select("id, name")
-        .in("id", orgIds);
+        .in("id", orgIds)
+        .is("deleted_at", null);
     const nameById = new Map(
         ((orgs ?? []) as { id: string; name: string }[]).map((o) => [
             o.id,
@@ -1190,7 +1152,7 @@ export async function listMyInvitations(
     );
     return {
         ok: true,
-        invitations: rows.map((r) => ({
+        invitations: rows.filter((r) => nameById.has(r.org_id)).map((r) => ({
             ...presentInvitation(r),
             org_name: nameById.get(r.org_id) ?? null,
             invited_by_email: r.invited_by
@@ -1211,7 +1173,8 @@ async function loadAnswerableInvitation(
     const email = normalizeEmail(params.userEmail);
     const { data } = await db
         .from("org_invitations")
-        .select("*")
+        .select("*, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("id", params.invitationId)
         .maybeSingle();
     const row = data as InvitationRow | null;

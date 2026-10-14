@@ -410,9 +410,8 @@ export function OrganizationGeneralSettings() {
               <div className="space-y-1">
                 <SettingsLabel>Delete this organization</SettingsLabel>
                 <SettingsDescription>
-                  Permanently delete this organization and everything in it:
-                  its projects, documents, chats, tabular reviews and
-                  workflows.
+                  Remove access for all members. Owners can restore the
+                  organization for 30 days before its content is permanently deleted.
                 </SettingsDescription>
               </div>
               <PillButtonUI
@@ -452,7 +451,7 @@ export function OrganizationGeneralSettings() {
       <ConfirmPopup
         open={pending === "delete"}
         title={`Delete ${org?.name ?? "this organization"}?`}
-        message="This permanently deletes the organization and all of its content for every member: projects, documents, chats, tabular reviews, workflows and memory, along with its memberships and invitations. Consider exporting anything you need to keep first. This action cannot be undone."
+        message="This removes access to the organization for all members. Its content and memberships are kept for 30 days. An owner can restore it from Settings → Organizations during that period. After 30 days, it is permanently deleted."
         confirmLabel="Delete"
         confirmVariant="danger"
         confirmStatus={working ? "loading" : "idle"}
