@@ -221,3 +221,18 @@ describe("runLLMStream document-mutation gating", () => {
     expect(dispatched).toEqual(["edit_document"]);
   });
 });
+
+it("retains scoped search events in the saved assistant response", async () => {
+  const search = { type: "doc_search" as const, search_id: "search", scope: "library", query: "assignment", offset: 0, match_count: 2, next_offset: null };
+  runToolCalls.mockResolvedValueOnce({
+    toolResults: [], docsRead: [], docsFound: [], docsCreated: [], docsReplicated: [],
+    workflowsApplied: [], docsEdited: [], askInputsEvents: [], courtlistenerEvents: [],
+    caseCitationEvents: [], mcpEvents: [], documentSearchEvents: [search],
+  } as never);
+  streamChatWithTools.mockImplementationOnce(async (params) => {
+    await params.runTools?.([{ id: "search", name: "find_documents", input: { scope: "library", query: "assignment" } }]);
+    return { fullText: "Found two agreements." };
+  });
+  const result = await runLLMStream(baseParams());
+  expect(result.events).toContainEqual(search);
+});

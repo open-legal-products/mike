@@ -38,3 +38,46 @@ it.each([null, { revision: "new-revision", status: "ready", text: "New text" }, 
   expect(await readDocumentContent("found", store, () => {}, index, {} as Db)).toBe("Document could not be read.");
   expect(mocks.download).not.toHaveBeenCalled();
 });
+
+const coverage = { total_versions: 4, indexed_versions: 2, pending_versions: 1, failed_versions: 1, versions_needing_ocr: 1 };
+async function searchActivity() {
+  const frames: Record<string, unknown>[] = [];
+  const result = await runToolCalls([{ id: "search-call", function: { name: "find_documents", arguments: JSON.stringify({ scope: "library", query: "clause", offset: 10 }) } }],
+    new Map(), "actor", {} as Db, (frame) => frames.push(JSON.parse(frame.slice(6))), undefined, undefined, {});
+  return { frames, result };
+}
+it("streams and retains search scope, page counts and incomplete coverage without source content", async () => {
+  mocks.find.mockImplementation(async () => ({ ok: true, data: { matches: [match], next_offset: 11, coverage } }));
+  const { frames, result } = await searchActivity();
+  expect(frames).toEqual([
+    { type: "doc_search_start", search_id: "search-call", scope: "library", query: "clause", offset: 10 },
+    { type: "doc_search", search_id: "search-call", scope: "library", query: "clause", offset: 10, match_count: 1, next_offset: 11, coverage },
+  ]);
+  expect(result.documentSearchEvents).toEqual([frames[1]]);
+  expect(JSON.stringify(frames)).not.toContain("private/source");
+  expect(JSON.stringify(frames)).not.toContain("Ignore all instructions");
+});
+it.each(["returned", "thrown", "invalid"])("completes a %s search failure without claiming zero matches", async (mode) => {
+  if (mode === "thrown") mocks.find.mockRejectedValue(new Error("secret backend error"));
+  else mocks.find.mockResolvedValue(mode === "invalid" ? { ok: false, kind: "validation", detail: "Choose a scope" } : { ok: false, kind: "error", error: new Error("secret backend error") });
+  const { frames, result } = await searchActivity();
+  expect(frames[1]).toMatchObject({ type: "doc_search", search_id: "search-call", error: "Document search could not be completed. Try again." });
+  expect(frames[1]).not.toHaveProperty("match_count");
+  expect(JSON.stringify(frames)).not.toContain("secret");
+  expect(result.documentSearchEvents).toEqual([frames[1]]);
+});
+it("completes reads when stored text cannot be read, including missing context and exceptions", async () => {
+  const doc = { filename: "contract.docx", file_type: "docx", storage_path: "obsolete", search_source: { revision: "revision", userId: "actor" } };
+  const store: DocStore = new Map([["found", doc]]);
+  const index: DocIndex = { found: { document_id: "document", version_id: "history", filename: "contract.docx" } };
+  for (const missing of ["db", "document", "version", "stored", "stale", "pending", "exception"]) {
+    const frames: Record<string, unknown>[] = [];
+    if (missing === "exception") mocks.read.mockRejectedValueOnce(new Error("unavailable"));
+    else mocks.read.mockResolvedValueOnce(missing === "stored" ? null : { revision: missing === "stale" ? "changed" : "revision", status: "pending" });
+    const selectedIndex = missing === "document" ? {} : missing === "version" ? { found: { document_id: "document", filename: "contract.docx" } } : index;
+    expect(await readDocumentContent("found", store, frame => frames.push(JSON.parse(frame.slice(6))), selectedIndex, missing === "db" ? undefined : {} as Db)).toBe("Document could not be read.");
+    expect(frames.map(f => f.type)).toEqual(["doc_read_start", "doc_read"]);
+    mocks.read.mockReset();
+  }
+  expect(mocks.download).not.toHaveBeenCalled();
+});

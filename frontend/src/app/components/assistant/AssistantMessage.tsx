@@ -12,6 +12,7 @@ import { ConnectorSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
+import { DocSearchBlockUI } from "@/shared/ui/DocumentEventBlocksUI";
 import {
     connectorToolLabel,
     eventErrorMessage,
@@ -477,6 +478,10 @@ export function AssistantMessage({
                     showConnector={showConnector}
                 />
             );
+        }
+        if (event.type === "doc_search") {
+            return <DocSearchBlockUI key={globalIdx} event={event}
+                isStreaming={event.isStreaming} showConnector={showConnector} />;
         }
         if (event.type === "doc_find") {
             return (

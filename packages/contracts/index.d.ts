@@ -294,7 +294,28 @@ export type McpToolEvent = {
   result?: string;
 };
 
+/** One scoped text search; counts describe this page, not every matching document. */
+export type DocumentSearchEvent = {
+  type: "doc_search";
+  search_id: string;
+  scope: string;
+  query: string;
+  offset: number;
+  match_count?: number;
+  next_offset?: number | null;
+  coverage?: {
+    total_versions: number;
+    indexed_versions: number;
+    pending_versions: number;
+    failed_versions: number;
+    versions_needing_ocr: number;
+  };
+  /** Safe, user-facing failure message. No result count is supplied on failure. */
+  error?: string;
+};
+
 export type AssistantEvent =
+  | DocumentSearchEvent
   | { type: "reasoning"; text: string }
   | AskInputsEvent
   | {

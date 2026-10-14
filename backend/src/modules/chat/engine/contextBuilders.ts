@@ -803,6 +803,7 @@ const COMPLETES_TEXTLESS_TURN = {
   ask_inputs_response: false,
   doc_read: false,
   doc_find: false,
+  doc_search: false,
   doc_created: true,
   doc_download: true,
   doc_replicated: true,

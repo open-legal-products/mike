@@ -32,6 +32,7 @@ export async function extractDocumentText(raw: ArrayBuffer, fileType: string) {
   return { text, textlessPageCount: null };
 }
 
+/** Extract and publish only while the queued version revision still matches. */
 export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<void> {
   const { versionId, revision } = job.payload;
   if (typeof versionId !== "string" || typeof revision !== "string") return;
@@ -60,6 +61,7 @@ export async function handleDocumentExtractText(db: Db, job: DbJob): Promise<voi
   if (publishError) throw publishError;
 }
 
+/** Mark exhausted work failed without overwriting a newer revision or ready text. */
 export async function markDocumentTextFailed(db: Db, job: DbJob): Promise<void> {
   const { versionId, revision } = job.payload;
   if (typeof versionId !== "string" || typeof revision !== "string") return;
@@ -92,6 +94,7 @@ export async function processDocumentTextInline(db: Db, versionIds?: string[]) {
   }
 }
 
+/** Queue a bounded, resumable batch of missing text, optionally retrying failures. */
 export async function backfillDocumentText(db: Db, options: { limit?: number; retryFailed?: boolean } = {}) {
   const { data, error } = await db.rpc("backfill_document_text", {
     p_limit: options.limit ?? 100, p_retry_failed: options.retryFailed ?? false,

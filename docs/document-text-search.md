@@ -74,3 +74,15 @@ handles. `documents.textSearch.sql` exercises actual PostgreSQL triggers, scoped
 search, version publication, backfill and permissions in rolled-back transactions.
 Run the opt-in PostgreSQL Vitest wrapper with `MIKE_TEST_POSTGRES_CONTAINER` pointing
 to a disposable local Supabase container; it creates and drops its own database.
+
+## Search activity
+
+The assistant emits `doc_search_start` and `doc_search` with a per-call search ID.
+The completed event is retained in conversation history. The pre-response timeline
+shows the query, scope, result count for that page, more-results notice, and
+incomplete extraction coverage. Failed searches have no result count.
+
+Existing versions receive a constant initial revision through PostgreSQL's
+metadata-only column default, avoiding a rewrite of the versions table. Cache
+and job identities pair this revision with the version ID. New uploads and
+content edits use random revisions; extraction backfill remains bounded.

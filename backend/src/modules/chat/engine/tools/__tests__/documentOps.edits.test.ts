@@ -319,4 +319,13 @@ describe("assistant document-edit lifecycle", () => {
     fake.done();
   });
 
+  it("preserves the uploaded object when an update error leaves commit success unknown", async () => {
+    mocks.active.mockResolvedValue({ id: "reused", filename: "Renamed.docx", storage_path: "same-turn" });
+    const fake = scriptedDb([...initial(), { table: "document_versions", op: "update", data: null, error: { message: "connection lost after commit" } }]);
+    expect(await run(fake.db, { versionId: "reused", versionNumber: 7, storagePath: "same-turn" })).toMatchObject({ ok: false });
+    expect(mocks.uploadFile).toHaveBeenCalledOnce();
+    expect(mocks.deleteFileBestEffort).not.toHaveBeenCalled();
+    fake.done();
+  });
+
 });

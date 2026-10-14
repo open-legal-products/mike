@@ -214,6 +214,7 @@ type WireActivity<T extends WireAssistantEvent["type"]> = Extract<
   { type: T }
 >;
 export type AssistantEvent =
+  | (WireActivity<"doc_search"> & { isStreaming?: boolean })
   | (Omit<WireActivity<"reasoning">, "isStreaming"> & { isStreaming?: boolean })
   | (Omit<WireActivity<"error">, "safe_to_display"> & {
       safe_to_display?: boolean;

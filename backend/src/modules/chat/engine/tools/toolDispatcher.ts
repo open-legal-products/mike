@@ -1,3 +1,5 @@
+import type { DocumentSearchEvent } from "@mike/contracts";
+import { internalFailure } from "../../../../lib/serviceResult";
 import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
@@ -324,6 +326,7 @@ export async function runToolCalls(
     total_matches: number;
   }[];
   docsCreated: DocCreatedResult[];
+  documentSearchEvents: DocumentSearchEvent[];
   docsReplicated: DocReplicatedResult[];
   workflowsApplied: { workflow_id: string; title: string }[];
   docsEdited: DocEditedResult[];
@@ -348,6 +351,7 @@ export async function runToolCalls(
     total_matches: number;
   }[] = [];
   const docsCreated: DocCreatedResult[] = [];
+  const documentSearchEvents: DocumentSearchEvent[] = [];
   const docsReplicated: DocReplicatedResult[] = [];
   const workflowsApplied: { workflow_id: string; title: string }[] = [];
   const docsEdited: DocEditedResult[] = [];
@@ -617,6 +621,18 @@ export async function runToolCalls(
           : fencedContent,
       });
     } else if (tc.function.name === "find_documents") {
+      const search: DocumentSearchEvent = {
+        type: "doc_search", search_id: tc.id,
+        scope: typeof args.scope === "string" ? args.scope.slice(0, 32) : "",
+        query: typeof args.query === "string" ? args.query.slice(0, 500) : "",
+        offset: typeof args.offset === "number" ? args.offset : 0,
+      };
+      write(`data: ${JSON.stringify({ ...search, type: "doc_search_start" })}\n\n`);
+      const finishSearch = (details: Partial<DocumentSearchEvent>) => {
+        const event = { ...search, ...details };
+        documentSearchEvents.push(event);
+        write(`data: ${JSON.stringify(event)}\n\n`);
+      };
       const rawDocId = typeof args.doc_id === "string" ? args.doc_id : undefined;
       const label = rawDocId ? resolveDocLabel(rawDocId, docStore, docIndex) : null;
       const result = await findDocumentText(db, {
@@ -627,9 +643,10 @@ export async function runToolCalls(
         documentId: label ? docIndex?.[label]?.document_id : rawDocId,
         versionId: typeof args.version_id === "string" ? args.version_id : null,
         limit: args.limit as number | undefined, offset: args.offset as number | undefined,
-      });
+      }).catch(internalFailure);
       if (!result.ok) {
         if (result.kind === "error") devLog("[find_documents] failed", safeError(result.error));
+        finishSearch({ error: "Document search could not be completed. Try again." });
         toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({
           ok: false, error: result.kind === "error" ? "Document search is unavailable." : result.detail,
         }) });
@@ -652,6 +669,8 @@ export async function runToolCalls(
         return { ...publicMatch, doc_id: docId };
       });
       const content = JSON.stringify({ ok: true, ...result.data, matches });
+      finishSearch({ match_count: matches.length, next_offset: result.data.next_offset,
+        coverage: result.data.coverage });
       toolResults.push({ role: "tool", tool_call_id: tc.id,
         content: nonce ? spotlight(content, nonce) : content });
     } else if (tc.function.name === "find_in_document") {
@@ -2109,6 +2128,7 @@ export async function runToolCalls(
     docsRead,
     docsFound,
     docsCreated,
+    documentSearchEvents,
     docsReplicated,
     workflowsApplied,
     docsEdited,

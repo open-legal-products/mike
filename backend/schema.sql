@@ -10289,7 +10289,12 @@ grant execute on function public.organization_audit_events_page(uuid,uuid,text,j
 -- Migration date: 2026-10-15
 -- Text is derived from one revision of one version. Version ids may survive
 -- editor saves and tracked-change resolution, so they are not cache identities.
-alter table public.document_versions add column if not exists text_revision uuid not null default gen_random_uuid();
+-- A constant initial revision uses PostgreSQL's metadata-only column default.
+-- Cache/job identities include version_id, so legacy versions may safely share it.
+-- New versions and subsequent content edits receive a fresh random revision.
+alter table public.document_versions add column if not exists text_revision uuid not null
+  default '00000000-0000-0000-0000-000000000000'::uuid;
+alter table public.document_versions alter column text_revision set default gen_random_uuid();
 create table if not exists public.document_version_texts (
   version_id uuid primary key references public.document_versions(id) on delete cascade,
   source_revision uuid not null,

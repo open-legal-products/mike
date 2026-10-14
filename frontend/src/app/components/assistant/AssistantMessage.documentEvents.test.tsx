@@ -204,3 +204,13 @@ describe("AssistantMessage document events", () => {
         );
     });
 });
+
+it("renders a saved document search in the pre-response timeline", () => {
+    render(<AssistantMessage events={[
+        { type: "doc_search", search_id: "search-1", scope: "templates", query: "assignment", offset: 0, match_count: 3, next_offset: null },
+        { type: "content", text: "I found three relevant templates." },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Completed in 1 step" }));
+    expect(screen.getByText(/the template library for/)).toBeVisible();
+    expect(screen.getByText("3 matching documents.")).toBeVisible();
+});

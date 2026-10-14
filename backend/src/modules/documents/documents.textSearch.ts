@@ -17,6 +17,7 @@ export type DocumentTextSearch = {
   };
 };
 
+/** Validate search bounds and query only text visible to the server-supplied actor. */
 export async function findDocumentText(db: Db, args: {
   userId: string; userEmail?: string | null; workspace?: string | null;
   scope: string; query: string; projectId?: string | null;

@@ -1246,6 +1246,9 @@ export async function runEditDocument(params: {
       content_sha256: contentSha256(editedBytes), pdf_storage_path: null,
     }, { expectedStoragePath: reuseVersion.storagePath });
     if (updated.error || !updated.data) {
+      // A transport/database error may arrive after the update committed. Only
+      // an acknowledged no-row result proves this new object is unreferenced;
+      // deleting it on an ambiguous failure could destroy the saved document.
       if (!updated.error) await deleteFileBestEffort(newPath, "assistant-edit-conflict");
       return { ok: false, error: "Failed to update document version. Read the latest version and try again." };
     }
@@ -1532,12 +1535,16 @@ export async function readDocumentContent(
     // Search results are bound to a content revision, not just a mutable
     // version id. Recheck access before serving persisted text or any bytes.
     if (docInfo.search_source) {
-      if (!db || !documentId || !versionId) return "Document could not be read.";
+      if (!db || !documentId || !versionId) {
+        emitDocRead();
+        return "Document could not be read.";
+      }
       const stored = await readStoredDocumentText(db, {
         userId: docInfo.search_source.userId, userEmail: docInfo.search_source.userEmail,
         documentId, versionId,
       });
       if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
+        emitDocRead();
         return "Document could not be read.";
       }
       emitDocRead();
