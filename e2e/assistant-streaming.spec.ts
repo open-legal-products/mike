@@ -238,6 +238,7 @@ test("scoped document search activity streams, survives reload, and fits narrow 
     });
     await page.goto("/assistant/chat/search-activity");
     const input = page.getByPlaceholder("How can I help?");
+    await expect(page.getByRole("button", { name: "Choose model", exact: true })).toHaveAttribute("title", "Choose model — Test model");
     await input.fill("Find documents containing a change of control clause in my document library.");
     await input.press("Enter");
     await expect(page.getByText("Searching the document library for “change of control”...", { exact: true })).toBeVisible();

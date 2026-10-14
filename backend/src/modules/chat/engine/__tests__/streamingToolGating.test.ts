@@ -41,7 +41,7 @@ vi.mock("../tools/toolDispatcher", () => ({
     runToolCalls(calls),
 }));
 
-import { runLLMStream } from "../streaming";
+import { runLLMStream, sanitizeAssistantSseChunk } from "../streaming";
 import { PROJECT_EXTRA_TOOLS } from "../tools/toolSchemas";
 
 type RunToolsFn = (
@@ -222,8 +222,8 @@ describe("runLLMStream document-mutation gating", () => {
   });
 });
 
-it("retains scoped search events in the saved assistant response", async () => {
-  const search = { type: "doc_search" as const, search_id: "search", scope: "library", query: "assignment", offset: 0, match_count: 2, next_offset: null };
+it.each([undefined, "Document search could not be completed. Try again."])("retains scoped search events in the saved assistant response (error: %s)", async (error) => {
+  const search = { type: "doc_search" as const, search_id: "search", scope: "library", query: "assignment", offset: 0, ...(error ? { error } : { match_count: 2, next_offset: null }) };
   runToolCalls.mockResolvedValueOnce({
     toolResults: [], docsRead: [], docsFound: [], docsCreated: [], docsReplicated: [],
     workflowsApplied: [], docsEdited: [], askInputsEvents: [], courtlistenerEvents: [],
@@ -235,4 +235,10 @@ it("retains scoped search events in the saved assistant response", async () => {
   });
   const result = await runLLMStream(baseParams());
   expect(result.events).toContainEqual(search);
+});
+
+it("maps raw search errors to the safe search message on the wire", () => {
+  const chunk = sanitizeAssistantSseChunk(`data: ${JSON.stringify({ type: "doc_search", error: "private database details" })}\n\n`);
+  expect(chunk).toContain("Document search could not be completed. Try again.");
+  expect(chunk).not.toContain("private database details");
 });

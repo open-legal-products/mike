@@ -123,7 +123,9 @@ function sanitizeAssistantEvent(event: AssistantEvent): AssistantEvent {
       : { ...event, message: ASSISTANT_ERROR_MESSAGE };
   }
   if ("error" in event && typeof event.error === "string" && event.error) {
-    return { ...event, error: TOOL_ERROR_MESSAGE };
+    return { ...event, error: event.type === "doc_search"
+      ? "Document search could not be completed. Try again."
+      : TOOL_ERROR_MESSAGE };
   }
   return event;
 }
