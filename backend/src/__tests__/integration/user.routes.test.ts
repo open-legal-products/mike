@@ -398,6 +398,35 @@ describe("user.routes", () => {
             expect(removed.status).toBe(200);
             expect(removed.body).toEqual({ profilePhoto: null });
         });
+        it.each([
+            "memory_curator_model", "project_memory_default",
+            "last_selected_reasoning_level", "last_selected_chat_model",
+            "dark_mode", "password_set_at", "onboarding_version",
+            "quick_actions_visible", "legal_research_us", "mfa_on_login", "title_model",
+        ])("keeps the saved photo on profile reload when %s is absent", async (column) => {
+            supabaseState.missingColumns = [column];
+            supabaseState.tables.user_profiles = {
+                data: { ...profileRow(), profile_photo: photo }, error: null,
+            };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body.profilePhoto).toBe(photo);
+            // The mock returns the seeded row; also assert the successful query
+            // actually requests the photo, as the live database requires.
+            const selects = supabaseState.selects.user_profiles;
+            expect(selects.length).toBeGreaterThan(1);
+            expect(selects.at(-1)?.split(/,\s*/)).toContain("profile_photo");
+        });
+        it("keeps profiles readable when both a preference and the photo column are absent", async () => {
+            supabaseState.missingColumns = ["memory_curator_model", "profile_photo"];
+            supabaseState.tables.user_profiles = { data: profileRow(), error: null };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ displayName: "Ada", profilePhoto: null });
+            const columns = supabaseState.selects.user_profiles.at(-1)?.split(/,\s*/);
+            expect(columns).not.toContain("profile_photo");
+            expect(columns).not.toContain("memory_curator_model");
+        });
         it("rejects non-raster and missing data", async () => {
             for (const data_url of [undefined, "data:image/svg+xml;base64,PHN2Zy8+", "data:image/png;base64,PHN2Zy8+"]) {
                 const res = await request(app).put("/user/profile/photo").set(...AUTH).send({ data_url });
