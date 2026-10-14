@@ -212,5 +212,6 @@ it("renders a saved document search in the pre-response timeline", () => {
     ]} />);
     fireEvent.click(screen.getByRole("button", { name: "Completed in 1 step" }));
     expect(screen.getByText(/the template library for/)).toBeVisible();
-    expect(screen.getByText("3 matching documents.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Searched the template library/ }));
+    expect(screen.getByText("3 matches")).toBeVisible();
 });

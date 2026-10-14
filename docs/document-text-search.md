@@ -79,8 +79,9 @@ to a disposable local Supabase container; it creates and drops its own database.
 
 The assistant emits `doc_search_start` and `doc_search` with a per-call search ID.
 The completed event is retained in conversation history. The pre-response timeline
-shows the query, scope, result count for that page, more-results notice, and
-incomplete extraction coverage. Failed searches have no result count.
+shows a collapsed search dropdown labelled with the query and scope. Expanding it
+shows only the match count for that page. Failed searches show a safe error instead
+of a count. Coverage and pagination remain available to the agent in the tool result.
 
 Existing versions receive a constant initial revision through PostgreSQL's
 metadata-only column default, avoiding a rewrite of the versions table. Cache

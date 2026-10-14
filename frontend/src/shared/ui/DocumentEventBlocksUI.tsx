@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import type { DocumentSearchEvent } from "@mike/contracts";
 
 type EventDotColor = "green" | "gray" | "red";
 
@@ -141,44 +140,6 @@ export function DocFindBlockUI({
                 )}
                 {isStreaming && "..."}
             </span>
-        </DocumentEventBlockUI>
-    );
-}
-
-/** Search activity keeps incomplete coverage visible alongside a page of results. */
-export function DocSearchBlockUI({ event, isStreaming, showConnector }: {
-    event: DocumentSearchEvent;
-    isStreaming?: boolean;
-    showConnector?: boolean;
-}) {
-    const scope = new Map([
-        ["project", "project documents"], ["library", "the document library"],
-        ["templates", "the template library"], ["document", "this document"],
-    ]).get(event.scope) ?? "documents";
-    const coverage = event.coverage;
-    const incomplete = coverage && (coverage.indexed_versions < coverage.total_versions
-        || coverage.pending_versions > 0 || coverage.failed_versions > 0 || coverage.versions_needing_ocr > 0);
-    const count = event.match_count ?? 0;
-    return (
-        <DocumentEventBlockUI showConnector={showConnector} isStreaming={isStreaming}
-            dotColor={event.error ? "red" : incomplete || count === 0 ? "gray" : "green"}>
-            <div className="[overflow-wrap:anywhere]">
-                <span className="font-medium">{isStreaming ? "Searching" : event.error ? "Search failed in" : "Searched"}</span>{" "}
-                {scope} for &ldquo;{event.query}&rdquo;{isStreaming && "..."}
-            </div>
-            {!isStreaming && (event.error ? <div>{event.error}</div> : <>
-                <div>
-                    {count === 0 ? "No matching documents found" : `${count} matching ${count === 1 ? "document" : "documents"}`}
-                    {event.offset > 0 && count > 0 && ` (results ${event.offset + 1}–${event.offset + count})`}
-                    {event.next_offset != null && "; more results available"}.
-                </div>
-                {incomplete && <div className="mt-1">
-                    Search coverage is incomplete. {coverage.indexed_versions} of {coverage.total_versions} document versions searchable.
-                    {coverage.pending_versions > 0 && ` ${coverage.pending_versions} awaiting extraction.`}
-                    {coverage.failed_versions > 0 && ` ${coverage.failed_versions} extraction${coverage.failed_versions === 1 ? "" : "s"} failed.`}
-                    {coverage.versions_needing_ocr > 0 && ` ${coverage.versions_needing_ocr} may contain unsearchable scanned pages.`}
-                </div>}
-            </>)}
         </DocumentEventBlockUI>
     );
 }
