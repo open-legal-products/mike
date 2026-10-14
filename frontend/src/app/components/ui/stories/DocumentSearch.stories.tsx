@@ -27,4 +27,3 @@ export const DocumentSearch = () => (
         </section>
     </div>
 );
-
