@@ -540,3 +540,16 @@ export interface DeletedOrganization {
     deleted_at: string;
     purge_after: string;
 }
+
+/** An identity visible in an authorized organization's audit history. */
+export interface AuditActor {
+  user_id: string;
+  email: string | null;
+  display_name: string | null;
+  profile_photo: string | null;
+}
+
+export interface AuditActorPage {
+  users: AuditActor[];
+  nextOffset: number | null;
+}

@@ -19,12 +19,13 @@ import {
   MoreHorizontal,
   X,
 } from "lucide-react";
-import { getAuditHistory, type AuditEvent } from "@/app/lib/mikeApi";
+import { getAuditHistory, type AuditActor, type AuditEvent } from "@/app/lib/mikeApi";
+import { HistoryActorFilter } from "./HistoryActorFilter";
 import { runUserExport } from "@/app/lib/asyncExport";
 import { appendUniqueRows } from "@/app/lib/paginatedRows";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
-import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
+import { FieldLabel } from "@/app/components/ui/form-field";
 import { UserAvatar } from "@/app/components/ui/user-avatar";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
@@ -83,7 +84,6 @@ import { HistorySkeuoIcon } from "@/app/components/shared/HistorySkeuoIcon";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { HeaderButtonUI } from "@/shared/ui/HeaderButtonsUI";
-import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
 import {
   Dropdown,
   DropdownContent,
@@ -208,7 +208,8 @@ export function AuditHistory({
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
   const [previewDocument, setPreviewDocument] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const [username, setUsername] = useState("");
+  const [actorSelection, setActorSelection] = useState<{ orgId: string; user: AuditActor | null } | null>(null);
+  const actor = actorSelection?.orgId === orgId ? actorSelection?.user : null;
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [action, setAction] = useState<string | null>(null);
@@ -251,7 +252,7 @@ export function AuditHistory({
         const out = await getAuditHistory(
           {
             ...(orgId ? { orgId } : {}),
-            username: orgId && username ? username : undefined,
+            actorUserId: actor?.user_id,
             q: debouncedSearch || undefined,
             action: action || undefined,
             status: status || undefined,
@@ -288,7 +289,7 @@ export function AuditHistory({
         }
       }
     },
-    [orgId, username, action, debouncedSearch, from, sort, status, surface, to],
+    [orgId, actor?.user_id, action, debouncedSearch, from, sort, status, surface, to],
   );
 
   useEffect(() => {
@@ -314,7 +315,7 @@ export function AuditHistory({
         ...(eventIds
           ? { event_ids: eventIds }
           : {
-              username: orgId && username ? username : undefined,
+              actor_user_id: actor?.user_id,
               q: search.trim() || undefined,
               action: action || undefined,
               status: status || undefined,
@@ -551,9 +552,11 @@ export function AuditHistory({
               <TableHeaderCell className="w-64 pr-4">
                 <span className="mr-1">Performed by</span>
                 {!initialLoading && (
-                  <HistoryUsernameFilter
-                    value={username}
-                    onChange={setUsername}
+                  <HistoryActorFilter
+                    key={orgId}
+                    orgId={orgId}
+                    value={actor ?? null}
+                    onChange={(user) => setActorSelection({ orgId, user })}
                   />
                 )}
               </TableHeaderCell>
@@ -810,81 +813,6 @@ export function AuditHistory({
         />
       )}
     </div>
-  );
-}
-
-function HistoryUsernameFilter({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const inputId = useId();
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (next) setDraft(value);
-      }}
-    >
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label="Filter by person"
-          aria-pressed={Boolean(value)}
-          title={value ? `Name or email contains ${value}` : "Filter by person"}
-          className={textButtonUIClassName({
-            className: `h-[18px] w-[22px] p-0 ${value ? "text-blue-600" : "text-gray-400"}`,
-          })}
-        >
-          <ChevronDown className="h-3 w-3" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        aria-label="Filter by person"
-        className="w-64 border-0 bg-transparent p-0 shadow-none"
-      >
-        <DropdownSurface className="p-3">
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              onChange(draft.trim());
-              setOpen(false);
-            }}
-          >
-            <FieldLabel htmlFor={inputId}>Name or email contains</FieldLabel>
-            <FormTextInput
-              id={inputId}
-              value={draft}
-              maxLength={200}
-              autoComplete="off"
-              placeholder="Enter a name or email"
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <div className="mt-3 flex justify-end gap-2">
-              <PillButtonUI
-                type="button"
-                tone="white"
-                onClick={() => {
-                  onChange("");
-                  setOpen(false);
-                }}
-              >
-                Clear
-              </PillButtonUI>
-              <PillButtonUI type="submit" tone="black">
-                Apply
-              </PillButtonUI>
-            </div>
-          </form>
-        </DropdownSurface>
-      </PopoverContent>
-    </Popover>
   );
 }
 

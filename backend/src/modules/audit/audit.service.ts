@@ -66,3 +66,4 @@ export async function listAuditEvents(
 }
 
 export { handleChatTurnAudit } from "./audit.jobs";
+export { listAuditActors } from "./audit.actors";

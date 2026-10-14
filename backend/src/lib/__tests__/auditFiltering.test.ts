@@ -556,3 +556,26 @@ describe("affected audit identities", () => {
         expect(denied.calls).toEqual([]);
     });
 });
+
+
+describe("exact actor filtering", () => {
+    it("validates IDs and disallows narrowing personal activity to another person", () => {
+        expect(parseQuery({ actor_user_id: eventId(1) }, 50).ok).toBe(false);
+        expect(parseQuery({ org_id: orgId, actor_user_id: "bad" }, 50).ok).toBe(false);
+        expect(parseQuery({ org_id: orgId, actor_user_id: eventId(1) }, 50)).toMatchObject({ ok: true, query: { actorUserId: eventId(1) } });
+    });
+    it("matches only the selected ID even when two people share a name, including exports", async () => {
+        const { db } = database([
+            { id: eventId(1), org_id: orgId, user_id: eventId(11), user_email: "one@example.com", title: "First", created_at: "2026-10-14" },
+            { id: eventId(2), org_id: orgId, user_id: eventId(12), user_email: "two@example.com", title: "Second", created_at: "2026-10-14" },
+        ], [
+            { user_id: eventId(11), display_name: "Alex" },
+            { user_id: eventId(12), display_name: "Alex" },
+        ]);
+        const selected = { ...query, orgId, actorUserId: eventId(11) };
+        expect((await queryEvents(db, "actor", undefined, selected)).data?.map((row) => row.id)).toEqual([eventId(1)]);
+        const csv = await buildAuditCsv(db, "actor", undefined, selected);
+        expect(csv).toContain("one@example.com");
+        expect(csv).not.toContain("two@example.com");
+    });
+});

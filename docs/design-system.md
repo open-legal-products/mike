@@ -140,13 +140,16 @@ Audit logs resolve photos only for actors on the authorized organization page;
 personal activity and CSV exports do not fetch photos. Affected members and
 invitation recipients prefer their current display name, falling back to the
 recorded email, which also keeps their monogram color stable. These lookups
-fetch names only for affected people on the authorized page.
+fetch names only for affected people on the authorized page. The Performed by
+filter searches distinct actors from the organization audit log, including
+former members, in a scrollable list of 20 people per page. Selecting a person
+filters by their ID and preserves that filter in CSV exports.
 
 Settings > Profile offers upload and a blue Edit button for saved images. Profile photos
 and organization logos share `ImageCropModal`: both support dragging, keyboard
-positioning, zoom, preview, and explicit saving. Edit reopens the saved image;
-Upload new selects a replacement. The footer places blue Save on the left
-(disabled until the image or framing changes) and red Remove on the right.
+positioning, zoom, preview, and explicit saving. Edit reopens the saved image.
+The footer places blue Save on the right and red Remove on the left.
+Save stays disabled until the image or framing changes.
 Photos use a circular preview
 and a crop that fills it. PNG, JPEG, and WebP source files up to 10 MB are
 rendered to a 256px PNG before upload; the API limits stored images to 512 KB.

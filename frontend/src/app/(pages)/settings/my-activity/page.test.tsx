@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   downloadUserExport,
   getAuditHistory,
+  getAuditActors,
   getUserExportStatus,
   startUserExport,
   type AuditEvent,
@@ -27,6 +28,7 @@ vi.mock("next/navigation", () => ({
 // start/poll/download wrappers instead of one blob request.
 vi.mock("@/app/lib/mikeApi", () => ({
   getAuditHistory: vi.fn(),
+  getAuditActors: vi.fn(),
   startUserExport: vi.fn(),
   getUserExportStatus: vi.fn(),
   downloadUserExport: vi.fn(),
@@ -315,8 +317,9 @@ describe("MyActivitySettingsPage", () => {
     );
   });
 
-  it("filters organization usernames on the server and carries the filter into exports", async () => {
+  it("filters an exact organization actor on the server and carries the filter into exports", async () => {
     const user = userEvent.setup();
+    vi.mocked(getAuditActors).mockResolvedValue({ users: [{ user_id: "actor-1", display_name: "Alex Lawyer", email: "lawyer@example.com", profile_photo: null }], nextOffset: null });
     render(<AuditHistory orgId="org-a" />);
     await screen.findByText(EVENT.title!);
     expect(screen.getByText("Performed by")).toBeInTheDocument();
@@ -331,15 +334,15 @@ describe("MyActivitySettingsPage", () => {
     );
     await user.click(screen.getByRole("button", { name: "Filter by person" }));
     await user.type(
-      screen.getByRole("textbox", { name: "Name or email contains" }),
+      screen.getByRole("searchbox", { name: "Search people" }),
       "  Alex  ",
     );
     await user.click(
-      screen.getByRole("button", { name: "Apply" }),
+      await screen.findByRole("button", { name: /Alex Lawyer.*lawyer@example.com/ }),
     );
     await waitFor(() =>
       expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
-        expect.objectContaining({ orgId: "org-a", username: "Alex", page: 1 }),
+        expect.objectContaining({ orgId: "org-a", actorUserId: "actor-1", page: 1 }),
         expect.any(AbortSignal),
       ),
     );
@@ -359,7 +362,7 @@ describe("MyActivitySettingsPage", () => {
     await waitFor(() =>
       expect(mockedStartUserExport).toHaveBeenCalledWith(
         "audit-csv",
-        expect.objectContaining({ org_id: "org-a", username: "Alex" }),
+        expect.objectContaining({ org_id: "org-a", actor_user_id: "actor-1" }),
       ),
     );
     await waitFor(() =>
@@ -367,12 +370,12 @@ describe("MyActivitySettingsPage", () => {
     );
     await user.click(screen.getByRole("button", { name: "Filter by person" }));
     expect(
-      screen.getByRole("textbox", { name: "Name or email contains" }),
-    ).toHaveValue("Alex");
-    await user.click(screen.getByRole("button", { name: "Clear" }));
+      screen.getByRole("searchbox", { name: "Search people" }),
+    ).toHaveValue("");
+    await user.click(screen.getByRole("button", { name: "All people" }));
     await waitFor(() =>
       expect(mockedGetAuditHistory).toHaveBeenLastCalledWith(
-        expect.objectContaining({ username: undefined, page: 1 }),
+        expect.objectContaining({ actorUserId: undefined, page: 1 }),
         expect.any(AbortSignal),
       ),
     );
