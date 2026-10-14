@@ -47,7 +47,7 @@ const value = async (s: string) =>
         : dockerSql(s);
 const migration = () =>
     readFileSync(
-        resolve("migrations/20261014_01_organization_audit_lifecycle.sql"),
+        resolve("migrations/20261014_03_organization_audit_lifecycle.sql"),
         "utf8",
     );
 const remove = (actor = 1) =>

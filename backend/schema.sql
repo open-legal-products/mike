@@ -10133,9 +10133,9 @@ insert into public.schema_migrations (filename) values
   ('20261013_04_public_member_handover.sql'),
   ('20261013_05_org_departure_retention.sql'),
   ('20261013_06_org_departure_listing.sql'),
-  ('20261014_01_organization_audit_lifecycle.sql'),
   ('20261014_01_user_profile_photos.sql'),
-  ('20261014_02_org_private_content_access.sql'),
   ('20261014_02_validate_user_profile_photos.sql'),
-  ('20261014_03_audit_private_content_access.sql')
+  ('20261014_03_organization_audit_lifecycle.sql'),
+  ('20261014_04_org_private_content_access.sql'),
+  ('20261014_05_audit_private_content_access.sql')
 on conflict (filename) do nothing;

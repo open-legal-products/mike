@@ -24,9 +24,9 @@ describe.skipIf(!container)("private organization content in PostgreSQL", () => 
         if (created) execFileSync("docker", ["exec", container!, "dropdb", "-U", "postgres", "--force", database]);
     });
     it("preserves the permission, scope, revocation and atomic audit boundaries on fresh installs and migration replay", () => {
-        const migration = readFileSync(resolve(process.cwd(), "migrations/20261014_02_org_private_content_access.sql"), "utf8");
+        const migration = readFileSync(resolve(process.cwd(), "migrations/20261014_04_org_private_content_access.sql"), "utf8");
         const assertions = readFileSync(resolve(process.cwd(), "src/modules/orgs/__tests__/orgs.privateContent.sql"), "utf8");
-        const auditMigration = readFileSync(resolve(process.cwd(), "migrations/20261014_03_audit_private_content_access.sql"), "utf8");
+        const auditMigration = readFileSync(resolve(process.cwd(), "migrations/20261014_05_audit_private_content_access.sql"), "utf8");
         const auditAssertions = readFileSync(resolve(process.cwd(), "src/modules/orgs/__tests__/orgs.auditPrivateContent.sql"), "utf8");
         sql(assertions);
         sql(auditAssertions);

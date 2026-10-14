@@ -122,7 +122,7 @@ restore, so recovery cannot race a purge. Document-version deletion enqueues
 existing durable storage cleanup; storage outages can be retried. A worker
 runtime must be running to perform expiry and drain cleanup jobs.
 
-Apply `20261014_01_organization_audit_lifecycle.sql` before deploying these
+Apply `20261014_03_organization_audit_lifecycle.sql` before deploying these
 API/UI changes. The complete fresh-install schema includes the same changes.
 No additional service or production dependency is required.
 
@@ -151,8 +151,8 @@ The server rechecks membership, permission and item scope on every read. Audit
 entries record permission changes, openings and voluntary endings. Admins
 without permission cannot see other actors' private-item titles in those events.
 
-Apply `20261014_02_org_private_content_access.sql` and
-`20261014_03_audit_private_content_access.sql` before deploying the backend.
+Apply `20261014_04_org_private_content_access.sql` and
+`20261014_05_audit_private_content_access.sql` before deploying the backend.
 The fresh schema includes the same changes. Verify the database rules in a
 disposable local database:
 
