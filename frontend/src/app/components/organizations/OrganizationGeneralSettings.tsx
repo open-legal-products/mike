@@ -91,6 +91,7 @@ export function OrganizationGeneralSettings() {
   const [logoBusy, setLogoBusy] = useState<"upload" | "remove" | null>(null);
 
   // A picked image waits here while it is framed in the logo dialog.
+  const [logoEditing, setLogoEditing] = useState(false);
   const [logoFile, setLogoFile] = useState<File | null>(null);
 
   function pickLogo(file: File) {
@@ -108,6 +109,7 @@ export function OrganizationGeneralSettings() {
       return;
     }
     setLogoFile(file);
+    setLogoEditing(true);
   }
 
   async function saveLogo(dataUrl: string) {
@@ -119,6 +121,7 @@ export function OrganizationGeneralSettings() {
       // The sidebar shows it too.
       void refreshOrganizations();
       setLogoFile(null);
+      setLogoEditing(false);
     } catch (error) {
       // The dialog stays up, with the framing intact, to try again.
       setFailure({
@@ -135,6 +138,8 @@ export function OrganizationGeneralSettings() {
     setLogoBusy("remove");
     try {
       await deleteOrgLogo(org.id);
+      setLogoFile(null);
+      setLogoEditing(false);
       setOrg({ ...org, logo_updated_at: null });
       void refreshOrganizations();
     } catch (error) {
@@ -317,28 +322,19 @@ export function OrganizationGeneralSettings() {
                 </div>
               </div>
               <div className="flex w-full shrink-0 gap-2 sm:w-auto">
-                {hasLogo ? (
-                  <PillButtonUI
-                    tone="white"
-                    size="sm"
-                    disabled={logoBusy !== null}
-                    loading={logoBusy === "remove"}
-                    aria-label="Remove logo"
-                    onClick={() => void removeLogo()}
-                  >
-                    Remove
-                  </PillButtonUI>
-                ) : null}
                 <PillButtonUI
                   tone="blue"
                   size="sm"
                   disabled={logoBusy !== null}
                   loading={logoBusy === "upload"}
-                  aria-label={hasLogo ? "Replace logo" : "Upload logo"}
-                  onClick={() => logoInputRef.current?.click()}
+                  aria-label={hasLogo ? "Edit logo" : "Upload logo"}
+                  onClick={() => {
+                    if (hasLogo) setLogoEditing(true);
+                    else logoInputRef.current?.click();
+                  }}
                 >
-                  <Upload className="h-4 w-4 shrink-0" />
-                  {hasLogo ? "Replace" : "Upload"}
+                  {!hasLogo && <Upload aria-hidden className="h-4 w-4 shrink-0" />}
+                  {hasLogo ? "Edit" : "Upload"}
                 </PillButtonUI>
                 <input
                   ref={logoInputRef}
@@ -430,12 +426,15 @@ export function OrganizationGeneralSettings() {
         </section>
       ) : null}
 
-      {logoFile && org ? (
+      {logoEditing && org ? (
         <OrganizationLogoModal
-          file={logoFile}
+          file={logoFile ?? undefined}
+          imageUrl={logo}
           organizationName={org.name}
           saving={logoBusy === "upload"}
-          onCancel={() => setLogoFile(null)}
+          removing={logoBusy === "remove"}
+          onRemove={hasLogo ? () => void removeLogo() : undefined}
+          onCancel={() => { setLogoFile(null); setLogoEditing(false); }}
           onSave={(dataUrl) => void saveLogo(dataUrl)}
         />
       ) : null}

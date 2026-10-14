@@ -61,10 +61,42 @@ describe("ProfilePhotoSettings", () => {
     fireEvent.click(save);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
+  it("opens the saved photo for editing and enables Save only after a crop change", async () => {
+    state.photo = PHOTO;
+    render(<ProfilePhotoSettings />);
+    const edit = screen.getByRole("button", { name: "Edit" });
+    expect(edit).toHaveClass("bg-blue-600/90");
+    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    fireEvent.click(edit);
+    await waitFor(() => expect(screen.getByLabelText("Zoom")).toBeEnabled());
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeDisabled();
+    expect(save).toHaveClass("bg-blue-600/90");
+    expect(screen.getByRole("button", { name: "Remove" })).toHaveClass("bg-red-600/90");
+    fireEvent.change(screen.getByLabelText("Zoom"), { target: { value: "2" } });
+    expect(save).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Zoom"), { target: { value: "1" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Zoom"), { target: { value: "1.5" } });
+    fireEvent.click(save);
+    await waitFor(() => expect(state.save).toHaveBeenCalledWith(PHOTO));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+  it("keeps a failed removal in the editor for retry", async () => {
+    state.photo = PHOTO;
+    state.save.mockRejectedValueOnce(new Error("network"));
+    render(<ProfilePhotoSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save your profile photo. Try again.");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
   it("removes the existing photo", async () => {
     state.photo = PHOTO;
     render(<ProfilePhotoSettings />);
-    expect(screen.getByRole("button", { name: "Change photo" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove" })));
     expect(state.save).toHaveBeenCalledWith(null);
   });

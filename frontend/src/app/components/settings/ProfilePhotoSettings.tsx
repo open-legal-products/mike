@@ -6,7 +6,6 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { ImageCropModal } from "@/app/components/modals/ImageCropModal";
 import { UserAvatar } from "@/app/components/ui/user-avatar";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
-import { TextButtonUI } from "@/shared/ui/TextButtonUI";
 import { ORG_LOGO_ACCEPT, OrgLogoImageError, validateOrgLogoFile } from "@/app/lib/orgLogoImage";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import { SettingsRow } from "./SettingsRow";
@@ -18,21 +17,23 @@ export function ProfilePhotoSettings() {
   const { profile, loading, updateProfilePhoto } = useUserProfile();
   const input = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState<"save" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /** Persists a photo or removal once at a time, closing the crop modal only after a successful update. */
   async function save(photo: string | null) {
     if (saving) return;
-    setSaving(true);
+    setSaving(photo === null ? "remove" : "save");
     setError(null);
     try {
       await updateProfilePhoto(photo);
       setFile(null);
+      setEditing(false);
     } catch (cause) {
       setError(userFacingApiError(cause, "Could not save your profile photo. Try again."));
     } finally {
-      setSaving(false);
+      setSaving(null);
     }
   }
 
@@ -43,7 +44,7 @@ export function ProfilePhotoSettings() {
         <div className="min-w-0 space-y-1">
           <SettingsLabel>Profile photo</SettingsLabel>
           <SettingsDescription>Shown beside your name when you share or work with others.</SettingsDescription>
-          {error && !file ? <p role="alert" className="text-xs text-red-600">{error}</p> : null}
+          {error && !editing ? <p role="alert" className="text-xs text-red-600">{error}</p> : null}
         </div>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-3">
@@ -55,16 +56,31 @@ export function ProfilePhotoSettings() {
           try {
             validateOrgLogoFile(picked);
             setFile(picked);
+            setEditing(true);
           } catch (cause) {
             setError(cause instanceof OrgLogoImageError ? cause.message : "Choose another image.");
           }
         }} />
-        <PillButtonUI size="sm" tone="white" disabled={loading || saving} onClick={() => input.current?.click()}>
-          {profile?.profilePhoto ? "Change photo" : "Upload photo"}
+        <PillButtonUI size="sm" tone={profile?.profilePhoto ? "blue" : "white"} disabled={loading || saving !== null} onClick={() => {
+          setError(null);
+          if (profile?.profilePhoto) setEditing(true);
+          else input.current?.click();
+        }}>
+          {profile?.profilePhoto ? "Edit" : "Upload photo"}
         </PillButtonUI>
-        {profile?.profilePhoto ? <TextButtonUI disabled={saving} onClick={() => void save(null)}>Remove</TextButtonUI> : null}
       </div>
-      {file ? <ImageCropModal file={file} name={profile?.displayName || user?.email || "You"} variant="photo" saving={saving} error={error} onCancel={() => { setFile(null); setError(null); }} onSave={(photo) => void save(photo)} /> : null}
+      {editing ? <ImageCropModal
+        file={file ?? undefined}
+        imageUrl={profile?.profilePhoto}
+        name={profile?.displayName || user?.email || "You"}
+        variant="photo"
+        saving={saving === "save"}
+        removing={saving === "remove"}
+        error={error}
+        onCancel={() => { setEditing(false); setFile(null); setError(null); }}
+        onSave={(photo) => void save(photo)}
+        onRemove={profile?.profilePhoto ? () => void save(null) : undefined}
+      /> : null}
     </SettingsRow>
   );
 }

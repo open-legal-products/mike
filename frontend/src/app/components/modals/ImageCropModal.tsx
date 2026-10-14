@@ -8,8 +8,10 @@ import {
   type PointerEvent,
 } from "react";
 import { Modal } from "@/app/components/modals/Modal";
+import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {
+  ORG_LOGO_ACCEPT,
   ORG_LOGO_MAX_ZOOM,
   clampOrgLogoFrame,
   initialOrgLogoFrame,
@@ -77,39 +79,60 @@ function FramedLogo({
  */
 export function ImageCropModal({
   file,
+  imageUrl,
   name,
   variant = "logo",
   saving = false,
+  removing = false,
   error,
   onCancel,
   onSave,
+  onRemove,
 }: {
   /** The picked image, already checked for type and size. */
-  file: File;
+  file?: File;
+  /** The previously saved raster image, reopened without requiring another upload. */
+  imageUrl?: string | null;
   name: string;
   variant?: "logo" | "photo";
   saving?: boolean;
+  removing?: boolean;
   error?: string | null;
   onCancel: () => void;
   /** Called with the framed logo as a PNG data URL. */
   onSave: (dataUrl: string) => void;
+  onRemove?: () => void;
 }) {
   // Decode the upload into pixels before displaying it. The raw file never
   // becomes a DOM URL, so markup cannot be interpreted as preview content.
+  const input = useRef<HTMLInputElement>(null);
+  const [replacement, setReplacement] = useState<File | null>(null);
+  const source = replacement ?? file ?? imageUrl ?? null;
+  const busy = saving || removing;
+  const [pickError, setPickError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<{
-    file: File;
+    source: File | string;
     image: ImageBitmap;
     frame: OrgLogoFrame;
   } | null>(null);
-  const [failedFile, setFailedFile] = useState<File | null>(null);
+  const [failedSource, setFailedSource] = useState<File | string | null>(null);
   useEffect(() => {
     let cancelled = false;
     let bitmap: ImageBitmap | undefined;
     /** Validates and decodes this file, discarding late results and releasing bitmaps after cancellation. */
     async function decode() {
       try {
-        validateOrgLogoFile(file);
-        const image = await createImageBitmap(file);
+        if (!source) return;
+        // Stored images are bounded raster data URLs, never external URLs.
+        let picked: File;
+        if (typeof source === "string") {
+          const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/.exec(source);
+          if (!match) throw new Error("Unsupported image");
+          const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+          picked = new File([bytes], "saved-image", { type: match[1] });
+        } else picked = source;
+        validateOrgLogoFile(picked);
+        const image = await createImageBitmap(picked);
         if (cancelled) {
           image.close();
           return;
@@ -118,12 +141,12 @@ export function ImageCropModal({
         if (image.width <= 0 || image.height <= 0) {
           image.close();
           bitmap = undefined;
-          setFailedFile(file);
+          setFailedSource(source);
           return;
         }
-        setLoaded({ file, image, frame: initialOrgLogoFrame(image.width, image.height) });
+        setLoaded({ source, image, frame: initialOrgLogoFrame(image.width, image.height) });
       } catch {
-        if (!cancelled) setFailedFile(file);
+        if (!cancelled) setFailedSource(source);
       }
     }
     void decode();
@@ -131,20 +154,22 @@ export function ImageCropModal({
       cancelled = true;
       bitmap?.close();
     };
-  }, [file]);
+  }, [source]);
 
   const isPhoto = variant === "photo";
   const previewSide = isPhoto ? 20 : SIDEBAR_SIDE;
   const [saveError, setSaveError] = useState(false);
-  const image = loaded?.file === file ? loaded.image : null;
-  const frame = loaded?.file === file ? loaded.frame : null;
-  const unreadable = failedFile === file;
+  const image = loaded?.source === source ? loaded.image : null;
+  const frame = loaded?.source === source ? loaded.frame : null;
+  const unreadable = source ? failedSource === source : imageUrl === null;
+  const changed = !!frame && (typeof source !== "string" || frame.zoom !== 1 ||
+    frame.centerX !== frame.imageWidth / 2 || frame.centerY !== frame.imageHeight / 2);
   const drag = useRef<{ x: number; y: number } | null>(null);
 
   /** Applies a crop update only to the active file and clamps its zoom and position to the variant bounds. */
   const change = (next: (current: OrgLogoFrame) => OrgLogoFrame) =>
     setLoaded((current) => {
-      if (current?.file !== file) return current;
+      if (!current || current.source !== source || busy) return current;
       const frame = next(current.frame);
       return { ...current, frame: clampOrgLogoFrame({
         ...frame, zoom: Math.max(isPhoto ? 1 : 0, frame.zoom),
@@ -164,13 +189,13 @@ export function ImageCropModal({
 
   /** Captures the pointer and starts a drag only when an editable image frame is available. */
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (!frame || saving) return;
+    if (!frame || busy) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     drag.current = { x: event.clientX, y: event.clientY };
   }
   /** Moves the crop by the pointer delta during an active drag, ignoring input while saving. */
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
-    if (!drag.current || saving) return;
+    if (!drag.current || busy) return;
     moveBy(event.clientX - drag.current.x, event.clientY - drag.current.y);
     drag.current = { x: event.clientX, y: event.clientY };
   }
@@ -188,7 +213,7 @@ export function ImageCropModal({
       ArrowDown: [0, NUDGE],
     };
     const move = moves[event.key];
-    if (!move || saving) return;
+    if (!move || busy) return;
     event.preventDefault();
     moveBy(...move);
   }
@@ -201,17 +226,45 @@ export function ImageCropModal({
     <Modal
       open
       onClose={() => {
-        if (!saving) onCancel();
+        if (!busy) onCancel();
       }}
       breadcrumbs={[isPhoto ? "Account" : name, isPhoto ? "Profile photo" : "Logo"]}
       size="sm"
       className="h-auto max-h-[calc(100vh-2rem)]"
-      primaryAction={{
+      headerAction={
+        <>
+          <PillButtonUI tone="white" size="sm" className="shrink-0 whitespace-nowrap" disabled={busy} onClick={() => input.current?.click()}>
+            Upload new
+          </PillButtonUI>
+          <input
+            ref={input}
+            type="file"
+            accept={ORG_LOGO_ACCEPT}
+            aria-label={isPhoto ? "New profile photo" : "New logo"}
+            className="hidden"
+            disabled={busy}
+            onChange={(event) => {
+              const picked = event.target.files?.[0];
+              event.target.value = "";
+              if (!picked) return;
+              try {
+                validateOrgLogoFile(picked);
+                setReplacement(picked);
+                setPickError(null);
+                setSaveError(false);
+              } catch (cause) {
+                setPickError(cause instanceof Error ? cause.message : "Choose another image.");
+              }
+            }}
+          />
+        </>
+      }
+      secondaryAction={{
         label: saving ? "Saving..." : "Save",
         variant: "blue",
-        disabled: !frame || saving,
+        disabled: !frame || !changed || busy,
         onClick: () => {
-          if (!frame || !image) return;
+          if (!frame || !image || !changed || busy) return;
           try {
             setSaveError(false);
             onSave(renderOrgLogo(image, frame));
@@ -220,11 +273,18 @@ export function ImageCropModal({
           }
         },
       }}
+      primaryAction={onRemove ? {
+        label: removing ? "Removing..." : "Remove",
+        variant: "danger",
+        disabled: busy,
+        onClick: onRemove,
+      } : undefined}
     >
       <div
         data-modal-scroll="vertical"
         className="min-h-0 min-w-0 space-y-5 overflow-y-auto pb-4"
       >
+        {pickError ? <p role="alert" className="text-sm text-red-600">{pickError}</p> : null}
         {error ? <p role="alert" className="text-sm text-red-600">{error}</p> : null}
         {saveError ? <p role="alert" className="text-sm text-red-600">That image could not be prepared. Choose another.</p> : null}
         {unreadable ? (
@@ -273,7 +333,7 @@ export function ImageCropModal({
                 max={ORG_LOGO_MAX_ZOOM}
                 step={0.01}
                 value={frame?.zoom ?? 1}
-                disabled={!frame || saving}
+                disabled={!frame || busy}
                 onChange={(event) => {
                   const zoom = Number(event.target.value);
                   change((current) => ({ ...current, zoom }));

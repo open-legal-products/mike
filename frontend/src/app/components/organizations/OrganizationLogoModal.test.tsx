@@ -63,12 +63,59 @@ async function savedFrame(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("OrganizationLogoModal", () => {
+  it("waits for the stored logo without flashing an unreadable-image error", () => {
+    renderModal({ file: undefined, imageUrl: undefined });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(save()).toBeDisabled();
+  });
   it("is named for the organization, and cannot save until the image has been read", () => {
     renderModal();
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getAllByText("Acme LLP").length).toBeGreaterThan(0);
     expect(save()).toBeDisabled();
     expect(screen.getByLabelText("Zoom")).toBeDisabled();
+  });
+
+  it("edits the saved image without saving an unchanged frame", async () => {
+    const user = userEvent.setup();
+    const onRemove = vi.fn();
+    const { onSave } = renderModal({ file: undefined, imageUrl: "data:image/png;base64,aW1hZ2U=", onRemove });
+    await loadImage(256, 256);
+    expect(save()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Zoom"), { target: { value: "2" } });
+    expect(save()).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Zoom"), { target: { value: "1" } });
+    expect(save()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Zoom"), { target: { value: "2" } });
+    position().focus();
+    await user.keyboard("{ArrowRight}");
+    await user.click(save());
+    expect(onSave).toHaveBeenCalledWith(RENDERED);
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    expect(onRemove).toHaveBeenCalledOnce();
+  });
+
+  it("allows choosing a replacement inside the editor and saving its initial frame", async () => {
+    const { onSave } = renderModal({ file: undefined, imageUrl: "data:image/png;base64,aW1hZ2U=" });
+    await loadImage(256, 256);
+    expect(save()).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("New logo"), { target: { files: [file] } });
+    expect(save()).toBeDisabled();
+    await loadImage(800, 200, 1);
+    expect(save()).toBeEnabled();
+    await userEvent.click(save());
+    expect(onSave).toHaveBeenCalledWith(RENDERED);
+  });
+
+  it("blocks editing, removal and closing during a removal", async () => {
+    const onRemove = vi.fn();
+    const { onCancel } = renderModal({ file: undefined, imageUrl: "data:image/png;base64,aW1hZ2U=", onRemove, removing: true });
+    await loadImage(256, 256);
+    expect(screen.getByRole("button", { name: "Removing..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Upload new" })).toBeDisabled();
+    expect(screen.getByLabelText("Zoom")).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("states the file types and the size limit", () => {
