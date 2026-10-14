@@ -483,3 +483,76 @@ describe("audit actor photos", () => {
         expect(result.data?.[0]).toMatchObject({ title: "Latest", user_display_name: null, user_profile_photo: null });
     });
 });
+
+describe("affected audit identities", () => {
+    const events = [
+        { id: eventId(1), org_id: orgId, user_id: "actor", created_at: "2026-10-14", action: "org.member.role_changed", title: "old@example.com", detail: { target_user_id: "member" } },
+        { id: eventId(2), org_id: orgId, user_id: "actor", created_at: "2026-10-13", action: "org.invite.created", title: "INVITEE@example.com", detail: {} },
+        { id: eventId(3), org_id: orgId, user_id: "actor", created_at: "2026-10-12", action: "document.edited", title: "stranger@example.com", detail: { target_user_id: "stranger" } },
+    ];
+    const profiles = [
+        { user_id: "actor", email: "actor@example.com", display_name: "Alex" },
+        { user_id: "member", email: "new@example.com", display_name: " Jamie Morgan ", profile_photo: "private-photo" },
+        { user_id: "invitee", email: "invitee@example.com", display_name: "Taylor Smith" },
+        { user_id: "stranger", email: "stranger@example.com", display_name: "Unrelated" },
+    ];
+
+    it("resolves member IDs and invitation emails without changing recorded titles or fetching affected photos", async () => {
+        const { db, calls } = database(events, profiles);
+        const result = await queryEvents(db, "actor", undefined, { ...query, orgId });
+        expect(result.data?.[0]).toMatchObject({ title: "old@example.com", affected_user_display_name: "Jamie Morgan" });
+        expect(result.data?.[1]).toMatchObject({ title: "INVITEE@example.com", affected_user_display_name: "Taylor Smith" });
+        expect(result.data?.[2]).not.toHaveProperty("affected_user_display_name");
+        expect(calls.filter(([table, operation]) => table === "user_profiles" && operation === "in"))
+            .toEqual([
+                ["user_profiles", "in", "user_id", ["actor"]],
+                ["user_profiles", "in", "user_id", ["member"]],
+                ["user_profiles", "in", "email", ["invitee@example.com"]],
+            ]);
+        expect(calls.filter(([table, operation]) => table === "user_profiles" && operation === "select"))
+            .toEqual([
+                ["user_profiles", "select", "user_id, display_name, profile_photo"],
+                ["user_profiles", "select", "user_id, email, display_name"],
+                ["user_profiles", "select", "user_id, email, display_name"],
+            ]);
+        expect(JSON.stringify(result.data)).not.toContain("private-photo");
+    });
+
+    it("only resolves affected identities on the final authorized page, including personal activity", async () => {
+        const { db, calls } = database(events, profiles);
+        const result = await queryEvents(db, "actor", undefined, { ...query, limit: 1 });
+        expect(result.data?.[0].affected_user_display_name).toBe("Jamie Morgan");
+        expect(calls.filter(([table, operation]) => table === "user_profiles" && operation === "in"))
+            .toEqual([
+                ["user_profiles", "in", "user_id", ["actor"]],
+                ["user_profiles", "in", "user_id", ["member"]],
+            ]);
+    });
+
+    it("keeps email fallbacks when names are missing or the profile read fails", async () => {
+        for (const profileError of [false, true]) {
+            const { db } = database(events, [{ ...profiles[1], display_name: " " }], 1000, profileError);
+            const result = await queryEvents(db, "actor", undefined, { ...query, orgId });
+            expect(result.error).toBeNull();
+            expect(result.data?.[0]).toMatchObject({ title: "old@example.com" });
+            expect(result.data?.[0]).not.toHaveProperty("affected_user_display_name");
+        }
+    });
+
+    it("never falls back to an email's new owner when the recorded member ID is missing", async () => {
+        const { db, calls } = database([events[0]], [{ user_id: "other", email: "old@example.com", display_name: "Wrong person" }]);
+        const result = await queryEvents(db, "actor", undefined, { ...query, orgId });
+        expect(result.data?.[0]).not.toHaveProperty("affected_user_display_name");
+        expect(calls.some((call) => call[0] === "user_profiles" && call[1] === "in" && call[2] === "email")).toBe(false);
+    });
+
+    it("skips affected profile lookups for CSV and denied organization access", async () => {
+        const csv = database(events, profiles);
+        expect(await buildAuditCsv(csv.db, "actor", undefined, { ...query, orgId })).toContain("old@example.com");
+        expect(csv.calls).not.toContainEqual(["read", "user_profiles"]);
+        access.role = "member";
+        const denied = database(events, profiles);
+        expect((await queryEvents(denied.db, "actor", undefined, { ...query, orgId })).error).not.toBeNull();
+        expect(denied.calls).toEqual([]);
+    });
+});

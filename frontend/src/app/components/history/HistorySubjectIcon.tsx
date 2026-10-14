@@ -9,7 +9,7 @@ import {
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { ClosedProjectSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import type { AuditEvent } from "@/app/lib/mikeApi";
-import { auditSubject } from "./auditPresentation";
+import { auditSubject, auditSubjectEmail } from "./auditPresentation";
 
 export function HistorySubjectIcon({ event }: { event: AuditEvent }) {
   const { type, name } = auditSubject(event);
@@ -38,8 +38,8 @@ export function HistorySubjectIcon({ event }: { event: AuditEvent }) {
   if (type === "Member" || type === "Recipient")
     return (
       <UserAvatar
-        name={name.includes("@") ? null : name}
-        email={name.includes("@") ? name : null}
+        name={name === "-" || name.includes("@") ? null : name}
+        email={auditSubjectEmail(event)}
       />
     );
   const Icon =

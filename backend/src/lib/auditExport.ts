@@ -6,7 +6,7 @@
 // surface.
 
 import { getOrgRole, isOrgAdmin } from "./access";
-import { normalizeDisplayName } from "./userLookup";
+import { normalizeDisplayName, normalizeEmail } from "./userLookup";
 import type { Db } from "./supabase";
 
 /** One CSV export is a single flat page; this caps the artifact size. */
@@ -145,6 +145,53 @@ const AUDIT_EVENT_COLUMNS =
     "id, org_id, created_at, user_id, user_email, action, status, title, surface, project_id, chat_id, document_id, review_id, model, detail";
 
 type AuditRow = Record<string, unknown>;
+
+/** A person explicitly identified by an authorized member/invitation event. */
+function affectedUser(
+    event: AuditRow,
+): { column: "user_id" | "email"; value: string } | null {
+    const action = String(event.action ?? "");
+    if (
+        !action.startsWith("org.member.") &&
+        !action.startsWith("org.invite.") &&
+        action !== "org.private_content.permission_changed" &&
+        action !== "org.departure.member.departed"
+    ) return null;
+    const detail = event.detail as Record<string, unknown> | null;
+    const id = typeof detail?.target_user_id === "string"
+        ? detail.target_user_id.trim()
+        : "";
+    if (id) return { column: "user_id", value: id };
+    const email = normalizeEmail(detail?.target_email ?? event.title);
+    return /^[^\s@]+@[^\s@]+$/.test(email) ? { column: "email", value: email } : null;
+}
+
+/** Resolve current names without changing the event's recorded identity. */
+async function affectedUserNames(db: Db, events: AuditRow[]) {
+    const targets = events.map(affectedUser).filter((target) => target !== null);
+    const names = new Map<string, string>();
+    for (const column of ["user_id", "email"] as const) {
+        const values = [...new Set(targets
+            .filter((target) => target.column === column)
+            .map((target) => target.value))];
+        for (const batch of chunk(values, ID_FILTER_CHUNK)) {
+            // Fetch names only, scoped to affected people on the final authorized
+            // page. An ID never falls back to email, which may have changed owners.
+            const { data, error } = await db.from("user_profiles")
+                .select("user_id, email, display_name")
+                .in(column, batch);
+            if (error) continue; // The recorded identity remains the fallback.
+            for (const profile of data ?? []) {
+                const name = normalizeDisplayName(profile.display_name);
+                const key = column === "email"
+                    ? normalizeEmail(profile.email)
+                    : profile.user_id;
+                if (name) names.set(`${column}:${key}`, name);
+            }
+        }
+    }
+    return names;
+}
 
 type EventsResult = {
     data: AuditRow[] | null;
@@ -405,6 +452,10 @@ export async function queryEvents(
         }
     }
 
+    const affectedNames = resolveDisplayNames
+        ? await affectedUserNames(db, result.data)
+        : new Map<string, string>();
+
     return {
         ...result,
         // Annotated: the merged path's rows are `AuditRow` (an index
@@ -412,8 +463,11 @@ export async function queryEvents(
         // without this the callers lose every other column from the type.
         data: result.data.map((row): AuditRow => {
             const { user_id: userId, ...event } = row;
+            const target = affectedUser(row);
+            const affectedName = target && affectedNames.get(`${target.column}:${target.value}`);
             return {
                 ...event,
+                ...(affectedName ? { affected_user_display_name: affectedName } : {}),
                 user_display_name:
                     displayNameByUserId.get(userId as string) ?? null,
                 ...(q.orgId ? {

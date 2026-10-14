@@ -835,6 +835,8 @@ export interface AuditEvent {
     id: string;
     created_at: string;
     user_display_name: string | null;
+    /** Current name of the affected member or invitation recipient. */
+    affected_user_display_name?: string | null;
     /** Current photo of an actor in the authorized organization audit page. */
     user_profile_photo?: string | null;
     user_email: string | null;

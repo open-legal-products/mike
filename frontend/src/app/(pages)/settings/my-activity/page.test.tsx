@@ -89,6 +89,18 @@ function observeLoadMore() {
 }
 
 describe("MyActivitySettingsPage", () => {
+  it("shows the affected member's name and initials, keeping email in the tooltip", async () => {
+    mockedGetAuditHistory.mockResolvedValue({
+      events: [{ ...EVENT, action: "org.member.role_changed", title: "jamie@example.com", affected_user_display_name: "Jamie Morgan" }],
+      total: 1, page: 1, pageSize: 50,
+    });
+    render(<AuditHistory orgId="org-a" />);
+    expect(await screen.findByRole("button", { name: "View details for Jamie Morgan" })).toBeInTheDocument();
+    const cell = screen.getByTitle("Member: Jamie Morgan (jamie@example.com)");
+    expect(cell).toHaveTextContent("Jamie Morgan");
+    expect(cell).not.toHaveTextContent("jamie@example.com");
+    expect(within(cell).getByRole("img", { name: "Jamie Morgan" })).toHaveTextContent("JM");
+  });
   it("scopes the reused organization history page to its organization", async () => {
     render(<AuditHistory orgId="org-a" onBack={() => {}} />);
     await waitFor(() =>

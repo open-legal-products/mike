@@ -31,6 +31,7 @@ import {
   auditLabel,
   auditPrivateAccess,
   auditSubject,
+  auditSubjectEmail,
   auditSummary,
   auditTimestamp,
   SURFACE_LABELS,
@@ -178,6 +179,7 @@ export function HistoryEventModal({
     setAttempt((value) => value + 1);
   };
   const subject = auditSubject(event);
+  const subjectEmail = auditSubjectEmail(event);
   const destination = auditDestination(event);
   const fields = [
     { label: "Description", value: auditSummary(event, personal) },
@@ -211,7 +213,7 @@ export function HistoryEventModal({
           <span className="inline-flex max-w-full items-start justify-end gap-2">
             <HistorySubjectIcon event={event} />
             <span className="min-w-0 [overflow-wrap:anywhere]">
-              {subject.name}
+              {`${subject.name}${subjectEmail && subjectEmail !== subject.name ? ` (${subjectEmail})` : ""}`}
             </span>
           </span>
         ) : (

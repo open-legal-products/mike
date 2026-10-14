@@ -138,11 +138,16 @@ recipients show a monogram until their photo is available through an authorized
 roster response; organization pickers can use their existing member photos.
 Audit logs resolve photos only for actors on the authorized organization page;
 personal activity and CSV exports do not fetch photos. Affected members and
-invitation recipients use monograms from the recorded identity.
+invitation recipients prefer their current display name, falling back to the
+recorded email, which also keeps their monogram color stable. These lookups
+fetch names only for affected people on the authorized page.
 
-Settings > Profile offers upload, replace, and remove controls. Profile photos
+Settings > Profile offers upload and a blue Edit button for saved images. Profile photos
 and organization logos share `ImageCropModal`: both support dragging, keyboard
-positioning, zoom, preview, and explicit saving. Photos use a circular preview
+positioning, zoom, preview, and explicit saving. Edit reopens the saved image;
+Upload new selects a replacement. The footer places blue Save on the left
+(disabled until the image or framing changes) and red Remove on the right.
+Photos use a circular preview
 and a crop that fills it. PNG, JPEG, and WebP source files up to 10 MB are
 rendered to a 256px PNG before upload; the API limits stored images to 512 KB.
 

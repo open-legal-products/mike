@@ -6,6 +6,7 @@ import {
   auditDestination,
   auditDetailFields,
   auditSubject,
+  auditSubjectEmail,
   auditSummary,
   auditTimestamp,
 } from "./auditPresentation";
@@ -32,6 +33,17 @@ const event: AuditEvent = {
 };
 
 describe("audit event presentation", () => {
+  it.each(["org.member.role_changed", "org.invite.created", "org.private_content.permission_changed"])("prefers the affected person's name for %s and retains the recorded email", (action) => {
+    const named = { ...event, action, affected_user_display_name: " Jamie Morgan " };
+    expect(auditSubject(named).name).toBe("Jamie Morgan");
+    expect(auditSubjectEmail(named)).toBe("jamie@example.com");
+    expect(auditSubject({ ...named, affected_user_display_name: " " }).name).toBe("jamie@example.com");
+  });
+  it("never replaces an affected document's title with a person's name", () => {
+    const document = { ...event, action: "document.edited", title: "NDA.docx", affected_user_display_name: "Jamie Morgan" };
+    expect(auditSubject(document).name).toBe("NDA.docx");
+    expect(auditSubjectEmail(document)).toBeNull();
+  });
   it("distinguishes the actor, affected member, and recorded role change", () => {
     expect(auditActor(event)).toBe("Alex Chen");
     expect(auditSubject(event)).toEqual({

@@ -157,11 +157,14 @@ export function auditSubject(event: AuditEvent) {
   // technical details, not where a person's name or email is expected.
   const isId =
     title && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(title);
-  const name =
+  const recordedName =
     title && !isId
       ? title
       : (detailText(event, "target_email") ??
         (type === "Provider" ? detailText(event, "provider") : null));
+  const name = ["Member", "Recipient"].includes(type)
+    ? event.affected_user_display_name?.trim() || recordedName
+    : recordedName;
   const context = [
     detailText(event, "organization_name") ?? detailText(event, "org_name"),
     detailText(event, "project_name"),
@@ -173,6 +176,13 @@ export function auditSubject(event: AuditEvent) {
     name: name ?? "-",
     context: [...new Set(context)].join(" · "),
   };
+}
+
+/** Retain the recorded email for identity tooltips and stable monogram colors. */
+export function auditSubjectEmail(event: AuditEvent): string | null {
+  if (!["Member", "Recipient"].includes(auditSubject(event).type)) return null;
+  const email = (detailText(event, "target_email") ?? event.title)?.trim();
+  return email && /^[^\s@]+@[^\s@]+$/.test(email) ? email : null;
 }
 
 export function auditTimestamp(value: string, exact = false): string {

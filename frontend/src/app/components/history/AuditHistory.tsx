@@ -74,6 +74,7 @@ import {
   auditAction,
   auditActor,
   auditSubject,
+  auditSubjectEmail,
   auditTimestamp,
   auditDestination,
   auditPrivateAccess,
@@ -651,6 +652,7 @@ export function AuditHistory({
             {events.map((event) => {
               const selected = selectedIds.has(event.id);
               const subject = auditSubject(event);
+              const subjectEmail = auditSubjectEmail(event);
               const actor = auditActor(event);
               const rowActions = (close: () => void) =>
                 renderActions(
@@ -666,7 +668,7 @@ export function AuditHistory({
                   role="button"
                   tabIndex={0}
                   aria-haspopup="dialog"
-                  aria-label={`View details for ${event.title ?? auditAction(event)}`}
+                  aria-label={`View details for ${subject.name === "-" ? auditAction(event) : subject.name}`}
                   className="h-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
                   onClick={(click) => {
                     click.currentTarget.focus();
@@ -727,7 +729,7 @@ export function AuditHistory({
                   </TableCell>
                   <TableCell
                     className="w-64 pr-6 text-xs text-gray-800"
-                    title={`${subject.type}: ${subject.name}`}
+                    title={`${subject.type}: ${subject.name}${subjectEmail && subjectEmail !== subject.name ? ` (${subjectEmail})` : ""}`}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       {subject.name !== "-" && (
