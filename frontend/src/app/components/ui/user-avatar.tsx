@@ -27,11 +27,14 @@ export function avatarInitials(name?: string | null, email?: string | null) {
     (words.length > 1 ? Array.from(words[words.length - 1])[0] : "")).toUpperCase();
 }
 
-/** A photo with a deterministic, accessible fallback, including broken images. */
-export function UserAvatar({ photo, name, email, className }: {
+export type UserAvatarSize = "sm" | "md";
+
+/** A photo with a deterministic fallback; use the small size in table rows. */
+export function UserAvatar({ photo, name, email, size = "md", className }: {
   photo?: string | null;
   name?: string | null;
   email?: string | null;
+  size?: UserAvatarSize;
   className?: string;
 }) {
   const [failedPhoto, setFailedPhoto] = useState<string | null>(null);
@@ -42,7 +45,7 @@ export function UserAvatar({ photo, name, email, className }: {
       role="img"
       aria-label={name?.trim() || email?.trim() || "User"}
       data-slot="user-avatar"
-      className={cn("inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full font-serif text-[10px] font-medium text-white", avatarColour(email, name), className)}
+      className={cn("inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-serif font-medium text-white", size === "sm" ? "h-4 w-4 text-[8px]" : "h-5 w-5 text-[10px]", avatarColour(email, name), className)}
     >
       {source ? (
         // Already cropped to a small raster data URL; no external fetch or optimizer.

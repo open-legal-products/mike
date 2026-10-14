@@ -1,5 +1,5 @@
 import { FileText, KeyRound, UserRound } from "lucide-react";
-import { UserAvatar } from "@/app/components/ui/user-avatar";
+import { UserAvatar, type UserAvatarSize } from "@/app/components/ui/user-avatar";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import {
   ChatSkeuoIcon,
@@ -11,7 +11,7 @@ import { ClosedProjectSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import type { AuditEvent } from "@/app/lib/mikeApi";
 import { auditSubject, auditSubjectEmail } from "./auditPresentation";
 
-export function HistorySubjectIcon({ event }: { event: AuditEvent }) {
+export function HistorySubjectIcon({ event, avatarSize }: { event: AuditEvent; avatarSize?: UserAvatarSize }) {
   const { type, name } = auditSubject(event);
   const className = "h-4 w-4 shrink-0";
   if (type === "Document")
@@ -38,6 +38,7 @@ export function HistorySubjectIcon({ event }: { event: AuditEvent }) {
   if (type === "Member" || type === "Recipient")
     return (
       <UserAvatar
+        size={avatarSize}
         name={name === "-" || name.includes("@") ? null : name}
         email={auditSubjectEmail(event)}
       />

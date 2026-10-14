@@ -141,8 +141,10 @@ single palette.
 `components/ui/user-avatar.tsx` renders profile photos and the monogram fallback
 for the account button, People/share rows, member pickers, organization members,
 and audit-log identities. Pass the identity's email, display name, and
-`profile_photo` from the existing authorized roster response. Row avatars are
-20px across, with white serif initials for monograms. The background colour is stable and keyed to the
+`profile_photo` from the existing authorized roster response. Table avatars use
+`size="sm"`: 16px across with 8px white serif initials. Pickers and detail views
+use the default 20px size. Loading placeholders match the table's 16px size.
+The background colour is stable and keyed to the
 normalized email, falling back to the display name. A missing or
 unreadable image restores those initials.
 

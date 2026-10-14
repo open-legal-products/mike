@@ -715,6 +715,7 @@ export function AuditHistory({
                       <span className="flex min-w-0 items-center gap-2">
                         {actor !== "System" && (
                           <UserAvatar
+                            size="sm"
                             photo={event.user_profile_photo}
                             name={event.user_display_name}
                             email={event.user_email}
@@ -736,7 +737,7 @@ export function AuditHistory({
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       {subject.name !== "-" && (
-                        <HistorySubjectIcon event={event} />
+                        <HistorySubjectIcon event={event} avatarSize="sm" />
                       )}
                       <span className="truncate">{subject.name}</span>
                     </span>
@@ -1048,7 +1049,7 @@ function HistoryLoadingRows({ organization }: { organization: boolean }) {
           {organization && (
             <TableCell className="w-64 pr-4">
               <span className="flex items-center gap-2">
-                <span className="h-5 w-5 shrink-0 animate-pulse rounded-full bg-gray-100" />
+                <span className="h-4 w-4 shrink-0 animate-pulse rounded-full bg-gray-100" />
                 <SkeletonLine className="w-28" />
               </span>
             </TableCell>
