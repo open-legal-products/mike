@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
+import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
+import ide from "../../../../public/icons/features/ide.svg";
 import { useRouter } from "next/navigation";
 import { FolderOpen, Plus } from "lucide-react";
 import { EmptyState } from "@/app/components/ui/empty-state";
@@ -38,12 +39,10 @@ export default function IdePage() {
                 <EmptyState
                     className="w-full max-w-md"
                     icon={
-                        <Image
-                            src="/icons/features/ide.svg"
-                            alt=""
+                        <SvgAssetIcon
+                            src={ide}
                             width={32}
                             height={32}
-                            unoptimized
                         />
                     }
                     title="Integrated Drafting Environment"

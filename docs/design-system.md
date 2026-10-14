@@ -36,6 +36,19 @@ implementations used by both targets. To style a link as a pill, apply
 `pillButtonUIClassName` from `PillButtonUI.styles` directly to the link; this
 keeps the correct link semantics and is safe in server components.
 
+## Icons
+
+Use the existing skeuomorphic feature, folder, file-type, and legal-source
+icons where available; use Lucide for other controls. Web SVG assets render
+through `components/ui/svg-asset-icon.tsx` with static imports from
+`frontend/public/icons/`. Static imports produce content-hashed URLs that can
+be cached immutably; avoid literal `/icons/...` URLs and manual version queries
+for these assets. Small UI icons load eagerly so they appear with their labels.
+The app layout preloads navigation and account-menu icons during the loading
+screen, before opening a menu can trigger an image request.
+`frontend/public/_headers` preserves immutable caching for `/_next/static/*`
+on Cloudflare, whose asset server otherwise revalidates even hashed files.
+
 ## Color tokens
 
 Two families coexist. Prefer a token over a raw Tailwind palette class whenever
