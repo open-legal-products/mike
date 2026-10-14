@@ -16,6 +16,11 @@ create table if not exists public.user_profiles (
   user_id uuid not null unique references auth.users(id) on delete cascade,
   email text,
   display_name text,
+  profile_photo text constraint user_profiles_profile_photo_check
+    check (profile_photo is null or (
+      octet_length(profile_photo) <= 699116
+      and profile_photo ~ '^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$'
+    )),
   organisation text,
   jurisdiction text,
   practice_setting text
@@ -8872,6 +8877,1415 @@ create table if not exists public.schema_migrations (
 alter table public.schema_migrations enable row level security;
 revoke all on public.schema_migrations from anon, authenticated, service_role;
 
+-- Migration date: 2026-10-14
+-- Organization audit attribution and a recoverable, owner-controlled lifecycle.
+alter table public.organizations add column if not exists deleted_at timestamptz;
+alter table public.organizations add column if not exists purge_after timestamptz;
+alter table public.organizations drop constraint if exists organizations_deletion_window;
+alter table public.organizations add constraint organizations_deletion_window check (
+  (deleted_at is null and purge_after is null) or
+  (kind = 'team' and deleted_at is not null and purge_after is not null and purge_after > deleted_at)
+);
+create index if not exists organizations_purge_due on public.organizations(purge_after) where deleted_at is not null;
+
+-- Attribution survives content and organization deletion. It is deliberately
+-- not a foreign key: audit records describe historical resources too.
+alter table public.audit_events add column if not exists org_id uuid;
+create index if not exists audit_events_org_created on public.audit_events(org_id, created_at desc, id);
+alter table public.audit_events alter column user_id drop not null;
+alter table public.audit_events drop constraint if exists audit_events_user_id_fkey;
+alter table public.audit_events add constraint audit_events_user_id_fkey foreign key(user_id) references auth.users(id) on delete set null;
+
+create or replace function public.audit_event_org()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+begin
+  if new.action like 'org.%' and new.surface is null then new.surface := 'organization'; end if;
+  if new.org_id is not null then return new; end if;
+  if new.detail->>'org_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    new.org_id := (new.detail->>'org_id')::uuid;
+  end if;
+  if new.org_id is null and new.project_id is not null then
+    select org_id into new.org_id from public.projects where id=new.project_id;
+  end if;
+  if new.org_id is null and new.chat_id is not null then
+    select coalesce(c.org_id,p.org_id) into new.org_id from public.chats c
+      left join public.projects p on p.id=c.project_id where c.id=new.chat_id;
+  end if;
+  if new.org_id is null and new.review_id is not null then
+    select coalesce(v.org_id,p.org_id) into new.org_id from public.tabular_reviews v
+      left join public.projects p on p.id=v.project_id where v.id=new.review_id;
+  end if;
+  if new.org_id is null and new.document_id is not null then
+    select coalesce(d.org_id,p.org_id,w.org_id) into new.org_id from public.documents d
+      left join public.projects p on p.id=d.project_id
+      left join public.workflows w on w.id=d.workflow_id where d.id=new.document_id;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists audit_event_org on public.audit_events;
+create trigger audit_event_org before insert or update of org_id on public.audit_events
+  for each row execute function public.audit_event_org();
+-- Only backfill provable associations. Never infer from a user's current org.
+update public.audit_events set org_id=org_id where org_id is null;
+
+create or replace function public.org_is_active(p_org_id uuid)
+returns boolean language sql stable set search_path = public, pg_temp as $$
+  select p_org_id is null or exists(select 1 from public.organizations where id=p_org_id and deleted_at is null);
+$$;
+
+-- Serialize lifecycle actions and new organization-owned writes. This also
+-- closes invitation acceptance and content creation races with deletion.
+create or replace function public.require_active_organization()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+begin
+  if tg_op='UPDATE' and old.org_id is not null then
+    perform 1 from public.organizations where id=old.org_id and deleted_at is null for share;
+    if not found then raise exception 'Organization is unavailable' using errcode='23514'; end if;
+  end if;
+  if new.org_id is not null then
+    perform 1 from public.organizations where id=new.org_id and deleted_at is null for share;
+    if not found then raise exception 'Organization is unavailable' using errcode='23514'; end if;
+  end if;
+  return new;
+end;
+$$;
+do $$ declare t text; begin
+  foreach t in array array['org_members','org_invitations','projects','workflows','documents','chats','tabular_reviews','memory_files'] loop
+    execute format('drop trigger if exists require_active_organization on public.%I',t);
+    execute format('create trigger require_active_organization before insert or update of org_id on public.%I for each row execute function public.require_active_organization()',t);
+  end loop;
+end $$;
+
+create or replace function public.soft_delete_organization(p_org_id uuid,p_actor_id uuid)
+returns void language plpgsql set search_path = public, pg_temp as $$
+declare org public.organizations; actor_role text;
+begin
+  select * into org from public.organizations where id=p_org_id and kind='team' for update;
+  if not found then raise exception 'Organization not found' using errcode='P0002'; end if;
+  select role into actor_role from public.org_members where org_id=p_org_id and user_id=p_actor_id;
+  if actor_role is null then raise exception 'Organization not found' using errcode='P0002'; end if;
+  if actor_role <> 'owner' then raise exception 'Only owners can delete organizations' using errcode='42501'; end if;
+  if org.deleted_at is not null then return; end if;
+  update public.organizations set deleted_at=now(),purge_after=now()+interval '30 days',updated_at=now() where id=p_org_id;
+  insert into public.audit_events(user_id,user_email,org_id,action,title,surface,detail)
+    values(p_actor_id,(select email from public.user_profiles where user_id=p_actor_id),p_org_id,'org.deleted',org.name,'organization',jsonb_build_object('purge_after',now()+interval '30 days'));
+end;
+$$;
+
+create or replace function public.restore_organization(p_org_id uuid,p_actor_id uuid)
+returns void language plpgsql set search_path = public, pg_temp as $$
+declare org public.organizations; actor_role text;
+begin
+  select * into org from public.organizations where id=p_org_id and kind='team' for update;
+  if not found then raise exception 'Organization not found' using errcode='P0002'; end if;
+  select role into actor_role from public.org_members where org_id=p_org_id and user_id=p_actor_id;
+  if actor_role is null then raise exception 'Organization not found' using errcode='P0002'; end if;
+  if actor_role <> 'owner' then raise exception 'Only owners can restore organizations' using errcode='42501'; end if;
+  if org.deleted_at is null then return; end if;
+  if org.purge_after <= now() then raise exception 'Recovery period has ended' using errcode='23514'; end if;
+  update public.organizations set deleted_at=null,purge_after=null,updated_at=now() where id=p_org_id;
+  insert into public.audit_events(user_id,user_email,org_id,action,title,surface)
+    values(p_actor_id,(select email from public.user_profiles where user_id=p_actor_id),p_org_id,'org.restored',org.name,'organization');
+end;
+$$;
+
+-- One transaction per bounded sweep, with the same lock as restore. Document
+-- version deletion triggers enqueue durable storage cleanup in this transaction.
+create or replace function public.purge_expired_organizations(p_limit integer default 10)
+returns integer language plpgsql set search_path = public, pg_temp as $$
+declare org record; purged integer := 0;
+begin
+  for org in select id,name from public.organizations where purge_after<=now()
+    order by purge_after,id limit greatest(1,least(p_limit,100)) for update skip locked loop
+    delete from public.projects where org_id=org.id;
+    delete from public.workflows where org_id=org.id;
+    delete from public.documents where org_id=org.id;
+    delete from public.tabular_reviews where org_id=org.id;
+    delete from public.chats where org_id=org.id;
+    delete from public.memory_files where org_id=org.id;
+    insert into public.audit_events(org_id,action,title,surface) values(org.id,'org.purged',org.name,'organization');
+    delete from public.organizations where id=org.id;
+    purged := purged+1;
+  end loop;
+  return purged;
+end;
+$$;
+
+-- The ordinary membership API hides deleted organizations; recovery is the
+-- sole exception and explicitly requires a retained owner membership.
+create or replace view public.active_org_members with (security_invoker=true) as
+  select m.* from public.org_members m join public.organizations o on o.id=m.org_id where o.deleted_at is null;
+revoke all on public.active_org_members from public,anon,authenticated;
+grant select on public.active_org_members to service_role;
+
+create or replace function public.project_access_role(
+  p_project_id uuid,
+  p_project_user_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.projects where id=p_project_id and archived_at is not null) then null
+    when p_org_id is not null then (
+      select case
+        when p_project_user_id::text = p_user_id then 'owner'
+        -- An organization owner owns what is public, and what has no Owner
+        -- left. A private item with an Owner is not theirs unless shared.
+        when m.role = 'owner' and (
+          (
+            select project.visibility from public.projects project
+            where project.id = p_project_id
+          ) = 'organization'
+          or public.project_is_ownerless(
+            p_project_id, p_project_user_id, p_org_id
+          )
+        ) then 'owner'
+        when o.role = 'deny' then null
+        when o.role in ('owner', 'editor', 'viewer') then o.role
+        when (
+          select project.visibility from public.projects project
+          where project.id = p_project_id
+        ) = 'organization' then 'editor'
+        else null
+      end
+      from public.org_members m
+      left join public.project_org_access_overrides o
+        on o.project_id = p_project_id
+       and o.org_id = p_org_id
+       and o.user_id = m.user_id
+      where m.org_id = p_org_id and m.user_id::text = p_user_id
+    )
+    when p_project_user_id::text = p_user_id then 'owner'
+    else (
+      select g.role from public.project_access_grants g
+      where g.project_id = p_project_id
+        and coalesce(p_user_email, '') <> ''
+        and g.email = lower(p_user_email)
+      limit 1
+    )
+  end;
+$$;
+
+create or replace function public.workflow_access_role(
+  p_workflow_id uuid,
+  p_workflow_user_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.workflows where id=p_workflow_id and archived_at is not null) then null
+    when p_org_id is not null then (
+      select case
+        when p_workflow_user_id::text = p_user_id then 'owner'
+        -- As for projects: public, or left without an Owner.
+        when m.role = 'owner' and (
+          (
+            select workflow.visibility from public.workflows workflow
+            where workflow.id = p_workflow_id
+          ) = 'organization'
+          or public.workflow_is_ownerless(
+            p_workflow_id, p_workflow_user_id, p_org_id
+          )
+        ) then 'owner'
+        when o.role = 'deny' then null
+        when o.role in ('owner', 'editor', 'viewer') then o.role
+        when (
+          select workflow.visibility from public.workflows workflow
+          where workflow.id = p_workflow_id
+        ) = 'organization' then 'editor'
+        else null
+      end
+      from public.org_members m
+      left join public.workflow_org_access_overrides o
+        on o.workflow_id = p_workflow_id
+       and o.org_id = p_org_id
+       and o.user_id = m.user_id
+      where m.org_id = p_org_id and m.user_id::text = p_user_id
+    )
+    when p_workflow_user_id::text = p_user_id then 'owner'
+    else (
+      -- BOTH sides lowered. get_workflows_overview lists a share with
+      -- lower() on both, so a legacy mixed-case row listed for its recipient
+      -- and then 404'd the moment they opened it (and re-sharing produced a
+      -- second row rather than updating the first). The 02 migration
+      -- normalizes the stored values and adds a lowercase CHECK; this stays
+      -- symmetrical with the overview regardless.
+      select s.role from public.workflow_shares s
+      where s.workflow_id = p_workflow_id
+        and coalesce(p_user_email, '') <> ''
+        and lower(s.shared_with_email) = lower(p_user_email)
+      limit 1
+    )
+  end;
+$$;
+
+create or replace function public.standalone_org_access_role(
+  p_org_id uuid,
+  p_creator_id uuid,
+  p_user_id text,
+  p_grant_role text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select case
+    when not public.org_is_active(p_org_id) then null
+    when not exists (
+      select 1 from public.org_members m
+      where m.org_id = p_org_id and m.user_id::text = p_user_id
+    ) then null
+    when p_creator_id::text = p_user_id then 'owner'
+    else p_grant_role
+  end;
+$$;
+
+create or replace function public.chat_access_role(
+  p_chat_id uuid,
+  p_chat_user_id uuid,
+  p_project_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.chats where id=p_chat_id and archived_at is not null) then null
+    when p_project_id is not null then (
+      select public.project_access_role(
+        p.id, p.user_id, p.org_id, p_user_id, p_user_email
+      ) from public.projects p where p.id = p_project_id
+    )
+    when public.org_is_team(p_org_id) then public.standalone_org_access_role(
+      p_org_id,
+      p_chat_user_id,
+      p_user_id,
+      (
+        select g.role from public.chat_access_grants g
+        where g.chat_id = p_chat_id
+          and coalesce(p_user_email, '') <> ''
+          and g.email = lower(p_user_email)
+        limit 1
+      )
+    )
+    when p_chat_user_id::text = p_user_id then 'owner'
+    else (
+      select g.role from public.chat_access_grants g
+      where g.chat_id = p_chat_id
+        and coalesce(p_user_email, '') <> ''
+        and g.email = lower(p_user_email)
+      limit 1
+    )
+  end;
+$$;
+
+create or replace function public.review_access_role(
+  p_review_id uuid,
+  p_review_user_id uuid,
+  p_project_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.tabular_reviews where id=p_review_id and archived_at is not null) then null
+    when p_project_id is not null then (
+      select public.project_access_role(
+        p.id, p.user_id, p.org_id, p_user_id, p_user_email
+      ) from public.projects p where p.id = p_project_id
+    )
+    when public.org_is_team(p_org_id) then public.standalone_org_access_role(
+      p_org_id,
+      p_review_user_id,
+      p_user_id,
+      (
+        select g.role from public.tabular_review_access_grants g
+        where g.tabular_review_id = p_review_id
+          and coalesce(p_user_email, '') <> ''
+          and g.email = lower(p_user_email)
+        limit 1
+      )
+    )
+    when p_review_user_id::text = p_user_id then 'owner'
+    else (
+      select g.role from public.tabular_review_access_grants g
+      where g.tabular_review_id = p_review_id
+        and coalesce(p_user_email, '') <> ''
+        and g.email = lower(p_user_email)
+      limit 1
+    )
+  end;
+$$;
+
+create or replace function public.ensure_user_memory_file(
+  p_user_id uuid,
+  p_org_id uuid
+)
+returns setof public.memory_files
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if p_org_id is not null and not exists (
+    select 1 from public.active_org_members member
+    where member.org_id = p_org_id and member.user_id = p_user_id
+  ) then
+    return;
+  end if;
+  if not exists (
+    select 1 from public.memory_files file
+    where file.scope = 'user'
+      and file.user_id = p_user_id
+      and file.org_id is not distinct from p_org_id
+  ) then
+    insert into public.memory_files(scope, user_id, org_id, enabled)
+    values (
+      'user',
+      p_user_id,
+      p_org_id,
+      coalesce((
+        select personal.enabled from public.memory_files personal
+        where personal.scope = 'user'
+          and personal.user_id = p_user_id
+          and personal.org_id is null
+      ), true)
+    )
+    on conflict do nothing;
+  end if;
+  return query
+    select file.* from public.memory_files file
+    where file.scope = 'user'
+      and file.user_id = p_user_id
+      and file.org_id is not distinct from p_org_id;
+end;
+$$;
+
+create or replace function public.memory_source_allows_app_memory(
+  p_surface text,
+  p_conversation_id uuid,
+  p_actor_user_id uuid,
+  p_project_id uuid
+)
+returns boolean
+language sql
+-- Re-read grants after the caller's project-row lock wait. A stable function
+-- could retain the statement's older snapshot while a concurrent share wins.
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+  -- App memory is private to one user, so it may only learn from a
+  -- conversation nobody else can read. That is a property of the
+  -- conversation itself (its owner, organization, and direct grants) and,
+  -- when it lives in a project, of the project too. The read path in the
+  -- routes applies the same three tests before showing app memory.
+  --
+  -- A chat started on its own in a team organization's workspace is private
+  -- to its author too, and learns into that author's memory FOR THAT
+  -- WORKSPACE (memory_source_org_id says which). A chat in an organization's
+  -- project is the project's, and never learns into anybody's own memory.
+  select case
+    when p_surface = 'word' then p_project_id is null
+    when p_surface = 'chat' then
+      exists (
+        select 1
+        from public.chats chat
+        where chat.id = p_conversation_id
+          and chat.user_id = p_actor_user_id
+          and (
+            not public.org_is_team(chat.org_id)
+            or (
+              chat.project_id is null
+              and exists (
+                select 1 from public.active_org_members member
+                where member.org_id = chat.org_id
+                  and member.user_id = p_actor_user_id
+              )
+            )
+          )
+          and not exists (
+            select 1
+            from public.chat_access_grants grant_row
+            where grant_row.chat_id = chat.id
+          )
+      )
+      and (
+        p_project_id is null
+        or public.memory_project_is_private(p_project_id)
+      )
+    when p_surface = 'tabular' then
+      p_project_id is not null
+      and exists (
+        select 1
+        from public.tabular_review_chats chat
+        join public.tabular_reviews review on review.id = chat.review_id
+        where chat.id = p_conversation_id
+          and review.user_id = p_actor_user_id
+          and review.org_id is null
+          and not exists (
+            select 1
+            from public.tabular_review_access_grants grant_row
+            where grant_row.tabular_review_id = review.id
+          )
+      )
+      and public.memory_project_is_private(p_project_id)
+    else false
+  end;
+$$;
+
+create or replace function public.prepare_account_org_departures(p_user_id uuid)
+returns void language plpgsql set search_path = public as $$
+declare membership record;
+begin
+  -- Lock all organizations in a fixed order before changing any of them.
+  perform o.id from public.organizations o join public.org_members m on m.org_id=o.id
+    where m.user_id=p_user_id and o.kind='team' and o.deleted_at is null order by o.id for update of o;
+  for membership in select m.org_id from public.org_members m join public.organizations o on o.id=m.org_id
+    where m.user_id=p_user_id and o.kind='team' and o.deleted_at is null order by m.org_id loop
+    perform public.remove_org_member(membership.org_id,p_user_id,p_user_id,null);
+  end loop;
+end;
+$$;
+
+create or replace function public.audit_org_departure()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+begin
+  insert into public.audit_events(org_id,user_id,action,surface,detail)
+    values(new.org_id,new.actor_id,'org.departure.'||new.action,'organization',new.detail);
+  return new;
+end;
+$$;
+drop trigger if exists audit_org_departure on public.org_departure_events;
+create trigger audit_org_departure after insert on public.org_departure_events for each row execute function public.audit_org_departure();
+revoke all on function public.audit_event_org(),public.org_is_active(uuid),public.require_active_organization(),
+ public.soft_delete_organization(uuid,uuid),public.restore_organization(uuid,uuid),public.purge_expired_organizations(integer),public.audit_org_departure()
+ from public,anon,authenticated;
+grant execute on function public.audit_event_org(),public.org_is_active(uuid),public.require_active_organization(),
+ public.soft_delete_organization(uuid,uuid),public.restore_organization(uuid,uuid),public.purge_expired_organizations(integer),public.audit_org_departure()
+ to service_role;
+
+create or replace function public.cleanup_removed_org_member_overrides()
+returns trigger language plpgsql set search_path = public as $$
+declare item record; successor uuid; actor uuid; item_table text; item_title text;
+declare snapshot jsonb;
+begin
+  perform 1 from public.organizations where id=old.org_id for update;
+  if not found or not public.org_is_active(old.org_id) then return old; end if;
+  if public.org_is_team(old.org_id) then
+    successor:=coalesce(nullif(current_setting('mike.departure_successor',true),'')::uuid,
+      public.org_default_departure_successor(old.org_id,array[old.user_id]));
+    actor:=coalesce(nullif(current_setting('mike.departure_actor',true),'')::uuid,successor);
+    -- Sharing writes lock their parent. Lock roots before classifying them.
+    perform id from public.projects where org_id=old.org_id order by id for update;
+    perform id from public.workflows where org_id=old.org_id order by id for update;
+    perform id from public.chats where org_id=old.org_id order by id for update;
+    perform id from public.tabular_reviews where org_id=old.org_id order by id for update;
+    perform id from public.documents where org_id=old.org_id order by id for update;
+    select coalesce(jsonb_agg(to_jsonb(i)),'[]') into snapshot
+      from public.org_members_departure_items(old.org_id,array[old.user_id]) i;
+    for item in select * from jsonb_to_recordset(snapshot) as x(kind text,item_id uuid,title text,disposition text) loop
+      if item.disposition='transfer' then
+        if successor is null or successor=old.user_id then
+          raise exception 'An organization must keep at least one owner' using errcode='23514';
+        end if;
+        perform public.assign_org_departure_item(old.org_id,item.kind,item.item_id,successor,actor);
+      else
+        item_table:=case item.kind when 'project' then 'projects' when 'workflow' then 'workflows'
+          when 'chat' then 'chats' when 'tabular_review' then 'tabular_reviews' else 'documents' end;
+        if item.kind='document' then
+          select coalesce(v.filename,'Untitled document') into item_title from public.documents d
+            left join public.document_versions v on v.id=d.current_version_id where d.id=item.item_id;
+        else
+          execute format('select coalesce(%I, ''Untitled'') from public.%I where id=$1',
+            case when item.kind='project' then 'name' else 'title' end,item_table) into item_title using item.item_id;
+        end if;
+        insert into public.org_departure_archives(org_id,kind,item_id,former_user_id,title)
+          values(old.org_id,item.kind,item.item_id,old.user_id,item_title) on conflict(kind,item_id) do nothing;
+        -- Null creator prevents a re-invited member reclaiming archived work.
+        execute format('update public.%I set archived_at=now(),user_id=null where id=$1',item_table) using item.item_id;
+        if item.kind='chat' then delete from public.chat_access_grants where chat_id=item.item_id;
+        elsif item.kind='tabular_review' then delete from public.tabular_review_access_grants where tabular_review_id=item.item_id;
+        end if;
+      end if;
+      insert into public.org_departure_events(org_id,actor_id,action,detail) values(old.org_id,actor,
+        case when item.disposition='transfer' then 'item.transferred' else 'item.archived' end,
+        jsonb_build_object('kind',item.kind,'item_id',item.item_id,'assigned_to',case when item.disposition='transfer' then successor end));
+    end loop;
+    insert into public.org_departure_events(org_id,actor_id,action,detail)
+      values(old.org_id,actor,'member.departed',jsonb_build_object('transferred',
+        (select count(*) from jsonb_array_elements(snapshot) x where x->>'disposition'='transfer'),
+        'archived',(select count(*) from jsonb_array_elements(snapshot) x where x->>'disposition'='archive')));
+  end if;
+  if public.org_is_team(old.org_id) then
+    update public.projects set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.workflows set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.chats set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.tabular_reviews set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.documents set user_id=null where org_id=old.org_id and user_id=old.user_id;
+  end if;
+  delete from public.project_org_access_overrides where org_id=old.org_id and user_id=old.user_id;
+  delete from public.workflow_org_access_overrides where org_id=old.org_id and user_id=old.user_id;
+  delete from public.chat_access_grants g using public.chats c,public.user_profiles p
+    where g.chat_id=c.id and c.org_id=old.org_id and p.user_id=old.user_id and g.email=lower(p.email);
+  delete from public.tabular_review_access_grants g using public.tabular_reviews r,public.user_profiles p
+    where g.tabular_review_id=r.id and r.org_id=old.org_id and p.user_id=old.user_id and g.email=lower(p.email);
+  return old;
+end;
+$$;
+
+-- Administration can inspect activity without acquiring access to private
+-- content. Redact inaccessible titles/details/links BEFORE search/sort/export,
+-- so filters cannot be used to guess a colleague's private prompt or title.
+create or replace function public.organization_audit_events(p_org_id uuid,p_actor_id uuid,p_actor_email text)
+returns setof public.audit_events language sql stable set search_path = public, pg_temp as $$
+  with scoped as (
+    select a.*, (
+      a.action like 'org.%' or a.user_id=p_actor_id
+      or public.project_access_role(p.id,p.user_id,p.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.chat_access_role(c.id,c.user_id,c.project_id,c.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.review_access_role(v.id,v.user_id,v.project_id,v.org_id,p_actor_id::text,p_actor_email) is not null
+      or (d.id is not null and (
+        public.project_access_role(dp.id,dp.user_id,dp.org_id,p_actor_id::text,p_actor_email) is not null
+        or public.workflow_access_role(w.id,w.user_id,w.org_id,p_actor_id::text,p_actor_email) is not null
+        or (d.project_id is null and d.workflow_id is null and d.user_id=p_actor_id and d.archived_at is null)
+      ))
+    ) as can_view
+    from public.audit_events a
+    left join public.projects p on p.id=a.project_id
+    left join public.chats c on c.id=a.chat_id
+    left join public.tabular_reviews v on v.id=a.review_id
+    left join public.documents d on d.id=a.document_id
+    left join public.projects dp on dp.id=d.project_id
+    left join public.workflows w on w.id=d.workflow_id
+    where a.org_id=p_org_id and exists(
+      select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin')
+    )
+  )
+  select (jsonb_populate_record(null::public.audit_events, (to_jsonb(s)-'can_view') ||
+    case when s.can_view then '{}'::jsonb else jsonb_build_object(
+      'title',null,'detail',null,'project_id',null,'chat_id',null,'review_id',null,'document_id',null
+    ) end)).* from scoped s;
+$$;
+revoke all on function public.organization_audit_events(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.organization_audit_events(uuid,uuid,text) to service_role;
+
+-- Migration date: 2026-10-14
+-- Administrative standing is separate from ordinary content sharing.
+alter table public.org_members add column if not exists can_access_private_content boolean not null default false;
+alter table public.org_members drop constraint if exists org_members_private_content_admin;
+alter table public.org_members add constraint org_members_private_content_admin
+  check (not can_access_private_content or role='admin');
+
+create table if not exists public.org_private_content_access (
+  org_id uuid not null,
+  user_id uuid not null,
+  kind text not null check(kind in ('project','workflow','chat','tabular_review','document')),
+  item_id uuid not null,
+  opened_at timestamptz not null default now(),
+  primary key(org_id,user_id,kind,item_id),
+  foreign key(org_id,user_id) references public.org_members(org_id,user_id) on delete cascade
+);
+alter table public.org_private_content_access enable row level security;
+revoke all on public.org_private_content_access from public,anon,authenticated;
+grant select,insert,update,delete on public.org_private_content_access to service_role;
+
+create or replace function public.can_access_org_private_content(p_org_id uuid,p_user_id uuid)
+returns boolean language sql stable set search_path=public,pg_temp as $$
+  select exists(select 1 from public.org_members m join public.organizations o on o.id=m.org_id
+    where m.org_id=p_org_id and m.user_id=p_user_id and o.kind='team' and o.deleted_at is null
+      and (m.role='owner' or (m.role='admin' and m.can_access_private_content)));
+$$;
+
+-- Only active, current organization items can be accessed. No personal rows,
+-- archived rows, or cross-organization references enter this catalog.
+create or replace function public.org_private_content_items(p_org_id uuid)
+returns table(kind text,item_id uuid,title text,user_id uuid) language sql stable set search_path=public,pg_temp as $$
+  select 'project',id,name,user_id from public.projects
+    where org_id=p_org_id and archived_at is null and visibility='private'
+  union all select 'workflow',id,title,user_id from public.workflows
+    where org_id=p_org_id and archived_at is null and visibility='private'
+  union all select 'chat',id,title,user_id from public.chats
+    where org_id=p_org_id and archived_at is null and project_id is null
+  union all select 'tabular_review',id,title,user_id from public.tabular_reviews
+    where org_id=p_org_id and archived_at is null and project_id is null
+  union all select 'document',d.id,coalesce(v.filename,'Untitled document'),d.user_id
+    from public.documents d left join public.document_versions v on v.id=d.current_version_id and v.deleted_at is null
+    where d.org_id=p_org_id and d.archived_at is null and d.project_id is null and d.workflow_id is null;
+$$;
+
+create or replace function public.org_private_access_role(p_org_id uuid,p_kind text,p_item_id uuid,p_user_id text)
+returns text language sql stable set search_path=public,pg_temp as $$
+  select 'viewer'::text where exists (
+    select 1 from public.org_private_content_access a
+    join public.org_private_content_items(p_org_id) item on item.kind=a.kind and item.item_id=a.item_id
+    where a.org_id=p_org_id and a.user_id::text=p_user_id and a.kind=p_kind and a.item_id=p_item_id
+      and public.can_access_org_private_content(p_org_id,a.user_id)
+  );
+$$;
+
+-- Reading a private chat/review includes its referenced files, but only files
+-- still in this organization. It does not grant access to a personal upload.
+create or replace function public.org_private_document_access(p_org_id uuid,p_document_id uuid,p_user_id text)
+returns boolean language sql stable set search_path=public,pg_temp as $$
+  select exists(select 1 from public.documents d where d.id=p_document_id and d.org_id=p_org_id
+    and d.archived_at is null and (
+      public.org_private_access_role(p_org_id,'document',d.id,p_user_id) is not null
+      or exists(select 1 from public.org_private_content_access a
+        join public.org_private_content_items(p_org_id) item on item.kind=a.kind and item.item_id=a.item_id
+        join public.org_item_document_ids(a.kind,a.item_id) attached on attached.document_id=d.id
+        where a.org_id=p_org_id and a.user_id::text=p_user_id
+          and public.can_access_org_private_content(p_org_id,a.user_id))
+    ));
+$$;
+
+create or replace function public.set_org_private_content_permission(p_org_id uuid,p_actor_id uuid,p_target_id uuid,p_enabled boolean)
+returns void language plpgsql set search_path=public,pg_temp as $$
+declare target_email text;
+begin
+  perform 1 from public.organizations where id=p_org_id and kind='team' and deleted_at is null for update;
+  if not found then raise exception 'Organization not found' using errcode='P0002'; end if;
+  perform 1 from public.org_members where org_id=p_org_id and user_id=p_actor_id and role='owner' for update;
+  if not found then raise exception 'Owner required' using errcode='42501'; end if;
+  perform 1 from public.org_members where org_id=p_org_id and user_id=p_target_id and role='admin' for update;
+  if not found then raise exception 'Choose an organization admin' using errcode='23514'; end if;
+  if p_enabled is null then raise exception 'Choose a permission' using errcode='23514'; end if;
+  update public.org_members set can_access_private_content=p_enabled,updated_at=now()
+    where org_id=p_org_id and user_id=p_target_id;
+  select email into target_email from public.user_profiles where user_id=p_target_id;
+  insert into public.audit_events(org_id,user_id,action,title,surface,detail)
+    values(p_org_id,p_actor_id,'org.private_content.permission_changed',target_email,'organization',
+      jsonb_build_object('target_user_id',p_target_id,'enabled',p_enabled));
+end;
+$$;
+
+create or replace function public.open_org_private_content(p_org_id uuid,p_actor_id uuid,p_kind text,p_item_id uuid)
+returns void language plpgsql set search_path=public,pg_temp as $$
+declare item_title text;
+begin
+  perform 1 from public.organizations where id=p_org_id and kind='team' and deleted_at is null for update;
+  if not found then raise exception 'Organization not found' using errcode='P0002'; end if;
+  perform 1 from public.org_members where org_id=p_org_id and user_id=p_actor_id for update;
+  if not public.can_access_org_private_content(p_org_id,p_actor_id) then
+    raise exception 'Private content permission required' using errcode='42501';
+  end if;
+  select title into item_title from public.org_private_content_items(p_org_id) where kind=p_kind and item_id=p_item_id;
+  if not found then raise exception 'Item not found' using errcode='P0002'; end if;
+  insert into public.org_private_content_access(org_id,user_id,kind,item_id) values(p_org_id,p_actor_id,p_kind,p_item_id)
+    on conflict(org_id,user_id,kind,item_id) do update set opened_at=now();
+  -- Grant and audit entry commit together. An audit failure denies access.
+  insert into public.audit_events(org_id,user_id,action,title,surface,detail)
+    values(p_org_id,p_actor_id,'org.private_content.opened',left(item_title,300),'organization',
+      jsonb_build_object('kind',p_kind,'item_id',p_item_id,'access','viewer'));
+end;
+$$;
+
+create or replace function public.close_org_private_content(p_org_id uuid,p_actor_id uuid,p_kind text,p_item_id uuid)
+returns void language plpgsql set search_path=public,pg_temp as $$
+begin
+  delete from public.org_private_content_access where org_id=p_org_id and user_id=p_actor_id and kind=p_kind and item_id=p_item_id;
+  if found then
+    insert into public.audit_events(org_id,user_id,action,surface,detail)
+      values(p_org_id,p_actor_id,'org.private_content.closed','organization',jsonb_build_object('kind',p_kind,'item_id',p_item_id));
+  end if;
+end;
+$$;
+
+create or replace function public.list_org_private_content(p_org_id uuid,p_actor_id uuid,p_limit integer default 50,p_offset integer default 0,p_search text default '')
+returns table(kind text,item_id uuid,title text,user_id uuid,display_name text,email text,has_access boolean)
+language plpgsql stable set search_path=public,pg_temp as $$
+begin
+  if not public.can_access_org_private_content(p_org_id,p_actor_id) then
+    raise exception 'Private content permission required' using errcode='42501';
+  end if;
+  return query select item.kind,item.item_id,item.title,item.user_id,profile.display_name,profile.email,
+    exists(select 1 from public.org_private_content_access a where a.org_id=p_org_id and a.user_id=p_actor_id and a.kind=item.kind and a.item_id=item.item_id)
+    from public.org_private_content_items(p_org_id) item left join public.user_profiles profile on profile.user_id=item.user_id
+    where item.user_id is distinct from p_actor_id and (p_search='' or position(lower(p_search) in lower(coalesce(item.title,'')))>0)
+    order by lower(item.title) nulls last,item.kind,item.item_id
+    limit greatest(1,least(p_limit,101)) offset greatest(0,p_offset);
+end;
+$$;
+
+-- Removal, demotion and revocation erase explicit access rather than letting
+-- old grants reappear when a member is promoted or re-enabled later.
+create or replace function public.revoke_org_private_content_on_membership_change()
+returns trigger language plpgsql set search_path=public,pg_temp as $$
+begin
+  if new.role is distinct from old.role or (old.can_access_private_content and not new.can_access_private_content) then
+    delete from public.org_private_content_access where org_id=old.org_id and user_id=old.user_id;
+  end if;
+  if new.role<>'admin' or new.role is distinct from old.role then new.can_access_private_content:=false; end if;
+  return new;
+end;
+$$;
+drop trigger if exists revoke_org_private_content_on_membership_change on public.org_members;
+create trigger revoke_org_private_content_on_membership_change before update on public.org_members
+  for each row execute function public.revoke_org_private_content_on_membership_change();
+
+create or replace function public.clear_org_private_item_access()
+returns trigger language plpgsql set search_path=public,pg_temp as $$
+begin
+  if tg_op='DELETE' or new.org_id is distinct from old.org_id or new.user_id is distinct from old.user_id or new.archived_at is distinct from old.archived_at then
+    delete from public.org_private_content_access where kind=tg_argv[0] and item_id=old.id;
+  end if;
+  return coalesce(new,old);
+end;
+$$;
+do $$ declare item record; begin
+  for item in select * from (values('projects','project'),('workflows','workflow'),('chats','chat'),('tabular_reviews','tabular_review'),('documents','document')) as items(table_name,kind) loop
+    execute format('drop trigger if exists clear_org_private_item_access on public.%I',item.table_name);
+    execute format('create trigger clear_org_private_item_access after update or delete on public.%I for each row execute function public.clear_org_private_item_access(%L)',item.table_name,item.kind);
+  end loop;
+end; $$;
+
+-- These actor-parameterized functions are server-only, like the ordinary
+-- access-role functions. Browser JWTs never get an impersonation primitive.
+revoke all on function public.can_access_org_private_content(uuid,uuid),public.org_private_content_items(uuid),public.org_private_access_role(uuid,text,uuid,text),public.org_private_document_access(uuid,uuid,text),public.set_org_private_content_permission(uuid,uuid,uuid,boolean),public.open_org_private_content(uuid,uuid,text,uuid),public.close_org_private_content(uuid,uuid,text,uuid),public.list_org_private_content(uuid,uuid,integer,integer,text) from public,anon,authenticated;
+grant execute on function public.can_access_org_private_content(uuid,uuid),public.org_private_content_items(uuid),public.org_private_access_role(uuid,text,uuid,text),public.org_private_document_access(uuid,uuid,text),public.set_org_private_content_permission(uuid,uuid,uuid,boolean),public.open_org_private_content(uuid,uuid,text,uuid),public.close_org_private_content(uuid,uuid,text,uuid),public.list_org_private_content(uuid,uuid,integer,integer,text) to service_role;
+
+-- Batched equivalents for directory and export authorization; page past the
+-- REST row limit without losing grants. Each read rechecks current permission.
+create or replace function public.list_org_private_content_access(p_org_ids uuid[],p_user_id text,p_offset integer default 0)
+returns table(kind text,item_id uuid) language sql stable set search_path=public,pg_temp as $$
+  select a.kind,a.item_id from public.org_private_content_access a
+    join lateral public.org_private_content_items(a.org_id) item on item.kind=a.kind and item.item_id=a.item_id
+    where a.org_id=any(p_org_ids) and a.user_id::text=p_user_id
+      and public.can_access_org_private_content(a.org_id,a.user_id)
+    order by a.org_id,a.kind,a.item_id limit 500 offset greatest(0,p_offset);
+$$;
+revoke all on function public.list_org_private_content_access(uuid[],text,integer) from public,anon,authenticated;
+grant execute on function public.list_org_private_content_access(uuid[],text,integer) to service_role;
+
+create or replace function public.clear_org_private_access_on_deletion()
+returns trigger language plpgsql set search_path=public,pg_temp as $$
+begin
+  if new.deleted_at is distinct from old.deleted_at then
+    delete from public.org_private_content_access where org_id=old.id;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists clear_org_private_access_on_deletion on public.organizations;
+create trigger clear_org_private_access_on_deletion after update of deleted_at on public.organizations
+  for each row execute function public.clear_org_private_access_on_deletion();
+
+create or replace function public.project_access_role(
+  p_project_id uuid,
+  p_project_user_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce((case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.projects where id=p_project_id and archived_at is not null) then null
+    when p_org_id is not null then (
+      select case
+        when p_project_user_id::text = p_user_id then 'owner'
+        -- An organization owner owns what is public, and what has no Owner
+        -- left. A private item with an Owner is not theirs unless shared.
+        when m.role = 'owner' and (
+          (
+            select project.visibility from public.projects project
+            where project.id = p_project_id
+          ) = 'organization'
+          or public.project_is_ownerless(
+            p_project_id, p_project_user_id, p_org_id
+          )
+        ) then 'owner'
+        when o.role = 'deny' then null
+        when o.role in ('owner', 'editor', 'viewer') then o.role
+        when (
+          select project.visibility from public.projects project
+          where project.id = p_project_id
+        ) = 'organization' then 'editor'
+        else null
+      end
+      from public.org_members m
+      left join public.project_org_access_overrides o
+        on o.project_id = p_project_id
+       and o.org_id = p_org_id
+       and o.user_id = m.user_id
+      where m.org_id = p_org_id and m.user_id::text = p_user_id
+    )
+    when p_project_user_id::text = p_user_id then 'owner'
+    else (
+      select g.role from public.project_access_grants g
+      where g.project_id = p_project_id
+        and coalesce(p_user_email, '') <> ''
+        and g.email = lower(p_user_email)
+      limit 1
+    )
+  end), public.org_private_access_role(p_org_id,'project',p_project_id,p_user_id));
+$$;
+
+create or replace function public.workflow_access_role(
+  p_workflow_id uuid,
+  p_workflow_user_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce((case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.workflows where id=p_workflow_id and archived_at is not null) then null
+    when p_org_id is not null then (
+      select case
+        when p_workflow_user_id::text = p_user_id then 'owner'
+        -- As for projects: public, or left without an Owner.
+        when m.role = 'owner' and (
+          (
+            select workflow.visibility from public.workflows workflow
+            where workflow.id = p_workflow_id
+          ) = 'organization'
+          or public.workflow_is_ownerless(
+            p_workflow_id, p_workflow_user_id, p_org_id
+          )
+        ) then 'owner'
+        when o.role = 'deny' then null
+        when o.role in ('owner', 'editor', 'viewer') then o.role
+        when (
+          select workflow.visibility from public.workflows workflow
+          where workflow.id = p_workflow_id
+        ) = 'organization' then 'editor'
+        else null
+      end
+      from public.org_members m
+      left join public.workflow_org_access_overrides o
+        on o.workflow_id = p_workflow_id
+       and o.org_id = p_org_id
+       and o.user_id = m.user_id
+      where m.org_id = p_org_id and m.user_id::text = p_user_id
+    )
+    when p_workflow_user_id::text = p_user_id then 'owner'
+    else (
+      -- BOTH sides lowered. get_workflows_overview lists a share with
+      -- lower() on both, so a legacy mixed-case row listed for its recipient
+      -- and then 404'd the moment they opened it (and re-sharing produced a
+      -- second row rather than updating the first). The 02 migration
+      -- normalizes the stored values and adds a lowercase CHECK; this stays
+      -- symmetrical with the overview regardless.
+      select s.role from public.workflow_shares s
+      where s.workflow_id = p_workflow_id
+        and coalesce(p_user_email, '') <> ''
+        and lower(s.shared_with_email) = lower(p_user_email)
+      limit 1
+    )
+  end), public.org_private_access_role(p_org_id,'workflow',p_workflow_id,p_user_id));
+$$;
+
+create or replace function public.chat_access_role(
+  p_chat_id uuid,
+  p_chat_user_id uuid,
+  p_project_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce((case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.chats where id=p_chat_id and archived_at is not null) then null
+    when p_project_id is not null then (
+      select public.project_access_role(
+        p.id, p.user_id, p.org_id, p_user_id, p_user_email
+      ) from public.projects p where p.id = p_project_id
+    )
+    when public.org_is_team(p_org_id) then public.standalone_org_access_role(
+      p_org_id,
+      p_chat_user_id,
+      p_user_id,
+      (
+        select g.role from public.chat_access_grants g
+        where g.chat_id = p_chat_id
+          and coalesce(p_user_email, '') <> ''
+          and g.email = lower(p_user_email)
+        limit 1
+      )
+    )
+    when p_chat_user_id::text = p_user_id then 'owner'
+    else (
+      select g.role from public.chat_access_grants g
+      where g.chat_id = p_chat_id
+        and coalesce(p_user_email, '') <> ''
+        and g.email = lower(p_user_email)
+      limit 1
+    )
+  end), public.org_private_access_role(p_org_id,'chat',p_chat_id,p_user_id));
+$$;
+
+create or replace function public.review_access_role(
+  p_review_id uuid,
+  p_review_user_id uuid,
+  p_project_id uuid,
+  p_org_id uuid,
+  p_user_id text,
+  p_user_email text
+)
+returns text
+language sql
+stable
+set search_path = public
+as $$
+  select coalesce((case
+    when not public.org_is_active(p_org_id) then null
+    when exists(select 1 from public.tabular_reviews where id=p_review_id and archived_at is not null) then null
+    when p_project_id is not null then (
+      select public.project_access_role(
+        p.id, p.user_id, p.org_id, p_user_id, p_user_email
+      ) from public.projects p where p.id = p_project_id
+    )
+    when public.org_is_team(p_org_id) then public.standalone_org_access_role(
+      p_org_id,
+      p_review_user_id,
+      p_user_id,
+      (
+        select g.role from public.tabular_review_access_grants g
+        where g.tabular_review_id = p_review_id
+          and coalesce(p_user_email, '') <> ''
+          and g.email = lower(p_user_email)
+        limit 1
+      )
+    )
+    when p_review_user_id::text = p_user_id then 'owner'
+    else (
+      select g.role from public.tabular_review_access_grants g
+      where g.tabular_review_id = p_review_id
+        and coalesce(p_user_email, '') <> ''
+        and g.email = lower(p_user_email)
+      limit 1
+    )
+  end), public.org_private_access_role(p_org_id,'tabular_review',p_review_id,p_user_id));
+$$;
+
+create or replace function public.organization_audit_events(p_org_id uuid,p_actor_id uuid,p_actor_email text)
+returns setof public.audit_events language sql stable set search_path = public, pg_temp as $$
+  with scoped as (
+    select a.*, (
+      (a.action like 'org.%' and (a.action not in ('org.private_content.opened','org.private_content.closed') or public.can_access_org_private_content(p_org_id,p_actor_id))) or a.user_id=p_actor_id
+      or public.project_access_role(p.id,p.user_id,p.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.chat_access_role(c.id,c.user_id,c.project_id,c.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.review_access_role(v.id,v.user_id,v.project_id,v.org_id,p_actor_id::text,p_actor_email) is not null
+      or (d.id is not null and (
+        public.project_access_role(dp.id,dp.user_id,dp.org_id,p_actor_id::text,p_actor_email) is not null
+        or public.workflow_access_role(w.id,w.user_id,w.org_id,p_actor_id::text,p_actor_email) is not null
+        or (d.project_id is null and d.workflow_id is null and d.user_id=p_actor_id and d.archived_at is null)
+        or public.org_private_document_access(d.org_id,d.id,p_actor_id::text)
+      ))
+    ) as can_view
+    from public.audit_events a
+    left join public.projects p on p.id=a.project_id
+    left join public.chats c on c.id=a.chat_id
+    left join public.tabular_reviews v on v.id=a.review_id
+    left join public.documents d on d.id=a.document_id
+    left join public.projects dp on dp.id=d.project_id
+    left join public.workflows w on w.id=d.workflow_id
+    where a.org_id=p_org_id and exists(
+      select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin')
+    )
+  )
+  select (jsonb_populate_record(null::public.audit_events, (to_jsonb(s)-'can_view') ||
+    case when s.can_view then '{}'::jsonb else jsonb_build_object(
+      'title',null,'detail',null,'project_id',null,'chat_id',null,'review_id',null,'document_id',null
+    ) end)).* from scoped s;
+$$;
+
+-- Migration date: 2026-10-14
+-- Discover private organization items from their audit events. Viewing an event
+-- does not open the item: the existing audited open transaction grants viewer.
+create or replace function public.organization_audit_events(p_org_id uuid,p_actor_id uuid,p_actor_email text)
+returns setof public.audit_events language sql stable set search_path = public, pg_temp as $$
+  with scoped as (
+    select a.*, private_item.access as private_access, (
+      private_item.access is not null
+      or (a.action like 'org.%' and (a.action not in ('org.private_content.opened','org.private_content.closed') or public.can_access_org_private_content(p_org_id,p_actor_id)))
+      or a.user_id=p_actor_id
+      or public.project_access_role(p.id,p.user_id,p.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.chat_access_role(c.id,c.user_id,c.project_id,c.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.review_access_role(v.id,v.user_id,v.project_id,v.org_id,p_actor_id::text,p_actor_email) is not null
+      or (d.id is not null and (
+        public.project_access_role(dp.id,dp.user_id,dp.org_id,p_actor_id::text,p_actor_email) is not null
+        or public.workflow_access_role(w.id,w.user_id,w.org_id,p_actor_id::text,p_actor_email) is not null
+        or (d.project_id is null and d.workflow_id is null and d.user_id=p_actor_id and d.archived_at is null)
+        or public.org_private_document_access(d.org_id,d.id,p_actor_id::text)
+      ))
+    ) as can_view
+    from public.audit_events a
+    left join public.projects p on p.id=a.project_id and p.org_id=p_org_id
+    left join public.chats c on c.id=a.chat_id and c.org_id=p_org_id and c.archived_at is null
+    left join public.tabular_reviews v on v.id=a.review_id and v.org_id=p_org_id and v.archived_at is null
+    left join public.documents d on d.id=a.document_id and d.org_id=p_org_id and d.archived_at is null
+    left join public.projects dp on dp.id=d.project_id and dp.org_id=p_org_id
+    left join public.workflows w on w.id=d.workflow_id and w.org_id=p_org_id
+    left join lateral (
+      select jsonb_build_object('kind',item.kind,'item_id',item.item_id,'has_access',
+        public.org_private_access_role(p_org_id,item.kind,item.item_id,p_actor_id::text) is not null) as access
+      from public.org_private_content_items(p_org_id) item
+      where public.can_access_org_private_content(p_org_id,p_actor_id)
+        and item.user_id is distinct from p_actor_id
+        -- Resolve the affected item first, then its current private parent.
+        -- Missing, archived, or moved items cannot fall back to another ID on
+        -- the old event. Catalog membership enforces current organization scope.
+        and (item.kind,item.item_id::text) = (
+          case
+            when a.document_id is not null then case when d.project_id is not null then 'project' when d.workflow_id is not null then 'workflow' else 'document' end
+            when a.review_id is not null then case when v.project_id is not null then 'project' else 'tabular_review' end
+            when a.chat_id is not null then case when c.project_id is not null then 'project' else 'chat' end
+            when a.project_id is not null then 'project'
+            when a.action in ('org.private_content.opened','org.private_content.closed') then a.detail->>'kind'
+            when a.detail->>'workflow_id' is not null then 'workflow'
+          end,
+          case
+            when a.document_id is not null then coalesce(d.project_id,d.workflow_id,d.id)::text
+            when a.review_id is not null then coalesce(v.project_id,v.id)::text
+            when a.chat_id is not null then coalesce(c.project_id,c.id)::text
+            when a.project_id is not null then p.id::text
+            when a.action in ('org.private_content.opened','org.private_content.closed') then a.detail->>'item_id'
+            else a.detail->>'workflow_id'
+          end
+        )
+    ) private_item on true
+    where a.org_id=p_org_id and exists(
+      select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin')
+    )
+  )
+  select (jsonb_populate_record(null::public.audit_events, (to_jsonb(s)-'can_view'-'private_access') ||
+    case when s.can_view then jsonb_build_object('detail',
+      -- This descriptor is server-derived, never trusted from stored metadata.
+      case when s.private_access is null then s.detail-'private_content_access'
+        else (coalesce(s.detail,'{}'::jsonb)-'private_content_access') || jsonb_build_object('private_content_access',s.private_access) end
+    ) else jsonb_build_object(
+      'title',null,'detail',null,'project_id',null,'chat_id',null,'review_id',null,'document_id',null
+    ) end
+  )).* from scoped s;
+$$;
+revoke all on function public.organization_audit_events(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.organization_audit_events(uuid,uuid,text) to service_role;
+
+-- Migration date: 2026-10-14
+-- Search distinct people who acted in this organization, including former
+-- members. Only identities already visible in its audit log are returned.
+create index if not exists audit_events_org_actor_created
+  on public.audit_events(org_id, user_id, created_at desc, id desc);
+
+create or replace function public.organization_audit_actors(
+  p_org_id uuid, p_actor_id uuid, p_search text default '',
+  p_offset integer default 0, p_limit integer default 21
+)
+returns table(user_id uuid, email text, display_name text, profile_photo text)
+language sql stable set search_path = public, pg_temp as $$
+  with actors as (
+    select distinct on (a.user_id) a.user_id, a.user_email
+    from public.audit_events a
+    where a.org_id = p_org_id and a.user_id is not null and exists (
+      select 1 from public.active_org_members m
+      where m.org_id = p_org_id and m.user_id = p_actor_id
+        and m.role in ('owner', 'admin')
+    )
+    order by a.user_id, a.created_at desc, a.id desc
+  ), identities as (
+    select a.user_id, coalesce(nullif(btrim(p.email), ''), a.user_email) as email,
+      nullif(btrim(p.display_name), '') as display_name, p.profile_photo,
+      a.user_email as recorded_email
+    from actors a left join public.user_profiles p on p.user_id = a.user_id
+  )
+  select i.user_id, i.email, i.display_name, i.profile_photo from identities i
+  where strpos(lower(coalesce(i.display_name, '')), lower(left(coalesce(p_search, ''), 200))) > 0
+    or strpos(lower(coalesce(i.email, '')), lower(left(coalesce(p_search, ''), 200))) > 0
+    or strpos(lower(coalesce(i.recorded_email, '')), lower(left(coalesce(p_search, ''), 200))) > 0
+  order by lower(coalesce(i.display_name, i.email, i.user_id::text)), i.user_id
+  limit greatest(0, least(coalesce(p_limit, 21), 51))
+  offset greatest(0, coalesce(p_offset, 0));
+$$;
+revoke all on function public.organization_audit_actors(uuid,uuid,text,integer,integer) from public,anon,authenticated;
+grant execute on function public.organization_audit_actors(uuid,uuid,text,integer,integer) to service_role;
+
+-- Migration date: 2026-10-14
+-- Preserve lifecycle serialization without blocking ordinary organization updates.
+create or replace function public.require_active_organization()
+returns trigger language plpgsql set search_path = public, pg_temp as $$
+begin
+  if tg_op='UPDATE' and old.org_id is not null then
+    perform 1 from public.organizations where id=old.org_id and deleted_at is null for key share;
+    if not found then raise exception 'Organization is unavailable' using errcode='23514'; end if;
+  end if;
+  if new.org_id is not null then
+    perform 1 from public.organizations where id=new.org_id and deleted_at is null for key share;
+    if not found then raise exception 'Organization is unavailable' using errcode='23514'; end if;
+  end if;
+  return new;
+end;
+$$;
+
+-- Account deletion may cascade memberships while an organization is deleted.
+create or replace function public.cleanup_removed_org_member_overrides()
+returns trigger language plpgsql set search_path = public as $$
+declare item record; successor uuid; actor uuid; item_table text; item_title text;
+declare snapshot jsonb; active boolean; former_user uuid;
+begin
+  select deleted_at is null into active from public.organizations where id=old.org_id for update;
+  if not found then return old; end if;
+  if public.org_is_team(old.org_id) then
+    -- The auth row is already gone during an account-deletion cascade.
+    select id into former_user from auth.users where id=old.user_id;
+    if active then
+      successor:=coalesce(nullif(current_setting('mike.departure_successor',true),'')::uuid,
+      public.org_default_departure_successor(old.org_id,array[old.user_id]));
+      actor:=coalesce(nullif(current_setting('mike.departure_actor',true),'')::uuid,successor);
+    end if;
+    -- Sharing writes lock their parent. Lock roots before classifying them.
+    perform id from public.projects where org_id=old.org_id order by id for update;
+    perform id from public.workflows where org_id=old.org_id order by id for update;
+    perform id from public.chats where org_id=old.org_id order by id for update;
+    perform id from public.tabular_reviews where org_id=old.org_id order by id for update;
+    perform id from public.documents where org_id=old.org_id order by id for update;
+    -- Deleted organizations cannot transfer work. Archive every departure
+    -- item so restoring the organization never exposes ownerless private work.
+    select coalesce(jsonb_agg(to_jsonb(i) ||
+      case when active then '{}'::jsonb else '{"disposition":"archive"}'::jsonb end),'[]') into snapshot
+      from public.org_members_departure_items(old.org_id,array[old.user_id]) i;
+    for item in select * from jsonb_to_recordset(snapshot) as x(kind text,item_id uuid,title text,disposition text) loop
+      if item.disposition='transfer' then
+        if successor is null or successor=old.user_id then
+          raise exception 'An organization must keep at least one owner' using errcode='23514';
+        end if;
+        perform public.assign_org_departure_item(old.org_id,item.kind,item.item_id,successor,actor);
+      else
+        item_table:=case item.kind when 'project' then 'projects' when 'workflow' then 'workflows'
+          when 'chat' then 'chats' when 'tabular_review' then 'tabular_reviews' else 'documents' end;
+        if item.kind='document' then
+          select coalesce(v.filename,'Untitled document') into item_title from public.documents d
+            left join public.document_versions v on v.id=d.current_version_id where d.id=item.item_id;
+        else
+          execute format('select coalesce(%I, ''Untitled'') from public.%I where id=$1',
+            case when item.kind='project' then 'name' else 'title' end,item_table) into item_title using item.item_id;
+        end if;
+        insert into public.org_departure_archives(org_id,kind,item_id,former_user_id,title)
+          values(old.org_id,item.kind,item.item_id,former_user,item_title) on conflict(kind,item_id) do nothing;
+        -- Null creator prevents a re-invited member reclaiming archived work.
+        execute format('update public.%I set archived_at=now(),user_id=null where id=$1',item_table) using item.item_id;
+        if item.kind='chat' then delete from public.chat_access_grants where chat_id=item.item_id;
+        elsif item.kind='tabular_review' then delete from public.tabular_review_access_grants where tabular_review_id=item.item_id;
+        end if;
+      end if;
+      insert into public.org_departure_events(org_id,actor_id,action,detail) values(old.org_id,actor,
+        case when item.disposition='transfer' then 'item.transferred' else 'item.archived' end,
+        jsonb_build_object('kind',item.kind,'item_id',item.item_id,'assigned_to',case when item.disposition='transfer' then successor end));
+    end loop;
+    insert into public.org_departure_events(org_id,actor_id,action,detail)
+      values(old.org_id,actor,'member.departed',jsonb_build_object('transferred',
+        (select count(*) from jsonb_array_elements(snapshot) x where x->>'disposition'='transfer'),
+        'archived',(select count(*) from jsonb_array_elements(snapshot) x where x->>'disposition'='archive')));
+  end if;
+  if public.org_is_team(old.org_id) then
+    update public.projects set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.workflows set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.chats set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.tabular_reviews set user_id=null where org_id=old.org_id and user_id=old.user_id;
+    update public.documents set user_id=null where org_id=old.org_id and user_id=old.user_id;
+  end if;
+  delete from public.project_org_access_overrides where org_id=old.org_id and user_id=old.user_id;
+  delete from public.workflow_org_access_overrides where org_id=old.org_id and user_id=old.user_id;
+  delete from public.chat_access_grants g using public.chats c,public.user_profiles p
+    where g.chat_id=c.id and c.org_id=old.org_id and p.user_id=old.user_id and g.email=lower(p.email);
+  delete from public.tabular_review_access_grants g using public.tabular_reviews r,public.user_profiles p
+    where g.tabular_review_id=r.id and r.org_id=old.org_id and p.user_id=old.user_id and g.email=lower(p.email);
+  return old;
+end;
+$$;
+
+-- Migration date: 2026-10-14
+-- Restrict expensive audit redaction to selected rows without relaxing search_path.
+create or replace function public.organization_audit_events(p_org_id uuid,p_actor_id uuid,p_actor_email text,p_event_ids uuid[])
+returns setof public.audit_events language sql stable set search_path = public, pg_temp as $$
+  with scoped as (
+    select a.*, private_item.access as private_access, (
+      private_item.access is not null
+      or (a.action like 'org.%' and (a.action not in ('org.private_content.opened','org.private_content.closed') or public.can_access_org_private_content(p_org_id,p_actor_id)))
+      or a.user_id=p_actor_id
+      or public.project_access_role(p.id,p.user_id,p.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.chat_access_role(c.id,c.user_id,c.project_id,c.org_id,p_actor_id::text,p_actor_email) is not null
+      or public.review_access_role(v.id,v.user_id,v.project_id,v.org_id,p_actor_id::text,p_actor_email) is not null
+      or (d.id is not null and (
+        public.project_access_role(dp.id,dp.user_id,dp.org_id,p_actor_id::text,p_actor_email) is not null
+        or public.workflow_access_role(w.id,w.user_id,w.org_id,p_actor_id::text,p_actor_email) is not null
+        or (d.project_id is null and d.workflow_id is null and d.user_id=p_actor_id and d.archived_at is null)
+        or public.org_private_document_access(d.org_id,d.id,p_actor_id::text)
+      ))
+    ) as can_view
+    from public.audit_events a
+    left join public.projects p on p.id=a.project_id and p.org_id=p_org_id
+    left join public.chats c on c.id=a.chat_id and c.org_id=p_org_id and c.archived_at is null
+    left join public.tabular_reviews v on v.id=a.review_id and v.org_id=p_org_id and v.archived_at is null
+    left join public.documents d on d.id=a.document_id and d.org_id=p_org_id and d.archived_at is null
+    left join public.projects dp on dp.id=d.project_id and dp.org_id=p_org_id
+    left join public.workflows w on w.id=d.workflow_id and w.org_id=p_org_id
+    left join lateral (
+      select jsonb_build_object('kind',item.kind,'item_id',item.item_id,'has_access',
+        public.org_private_access_role(p_org_id,item.kind,item.item_id,p_actor_id::text) is not null) as access
+      from public.org_private_content_items(p_org_id) item
+      where public.can_access_org_private_content(p_org_id,p_actor_id)
+        and item.user_id is distinct from p_actor_id
+        -- Resolve the affected item first, then its current private parent.
+        -- Missing, archived, or moved items cannot fall back to another ID on
+        -- the old event. Catalog membership enforces current organization scope.
+        and (item.kind,item.item_id::text) = (
+          case
+            when a.document_id is not null then case when d.project_id is not null then 'project' when d.workflow_id is not null then 'workflow' else 'document' end
+            when a.review_id is not null then case when v.project_id is not null then 'project' else 'tabular_review' end
+            when a.chat_id is not null then case when c.project_id is not null then 'project' else 'chat' end
+            when a.project_id is not null then 'project'
+            when a.action in ('org.private_content.opened','org.private_content.closed') then a.detail->>'kind'
+            when a.detail->>'workflow_id' is not null then 'workflow'
+          end,
+          case
+            when a.document_id is not null then coalesce(d.project_id,d.workflow_id,d.id)::text
+            when a.review_id is not null then coalesce(v.project_id,v.id)::text
+            when a.chat_id is not null then coalesce(c.project_id,c.id)::text
+            when a.project_id is not null then p.id::text
+            when a.action in ('org.private_content.opened','org.private_content.closed') then a.detail->>'item_id'
+            else a.detail->>'workflow_id'
+          end
+        )
+    ) private_item on true
+    where a.org_id=p_org_id and (p_event_ids is null or a.id=any(p_event_ids)) and exists(
+      select 1 from public.active_org_members m where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin')
+    )
+  )
+  select (jsonb_populate_record(null::public.audit_events, (to_jsonb(s)-'can_view'-'private_access') ||
+    case when s.can_view then jsonb_build_object('detail',
+      -- This descriptor is server-derived, never trusted from stored metadata.
+      case when s.private_access is null then s.detail-'private_content_access'
+        else (coalesce(s.detail,'{}'::jsonb)-'private_content_access') || jsonb_build_object('private_content_access',s.private_access) end
+    ) else jsonb_build_object(
+      'title',null,'detail',null,'project_id',null,'chat_id',null,'review_id',null,'document_id',null
+    ) end
+  )).* from scoped s;
+$$;
+revoke all on function public.organization_audit_events(uuid,uuid,text,uuid[]) from public,anon,authenticated;
+grant execute on function public.organization_audit_events(uuid,uuid,text,uuid[]) to service_role;
+
+-- Preserve the existing unpaged SQL API for internal callers.
+create or replace function public.organization_audit_events(p_org_id uuid,p_actor_id uuid,p_actor_email text)
+returns setof public.audit_events language sql stable set search_path = public, pg_temp as $$
+  select * from public.organization_audit_events(p_org_id,p_actor_id,p_actor_email,null::uuid[]);
+$$;
+revoke all on function public.organization_audit_events(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.organization_audit_events(uuid,uuid,text) to service_role;
+
+-- Page and count authorized metadata before resolving resource access. Title
+-- search/sort deliberately redact first so hidden titles cannot affect results.
+create or replace function public.organization_audit_events_page(
+  p_org_id uuid, p_actor_id uuid, p_actor_email text,
+  p_filter jsonb default '{}'::jsonb,
+  p_sort_by text default 'created_at', p_sort_direction text default 'desc',
+  p_offset integer default 0, p_limit integer default 50
+) returns jsonb language plpgsql stable set search_path = public, pg_temp as $$
+declare candidates text; filtered text; result jsonb; ordering text;
+begin
+  if not exists(select 1 from public.active_org_members m
+    where m.org_id=p_org_id and m.user_id=p_actor_id and m.role in ('owner','admin')) then
+    return jsonb_build_object('events','[]'::jsonb,'total',0);
+  end if;
+  if p_sort_by is null or p_sort_by not in ('created_at','user_email','title','model')
+    or p_sort_direction is null or p_sort_direction not in ('asc','desc') then
+    raise exception 'Invalid audit sort' using errcode='22023';
+  end if;
+  p_limit:=greatest(1,least(coalesce(p_limit,50),2000));
+  p_offset:=greatest(0,least(coalesce(p_offset,0),200000000));
+  ordering:=format('%I %s nulls last, id asc',p_sort_by,p_sort_direction);
+  -- Only allowlisted sort identifiers are interpolated. All filter values
+  -- remain bound parameters, including arrays, search patterns and dates.
+  candidates:=$query$
+    select a.* from public.audit_events a where a.org_id=$1
+      and ($4->>'username_pattern' is null or a.user_email ilike $4->>'username_pattern'
+        or exists(select 1 from public.user_profiles profile where profile.user_id=a.user_id
+          and (profile.display_name ilike $4->>'username_pattern' or profile.email ilike $4->>'username_pattern')))
+      and ($4->>'action' is null or a.action=$4->>'action')
+      and ($4->>'status' is null or a.status=$4->>'status')
+      and ($4->>'surface' is null or a.surface=$4->>'surface')
+      and ($4->>'actor_user_id' is null or a.user_id=($4->>'actor_user_id')::uuid)
+      and ($4->>'from' is null or a.created_at>=($4->>'from')::timestamptz)
+      and ($4->>'to' is null or a.created_at<=($4->>'to')::timestamptz)
+      and (not ($4 ? 'event_ids') or a.id=any(array(select jsonb_array_elements_text($4->'event_ids')::uuid)))
+      and (not ($4 ? 'user_ids') or a.user_id=any(array(select jsonb_array_elements_text($4->'user_ids')::uuid)))
+  $query$;
+  if p_filter->>'title_pattern' is not null or p_sort_by='title' then
+    -- These operations depend on visible titles, so they necessarily inspect
+    -- the metadata-filtered candidates. Materialize once for both count/page.
+    filtered:=format($query$
+      with candidates as (%s), visible as materialized (
+        select * from public.organization_audit_events($1,$2,$3,array(select id from candidates))
+      ), filtered as not materialized (
+        select * from visible where $4->>'title_pattern' is null or title ilike $4->>'title_pattern'
+      ), page as (select * from filtered order by %s limit $5 offset $6)
+      select jsonb_build_object(
+        'events',coalesce((select jsonb_agg(to_jsonb(page) order by %s) from page),'[]'::jsonb),
+        'total',(select count(*) from filtered))
+    $query$,candidates,ordering,ordering);
+  else
+    -- NOT MATERIALIZED permits the count and page to use separate index scans.
+    -- The expensive resource joins/permission checks see only this page's IDs.
+    filtered:=format($query$
+      with candidates as not materialized (%s),
+      page as materialized (select id from candidates order by %s limit $5 offset $6),
+      visible as (
+        select * from public.organization_audit_events($1,$2,$3,array(select id from page))
+      )
+      select jsonb_build_object(
+        'events',coalesce((select jsonb_agg(to_jsonb(visible) order by %s) from visible),'[]'::jsonb),
+        'total',(select count(*) from candidates))
+    $query$,candidates,ordering,ordering);
+  end if;
+  execute filtered into result using p_org_id,p_actor_id,p_actor_email,coalesce(p_filter,'{}'::jsonb),p_limit,p_offset;
+  return result;
+end;
+$$;
+revoke all on function public.organization_audit_events_page(uuid,uuid,text,jsonb,text,text,integer,integer) from public,anon,authenticated;
+grant execute on function public.organization_audit_events_page(uuid,uuid,text,jsonb,text,text,integer,integer) to service_role;
+
 insert into public.schema_migrations (filename) values
   ('20260419_tabular_chat_jsonb.sql'),
   ('20260421_01_docx_editing.sql'),
@@ -9000,5 +10414,13 @@ insert into public.schema_migrations (filename) values
   ('20261013_03_workspace_library.sql'),
   ('20261013_04_public_member_handover.sql'),
   ('20261013_05_org_departure_retention.sql'),
-  ('20261013_06_org_departure_listing.sql')
+  ('20261013_06_org_departure_listing.sql'),
+  ('20261014_01_user_profile_photos.sql'),
+  ('20261014_02_validate_user_profile_photos.sql'),
+  ('20261014_03_organization_audit_lifecycle.sql'),
+  ('20261014_04_org_private_content_access.sql'),
+  ('20261014_05_audit_private_content_access.sql'),
+  ('20261014_06_audit_actor_picker.sql'),
+  ('20261014_07_org_lifecycle_review_fixes.sql'),
+  ('20261014_08_paginate_organization_audit.sql')
 on conflict (filename) do nothing;

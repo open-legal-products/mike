@@ -46,10 +46,10 @@
     "tiptap-markdown": "^0.9.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
-    "@sentry/webpack-plugin": "5.4.0",
+    "@playwright/test": "^1.64.0",
+    "@sentry/webpack-plugin": "5.4.1",
     "@tailwindcss/postcss": "^4.1.18",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/office-js": "^1.0.611",
     "@types/office-runtime": "^1.0.40",
     "@types/react": "^19.3.0",
@@ -59,7 +59,7 @@
     "http-server": "^14.1.1",
     "office-addin-debugging": "^7.0.1",
     "office-addin-dev-certs": "^3.0.0",
-    "postcss": "^8.5.28",
+    "postcss": "^8.5.29",
     "postcss-loader": "^8.2.0",
     "semver": "^7.8.5",
     "style-loader": "^4.0.0",

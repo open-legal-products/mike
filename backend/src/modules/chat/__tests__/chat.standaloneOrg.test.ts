@@ -32,6 +32,7 @@ describe("createChat", () => {
         ).resolves.toEqual({ ok: true, id: "chat-1" });
         // Membership is asked of THIS user in THIS organization.
         expect(fake.calls[0].filters).toEqual([
+            ["is", "organizations.deleted_at", null],
             ["eq", "org_id", "org-1"],
             ["eq", "user_id", "u1"],
         ]);

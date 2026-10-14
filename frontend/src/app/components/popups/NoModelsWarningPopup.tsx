@@ -55,7 +55,7 @@ function VisibleNoModelsWarning({
             primaryAction={
                 settingsHref
                     ? {
-                          label: "Open Organization Settings",
+                          label: "Open Organization",
                           onClick: () => {
                               onClose();
                               router.push(settingsHref);

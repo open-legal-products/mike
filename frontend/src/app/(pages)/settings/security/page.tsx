@@ -171,7 +171,7 @@ function VerificationCodeInput({
 
 function MfaSettingsSkeleton() {
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-5">
+    <div className="flex items-center justify-between gap-3 p-4">
       <div className="min-w-0 flex-1 space-y-1">
         <div>
           <div className="h-4 w-36 animate-pulse rounded bg-gray-100" />

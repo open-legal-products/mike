@@ -3133,6 +3133,7 @@ describe("chat grants, deletion and roster", () => {
     });
 
     it("returns the creator and direct-grant roster from GET /chat/:chatId/people", async () => {
+        const photo = "data:image/png;base64,iVBORw0KGgo=";
         mockedCreate.mockImplementation(
             () =>
                 makeRbacDb(null, "colleague-1", {
@@ -3162,11 +3163,13 @@ describe("chat grants, deletion and roster", () => {
                             user_id: "u1",
                             email: "u1@test.local",
                             display_name: "Current User",
+                            profile_photo: photo,
                         },
                         {
                             user_id: "colleague-1",
                             email: "colleague@example.com",
                             display_name: "Colleague One",
+                            profile_photo: photo,
                         },
                         {
                             user_id: "mate-1",
@@ -3186,6 +3189,7 @@ describe("chat grants, deletion and roster", () => {
             user_id: "colleague-1",
             email: "colleague@example.com",
             display_name: "Colleague One",
+            profile_photo: photo,
             role: "owner",
         });
         expect(res.body.members).toEqual([
@@ -3193,12 +3197,14 @@ describe("chat grants, deletion and roster", () => {
                 user_id: "u1",
                 email: "u1@test.local",
                 display_name: "Current User",
+                profile_photo: photo,
                 role: "editor",
             },
             {
                 user_id: "mate-1",
                 email: "mate@example.com",
                 display_name: "Mate",
+                profile_photo: null,
                 role: "viewer",
             },
         ]);

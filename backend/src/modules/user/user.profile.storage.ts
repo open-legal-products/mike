@@ -5,6 +5,7 @@ export const MONTHLY_CREDIT_LIMIT = 999999;
 
 export type UserProfileRow = {
     display_name: string | null;
+    profile_photo?: string | null;
     organisation: string | null;
     jurisdiction?: string | null;
     practice_setting?: string | null;
@@ -87,19 +88,38 @@ function isMissingProfileColumn(error: unknown, column: string): boolean {
     return record.code === "42703" && message.includes(column);
 }
 
+/** Keeps photos in every compatibility tier, dropping them only when their own column is absent. */
+function createProfileReader(db: Db, userId: string, mode: "maybe" | "single") {
+    let includePhoto = true;
+    const queryProfile = (columns: string) => {
+        const query = db.from("user_profiles")
+            .select(includePhoto ? `${columns}, profile_photo` : columns)
+            .eq("user_id", userId);
+        return mode === "single" ? query.single() : query.maybeSingle();
+    };
+    return async (columns: string) => {
+        let result = await queryProfile(columns);
+        if (includePhoto && isMissingProfileColumn(result.error, "profile_photo")) {
+            includePhoto = false;
+            result = await queryProfile(columns);
+        }
+        // Dynamic compatibility projections cannot be inferred by PostgREST's
+        // type parser; they all select this profile shape with legacy defaults.
+        return { ...result, data: result.data as unknown as UserProfileRow | null };
+    };
+}
+
 // Loads a profile while tolerating older databases that lack newer preference
 // columns. Tries the full select first, then falls back through the legacy
 // cascade (which also handles missing title_model / mfa_on_login) and applies
 // safe defaults for missing fields.
+/**
+ * Reads one profile using the newest projection, retrying without unavailable columns during staged migrations.
+ * The requested single-row mode is preserved across compatibility fallbacks.
+ */
 export async function selectProfile(db: Db, userId: string, mode: "maybe" | "single") {
-    const newestQuery = db
-        .from("user_profiles")
-        .select(PROFILE_SELECT_NEWEST)
-        .eq("user_id", userId);
-    const newest =
-        mode === "single"
-            ? await newestQuery.single()
-            : await newestQuery.maybeSingle();
+    const read = createProfileReader(db, userId, mode);
+    const newest = await read(PROFILE_SELECT_NEWEST);
     if (!newest.error) return newest;
     let cascadeError: unknown = newest.error;
 
@@ -107,14 +127,7 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
         isMissingProfileColumn(cascadeError, "memory_curator_model") ||
         isMissingProfileColumn(cascadeError, "project_memory_default")
     ) {
-        const previousQuery = db
-            .from("user_profiles")
-            .select(PROFILE_SELECT_NO_MEMORY_CURATOR_MODEL)
-            .eq("user_id", userId);
-        const previous =
-            mode === "single"
-                ? await previousQuery.single()
-                : await previousQuery.maybeSingle();
+        const previous = await read(PROFILE_SELECT_NO_MEMORY_CURATOR_MODEL);
         if (!previous.error) {
             if (previous.data && typeof previous.data === "object") {
                 Object.assign(previous.data as Record<string, unknown>, {
@@ -128,14 +141,7 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
     }
 
     if (isMissingProfileColumn(cascadeError, "last_selected_reasoning_level")) {
-        const modelOnlyQuery = db
-            .from("user_profiles")
-            .select(PROFILE_SELECT_WITH_LAST_SELECTED_CHAT_MODEL)
-            .eq("user_id", userId);
-        const modelOnly =
-            mode === "single"
-                ? await modelOnlyQuery.single()
-                : await modelOnlyQuery.maybeSingle();
+        const modelOnly = await read(PROFILE_SELECT_WITH_LAST_SELECTED_CHAT_MODEL);
         if (!modelOnly.error) {
             if (modelOnly.data && typeof modelOnly.data === "object") {
                 Object.assign(modelOnly.data as Record<string, unknown>, {
@@ -148,14 +154,7 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
     }
 
     if (isMissingProfileColumn(cascadeError, "last_selected_chat_model")) {
-        const fullQuery = db
-            .from("user_profiles")
-            .select(PROFILE_SELECT)
-            .eq("user_id", userId);
-        const full =
-            mode === "single"
-                ? await fullQuery.single()
-                : await fullQuery.maybeSingle();
+        const full = await read(PROFILE_SELECT);
         if (!full.error) {
             if (full.data && typeof full.data === "object") {
                 Object.assign(full.data as Record<string, unknown>, {
@@ -175,14 +174,7 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
     // fails the full select on one of those instead (they sort earlier in
     // the select list), so this tier is skipped and the tiers below handle it.
     if (isMissingProfileColumn(cascadeError, "dark_mode")) {
-        const noDarkQuery = db
-            .from("user_profiles")
-            .select(PROFILE_SELECT_NO_DARK_MODE)
-            .eq("user_id", userId);
-        const noDark =
-            mode === "single"
-                ? await noDarkQuery.single()
-                : await noDarkQuery.maybeSingle();
+        const noDark = await read(PROFILE_SELECT_NO_DARK_MODE);
         if (!noDark.error) {
             if (noDark.data && typeof noDark.data === "object") {
                 Object.assign(noDark.data as Record<string, unknown>, {
@@ -204,14 +196,7 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
     // and serializeProfile treats the absent fields as legacy-exempt —
     // matching what the migration's backfill would write.
     if (isMissingProfileColumn(cascadeError, "password_set_at")) {
-        const prePasswordQuery = db
-            .from("user_profiles")
-            .select(PROFILE_SELECT_NO_PASSWORD)
-            .eq("user_id", userId);
-        const prePassword =
-            mode === "single"
-                ? await prePasswordQuery.single()
-                : await prePasswordQuery.maybeSingle();
+        const prePassword = await read(PROFILE_SELECT_NO_PASSWORD);
         if (!prePassword.error) return prePassword;
         cascadeError = prePassword.error;
     }
@@ -220,27 +205,13 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
             isMissingProfileColumn(cascadeError, column),
         )
     ) {
-        const preOnboardingQuery = db
-            .from("user_profiles")
-            .select(PROFILE_SELECT_NO_ONBOARDING)
-            .eq("user_id", userId);
-        const preOnboarding =
-            mode === "single"
-                ? await preOnboardingQuery.single()
-                : await preOnboardingQuery.maybeSingle();
+        const preOnboarding = await read(PROFILE_SELECT_NO_ONBOARDING);
         if (!preOnboarding.error) return preOnboarding;
         cascadeError = preOnboarding.error;
     }
 
     if (isMissingProfileColumn(cascadeError, "quick_actions_visible")) {
-        const previousQuery = db
-            .from("user_profiles")
-            .select(PROFILE_SELECT_NO_QUICK_ACTIONS)
-            .eq("user_id", userId);
-        const previous =
-            mode === "single"
-                ? await previousQuery.single()
-                : await previousQuery.maybeSingle();
+        const previous = await read(PROFILE_SELECT_NO_QUICK_ACTIONS);
         if (!previous.error) {
             if (previous.data && typeof previous.data === "object") {
                 Object.assign(previous.data, {
@@ -252,7 +223,7 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
         }
     }
 
-    const legacy = await selectProfileLegacy(db, userId, mode);
+    const legacy = await selectProfileLegacy(read);
     if (legacy.data && typeof legacy.data === "object") {
         const row = legacy.data as Record<string, unknown>;
         if (!("legal_research_us" in row)) {
@@ -267,16 +238,9 @@ export async function selectProfile(db: Db, userId: string, mode: "maybe" | "sin
 }
 
 async function selectProfileLegacy(
-    db: Db,
-    userId: string,
-    mode: "maybe" | "single",
+    read: ReturnType<typeof createProfileReader>,
 ) {
-    const query = db
-        .from("user_profiles")
-        .select(PROFILE_SELECT_NO_LEGAL)
-        .eq("user_id", userId);
-    const result =
-        mode === "single" ? await query.single() : await query.maybeSingle();
+    const result = await read(PROFILE_SELECT_NO_LEGAL);
     if (!result.error) {
         return result;
     }
@@ -286,14 +250,7 @@ async function selectProfileLegacy(
         "mfa_on_login",
     );
     if (missingMfaOnLogin) {
-        const modelQuery = db
-            .from("user_profiles")
-            .select(LEGACY_PROFILE_MODEL_SELECT)
-            .eq("user_id", userId);
-        const modelLegacy =
-            mode === "single"
-                ? await modelQuery.single()
-                : await modelQuery.maybeSingle();
+        const modelLegacy = await read(LEGACY_PROFILE_MODEL_SELECT);
         if (
             !modelLegacy.error ||
             !isMissingProfileColumn(modelLegacy.error, "title_model")
@@ -315,14 +272,7 @@ async function selectProfileLegacy(
         return result;
     }
 
-    const legacyQuery = db
-        .from("user_profiles")
-        .select(LEGACY_PROFILE_SELECT)
-        .eq("user_id", userId);
-    const legacy =
-        mode === "single"
-            ? await legacyQuery.single()
-            : await legacyQuery.maybeSingle();
+    const legacy = await read(LEGACY_PROFILE_SELECT);
     if (legacy.data && typeof legacy.data === "object") {
         const row = legacy.data as Record<string, unknown>;
         Object.assign(row, {

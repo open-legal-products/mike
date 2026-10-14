@@ -9,6 +9,7 @@ import { WorkspaceProvider } from "@/app/contexts/WorkspaceContext";
 import { SidebarContext } from "@/app/contexts/SidebarContext";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 import { AppSidebar } from "@/app/components/shared/AppSidebar";
+import { preloadSidebarIcons } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { HeaderButtonUI, HeaderButtonsUI } from "@/shared/ui/HeaderButtonsUI";
 import { cn } from "@/app/lib/utils";
@@ -18,6 +19,7 @@ export default function MikeLayout({
 }: {
     children: React.ReactNode;
 }) {
+    preloadSidebarIcons();
     const { isAuthenticated, authLoading } = useAuth();
     const [hasMounted, setHasMounted] = useState(false);
     useEffect(() => {

@@ -11,9 +11,9 @@
 //   admin  — runs the organization day to day: settings, invitations, and
 //            removing members.
 //   member — reads the organization and its roster. No org mutations.
-// Organization content is private by default. Owners can open every project
-// and workflow; an admin or member reaches what they created, what was shared
-// with them, and what has been made public (resolveOrgContentRole).
+// Organization content is private by default. Ordinary access follows
+// creation, sharing, public visibility and ownerless recovery. Owners and
+// permitted admins can also explicitly open audited read-only private access.
 //
 // Nobody acts on a peer or a superior, owners excepted (canManageOrgRole): an
 // admin cannot appoint a second admin, promote themselves or remove an owner.
@@ -29,6 +29,7 @@
 // recipient's consent, not just the inviter's intent.
 
 import type { OrgMemberHandover } from "@mike/contracts";
+import { listOrgPrivateContentAccess } from "./orgPrivateContent";
 import type { Db } from "./supabase";
 import { recordAudit } from "./audit";
 import {
@@ -147,7 +148,8 @@ export async function listMyOrgs(
     const { data: allOrgs, error: orgsError } = await db
         .from("organizations")
         .select("*")
-        .in("id", orgIds);
+        .in("id", orgIds)
+        .is("deleted_at", null);
     if (orgsError)
         return { ok: false, kind: "db_error", detail: orgsError.message };
     // A person's own organization is not one of "their organizations".
@@ -177,7 +179,7 @@ export async function listMyOrgs(
 
 export async function createOrg(
     db: Db,
-    params: { userId: string; name: unknown },
+    params: { userId: string; name: unknown; userEmail?: string | null },
 ): Promise<OrgResult<{ org: Record<string, unknown> }>> {
     const name = typeof params.name === "string" ? params.name.trim() : "";
     if (!name)
@@ -206,6 +208,10 @@ export async function createOrg(
         return { ok: false, kind: "db_error", detail: memberError.message };
     }
 
+    await recordAudit(db, {
+        userId: params.userId, userEmail: params.userEmail,
+        orgId: String(org.id), action: "org.created", title: name, surface: "organization",
+    });
     return { ok: true, org: { ...org, role: "owner", member_count: 1 } };
 }
 
@@ -222,7 +228,21 @@ export async function getOrg(
         .eq("id", params.orgId)
         .maybeSingle();
     if (error || !org) return { ok: false, kind: "not_found" };
-    return { ok: true, org: { ...org, role } };
+    const { data: membership, error: permissionError } = await db
+        .from("org_members")
+        .select("can_access_private_content")
+        .eq("org_id", params.orgId)
+        .eq("user_id", params.userId)
+        .maybeSingle();
+    if (permissionError) return { ok: false, kind: "db_error", detail: permissionError.message };
+    return {
+        ok: true,
+        org: {
+            ...org, role,
+            can_access_private_content: role === "owner" ||
+                (role === "admin" && membership?.can_access_private_content === true),
+        },
+    };
 }
 
 export async function updateOrg(
@@ -249,66 +269,22 @@ export async function updateOrg(
             kind: "db_error",
             detail: error?.message ?? "Failed to update organization",
         };
-    return { ok: true, org: { ...org, role } };
+    return getOrg(db, params);
 }
 
-/**
- * Delete an organization and everything it owns. Owner only.
- *
- * Deleting the content is the caller's to supply: it needs the documents and
- * projects modules, which lib/ may not import, so modules/orgs passes
- * `purgeContent` in. It runs after the owner check and before the row goes,
- * because every `org_id` foreign key on a content table is ON DELETE
- * RESTRICT.
- */
+/** Owner-only soft deletion. Content stays recoverable for 30 days. */
 export async function deleteOrg(
     db: Db,
-    params: {
-        userId: string;
-        userEmail?: string | null;
-        orgId: string;
-        purgeContent: (db: Db, orgId: string) => Promise<void>;
-    },
+    params: { userId: string; userEmail?: string | null; orgId: string },
 ): Promise<OrgResult<Record<never, never>>> {
     const role = await getOrgRole(params.userId, params.orgId, db);
     if (!role) return { ok: false, kind: "not_found" };
     if (!isOrgAdmin(role)) return { ok: false, kind: "forbidden" };
     if (!isOrgOwner(role)) return { ok: false, kind: "owner_required" };
-
-    const { data: org } = await db
-        .from("organizations")
-        .select("id, name")
-        .eq("id", params.orgId)
-        .maybeSingle();
-    if (!org) return { ok: false, kind: "not_found" };
-
-    try {
-        await params.purgeContent(db, params.orgId);
-    } catch (error) {
-        return {
-            ok: false,
-            kind: "db_error",
-            detail:
-                error instanceof Error
-                    ? error.message
-                    : "Failed to delete organization content",
-        };
-    }
-
-    const { error } = await db
-        .from("organizations")
-        .delete()
-        .eq("id", params.orgId);
-    if (error)
-        return { ok: false, kind: "db_error", detail: error.message };
-
-    await recordAudit(db, {
-        userId: params.userId,
-        userEmail: params.userEmail ?? null,
-        action: "org.deleted",
-        title: typeof org.name === "string" ? org.name : null,
-        detail: { org_id: params.orgId },
-    });
+    const { error } = await db.rpc("soft_delete_organization", { p_org_id: params.orgId, p_actor_id: params.userId });
+    if (error?.code === "P0002" || error?.code === "22P02") return { ok: false, kind: "not_found" };
+    if (error?.code === "42501") return { ok: false, kind: "owner_required" };
+    if (error) return { ok: false, kind: "db_error", detail: error.message };
     return { ok: true };
 }
 
@@ -397,12 +373,17 @@ export async function listOrgResources(
         isOrgOwner(role) ? [params.orgId] : [],
     );
 
+    const privateAccess = await listOrgPrivateContentAccess(
+        db, isOrgAdmin(role) ? [params.orgId] : [], params.userId,
+    );
+
     const visible = <
         T extends { id?: unknown; user_id?: unknown; visibility?: unknown },
     >(
         rows: T[],
         overrideById: Map<string, unknown>,
         ownerlessIds: Set<string>,
+        privateIds?: Set<string>,
     ) =>
         rows.filter((row) => {
             const override =
@@ -417,7 +398,7 @@ export async function listOrgResources(
                     visibility: row.visibility,
                     ownerless:
                         typeof row.id === "string" && ownerlessIds.has(row.id),
-                }) !== null
+                }) !== null || (typeof row.id === "string" && privateIds?.has(row.id) === true)
             );
         });
 
@@ -428,11 +409,13 @@ export async function listOrgResources(
             (projectsResult.data ?? []) as Row[],
             projectOverrideById,
             ownerless.projects,
+            privateAccess.get("project"),
         ),
         workflows: visible(
             (workflowsResult.data ?? []) as Row[],
             workflowOverrideById,
             ownerless.workflows,
+            privateAccess.get("workflow"),
         ),
     };
 }
@@ -449,30 +432,32 @@ export async function listOrgResources(
 async function attachProfiles(
     db: Db,
     rows: { user_id: string }[],
-): Promise<Map<string, { email: string | null; display_name: string | null }>> {
+): Promise<Map<string, { email: string | null; display_name: string | null; profile_photo?: string | null }>> {
     const byUser = new Map<
         string,
-        { email: string | null; display_name: string | null }
+        { email: string | null; display_name: string | null; profile_photo?: string | null }
     >();
     const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
     if (userIds.length === 0) return byUser;
     const { data } = await db
         .from("user_profiles")
-        .select("user_id, email, display_name")
+        .select("user_id, email, display_name, profile_photo")
         .in("user_id", userIds);
     for (const p of (data ?? []) as {
         user_id: string;
         email: string | null;
-        display_name: string | null;
+        display_name: string | null; profile_photo?: string | null;
     }[]) {
         byUser.set(p.user_id, {
             email: p.email ?? null,
             display_name: p.display_name ?? null,
+            profile_photo: p.profile_photo ?? null,
         });
     }
     return byUser;
 }
 
+/** Lists organization members and their profile identities after verifying the caller belongs to the organization. */
 export async function listMembers(
     db: Db,
     params: { userId: string; orgId: string },
@@ -482,7 +467,7 @@ export async function listMembers(
 
     const { data, error } = await db
         .from("org_members")
-        .select("id, user_id, role, created_at")
+        .select("id, user_id, role, created_at, can_access_private_content")
         .eq("org_id", params.orgId);
     if (error) return { ok: false, kind: "db_error", detail: error.message };
 
@@ -499,6 +484,7 @@ export async function listMembers(
             ...m,
             email: profiles.get(m.user_id)?.email ?? null,
             display_name: profiles.get(m.user_id)?.display_name ?? null,
+            profile_photo: profiles.get(m.user_id)?.profile_photo ?? null,
         })),
     };
 }
@@ -1172,7 +1158,8 @@ export async function listMyInvitations(
     const { data: orgs } = await db
         .from("organizations")
         .select("id, name")
-        .in("id", orgIds);
+        .in("id", orgIds)
+        .is("deleted_at", null);
     const nameById = new Map(
         ((orgs ?? []) as { id: string; name: string }[]).map((o) => [
             o.id,
@@ -1187,7 +1174,7 @@ export async function listMyInvitations(
     );
     return {
         ok: true,
-        invitations: rows.map((r) => ({
+        invitations: rows.filter((r) => nameById.has(r.org_id)).map((r) => ({
             ...presentInvitation(r),
             org_name: nameById.get(r.org_id) ?? null,
             invited_by_email: r.invited_by
@@ -1208,7 +1195,8 @@ async function loadAnswerableInvitation(
     const email = normalizeEmail(params.userEmail);
     const { data } = await db
         .from("org_invitations")
-        .select("*")
+        .select("*, organizations!inner(id)")
+        .is("organizations.deleted_at", null)
         .eq("id", params.invitationId)
         .maybeSingle();
     const row = data as InvitationRow | null;

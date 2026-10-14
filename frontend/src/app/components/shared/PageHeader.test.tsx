@@ -20,7 +20,7 @@ describe("PageHeader title size", () => {
         render(
             <PageHeader
                 breadcrumbs={[
-                    { label: "Organization Settings", onClick: () => {} },
+                    { label: "Organization", onClick: () => {} },
                     { label: "Members", cursor: "text" },
                 ]}
             />,

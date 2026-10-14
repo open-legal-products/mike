@@ -35,6 +35,7 @@ export async function getUserProfile(
     return { ok: true, body: { ...data, apiKeyStatus } };
 }
 
+/** Returns the minimal identity needed to offer a new direct share. */
 export async function lookupUserByEmail(
     db: Db,
     email: string,

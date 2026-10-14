@@ -80,6 +80,7 @@ interface Props {
     projectCmNumber?: string | null;
 }
 
+/** Collects tabular-review configuration and pending access choices before creating a review. */
 export function NewTRModal({
     open,
     onClose,
@@ -694,6 +695,7 @@ export function NewTRModal({
                         orgId={workspaceOrgId}
                         organizationName={activeOrganization?.name ?? null}
                         currentUserEmail={user?.email ?? null}
+                        currentUserProfile={profile}
                         currentUserId={user?.id ?? null}
                         directGrants={directGrants}
                         onDirectGrantsChange={setDirectGrants}

@@ -493,6 +493,7 @@ async function processCreatedDocument(
     userId: session.user_id,
     userEmail: session.user_email,
     action: "document.uploaded",
+    orgId: document.org_id ?? null,
     title: file.filename,
     surface: projectId ? "project" : "assistant",
     projectId,

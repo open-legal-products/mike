@@ -38,6 +38,7 @@ import {
 import { sendOrgFailure } from "../../lib/orgFailure";
 import { configuredApiPublicUrl } from "../../lib/runtimeConfig";
 import {
+    setUserProfilePhoto,
     bootstrapUserProfile,
     completeUserOnboarding,
     createMcpConnector,
@@ -189,6 +190,25 @@ userRouter.post("/profile", requireAuth, asyncRoute(async (_req, res) => {
     const result = await bootstrapUserProfile(db, userId);
     if (!result.ok) return void sendInternalError(res, result.error);
     res.json({ ok: true });
+}));
+
+// Profile photos have the same account ownership boundary as other settings.
+userRouter.put("/profile/photo", requireAuth, asyncRoute(async (req, res) => {
+    const result = await setUserProfilePhoto(
+        createServerSupabase(), res.locals.userId as string, req.body?.data_url,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
+}));
+
+userRouter.delete("/profile/photo", requireAuth, asyncRoute(async (_req, res) => {
+    const result = await setUserProfilePhoto(
+        createServerSupabase(), res.locals.userId as string, null,
+    );
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(result.data);
 }));
 
 // GET /user/lookup?email=person@example.com
@@ -1349,7 +1369,7 @@ userRouter.post(
             payload: parsed.payload,
         });
         if (!result.ok)
-            return void res.status(500).json({ detail: result.detail });
+            return void res.status(result.forbidden ? 403 : 500).json({ detail: result.detail });
         res.status(202).json({ export_id: result.exportId });
     }),
 );

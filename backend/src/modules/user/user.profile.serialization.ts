@@ -6,6 +6,7 @@ import { UserProfileRow, MONTHLY_CREDIT_LIMIT } from "./user.profile.storage";
 
 import { ROUTER_PROFILE_FIELDS } from "./user.profile.routerPreferences";
 
+/** Maps stored profile values and model selections to the client contract, including a nullable profile photo. */
 export function serializeProfile(
     routerModels: RouterModelSelections,
     row: UserProfileRow,
@@ -14,6 +15,7 @@ export function serializeProfile(
     const creditsUsed = row.message_credits_used ?? 0;
     return {
         displayName: row.display_name,
+        profilePhoto: row.profile_photo ?? null,
         organisation: row.organisation,
         jurisdiction: row.jurisdiction ?? null,
         practiceSetting: row.practice_setting ?? null,

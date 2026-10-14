@@ -1,9 +1,12 @@
 import type {
+    AuditActorPage,
     OrgMemberHandover,
     OrgDepartureList,
     OrgDepartureResolution,
 } from "@mike/contracts";
 export type {
+    AuditActor,
+    AuditActorPage,
     OrgMemberHandover,
     OrgDeparture,
     OrgDepartureItem,
@@ -730,7 +733,7 @@ export type UserExportStatus =
 
 /**
  * `params` carries the inputs of the filtered exports — the History CSV's
- * filter values (wire names: q/action/status/surface/from/to/sort_by/sort_dir)
+ * filter values (including username and event_ids for selected audit entries)
  * and documents-zip's `document_ids`. The backend re-validates them and 400s
  * on anything it would have rejected on the synchronous route.
  */
@@ -782,6 +785,7 @@ export interface PersonalisationDetails {
     practiceAreas?: string[];}
 
 export interface UserProfile extends RouterProfileLists {
+    profilePhoto?: string | null;
     displayName: string | null;
     organisation: string | null;
     jurisdiction: string | null;
@@ -808,6 +812,17 @@ export interface UserProfile extends RouterProfileLists {
     apiKeyStatus: ApiKeyStatus;
 }
 
+/** Uploads a cropped profile-photo data URL, or removes the current photo when passed null. */
+export async function setUserProfilePhoto(photo: string | null): Promise<{ profilePhoto: string | null }> {
+    return apiRequest("/user/profile/photo", photo === null
+        ? { method: "DELETE" }
+        : {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data_url: photo }),
+        });
+}
+
 export interface UserLookupResult {
     exists: boolean;
     email: string;
@@ -819,9 +834,14 @@ export interface UserLookupResult {
 // ---------------------------------------------------------------------------
 
 export interface AuditEvent {
+    org_id?: string | null;
     id: string;
     created_at: string;
     user_display_name: string | null;
+    /** Current name of the affected member or invitation recipient. */
+    affected_user_display_name?: string | null;
+    /** Current photo of an actor in the authorized organization audit page. */
+    user_profile_photo?: string | null;
     user_email: string | null;
     action: string;
     status: string;
@@ -837,6 +857,9 @@ export interface AuditEvent {
 
 export async function getAuditHistory(
     params: {
+        orgId?: string;
+        username?: string;
+        actorUserId?: string;
         q?: string;
         action?: string;
         status?: string;
@@ -855,6 +878,9 @@ export async function getAuditHistory(
     pageSize: number;
 }> {
     const qs = new URLSearchParams();
+    if (params.orgId) qs.set("org_id", params.orgId);
+    if (params.username) qs.set("username", params.username);
+    if (params.actorUserId) qs.set("actor_user_id", params.actorUserId);
     if (params.q) qs.set("q", params.q);
     if (params.action) qs.set("action", params.action);
     if (params.status) qs.set("status", params.status);
@@ -865,6 +891,17 @@ export async function getAuditHistory(
     if (params.sortDirection) qs.set("sort_dir", params.sortDirection);
     if (params.page) qs.set("page", String(params.page));
     return apiRequest(`/audit?${qs.toString()}`, { signal });
+}
+
+/** Search the people represented in an organization's audit log, one page at a time. */
+export async function getAuditActors(
+    params: { orgId: string; search?: string; offset?: number },
+    signal?: AbortSignal,
+): Promise<AuditActorPage> {
+    const qs = new URLSearchParams({ org_id: params.orgId });
+    if (params.search) qs.set("q", params.search);
+    if (params.offset) qs.set("offset", String(params.offset));
+    return apiRequest(`/audit/actors?${qs.toString()}`, { signal });
 }
 
 export async function getUserProfile(): Promise<UserProfile> {
@@ -1440,6 +1477,7 @@ export interface ProjectPeople {
         user_id: string;
         email: string | null;
         display_name: string | null;
+        profile_photo?: string | null;
         role?: ProjectRole;
     } | null;
     /** Direct recipients and their grant roles. */
@@ -1447,6 +1485,7 @@ export interface ProjectPeople {
         user_id?: string | null;
         email: string;
         display_name: string | null;
+        profile_photo?: string | null;
         role?: AccessAssignmentRole;
     }[];
     admin_contacts?: ProjectContact[];
@@ -1546,6 +1585,7 @@ export interface Org {
     updated_at?: string;
     /** The caller's role in this org. */
     role: OrgRole;
+    can_access_private_content?: boolean;
     /**
      * When the organization's logo was last set, or null/absent for none. It
      * says whether there is a logo to fetch, and changes when the logo does.
@@ -1563,11 +1603,13 @@ export interface OrgMemberRow {
     id: string;
     user_id: string;
     role: OrgRole;
+    can_access_private_content?: boolean;
     created_at?: string;
 }
 
 /** Roster row from GET /members: the bare row plus mirrored profile fields. */
 export interface OrgMember extends OrgMemberRow {
+    profile_photo?: string | null;
     email: string | null;
     display_name: string | null;
 }
@@ -1610,6 +1652,16 @@ export async function listOrgs(): Promise<Org[]> {
     return apiRequest<Org[]>("/orgs");
 }
 
+export type { DeletedOrganization } from "@mike/contracts";
+
+export async function listDeletedOrganizations(): Promise<import("@mike/contracts").DeletedOrganization[]> {
+    return apiRequest("/orgs/deleted");
+}
+
+export async function restoreOrganization(orgId: string): Promise<void> {
+    await apiRequest(`/orgs/${orgId}/restore`, { method: "POST" });
+}
+
 export async function createOrg(name: string): Promise<Org> {
     return apiRequest<Org>("/orgs", {
         method: "POST",
@@ -1630,7 +1682,7 @@ export async function updateOrg(orgId: string, name: string): Promise<Org> {
     });
 }
 
-/** Deletes the organization together with everything it owns. Owner only. */
+/** Soft-delete an organization for 30 days. Owner only. */
 export async function deleteOrg(orgId: string): Promise<void> {
     await apiRequest(`/orgs/${orgId}`, { method: "DELETE" });
 }
@@ -1771,6 +1823,27 @@ export async function setOrgPersonalApiKeysAllowed(
 
 export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
     return apiRequest<OrgMember[]>(`/orgs/${orgId}/members`);
+}
+
+export type { OrgPrivateContentItem, OrgPrivateContentKind, OrgPrivateContentPage } from "@mike/contracts";
+
+export async function listOrgPrivateContent(orgId: string, offset = 0, search = "") {
+    const query = new URLSearchParams({ limit: "50", offset: String(offset), search });
+    return apiRequest<import("@mike/contracts").OrgPrivateContentPage>(`/orgs/${orgId}/private-content?${query}`);
+}
+
+export async function setOrgPrivateContentPermission(orgId: string, userId: string, enabled: boolean): Promise<void> {
+    await apiRequest(`/orgs/${orgId}/members/${userId}/private-content-permission`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+    });
+}
+
+export async function openOrgPrivateContent(orgId: string, kind: import("@mike/contracts").OrgPrivateContentKind, itemId: string): Promise<void> {
+    await apiRequest(`/orgs/${orgId}/private-content/${kind}/${itemId}/open`, { method: "POST" });
+}
+
+export async function closeOrgPrivateContent(orgId: string, kind: import("@mike/contracts").OrgPrivateContentKind, itemId: string): Promise<void> {
+    await apiRequest(`/orgs/${orgId}/private-content/${kind}/${itemId}`, { method: "DELETE" });
 }
 
 export async function updateOrgMember(
