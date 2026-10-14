@@ -95,24 +95,12 @@ describe("OrganizationLogoModal", () => {
     expect(onRemove).toHaveBeenCalledOnce();
   });
 
-  it("allows choosing a replacement inside the editor and saving its initial frame", async () => {
-    const { onSave } = renderModal({ file: undefined, imageUrl: "data:image/png;base64,aW1hZ2U=" });
-    await loadImage(256, 256);
-    expect(save()).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("New logo"), { target: { files: [file] } });
-    expect(save()).toBeDisabled();
-    await loadImage(800, 200, 1);
-    expect(save()).toBeEnabled();
-    await userEvent.click(save());
-    expect(onSave).toHaveBeenCalledWith(RENDERED);
-  });
-
   it("blocks editing, removal and closing during a removal", async () => {
     const onRemove = vi.fn();
     const { onCancel } = renderModal({ file: undefined, imageUrl: "data:image/png;base64,aW1hZ2U=", onRemove, removing: true });
     await loadImage(256, 256);
     expect(screen.getByRole("button", { name: "Removing..." })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Upload new" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Upload new" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Zoom")).toBeDisabled();
     await userEvent.keyboard("{Escape}");
     expect(onCancel).not.toHaveBeenCalled();

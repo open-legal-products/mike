@@ -8,10 +8,8 @@ import {
   type PointerEvent,
 } from "react";
 import { Modal } from "@/app/components/modals/Modal";
-import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {
-  ORG_LOGO_ACCEPT,
   ORG_LOGO_MAX_ZOOM,
   clampOrgLogoFrame,
   initialOrgLogoFrame,
@@ -105,11 +103,8 @@ export function ImageCropModal({
 }) {
   // Decode the upload into pixels before displaying it. The raw file never
   // becomes a DOM URL, so markup cannot be interpreted as preview content.
-  const input = useRef<HTMLInputElement>(null);
-  const [replacement, setReplacement] = useState<File | null>(null);
-  const source = replacement ?? file ?? imageUrl ?? null;
+  const source = file ?? imageUrl ?? null;
   const busy = saving || removing;
-  const [pickError, setPickError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<{
     source: File | string;
     image: ImageBitmap;
@@ -231,35 +226,7 @@ export function ImageCropModal({
       breadcrumbs={[isPhoto ? "Account" : name, isPhoto ? "Profile photo" : "Logo"]}
       size="sm"
       className="h-auto max-h-[calc(100vh-2rem)]"
-      headerAction={
-        <>
-          <PillButtonUI tone="white" size="sm" className="shrink-0 whitespace-nowrap" disabled={busy} onClick={() => input.current?.click()}>
-            Upload new
-          </PillButtonUI>
-          <input
-            ref={input}
-            type="file"
-            accept={ORG_LOGO_ACCEPT}
-            aria-label={isPhoto ? "New profile photo" : "New logo"}
-            className="hidden"
-            disabled={busy}
-            onChange={(event) => {
-              const picked = event.target.files?.[0];
-              event.target.value = "";
-              if (!picked) return;
-              try {
-                validateOrgLogoFile(picked);
-                setReplacement(picked);
-                setPickError(null);
-                setSaveError(false);
-              } catch (cause) {
-                setPickError(cause instanceof Error ? cause.message : "Choose another image.");
-              }
-            }}
-          />
-        </>
-      }
-      secondaryAction={{
+      primaryAction={{
         label: saving ? "Saving..." : "Save",
         variant: "blue",
         disabled: !frame || !changed || busy,
@@ -273,7 +240,7 @@ export function ImageCropModal({
           }
         },
       }}
-      primaryAction={onRemove ? {
+      secondaryAction={onRemove ? {
         label: removing ? "Removing..." : "Remove",
         variant: "danger",
         disabled: busy,
@@ -284,7 +251,6 @@ export function ImageCropModal({
         data-modal-scroll="vertical"
         className="min-h-0 min-w-0 space-y-5 overflow-y-auto pb-4"
       >
-        {pickError ? <p role="alert" className="text-sm text-red-600">{pickError}</p> : null}
         {error ? <p role="alert" className="text-sm text-red-600">{error}</p> : null}
         {saveError ? <p role="alert" className="text-sm text-red-600">That image could not be prepared. Choose another.</p> : null}
         {unreadable ? (
