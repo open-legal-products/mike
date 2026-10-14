@@ -76,6 +76,7 @@ export type OrgAccessPerson = {
     user_id: string;
     email: string;
     display_name: string | null;
+    profile_photo?: string | null;
     role: OrgAssignableRole;
     has_override: boolean;
 };
@@ -226,7 +227,7 @@ export async function listOrgAccessPeople(
     const { data: profiles, error: profilesError } = userIds.length
         ? await db
               .from("user_profiles")
-              .select("user_id, email, display_name")
+              .select("user_id, email, display_name, profile_photo")
               .in("user_id", userIds)
         : { data: [], error: null };
     if (profilesError)
@@ -240,6 +241,7 @@ export async function listOrgAccessPeople(
             user_id: string;
             email: string | null;
             display_name: string | null;
+            profile_photo?: string | null;
         }[]).map((profile) => [profile.user_id, profile]),
     );
     // No Owner left among the members: the creator is not one of them and
@@ -272,6 +274,7 @@ export async function listOrgAccessPeople(
             user_id: userId,
             email: profile.email,
             display_name: profile.display_name ?? null,
+            profile_photo: profile.profile_photo ?? null,
             role,
             has_override: override !== undefined,
         });

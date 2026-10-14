@@ -37,7 +37,7 @@ import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 
 // An organization's model providers: the keys its work runs on, the models
 // each may run, and whether a member's own key may stand in where it has
-// none. These are the sections of the Organization Settings page, which is
+// none. These are the sections of the Organization page, which is
 // its owners' and admins' alone; they manage it with the same cards and the
 // same key dialog as a person's Bring Your Own Keys page.
 //

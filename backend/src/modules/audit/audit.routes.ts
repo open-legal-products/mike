@@ -3,18 +3,27 @@
 //
 // Handlers read the caller off res.locals, pass the raw query string through
 // to audit.service, and map its `ServiceResult` onto a status code, headers,
-// and body. Visibility (own events plus events in accessible projects) is
-// enforced in the service.
+// and body. Personal activity is restricted to the caller's actions;
+// organization audit visibility is enforced in the service.
 
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendServiceFailure } from "../../lib/serviceResult";
-import { listAuditEvents } from "./audit.service";
+import { listAuditActors, listAuditEvents } from "./audit.service";
 
 export const auditRouter = Router();
 auditRouter.use(requireAuth);
+
+auditRouter.get("/actors", asyncRoute(async (req, res) => {
+  const result = await listAuditActors(createServerSupabase(), {
+    userId: res.locals.userId as string,
+    query: req.query as Record<string, unknown>,
+  });
+  if (!result.ok) return void sendServiceFailure(res, result);
+  res.json(result.data);
+}));
 
 auditRouter.get("/", asyncRoute(async (req, res) => {
   const result = await listAuditEvents(createServerSupabase(), {

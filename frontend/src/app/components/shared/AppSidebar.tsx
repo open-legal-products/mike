@@ -1,5 +1,7 @@
 "use client";
 
+import { UserAvatar } from "@/app/components/ui/user-avatar";
+
 import {
     useState,
     useEffect,
@@ -50,7 +52,6 @@ import {
     SettingsSkeuoIcon,
     SignOutSkeuoIcon,
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
-import { HistorySkeuoIcon } from "@/app/components/shared/HistorySkeuoIcon";
 import { listProjectsPage } from "@/app/lib/mikeApi";
 import type { Project } from "@/app/components/shared/types";
 import { cn } from "@/app/lib/utils";
@@ -99,6 +100,7 @@ interface AppSidebarProps {
     onToggle: () => void;
 }
 
+/** Renders workspace navigation, recent content, and the current account menu with its photo or monogram. */
 export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const { user, signOut } = useAuth();
     const { profile } = useUserProfile();
@@ -406,11 +408,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         setCurrentChatId(routeChatId);
     }, [routeChatId, setCurrentChatId]);
 
-    const getUserInitials = (email: string) => {
-        if (profile?.displayName)
-            return profile.displayName.charAt(0).toUpperCase();
-        return email.charAt(0).toUpperCase();
-    };
 
     const getDisplayName = () => {
         if (!profile) return "";
@@ -447,7 +444,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     isOpen ? "rounded-2xl" : "rounded-[23px]",
                     "my-2 ml-2 mr-0 md:my-3 md:ml-3 md:mr-0 overflow-visible",
                     LIQUID_GLASS_FLOAT_CLASS,
-                    "absolute z-[99] flex shrink-0 flex-col transition-all duration-300 md:relative",
+                    "absolute z-[99] flex shrink-0 flex-col transition-all duration-300 motion-reduce:transition-none md:relative",
                 )}
             >
                 {/* Toggle + Logo */}
@@ -472,14 +469,14 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                         data-slot="sidebar-heading-loading"
                                         role="status"
                                         aria-label="Loading workspace"
-                                        className="h-5 w-28 rounded bg-gray-200 animate-pulse"
+                                        className={cn("h-5 w-28 rounded bg-gray-200", shouldAnimate ? "sidebar-heading-enter" : "animate-pulse")}
                                     />
                                 ) : (
                                     <SidebarHeading
                                         name={sidebarHeading}
                                         className={
                                             shouldAnimate
-                                                ? "sidebar-fade-in"
+                                                ? "sidebar-heading-enter"
                                                 : undefined
                                         }
                                     />
@@ -802,16 +799,13 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     isOpen ? "rounded-xl" : "rounded-[18px]",
                                     !isOpen ? "hidden md:flex" : "",
                                     pathname.startsWith("/settings") ||
-                                        pathname === "/history" ||
                                         isDropdownOpen
                                         ? LIQUID_GLASS_SELECTED_CLASS
                                         : LIQUID_GLASS_HOVER_CLASS,
                                 )}
                                 title={!isOpen ? user.email : undefined}
                             >
-                                <div className="h-5.5 w-5.5 flex-shrink-0 rounded-full bg-gray-700 flex items-center justify-center text-white text-[13px] font-medium font-serif">
-                                    {getUserInitials(user.email)}
-                                </div>
+                                <UserAvatar photo={profile?.profilePhoto} name={profile?.displayName} email={user.email} className="h-5.5 w-5.5 text-[10px]" />
                                 {isOpen && (
                                     <div
                                         className={`text-left flex-1 min-w-0 pl-2 flex items-center justify-between gap-2 ${
@@ -878,14 +872,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                   </>
                               ) : null}
                               <DropdownItem
-                                  selected={pathname === "/history"}
-                                  onSelect={() => router.push("/history")}
-                                  className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
-                              >
-                                  <HistorySkeuoIcon className={cn("h-4 w-4", pathname === "/history" ? "text-gray-900" : "text-black")} />
-                                  History
-                              </DropdownItem>
-                              <DropdownItem
                                   onSelect={() => router.push("/settings")}
                                   className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                               >
@@ -906,7 +892,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                       className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                                   >
                                       <OrganizationSkeuoIcon className="h-4 w-4 text-black" />
-                                      Organization settings
+                                      Organization
                                   </DropdownItem>
                               ) : null}
                               <DropdownItem

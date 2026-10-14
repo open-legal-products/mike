@@ -35,9 +35,14 @@ describe("Mike DOCX review module using the public core", () => {
         expect(xml).toContain("<w:ins");
         const reopened = new TreeDocumentStore(parse(xml));
         const items = changes(reopened.part);
-        expect(items).toHaveLength(1);
-        expect(items[0]).toMatchObject({ revisionKind: "replace", text: "sixty", replacedText: "thirty", author: revision.author, date: revision.date, readOnly: false });
-        expect(items[0].addresses).toHaveLength(2);
+        // Core 2.27 exposes a replacement as independent deletion and insertion
+        // decisions. Keep both visible and resolvable through the public API.
+        expect(items).toHaveLength(2);
+        expect(items[0]).toMatchObject({ revisionKind: "delete", text: "thirty", author: revision.author, date: revision.date, readOnly: false });
+        expect(items[1]).toMatchObject({ revisionKind: "insert", text: "sixty", author: revision.author, date: revision.date, readOnly: false });
+        expect(items[0].addresses).toEqual([items[0].address]);
+        expect(items[1].addresses).toEqual([items[1].address]);
+        expect(items[0].address).not.toEqual(items[1].address);
         expect(review.revisionItemsOfParagraph(reopened.part, [...paragraphOrderOfPart(reopened.part).keys()][0])).toEqual(items);
         apply(reopened, { op });
         expect(changes(reopened.part)).toHaveLength(0);
@@ -45,7 +50,7 @@ describe("Mike DOCX review module using the public core", () => {
         expect(resolved).toContain(op === "acceptAllRevisions" ? "sixty" : "thirty");
         expect(resolved).not.toContain(op === "acceptAllRevisions" ? "thirty" : "sixty");
         expect(reopened.undo()).not.toBeNull();
-        expect(changes(reopened.part)).toHaveLength(1);
+        expect(changes(reopened.part)).toEqual(items);
         expect(reopened.redo()).not.toBeNull();
         expect(changes(reopened.part)).toHaveLength(0);
     });

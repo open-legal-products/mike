@@ -1,6 +1,8 @@
 "use client";
 
-import Image from "next/image";
+import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
+import caseLaw from "../../../../public/icons/legal-sources/case-law.svg";
+import legislation from "../../../../public/icons/legal-sources/legislation.svg";
 import { useEffect, useState } from "react";
 import { Download, ExternalLink } from "lucide-react";
 import { downloadDocumentFile } from "@/app/lib/downloadDocument";
@@ -57,13 +59,12 @@ export function DocumentTitleRow({
                     <span className="shrink-0">
                         {document.type === "case" ||
                         document.type === "legislation" ? (
-                            <Image
+                            <SvgAssetIcon
                                 src={
                                     document.type === "case"
-                                        ? "/icons/legal-sources/case-law.svg"
-                                        : "/icons/legal-sources/legislation.svg"
+                                        ? caseLaw
+                                        : legislation
                                 }
-                                alt=""
                                 aria-hidden="true"
                                 width={14}
                                 height={14}

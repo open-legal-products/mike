@@ -558,6 +558,7 @@ export async function createTabularReview(
         userId,
         userEmail,
         action: "tabular.created",
+        orgId: resolvedOrg.orgId,
         title: (review as { title?: string | null }).title ?? null,
         surface: "tabular",
         projectId: project_id ?? null,

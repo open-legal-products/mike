@@ -1,5 +1,7 @@
 "use client";
 
+import { UserAvatar } from "@/app/components/ui/user-avatar";
+
 import { useState, type ReactNode } from "react";
 import { Check, ChevronDown, Info, Loader2 } from "lucide-react";
 import type { UserLookupResult } from "@/app/lib/mikeApi";
@@ -32,6 +34,7 @@ export interface AccessRow {
     email: string | null;
     user_id?: string | null;
     display_name: string | null;
+    profile_photo?: string | null;
     role: AccessAssignmentRole;
     isCreator?: boolean;
 }
@@ -205,6 +208,7 @@ function InfoLabelTooltip({
     );
 }
 
+/** Searches eligible organization members and presents their existing roster photos for selection. */
 function OrganizationMemberPicker({
     id,
     label,
@@ -305,15 +309,11 @@ function OrganizationMemberPicker({
                                     }}
                                     className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${LIQUID_GLASS_HOVER_CLASS}`}
                                 >
-                                    <span className="min-w-0 truncate text-xs text-gray-800">
-                                        {member.display_name?.trim() ||
-                                            member.email}
+                                    <UserAvatar photo={member.profile_photo} name={member.display_name} email={member.email} />
+                                    <span className="min-w-0 flex-1 text-xs [overflow-wrap:anywhere]">
+                                        <span className="block text-gray-800">{member.display_name?.trim() || member.email}</span>
+                                        {member.display_name ? <span className="block text-gray-500">{member.email}</span> : null}
                                     </span>
-                                    {member.display_name ? (
-                                        <span className="min-w-0 truncate text-xs text-gray-400">
-                                            {member.email}
-                                        </span>
-                                    ) : null}
                                 </button>
                             );
                         })
@@ -328,6 +328,7 @@ function OrganizationMemberPicker({
     );
 }
 
+/** Displays assigned people with compact avatars and responsive role controls, respecting read-only access. */
 function OrganizationAssignmentList({
     label,
     assignments,
@@ -362,17 +363,17 @@ function OrganizationAssignmentList({
      */
     ownerRoleImplied?: boolean;
 }) {
-    const WITH_ROLE = "grid-cols-[minmax(0,1fr)_minmax(8rem,14rem)_5rem_1.5rem]";
-    const WITHOUT_ROLE = "grid-cols-[minmax(0,1fr)_minmax(10rem,16rem)_1.5rem]";
+    const WITH_ROLE = "grid-cols-[minmax(0,1fr)_5rem_1.5rem] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_1.5rem]";
+    const WITHOUT_ROLE = "grid-cols-[minmax(0,1fr)_1.5rem] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.5rem]";
     return (
-        <div className="h-28 overflow-y-auto rounded-xl bg-white/20 p-1">
+        <div className="min-h-28 max-h-72 overflow-y-auto rounded-xl bg-white/20 p-1">
             {loading ? (
-                <div className="flex h-full items-center justify-center gap-2 text-xs text-gray-400">
+                <div className="flex min-h-26 items-center justify-center gap-2 text-xs text-gray-400">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Loading organization members…
                 </div>
             ) : assignments.length === 0 ? (
-                <div className="flex h-full items-center justify-center text-xs text-gray-400">
+                <div className="flex min-h-26 items-center justify-center text-xs text-gray-400">
                     {emptyMessage}
                 </div>
             ) : (
@@ -391,12 +392,13 @@ function OrganizationAssignmentList({
                         return (
                             <li
                                 key={key}
-                                className={`${LIQUID_GLASS_MODAL_ROW_HOVER_CLASS} grid ${showRole ? WITH_ROLE : WITHOUT_ROLE} items-center gap-3 rounded-lg px-2 py-2 transition-colors`}
+                                className={`${LIQUID_GLASS_MODAL_ROW_HOVER_CLASS} grid ${showRole ? WITH_ROLE : WITHOUT_ROLE} items-center gap-x-3 gap-y-0 sm:gap-y-3 rounded-lg px-2 py-2 transition-colors`}
                             >
-                                <span className="truncate text-xs text-gray-800">
-                                    {assignment.display_name?.trim() || "—"}
+                                <span className="flex min-w-0 items-center gap-2 text-xs text-gray-800">
+                                    <UserAvatar photo={assignment.profile_photo} name={assignment.display_name} email={assignment.email} />
+                                    <span className="min-w-0 [overflow-wrap:anywhere]">{assignment.display_name?.trim() || "—"}</span>
                                 </span>
-                                <span className="max-w-full justify-self-end truncate text-xs text-gray-500">
+                                <span className="col-span-full row-start-2 min-w-0 max-w-full justify-self-start pl-7 text-xs text-gray-500 [overflow-wrap:anywhere] sm:col-auto sm:row-auto sm:justify-self-end sm:pl-0">
                                     {assignment.email || "—"}
                                 </span>
                                 {showRole && onRoleChange ? (
@@ -706,6 +708,10 @@ export function OrganizationAccessEditor({
     );
 }
 
+/**
+ * Renders shared access controls for direct grants, organization assignments, and inherited project access.
+ * Receives authorized roster identities and delegates changes to the owning flow.
+ */
 export function AccessEditor({
     scope,
     rows,
@@ -847,7 +853,7 @@ export function AccessEditor({
                     </p>
                 ) : null}
 
-                <div className="mb-1 grid grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)_5rem_1.5rem] gap-3 px-2 text-xs font-medium text-gray-500">
+                <div className="mb-1 hidden sm:grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_1.5rem] gap-3 px-2 text-xs font-medium text-gray-500">
                     <div className="flex items-center gap-2">
                         <span>Name</span>
                         {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
@@ -862,10 +868,13 @@ export function AccessEditor({
                         {[1, 2].map((item) => (
                             <div
                                 key={item}
-                                className="grid grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)_5rem_1.5rem] items-center gap-3 rounded-lg px-2 py-2"
+                                className="grid grid-cols-[minmax(0,1fr)_5rem_1.5rem] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_1.5rem] items-center gap-x-3 gap-y-0 sm:gap-y-3 rounded-lg px-2 py-2"
                             >
-                                <div className="h-3 w-20 animate-pulse rounded bg-gray-100" />
-                                <div className="h-3 w-28 animate-pulse rounded bg-gray-100" />
+                                <div className="flex min-w-0 items-center gap-2">
+                                    <div className="h-5 w-5 shrink-0 animate-pulse rounded-full bg-gray-100" />
+                                    <div className="h-3 w-20 animate-pulse rounded bg-gray-100" />
+                                </div>
+                                <div className="col-span-full row-start-2 ml-7 h-3 w-28 animate-pulse rounded bg-gray-100 sm:col-auto sm:row-auto sm:ml-0" />
                                 <div className="h-4 w-12 animate-pulse rounded-full bg-gray-100" />
                                 <div className="h-6 w-6" />
                             </div>
@@ -906,10 +915,13 @@ export function AccessEditor({
                                 <div
                                     key={rowKey}
                                     role="listitem"
-                                    className={`${LIQUID_GLASS_MODAL_ROW_HOVER_CLASS} relative grid grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)_5rem_1.5rem] items-start gap-3 rounded-lg px-2 py-2 transition-colors`}
+                                    className={`${LIQUID_GLASS_MODAL_ROW_HOVER_CLASS} relative grid grid-cols-[minmax(0,1fr)_5rem_1.5rem] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_1.5rem] items-start gap-x-3 gap-y-0 sm:gap-y-3 rounded-lg px-2 py-2 transition-colors`}
                                 >
-                                    <p className="truncate pt-1 text-xs text-gray-800">{name}</p>
-                                    <p className="justify-self-start truncate pt-1 text-left text-xs text-gray-500">{entry.email || "—"}</p>
+                                    <div className="flex min-w-0 items-center gap-2 text-xs text-gray-800">
+                                        <UserAvatar photo={entry.profile_photo} name={entry.display_name} email={entry.email} />
+                                        <span className="min-w-0 [overflow-wrap:anywhere]">{name}</span>
+                                    </div>
+                                    <p className="col-span-full row-start-2 min-w-0 justify-self-start pl-7 text-left text-xs text-gray-500 [overflow-wrap:anywhere] sm:col-auto sm:row-auto sm:pl-0 sm:pt-1">{entry.email || "—"}</p>
                                     <AccessRolePill
                                         role={entry.role}
                                         label={email || name}

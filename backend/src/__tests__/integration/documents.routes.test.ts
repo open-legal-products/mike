@@ -168,6 +168,45 @@ const access = (projectRole: string, isCreator: boolean) => ({
     projectRole,
 });
 
+describe("GET /single-documents/:documentId", () => {
+    beforeEach(() => {
+        errors = {};
+        rows = {
+            documents: [{ id: DOC, user_id: "u2", project_id: "p1", org_id: "o1", workflow_id: null }],
+            document_versions: [],
+        };
+        ensureDocAccess.mockResolvedValue(access("viewer", false));
+    });
+
+    it("returns the file metadata with read-only permissions for a viewer", async () => {
+        const res = await request(app).get(`/single-documents/${DOC}`).set(...AUTH);
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ id: DOC, can_edit: false, can_delete: false });
+    });
+
+    it("distinguishes denied access from a missing document without exposing metadata", async () => {
+        ensureDocAccess.mockResolvedValue({ ok: false });
+        const res = await request(app).get(`/single-documents/${DOC}`).set(...AUTH);
+        expect(res.status).toBe(403);
+        expect(res.body).toEqual({ detail: "You do not have access to this document." });
+    });
+
+    it.each(["missing", "archived"])("returns 404 for a %s document", async (state) => {
+        if (state === "missing") rows.documents = [];
+        else rows.documents[0].archived_at = "2026-10-14T00:00:00Z";
+        const res = await request(app).get(`/single-documents/${DOC}`).set(...AUTH);
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({ detail: "Document not found" });
+    });
+
+    it("does not describe a database failure as a missing document", async () => {
+        errors.documents = { message: "private database failure" };
+        const res = await request(app).get(`/single-documents/${DOC}`).set(...AUTH);
+        expect(res.status).toBe(500);
+        expect(JSON.stringify(res.body)).not.toContain("private database failure");
+    });
+});
+
 describe("DELETE /single-documents/:documentId", () => {
     beforeEach(() => {
         deletes.length = 0;

@@ -234,7 +234,8 @@ async function orgRouterKeyOwners(
     const [membership, keys] = await Promise.all([
         db
             .from("org_members")
-            .select("org_id")
+            .select("org_id, organizations!inner(id)")
+            .is("organizations.deleted_at", null)
             .eq("org_id", orgId)
             .eq("user_id", userId)
             .maybeSingle(),

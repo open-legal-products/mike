@@ -33,6 +33,7 @@ vi.mock("../../../lib/supabase", () => ({
             let orgId = "";
             const query = {
                 select: () => query,
+                is: () => query,
                 eq: (column: string, value: string) => {
                     if (column === "org_id") orgId = value;
                     return query;

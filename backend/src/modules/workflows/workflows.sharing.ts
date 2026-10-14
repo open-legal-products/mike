@@ -18,6 +18,7 @@ export type ListWorkflowPeopleResult =
 // GET /workflows/:workflowId/people — the access roster any viewer of the
 // workflow may read. Organization workflows answer from the org roster (with
 // its overrides); personal ones answer from the direct-grant table.
+/** Authorizes workflow access before returning its organization or direct-share roster and scoped profile photos. */
 export async function listWorkflowPeople(
   db: Db,
   params: { workflowId: string; userId: string; userEmail: string | undefined },
@@ -48,6 +49,7 @@ export async function listWorkflowPeople(
               user_id: creator.user_id,
               email: creator.email,
               display_name: creator.display_name,
+              profile_photo: creator.profile_photo ?? null,
               role: "owner",
             }
           : null,
@@ -63,7 +65,10 @@ export async function listWorkflowPeople(
     .select("shared_with_email, role")
     .eq("workflow_id", workflowId);
   if (error) return { ok: false, kind: "db_error", error };
-  const { userByEmail, userById } = await loadProfileUsersByEmail(db);
+  const { userByEmail, userById } = await loadProfileUsersByEmail(db, {
+    userIds: access.workflow.user_id ? [access.workflow.user_id] : [],
+    emails: (shares ?? []).map((share) => share.shared_with_email as string),
+  });
   const creator = access.workflow.user_id
     ? userById.get(access.workflow.user_id)
     : undefined;
@@ -76,6 +81,7 @@ export async function listWorkflowPeople(
             user_id: access.workflow.user_id,
             email: creator?.email ?? null,
             display_name: creator?.display_name ?? null,
+            profile_photo: creator?.profile_photo ?? null,
             role: "owner",
           }
         : null,
@@ -86,6 +92,8 @@ export async function listWorkflowPeople(
         }[]
       ).map((share) => ({
         email: share.shared_with_email,
+        user_id: userByEmail.get(share.shared_with_email)?.id ?? null,
+        profile_photo: userByEmail.get(share.shared_with_email)?.profile_photo ?? null,
         display_name:
           userByEmail.get(share.shared_with_email)?.display_name ?? null,
         role: share.role,

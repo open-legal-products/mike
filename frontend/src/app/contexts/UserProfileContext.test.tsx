@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
+    setUserProfilePhoto,
     getUserProfile,
     updateUserProfile,
     updateChatModel,
@@ -11,6 +12,7 @@ const {
     saveApiKey,
 } = vi.hoisted(() => ({
     saveApiKey: vi.fn(),
+    setUserProfilePhoto: vi.fn(),
     getUserProfile: vi.fn(),
     updateUserProfile: vi.fn(),
     updateChatModel: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock("@/app/contexts/AuthContext", () => ({
 
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
+    setUserProfilePhoto: (...args: unknown[]) => setUserProfilePhoto(...args),
     getUserProfile: (...args: unknown[]) => getUserProfile(...args),
     updateUserProfile: (...args: unknown[]) => updateUserProfile(...args),
     updateChatModel: (...args: unknown[]) => updateChatModel(...args),
@@ -360,4 +363,25 @@ describe("UserProfileProvider dark mode", () => {
         });
         unsubscribe();
     });
+});
+
+
+it("updates every profile consumer immediately after saving or removing a photo", async () => {
+    const photo = "data:image/png;base64,iVBORw0KGgo=";
+    getUserProfile.mockResolvedValue(apiProfile(false));
+    setUserProfilePhoto.mockImplementation(async (value: string | null) => ({ profilePhoto: value }));
+    function PhotoControls() {
+        const { profile, updateProfilePhoto } = useUserProfile();
+        return <>
+            <span data-testid="photo-value">{profile?.profilePhoto ?? "none"}</span>
+            <button onClick={() => void updateProfilePhoto(photo)}>Upload</button>
+            <button onClick={() => void updateProfilePhoto(null)}>Remove photo</button>
+        </>;
+    }
+    render(<UserProfileProvider><PhotoControls /></UserProfileProvider>);
+    await waitFor(() => expect(getUserProfile).toHaveBeenCalled());
+    fireEvent.click(screen.getByText("Upload"));
+    await waitFor(() => expect(screen.getByTestId("photo-value")).toHaveTextContent(photo));
+    fireEvent.click(screen.getByText("Remove photo"));
+    await waitFor(() => expect(screen.getByTestId("photo-value")).toHaveTextContent("none"));
 });

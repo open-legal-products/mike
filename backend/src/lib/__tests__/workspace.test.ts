@@ -64,6 +64,7 @@ describe("resolveWorkspaceFilter", () => {
         // The lookup is for THIS user in THIS organization, not "does the
         // organization exist".
         expect(fake.calls[0].filters).toEqual([
+            ["is", "organizations.deleted_at", null],
             ["eq", "org_id", ORG],
             ["eq", "user_id", "u1"],
         ]);
