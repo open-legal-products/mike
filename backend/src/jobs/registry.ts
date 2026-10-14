@@ -1,7 +1,7 @@
 // Composition root: domain handlers are reached through their public facades.
 import { handleChatTurnAudit } from "../modules/audit/audit.service";
 import { handleAccountDelete, handleExportBuild, handleMcpRefreshToken } from "../modules/user/user.service";
-import { handleDocumentCleanup, handleDocumentPrecomputeText, handleConversionConvert, markConversionFailed } from "../modules/documents/documents.service";
+import { handleDocumentCleanup, handleDocumentExtractText, markDocumentTextFailed, handleDocumentPrecomputeText, handleConversionConvert, markConversionFailed } from "../modules/documents/documents.service";
 import { handleExtractionExtract, markExtractionJobFailed } from "../modules/tabular/tabular.service";
 import { handleMemoryConsolidation, markMemoryConsolidationFailed } from "../modules/memory/memory.service";
 import { handleStorageCleanup } from "../lib/dbq/storageCleanup";
@@ -18,10 +18,12 @@ export const DB_JOB_HANDLERS: DbJobHandlers = {
   "extraction.extract": handleExtractionExtract,
   "mcp.refresh_token": handleMcpRefreshToken,
   "document.precompute_text": handleDocumentPrecomputeText,
+  "document.extract_text": handleDocumentExtractText,
   "memory.consolidate": handleMemoryConsolidation,
 };
 export const DB_JOB_FAILURE_HOOKS: Record<string, DbJobFailureHook> = {
   "conversion.convert": markConversionFailed,
+  "document.extract_text": markDocumentTextFailed,
   "extraction.extract": markExtractionJobFailed,
   "memory.consolidate": markMemoryConsolidationFailed,
 };

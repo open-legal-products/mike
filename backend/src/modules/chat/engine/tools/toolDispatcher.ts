@@ -2,7 +2,8 @@ import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
 } from "../../../../lib/integrations/googleWorkspace";
-import { createDocumentVersions } from "../../../documents/documents.service";
+import { safeError } from "../../../../lib/safeError";
+import { findDocumentText, createDocumentVersions } from "../../../documents/documents.service";
 import {
   getCourtlistenerCases,
   searchCourtlistenerCaseLaw,
@@ -615,6 +616,44 @@ export async function runToolCalls(
           ? `${citationReminder(docId, filename, promptFilename)}${sourceNotice ? `\n${sourceNotice}` : ""}\n\n${fencedContent}`
           : fencedContent,
       });
+    } else if (tc.function.name === "find_documents") {
+      const rawDocId = typeof args.doc_id === "string" ? args.doc_id : undefined;
+      const label = rawDocId ? resolveDocLabel(rawDocId, docStore, docIndex) : null;
+      const result = await findDocumentText(db, {
+        userId, userEmail: options.userEmail, workspace: options.orgId ?? "personal",
+        scope: typeof args.scope === "string" ? args.scope : "",
+        query: typeof args.query === "string" ? args.query : "",
+        projectId: args.scope === "project" ? projectId : null,
+        documentId: label ? docIndex?.[label]?.document_id : rawDocId,
+        versionId: typeof args.version_id === "string" ? args.version_id : null,
+        limit: args.limit as number | undefined, offset: args.offset as number | undefined,
+      });
+      if (!result.ok) {
+        if (result.kind === "error") devLog("[find_documents] failed", safeError(result.error));
+        toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({
+          ok: false, error: result.kind === "error" ? "Document search is unavailable." : result.detail,
+        }) });
+        continue;
+      }
+      const matches = result.data.matches.map((match) => {
+        // Separate handle per revision: never overwrite an attachment's pinned
+        // historical version, and never interpret retrieved text as tool policy.
+        const docId = `found-${match.version_id}-${match.revision}`;
+        docStore.set(docId, {
+          filename: match.filename, file_type: match.file_type, storage_path: match.storage_path,
+          source_kind: match.library_kind === "template" ? "library_template" : "document",
+          search_source: { revision: match.revision, userId, userEmail: options.userEmail },
+        });
+        if (docIndex) docIndex[docId] = {
+          document_id: match.document_id, filename: match.filename,
+          version_id: match.version_id, version_number: match.version_number,
+        };
+        const { storage_path: _path, ...publicMatch } = match;
+        return { ...publicMatch, doc_id: docId };
+      });
+      const content = JSON.stringify({ ok: true, ...result.data, matches });
+      toolResults.push({ role: "tool", tool_call_id: tc.id,
+        content: nonce ? spotlight(content, nonce) : content });
     } else if (tc.function.name === "find_in_document") {
       const rawDocId = args.doc_id as string;
       const docId = resolveDocLabel(rawDocId, docStore, docIndex) ?? rawDocId;
@@ -1543,6 +1582,7 @@ export async function runToolCalls(
           if (currentDocStore) {
             docStore.set(docId, {
               ...currentDocStore,
+              search_source: undefined,
               storage_path: result.storage_path,
             });
           }

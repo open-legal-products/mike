@@ -156,6 +156,9 @@ jobs:
       - name: Document lifecycle transactions
         run: psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f backend/scripts/test-document-lifecycle.sql
 
+      - name: Document text search and backfill transactions
+        run: psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 -f backend/src/modules/documents/__tests__/documents.textSearch.sql
+
       - name: Concurrent document lifecycle operations
         run: node backend/scripts/test-document-lifecycle-concurrency.mjs
 

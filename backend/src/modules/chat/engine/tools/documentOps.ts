@@ -1,6 +1,7 @@
-import { createDocumentVersion, activateDocumentVersion, updateDocumentVersion } from "../../../documents/documents.service";
+import { readStoredDocumentText, createDocumentVersion, activateDocumentVersion, updateDocumentVersion } from "../../../documents/documents.service";
 import {
   downloadFile,
+  deleteFileBestEffort,
   extractedTextKey,
   generatedDocKey,
   uploadFile,
@@ -1229,20 +1230,25 @@ export async function runEditDocument(params: {
   let nextVersionNumber: number;
 
   if (reuseVersion) {
-    // Overwrite the existing turn version's file in place. The version
-    // row, version_number, and current_version_id all already point here.
-    newPath = reuseVersion.storagePath;
+    // Reuse the version number, but never overwrite bytes an extraction job
+    // may be reading. Publish the new path/hash together after storage succeeds.
+    if (activeVersion?.id !== reuseVersion.versionId || current.storage_path !== reuseVersion.storagePath) {
+      return { ok: false, error: "This document changed. Read the latest version and try again." };
+    }
+    newPath = `documents/${userId}/${documentId}/edits/${crypto.randomUUID().replace(/-/g, "")}.docx`;
     versionRowId = reuseVersion.versionId;
     nextVersionNumber = reuseVersion.versionNumber;
 
-    const clear = await updateDocumentVersion(db, documentId, versionRowId, { content_sha256: null });
-    if (clear.error || !clear.data) return { ok: false, error: "Document version is unavailable." };
     await uploadFile(newPath, ab, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     const updated = await updateDocumentVersion(db, documentId, versionRowId, {
+      storage_path: newPath,
       file_type: "docx", size_bytes: editedBytes.byteLength, page_count: null,
       content_sha256: contentSha256(editedBytes), pdf_storage_path: null,
-    });
-    if (updated.error || !updated.data) return { ok: false, error: "Failed to update document version." };
+    }, { expectedStoragePath: reuseVersion.storagePath });
+    if (updated.error || !updated.data) {
+      if (!updated.error) await deleteFileBestEffort(newPath, "assistant-edit-conflict");
+      return { ok: false, error: "Failed to update document version. Read the latest version and try again." };
+    }
   } else {
     const versionId = crypto.randomUUID().replace(/-/g, "");
     newPath = `documents/${userId}/${documentId}/edits/${versionId}.docx`;
@@ -1383,6 +1389,15 @@ export async function getTurnReadIdentity(params: {
   if (!docInfo) return null;
 
   const documentId = docIndex?.[docLabel]?.document_id;
+  if (docInfo.search_source) {
+    const indexed = docIndex?.[docLabel];
+    return {
+      key: `${documentId}:${indexed?.version_id}:${docInfo.search_source.revision}`,
+      docLabel, filename: docInfo.filename, documentId,
+      versionId: indexed?.version_id, versionNumber: indexed?.version_number,
+      storagePath: docInfo.storage_path,
+    };
+  }
   if (documentId && db) {
     const active = await loadActiveVersion(documentId, db);
     if (active?.storage_path) {
@@ -1512,6 +1527,24 @@ export async function readDocumentContent(
       );
       emitDocRead();
       return docInfo.inline_text;
+    }
+
+    // Search results are bound to a content revision, not just a mutable
+    // version id. Recheck access before serving persisted text or any bytes.
+    if (docInfo.search_source) {
+      if (!db || !documentId || !versionId) return "Document could not be read.";
+      const stored = await readStoredDocumentText(db, {
+        userId: docInfo.search_source.userId, userEmail: docInfo.search_source.userEmail,
+        documentId, versionId,
+      });
+      if (!stored || stored.revision !== docInfo.search_source.revision || stored.status !== "ready") {
+        return "Document could not be read.";
+      }
+      emitDocRead();
+      const notice = stored.textless_page_count
+        ? `[${stored.textless_page_count} page(s) have no text layer and need OCR. Search coverage is incomplete.]\n\n`
+        : "";
+      return notice + (stored.text ?? "");
     }
 
     // Prefer the current tracked-changes version (if any) so read_document

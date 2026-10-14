@@ -135,6 +135,7 @@ describe("resolving a tracked edit", () => {
       { table: "document_versions", op: "update", data: { id: "v1" } },
       { rpc: "document_cache_writer_active", data: false },
       { rpc: "document_cleanup_referenced_keys", data: [] },
+      { table: "db_jobs", data: [] },
       { table: "document_edits", op: "update" },
       { table: "document_edits", data: [] },
     ]);

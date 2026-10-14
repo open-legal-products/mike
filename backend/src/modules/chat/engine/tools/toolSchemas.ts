@@ -268,6 +268,26 @@ export const TOOLS = [
   {
     type: "function",
     function: {
+      name: "find_documents",
+      description:
+        "Find a literal phrase across stored document text in the current project, Library Files, Library Templates, or one document in the current workspace. Matching is case-insensitive; punctuation and whitespace are literal. Returns one excerpt per matching document, exact version/revision identifiers, doc_id handles for read_document/find_in_document, next_offset, and extraction coverage. Follow next_offset for more documents. Pending, failed, or OCR-incomplete coverage means no match does NOT establish absence. Search current versions by default; supply version_id only with document scope for history. If a returned handle cannot be read, repeat find_documents to refresh it. Try alternative wording for conceptual questions, then read full clauses before concluding.",
+      parameters: {
+        type: "object",
+        properties: {
+          scope: { type: "string", enum: ["project", "library", "templates", "document"] },
+          query: { type: "string", minLength: 2, maxLength: 500 },
+          doc_id: { type: "string", description: "Document handle or UUID, required for document scope." },
+          version_id: { type: "string", description: "Optional historical version UUID; document scope only." },
+          limit: { type: "integer", minimum: 1, maximum: 20 },
+          offset: { type: "integer", minimum: 0, maximum: 100000 },
+        },
+        required: ["scope", "query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "find_in_document",
       description:
         "Search for specific strings inside a document — a Ctrl+F equivalent. Returns each match with surrounding context so you can locate and quote the exact text without reading the whole document. Matching is case-insensitive and whitespace-tolerant. Use this for targeted lookups (e.g. finding a clause title, party name, or a specific phrase) rather than reading the whole document.",
