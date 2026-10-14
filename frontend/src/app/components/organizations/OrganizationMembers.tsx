@@ -463,9 +463,9 @@ export function OrganizationMembers({
         loading={loading}
         breadcrumbs={[
           {
-            label: "Organization Settings",
+            label: "Organization",
             onClick: () => router.push(`/organizations/${orgId}/settings`),
-            title: "Back to Organization Settings",
+            title: "Back to Organization",
           },
           { label: "Members", cursor: "text" },
         ]}

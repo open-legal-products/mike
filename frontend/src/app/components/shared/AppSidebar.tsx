@@ -892,7 +892,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                       className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                                   >
                                       <OrganizationSkeuoIcon className="h-4 w-4 text-black" />
-                                      Organization settings
+                                      Organization
                                   </DropdownItem>
                               ) : null}
                               <DropdownItem

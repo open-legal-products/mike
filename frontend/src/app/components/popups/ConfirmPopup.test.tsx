@@ -106,7 +106,7 @@ describe("ConfirmPopup", () => {
     const onCancel = vi.fn();
     const onClose = vi.fn();
     const scene = (popupOpen: boolean) => (
-      <ModalUI open onClose={onClose} ariaLabel="Organization settings">
+      <ModalUI open onClose={onClose} ariaLabel="Organization">
         <p>Settings</p>
         <ConfirmPopup
           open={popupOpen}

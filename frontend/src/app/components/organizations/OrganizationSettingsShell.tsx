@@ -131,7 +131,7 @@ export function OrganizationSettingsProvider({
       <TableEmptyState>
         <EmptyState
           icon={<OrganizationSkeuoIcon />}
-          title="Organization settings"
+          title="Organization"
           description="These settings are not available."
           action={
             <PillButtonUI
@@ -155,7 +155,7 @@ export function OrganizationSettingsProvider({
       <TableEmptyState>
         <EmptyState
           icon={<OrganizationSkeuoIcon />}
-          title="Organization settings"
+          title="Organization"
           description={loadError}
           tone="error"
           action={
@@ -236,8 +236,8 @@ export function OrganizationSettingsFrame({
 
   return (
     <SettingsShell
-      title="Organization Settings"
-      navLabel="Organization settings"
+      title="Organization"
+      navLabel="Organization"
       tabs={tabs}
       rootHref={organizationSettingsHref(orgId)}
     >

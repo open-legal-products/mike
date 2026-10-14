@@ -606,13 +606,13 @@ export const NO_MODELS_MESSAGES: Record<NoModelsReason, string> = {
   "api-keys":
     "Add an API key in Bring Your Own Keys before selecting a model.",
   "org-router-models":
-    "Your organization has not added any models for its provider yet. Ask an organization admin to add them in Organization Settings.",
+    "Your organization has not added any models for its provider yet. Ask an organization admin to add them in Organization.",
   "org-providers-disabled":
-    "Your organization has turned its model providers off. Ask an organization admin to turn one back on in Organization Settings.",
+    "Your organization has turned its model providers off. Ask an organization admin to turn one back on in Organization.",
   "org-api-keys":
-    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization Settings.",
+    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization.",
   "org-api-keys-or-own":
-    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization Settings, or add your own API key in Bring Your Own Keys.",
+    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization, or add your own API key in Bring Your Own Keys.",
 };
 
 /** Whether the fix for an empty picker sits with the organization's admins. */

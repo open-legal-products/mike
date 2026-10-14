@@ -100,7 +100,7 @@ describe("MyActivitySettingsPage", () => {
     expect(
       screen.getByRole("button", { name: "Audit log actions" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Organization Settings").length).toBeGreaterThan(
+    expect(screen.getAllByText("Organization").length).toBeGreaterThan(
       0,
     );
   });

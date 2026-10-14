@@ -75,7 +75,7 @@ const renderShell = (children = <Section />) =>
     </OrganizationSettingsProvider>,
   );
 const sections = () =>
-  within(screen.getByRole("navigation", { name: "Organization settings" }))
+  within(screen.getByRole("navigation", { name: "Organization" }))
     .getAllByRole("button")
     .map((button) => button.textContent);
 
@@ -143,15 +143,15 @@ describe("the sections each role is offered", () => {
 });
 
 describe("the frame", () => {
-  it("is headed Organization Settings, whichever organization it is", async () => {
+  it("is headed Organization, whichever organization it is", async () => {
     renderShell();
     // Before the organization has loaded, and after.
     expect(
-      screen.getByRole("heading", { level: 1, name: "Organization Settings" }),
+      screen.getByRole("heading", { level: 1, name: "Organization" }),
     ).toBeInTheDocument();
     await screen.findByText("section for Elite Law LLP");
     expect(
-      screen.getByRole("heading", { level: 1, name: "Organization Settings" }),
+      screen.getByRole("heading", { level: 1, name: "Organization" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Elite Law LLP" }),
@@ -277,7 +277,7 @@ describe("the settings title", () => {
     renderShell();
     const title = screen.getByRole("heading", {
       level: 1,
-      name: "Organization Settings",
+      name: "Organization",
     });
     expect(title).toHaveClass("text-3xl", "font-medium");
     expect(title).not.toHaveClass("text-4xl");

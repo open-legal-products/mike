@@ -236,7 +236,7 @@ describe("AppSidebar workspace switcher", () => {
 
     await openAccountMenu(user);
     await user.click(
-      screen.getByRole("menuitem", { name: "Organization settings" }),
+      screen.getByRole("menuitem", { name: "Organization" }),
     );
 
     expect(state.push).toHaveBeenCalledWith(
@@ -252,7 +252,7 @@ describe("AppSidebar workspace switcher", () => {
 
     await openAccountMenu(user);
     expect(
-      screen.getByRole("menuitem", { name: "Organization settings" }),
+      screen.getByRole("menuitem", { name: "Organization" }),
     ).toBeVisible();
   });
 
@@ -266,7 +266,7 @@ describe("AppSidebar workspace switcher", () => {
     await openAccountMenu(user);
     expect(screen.getByRole("menuitem", { name: "Settings" })).toBeVisible();
     expect(
-      screen.queryByRole("menuitem", { name: "Organization settings" }),
+      screen.queryByRole("menuitem", { name: "Organization" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("menuitem", { name: "Organizations" }),

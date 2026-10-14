@@ -466,7 +466,7 @@ export function AuditHistory({
         shrink
         breadcrumbs={[
           {
-            label: orgId ? "Organization Settings" : "Settings",
+            label: orgId ? "Organization" : "Settings",
             onClick: onBack,
           },
           { label: title },
