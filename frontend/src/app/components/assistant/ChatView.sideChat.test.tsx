@@ -58,6 +58,15 @@ vi.mock("./ChatAccessModal", () => ({ ChatAccessModal: () => null }));
 
 const started: Message[] = [{ role: "user", content: "Summarise the lease" }];
 
+// jsdom has no element scrolling API. The initial message is positioned in a
+// pair of animation frames, which can run while an async menu assertion waits.
+beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+        configurable: true,
+        value: vi.fn(),
+    });
+});
+
 function Column({
     newChat = false,
     onLoadChat = vi.fn(),

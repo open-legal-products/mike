@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listProjectChats, listProjectsPage } from "@/app/lib/mikeApi";
@@ -69,13 +69,15 @@ describe("AppSidebar account dropdown", () => {
     state.chats = [];
   });
 
-  it("keeps memory navigation inside Settings", async () => {
+  it("keeps Memory and My Activity navigation inside Settings", async () => {
     const user = userEvent.setup();
     render(<AppSidebar isOpen onToggle={vi.fn()} />);
 
     await user.click(screen.getByText("Alice").closest("button")!);
 
     expect(screen.getByRole("menuitem", { name: "Settings" })).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: "My Activity" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "History" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Memory" })).toBeNull();
   });
 
@@ -247,7 +249,10 @@ describe("AppSidebar account dropdown", () => {
         name: "Show recent chats and reviews in Other matter",
       }),
     ).toHaveAttribute("aria-expanded", "false");
-    expect(listProjectChats).toHaveBeenCalledWith("open-project");
+    // The expanded button can render before the row's loading effect runs.
+    await waitFor(() =>
+      expect(listProjectChats).toHaveBeenCalledWith("open-project"),
+    );
     expect(listProjectChats).not.toHaveBeenCalledWith("other-project");
   });
 

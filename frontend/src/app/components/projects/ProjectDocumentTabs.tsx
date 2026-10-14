@@ -1,6 +1,8 @@
 "use client";
 
-import Image from "next/image";
+import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
+import caseLaw from "../../../../public/icons/legal-sources/case-law.svg";
+import legislation from "../../../../public/icons/legal-sources/legislation.svg";
 import { DocumentTabBar } from "@/app/components/shared/DocumentTabBar";
 import type { Document, PanelDocument } from "@/app/components/shared/types";
 import type { TabDropPosition } from "@/app/lib/reorderTabs";
@@ -59,13 +61,12 @@ export function ProjectDocumentTabs({
                     sourceType === "case" || sourceType === "legislation";
                 return {
                     icon: legalSource ? (
-                        <Image
+                        <SvgAssetIcon
                             src={
                                 sourceType === "case"
-                                    ? "/icons/legal-sources/case-law.svg"
-                                    : "/icons/legal-sources/legislation.svg"
+                                    ? caseLaw
+                                    : legislation
                             }
-                            alt=""
                             aria-hidden="true"
                             width={14}
                             height={14}

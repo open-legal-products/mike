@@ -168,7 +168,7 @@ function WorkspaceMemory({
         <GlassCardUI>
           {loading ? (
             <div
-              className="flex items-center justify-between gap-3 px-4 py-5"
+              className="flex items-center justify-between gap-3 p-4"
               aria-label="Loading memory settings"
             >
               <div className="space-y-2">

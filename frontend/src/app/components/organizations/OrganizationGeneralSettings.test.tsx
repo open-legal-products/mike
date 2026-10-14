@@ -85,11 +85,15 @@ vi.mock("./OrganizationLogoModal", () => ({
   OrganizationLogoModal: ({
     file,
     organizationName,
+    imageUrl,
     saving,
     onCancel,
     onSave,
+    onRemove,
   }: {
-    file: File;
+    file?: File;
+    imageUrl?: string | null;
+    onRemove?: () => void;
     organizationName: string;
     saving?: boolean;
     onCancel: () => void;
@@ -97,11 +101,12 @@ vi.mock("./OrganizationLogoModal", () => ({
   }) => (
     <div role="dialog" aria-label="Logo">
       <p>
-        {organizationName}|{file.name}|{saving ? "saving" : "idle"}
+        {organizationName}|{file?.name ?? imageUrl}|{saving ? "saving" : "idle"}
       </p>
       <button type="button" onClick={() => onSave(FRAMED_LOGO)}>
         Save framed logo
       </button>
+      {onRemove ? <button type="button" onClick={onRemove}>Remove logo</button> : null}
       <button type="button" onClick={onCancel}>
         Cancel framing
       </button>
@@ -371,7 +376,7 @@ describe("deleting", () => {
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
   });
 
-  it("warns that all content goes with it, and suggests exporting first", async () => {
+  it("explains the 30-day owner recovery period before confirming deletion", async () => {
     const user = userEvent.setup();
     render(<OrganizationGeneralSettings />);
 
@@ -379,12 +384,12 @@ describe("deleting", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveTextContent(
-      "permanently deletes the organization and all of its content for every member",
+      "removes access to the organization for all members",
     );
     expect(dialog).toHaveTextContent(
-      "Consider exporting anything you need to keep first.",
+      "Its content and memberships are kept for 30 days.",
     );
-    expect(dialog).toHaveTextContent("This action cannot be undone.");
+    expect(dialog).toHaveTextContent("An owner can restore it from Settings → Organizations");
     // Nothing is deleted until it is confirmed.
     expect(mocks.deleteOrg).not.toHaveBeenCalled();
   });
@@ -523,7 +528,7 @@ describe("the organization's logo", () => {
     expect(mocks.setOrg).not.toHaveBeenCalled();
   });
 
-  it("shows the logo it has, and offers to replace or remove it", async () => {
+  it("shows the logo it has and opens it with a blue Edit button", async () => {
     mocks.org = { ...orgAs("owner"), logo_updated_at: "2026-10-12T10:00:00Z" };
     mocks.getOrgLogo.mockResolvedValue(LOGO);
     render(<OrganizationGeneralSettings />);
@@ -532,7 +537,12 @@ describe("the organization's logo", () => {
       "src",
       LOGO,
     );
-    expect(screen.getByRole("button", { name: "Replace logo" })).toBeEnabled();
+    const edit = screen.getByRole("button", { name: "Edit logo" });
+    expect(edit).toHaveTextContent("Edit");
+    expect(edit).toHaveClass("bg-blue-600/90");
+    expect(screen.queryByRole("button", { name: "Remove logo" })).not.toBeInTheDocument();
+    fireEvent.click(edit);
+    expect(screen.getByRole("dialog", { name: "Logo" })).toHaveTextContent(LOGO);
     expect(screen.getByRole("button", { name: "Remove logo" })).toBeEnabled();
   });
 
@@ -543,6 +553,7 @@ describe("the organization's logo", () => {
     mocks.deleteOrgLogo.mockResolvedValue(undefined);
     render(<OrganizationGeneralSettings />);
 
+    await user.click(screen.getByRole("button", { name: "Edit logo" }));
     await user.click(screen.getByRole("button", { name: "Remove logo" }));
 
     await waitFor(() =>

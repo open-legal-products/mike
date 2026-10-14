@@ -24,6 +24,9 @@ const resolvePath = (relative: string) =>
 
 export default defineConfig({
     plugins: [react()],
+    // Next emits imported images as files. Match that behavior instead of
+    // Vite's inline data URLs when testing image preloads.
+    build: { assetsInlineLimit: 0 },
     resolve: {
         // Mirror the `@/*` path alias from tsconfig.json so unit tests resolve
         // the same module specifiers the app uses.

@@ -1,5 +1,7 @@
 "use client";
 
+import { UserAvatar } from "@/app/components/ui/user-avatar";
+
 import {
   useCallback,
   useEffect,
@@ -461,9 +463,9 @@ export function OrganizationMembers({
         loading={loading}
         breadcrumbs={[
           {
-            label: "Organization Settings",
+            label: "Organization",
             onClick: () => router.push(`/organizations/${orgId}/settings`),
-            title: "Back to Organization Settings",
+            title: "Back to Organization",
           },
           { label: "Members", cursor: "text" },
         ]}
@@ -619,6 +621,7 @@ export function OrganizationMembers({
   );
 }
 
+/** Renders searchable, sortable organization members with compact avatars and permission-aware actions. */
 function PeopleTable({
   loading,
   error,
@@ -863,7 +866,8 @@ function PeopleTable({
                   onSelectionChange={() => toggleMember(member.id)}
                   checkboxTitle={`Select ${label}`}
                 >
-                  <span className="min-w-0 flex-1 truncate text-xs text-gray-800">
+                  <UserAvatar photo={member.profile_photo} name={member.display_name} email={member.email} size="sm" className="mr-2" />
+                  <span className="min-w-0 flex-1 text-xs text-gray-800 [overflow-wrap:anywhere]">
                     {label}
                   </span>
                   {member.user_id === currentUserId ? (
@@ -987,6 +991,7 @@ function OrganizationRoleTab({
   );
 }
 
+/** Matches the people table's columns and compact identity layout while member data loads. */
 function LoadingRows({ columns }: { columns: string[] }) {
   return (
     <TableBody>
@@ -994,6 +999,7 @@ function LoadingRows({ columns }: { columns: string[] }) {
         <TableRow key={row} interactive={false}>
           <TableStickyCell hover={false} bgClassName="bg-transparent">
             <SkeletonCheckbox />
+            <span className="mr-2 h-4 w-4 shrink-0 animate-pulse rounded-full bg-gray-100" />
             <SkeletonLine className="w-40" />
           </TableStickyCell>
           {columns.map((width, index) => (

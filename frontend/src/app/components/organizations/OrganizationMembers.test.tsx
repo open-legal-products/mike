@@ -173,7 +173,7 @@ describe("OrganizationMembers", () => {
     // The count sits beside the column's name.
     expect(screen.getByText("(2)")).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: "Back to Organization Settings" }),
+      screen.getByRole("button", { name: "Back to Organization" }),
     );
     expect(mocks.push).toHaveBeenCalledWith("/organizations/org-1/settings");
     expect(screen.getByText("me@firm.example")).toBeInTheDocument();

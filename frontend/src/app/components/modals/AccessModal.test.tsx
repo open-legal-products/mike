@@ -36,6 +36,7 @@ function accessResponse() {
             user_id: "u1",
             email: "creator@firm.example",
             display_name: "Creator",
+            profile_photo: "data:image/png;base64,iVBORw0KGgo=",
             role: "owner" as const,
         },
         members: [
@@ -150,10 +151,11 @@ describe("AccessModal — per-recipient roles", () => {
             .getByText("Creator")
             .closest<HTMLElement>('[role="listitem"]');
         expect(creatorRow).not.toBeNull();
+        expect(creatorRow?.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
         expect(creatorRow?.tagName).toBe("DIV");
         expect(creatorRow?.parentElement?.tagName).toBe("DIV");
         expect(creatorRow).toHaveClass(
-            "grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)_5rem_1.5rem]",
+            "sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem_1.5rem]",
         );
         expect(creatorRow).not.toHaveClass(
             "grid-cols-[minmax(0,1fr)_minmax(10rem,16rem)_5rem_1.5rem]",

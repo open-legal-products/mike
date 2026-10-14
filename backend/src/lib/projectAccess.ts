@@ -34,6 +34,10 @@ export type ProjectGrant = {
     updated_at: string;
 };
 
+/**
+ * Builds the direct or organization roster for a project the caller has already authorized.
+ * Photo queries are limited to the creator and the roster identities.
+ */
 export async function listProjectPeople(
     db: Db,
     project: {
@@ -50,12 +54,14 @@ export async function listProjectPeople(
               user_id: string;
               email: string | null;
               display_name: string | null;
+              profile_photo?: string | null;
               role: "owner";
           } | null;
           members: {
               user_id?: string | null;
               email: string;
               display_name: string | null;
+              profile_photo?: string | null;
               role: ProjectRole | "deny";
           }[];
       }
@@ -81,6 +87,7 @@ export async function listProjectPeople(
                       user_id: creator.user_id,
                       email: creator.email,
                       display_name: creator.display_name,
+                      profile_photo: creator.profile_photo ?? null,
                       role: "owner",
                   }
                 : null,
@@ -95,7 +102,7 @@ export async function listProjectPeople(
         project.user_id
             ? db
                   .from("user_profiles")
-                  .select("user_id, email, display_name")
+                  .select("user_id, email, display_name, profile_photo")
                   .eq("user_id", project.user_id)
                   .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
@@ -107,7 +114,7 @@ export async function listProjectPeople(
     const { data: profiles, error } = emails.length
         ? await db
               .from("user_profiles")
-              .select("user_id, email, display_name")
+              .select("user_id, email, display_name, profile_photo")
               .in("email", emails)
         : { data: [], error: null };
     if (error) return { ok: false, detail: error.message };
@@ -116,12 +123,14 @@ export async function listProjectPeople(
             user_id: string;
             email: string;
             display_name: string | null;
+            profile_photo?: string | null;
         }[]).map((profile) => [profile.email, profile]),
     );
     const creator = creatorProfile.data as {
         user_id: string;
         email: string | null;
         display_name: string | null;
+        profile_photo?: string | null;
     } | null;
     return {
         ok: true,
@@ -131,6 +140,7 @@ export async function listProjectPeople(
                   user_id: creator.user_id,
                   email: creator.email,
                   display_name: creator.display_name,
+                  profile_photo: creator.profile_photo ?? null,
                   role: "owner",
               }
             : null,
@@ -139,6 +149,7 @@ export async function listProjectPeople(
             email: grant.email,
             display_name:
                 profileByEmail.get(grant.email)?.display_name ?? null,
+                profile_photo: profileByEmail.get(grant.email)?.profile_photo ?? null,
             role: grant.role,
         })),
     };

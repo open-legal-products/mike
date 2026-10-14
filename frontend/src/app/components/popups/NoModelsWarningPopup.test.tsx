@@ -68,15 +68,15 @@ describe("NoModelsWarningPopup", () => {
         it.each([
             [
                 "org-router-models",
-                "Your organization has not added any models for its provider yet. Ask an organization admin to add them in Organization Settings.",
+                "Your organization has not added any models for its provider yet. Ask an organization admin to add them in Organization.",
             ],
             [
                 "org-providers-disabled",
-                "Your organization has turned its model providers off. Ask an organization admin to turn one back on in Organization Settings.",
+                "Your organization has turned its model providers off. Ask an organization admin to turn one back on in Organization.",
             ],
             [
                 "org-api-keys",
-                "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization Settings.",
+                "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization.",
             ],
         ] as const)(
             "says who can fix %s and takes an admin to the organization's settings",
@@ -95,7 +95,7 @@ describe("NoModelsWarningPopup", () => {
 
                 await user.click(
                     screen.getByRole("button", {
-                        name: "Open Organization Settings",
+                        name: "Open Organization",
                     }),
                 );
 
@@ -124,7 +124,7 @@ describe("NoModelsWarningPopup", () => {
             ).toBeInTheDocument();
             expect(
                 screen.queryByRole("button", {
-                    name: "Open Organization Settings",
+                    name: "Open Organization",
                 }),
             ).not.toBeInTheDocument();
             expect(
@@ -145,7 +145,7 @@ describe("NoModelsWarningPopup", () => {
             );
             expect(
                 screen.getByRole("button", {
-                    name: "Open Organization Settings",
+                    name: "Open Organization",
                 }),
             ).toBeInTheDocument();
         });
@@ -161,7 +161,7 @@ describe("NoModelsWarningPopup", () => {
 
             expect(
                 screen.getByText(
-                    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization Settings, or add your own API key in Bring Your Own Keys.",
+                    "Your organization has not set up a model provider yet. Ask an organization admin to add one in Organization, or add your own API key in Bring Your Own Keys.",
                 ),
             ).toBeInTheDocument();
             // The step the member can take themselves.

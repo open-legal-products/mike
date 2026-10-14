@@ -25,6 +25,7 @@ import {
     MikeApiError,
     saveApiKey,
     setApiKeyEnabled,
+    setUserProfilePhoto,
     syncUserPasswordSet,
     updateUserMfaOnLogin,
     updateUserProfile,
@@ -51,6 +52,7 @@ import {
 } from "@/app/hooks/useConfiguredModels";
 
 interface UserProfile extends RouterProfileLists {
+    profilePhoto?: string | null;
     displayName: string | null;
     organisation: string | null;
     jurisdiction: string | null;
@@ -92,6 +94,7 @@ interface UserProfileContextType {
      * selection that is absent from the router lists) must not run at all.
      */
     apiKeysDegraded: boolean;
+    updateProfilePhoto: (photo: string | null) => Promise<void>;
     updateDisplayName: (name: string) => Promise<boolean>;
     updateOrganisation: (organisation: string) => Promise<boolean>;
     completeOnboarding: (details?: PersonalisationDetails) => Promise<boolean>;
@@ -154,12 +157,14 @@ function emptyApiKeys(): ApiKeyState {
     };
 }
 
+/** Normalizes the API profile into client defaults, including nullable photos and provider-key state. */
 function toProfile(data: ApiUserProfile): UserProfile {
     const { apiKeyStatus, ...profile } = data;
     const apiKeys = apiKeyStateFromStatus(apiKeyStatus);
 
     return {
         ...profile,
+        profilePhoto: profile.profilePhoto ?? null,
         jurisdiction: profile.jurisdiction ?? null,
         practiceSetting: profile.practiceSetting ?? null,
         professionalTitle: profile.professionalTitle ?? null,
@@ -181,6 +186,7 @@ function toProfile(data: ApiUserProfile): UserProfile {
     };
 }
 
+/** Loads the authenticated profile and shares persisted updates across settings, navigation, and account consumers. */
 export function UserProfileProvider({ children }: { children: ReactNode }) {
     const { user, isAuthenticated } = useAuth();
     const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -274,6 +280,13 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         applyDarkMode(profile?.darkMode === true);
     }, [profile?.darkMode]);
+
+    /** Persists a photo change before publishing the returned value to every profile consumer. */
+    const updateProfilePhoto = useCallback(async (photo: string | null) => {
+        if (!user) return;
+        const updated = await setUserProfilePhoto(photo);
+        setProfile((previous) => previous ? { ...previous, profilePhoto: updated.profilePhoto } : previous);
+    }, [user]);
 
     const updateDisplayName = useCallback(
         async (displayName: string): Promise<boolean> => {
@@ -656,6 +669,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             profile,
             loading,
             apiKeysDegraded,
+            updateProfilePhoto,
             updateDisplayName,
             updateOrganisation,
             completeOnboarding,
@@ -679,6 +693,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             profile,
             loading,
             apiKeysDegraded,
+            updateProfilePhoto,
             updateDisplayName,
             updateOrganisation,
             completeOnboarding,

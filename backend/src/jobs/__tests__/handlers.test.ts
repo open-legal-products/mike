@@ -499,7 +499,7 @@ describe("handleExportBuild", () => {
         );
     });
 
-    it("builds the history CSV from the job's stored filters", async () => {
+    it("builds the My Activity CSV from the job's stored filters", async () => {
         const query = { sortBy: "created_at", sortDirection: "desc", page: 3, limit: 2000 };
         const out = await handleExportBuild(
             makeDb() as never,
@@ -517,9 +517,9 @@ describe("handleExportBuild", () => {
             query,
         );
         const [path, , contentType] = uploadFile.mock.calls[0];
-        expect(path).toBe("exports/u1/job-1-history-export.csv");
+        expect(path).toBe("exports/u1/job-1-my-activity.csv");
         expect(contentType).toMatch(/^text\/csv/);
-        expect(out.filename).toBe("history-export.csv");
+        expect(out.filename).toBe("my-activity.csv");
         expect(out.content_type).toMatch(/^text\/csv/);
         // Exporting history does not itself record an audit row.
         expect(recordAudit).not.toHaveBeenCalled();

@@ -758,16 +758,18 @@ describe("NewProjectModal sharing", () => {
         );
         const people = screen.getByRole("list", { name: "People with access" });
         expect(within(people).getByText("Project Lead")).toBeInTheDocument();
-    expect(within(people).getByText("Project Creator")).toBeInTheDocument();
+        expect(within(people).getByText("Project Creator")).toBeInTheDocument();
         expect(within(people).getByText("lead@elite.test")).toHaveClass(
-            "justify-self-end",
+            "sm:justify-self-end",
         );
         expect(
             within(people).queryByRole("button", {
                 name: "Actions for me@firm.test",
             }),
         ).not.toBeInTheDocument();
-        expect(people.parentElement).toHaveClass("h-28", "overflow-y-auto");
+        expect(people.parentElement).toHaveClass(
+            "min-h-28", "max-h-72", "overflow-y-auto",
+        );
 
         await submit(user);
         await waitFor(() =>

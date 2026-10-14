@@ -516,7 +516,7 @@ describe("OrganizationAccessEditor — public and private", () => {
             .closest("li") as HTMLElement;
         // Email at the right end, then the menu.
         expect(within(row).getByText("jane@firm.example")).toHaveClass(
-            "justify-self-end",
+            "sm:justify-self-end",
         );
         expect(row.lastElementChild).toHaveAccessibleName(
             "Actions for jane@firm.example",

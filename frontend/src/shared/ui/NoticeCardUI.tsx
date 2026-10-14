@@ -126,7 +126,7 @@ export function NoticeCardUI({
             {...rest}
             className={twMerge(
                 clsx(
-                    "pointer-events-auto relative flex rounded-2xl px-3 pb-3 pt-2 text-xs",
+                    "pointer-events-auto relative flex rounded-2xl px-3 py-2 text-xs",
                     LIQUID_GLASS_FLOAT_CLASS,
                     // Only visible when a toast is focused with the keyboard.
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2",
@@ -136,7 +136,10 @@ export function NoticeCardUI({
         >
             <div className={clsx("min-w-0 flex-1", toneTitleClass[tone])}>
                 {title ? (
-                    <div className="mb-1 flex items-center gap-1.5 text-sm font-medium">
+                    <div className={clsx(
+                        "flex items-center gap-1.5 text-sm font-medium",
+                        (message || children) && "mb-1",
+                    )}>
                         {toneIconNode}
                         {title}
                     </div>

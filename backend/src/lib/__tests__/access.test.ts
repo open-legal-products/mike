@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
     canManageOrgRole,
     checkProjectAccess,
@@ -33,6 +33,7 @@ function makeDb(
         // Whether an organization's item has an Owner left is the database's
         // to say; answered here from the same tables.
         rpc: async (name: string, args?: Record<string, unknown>) =>
+            (name === "list_org_private_content_access" ? { data: [], error: null } : null) ??
             ownerlessRpcResult(tables, name, args) ?? {
                 data: null,
                 error: { message: `unexpected rpc ${name}` },
@@ -62,7 +63,9 @@ function makeDb(
                     return query;
                 },
                 is: (column: string, value: unknown) => {
-                    rows = rows.filter((row) => row[column] === value);
+                    rows = rows.filter((row) => (column === "organizations.deleted_at"
+                        ? tables.organizations?.find((org) => org.id === row.org_id)?.deleted_at ?? null
+                        : row[column]) === value);
                     return query;
                 },
                 neq: (column: string, value: unknown) => {
@@ -1957,5 +1960,42 @@ describe("listAccessibleProjectIds with capped deny responses", () => {
         await expect(
             listAccessibleProjectIds("member", undefined, db),
         ).rejects.toThrow(/access override read failed: statement timeout/);
+    });
+});
+
+
+describe("explicit private organization access", () => {
+    it("adds only viewer standing across all five kinds and loses it when revoked", async () => {
+        const row = { id: "item", user_id: "member", org_id: "org", project_id: null, visibility: "private" };
+        const db = makeDb({
+            organizations: [{ id: "org", kind: "team" }],
+            org_members: [{ org_id: "org", user_id: "admin", role: "admin" }, { org_id: "org", user_id: "member", role: "member" }],
+            projects: [row], workflows: [row],
+        });
+        let opened = false;
+        db.rpc = vi.fn(async (name: string) => ({ data: name === "org_private_document_access" ? opened : opened ? "viewer" : null, error: null }));
+        const checks = [
+            () => checkProjectAccess("item", "admin", "admin@example.test", db),
+            () => checkWorkflowAccess("item", "admin", "admin@example.test", db),
+            () => ensureChatAccess(row, "admin", "admin@example.test", db),
+            () => ensureReviewAccess(row, "admin", "admin@example.test", db),
+            () => ensureDocAccess(row, "admin", "admin@example.test", db),
+        ];
+        for (const check of checks) expect(await check()).toMatchObject({ ok: false });
+        opened = true;
+        for (const check of checks) expect(await check()).toMatchObject({ ok: true, projectRole: "viewer", isCreator: false });
+        opened = false;
+        for (const check of checks) expect(await check()).toMatchObject({ ok: false });
+    });
+    it("includes an explicitly opened project in the accessible-ID list", async () => {
+        const db = makeDb({
+            organizations: [{ id: "org", kind: "team" }],
+            org_members: [{ org_id: "org", user_id: "admin", role: "admin" }, { org_id: "org", user_id: "member", role: "member" }],
+            projects: [{ id: "private", org_id: "org", user_id: "member", visibility: "private" }, { id: "unopened", org_id: "org", user_id: "member", visibility: "private" }],
+        });
+        const original = db.rpc;
+        db.rpc = vi.fn((name: string, args: Record<string, unknown>) => name === "list_org_private_content_access"
+            ? Promise.resolve({ data: [{ kind: "project", item_id: "private" }], error: null }) : original(name, args));
+        expect(await listAccessibleProjectIds("admin", "admin@example.test", db)).toEqual(["private"]);
     });
 });

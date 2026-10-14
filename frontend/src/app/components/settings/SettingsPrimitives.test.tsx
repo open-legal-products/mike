@@ -35,8 +35,7 @@ describe("settings primitives", () => {
       "sm:flex-row",
       "border-t",
       "first:border-t-0",
-      "px-4",
-      "py-5",
+      "p-4",
     );
   });
 

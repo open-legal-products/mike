@@ -184,6 +184,7 @@ describe("updateWorkflow visibility", () => {
             { table: "workflows", data: { ...workflowRow, visibility: "private" } },
             { table: "org_members", data: { role: "admin" } },
             { table: "workflow_org_access_overrides", data: null },
+            { rpc: "org_private_access_role", data: null },
         ]);
         await expect(
             updateWorkflow(fake.db, {

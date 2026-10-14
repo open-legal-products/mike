@@ -1,5 +1,6 @@
 "use client";
 
+import { ProfilePhotoSettings } from "@/app/components/settings/ProfilePhotoSettings";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
@@ -35,18 +36,15 @@ interface EmailWarning {
   message: string;
 }
 
+/** Composes authenticated account settings, including profile-photo editing and account security controls. */
 export default function SettingsPage() {
   const router = useRouter();
   const { user, signOut, updateEmail } = useAuth();
-  const { profile, updateDisplayName, updateOrganisation } = useUserProfile();
+  const { profile, updateDisplayName } = useUserProfile();
   const [displayName, setDisplayName] = useState("");
   const [isSavingName, setIsSavingName] = useState(false);
   const [saved, setSaved] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
-  const [organisation, setOrganisation] = useState("");
-  const [isSavingOrg, setIsSavingOrg] = useState(false);
-  const [orgSaved, setOrgSaved] = useState(false);
-  const [orgError, setOrgError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [isSavingEmail, setIsSavingEmail] = useState(false);
   const [emailSaved, setEmailSaved] = useState(false);
@@ -61,21 +59,11 @@ export default function SettingsPage() {
   const requiresPasswordForEmailChange =
     user?.createdWithGoogle === true && profile?.passwordSet !== true;
 
-  // Each field syncs from the profile independently. A combined effect
-  // (both setters, keyed on both values) wiped in-progress text from the
-  // sibling input whenever one field's blur-autosave refreshed the
-  // profile; per-field effects don't run then, because the sibling's own
-  // profile value did not change. Deliberately NO focused-input guard
-  // here: skipping the sync while focused let a profile that loads after
-  // mount leave the focused input empty, and blurring it then saved ""
-  // over the stored name.
+  // Sync a profile that loads after mount, even while the name input is focused.
+  // Otherwise an empty blur-autosave could overwrite the stored name.
   useEffect(() => {
     setDisplayName(profile?.displayName ?? "");
   }, [profile?.displayName]);
-
-  useEffect(() => {
-    setOrganisation(profile?.organisation ?? "");
-  }, [profile?.organisation]);
 
   useEffect(() => {
     if (user?.email) {
@@ -214,22 +202,6 @@ export default function SettingsPage() {
     }
   };
 
-  const handleSaveOrganisation = async () => {
-    const nextOrganisation = organisation.trim();
-    if (nextOrganisation === (profile?.organisation ?? "")) return;
-    setIsSavingOrg(true);
-    setOrgError(null);
-    const success = await updateOrganisation(nextOrganisation);
-    setIsSavingOrg(false);
-
-    if (success) {
-      setOrgSaved(true);
-      setTimeout(() => setOrgSaved(false), 2000);
-    } else {
-      setOrgError("Unable to save your organisation.");
-    }
-  };
-
   if (!user) return null;
 
   return (
@@ -269,37 +241,7 @@ export default function SettingsPage() {
               />
             </div>
           </SettingsRow>
-          <SettingsRow layout="stacked">
-            <div>
-              <div className="flex items-start justify-between gap-3">
-                <FieldLabel htmlFor="organisation">Organisation</FieldLabel>
-                <span
-                  className={`text-xs ${orgError ? "text-red-600" : "text-gray-400"}`}
-                  aria-live="polite"
-                >
-                  {isSavingOrg
-                    ? "Saving..."
-                    : orgError
-                      ? orgError
-                      : orgSaved
-                        ? "Saved"
-                        : ""}
-                </span>
-              </div>
-              <SettingsTextInput
-                id="organisation"
-                type="text"
-                value={organisation}
-                onChange={(e) => {
-                  setOrganisation(e.target.value);
-                  setOrgError(null);
-                  setOrgSaved(false);
-                }}
-                onBlur={() => void handleSaveOrganisation()}
-                placeholder="Enter your organisation"
-              />
-            </div>
-          </SettingsRow>
+          <ProfilePhotoSettings />
         </GlassCardUI>
       </section>
 

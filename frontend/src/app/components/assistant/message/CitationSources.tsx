@@ -1,4 +1,5 @@
-import Image from "next/image";
+import { SvgAssetIcon } from "@/app/components/ui/svg-asset-icon";
+import caseLaw from "../../../../../public/icons/legal-sources/case-law.svg";
 import { Loader2 } from "lucide-react";
 import { FileTypeIcon } from "../../shared/FileTypeIcon";
 import { displayCitationQuote, formatCitationPage } from "../../shared/types";
@@ -46,9 +47,8 @@ export function citationTooltip(annotation: Citation): string {
 function CitationSourceIcon({ annotation }: { annotation: Citation }) {
     if (annotation.kind === "case") {
         return (
-            <Image
-                src="/icons/legal-sources/case-law.svg"
-                alt=""
+            <SvgAssetIcon
+                src={caseLaw}
                 aria-hidden="true"
                 width={14}
                 height={14}
