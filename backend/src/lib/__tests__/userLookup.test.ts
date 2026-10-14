@@ -197,10 +197,15 @@ describe("loadProfileUsersByEmail", () => {
 
 describe("findProfileUserByEmail", () => {
     const rows = [
-        { user_id: "u1", email: "alice@example.com", display_name: "Alice" },
+        {
+            user_id: "u1",
+            email: "alice@example.com",
+            display_name: "Alice",
+            profile_photo: "data:image/png;base64,iVBORw0KGgo=",
+        },
     ];
 
-    it("finds a profile by normalized email", async () => {
+    it("finds a profile by normalized email without exposing its photo", async () => {
         const db = makeDb(rows);
         await expect(
             findProfileUserByEmail(db as any, "  ALICE@example.com "),
@@ -297,5 +302,23 @@ describe("syncProfileEmail", () => {
         await expect(syncProfileEmail(db as any, "u1", null)).resolves.toBeNull();
         await expect(syncProfileEmail(db as any, "u1", "   ")).resolves.toBeNull();
         expect(db.tables.user_profiles).toEqual([]);
+    });
+});
+
+
+describe("scoped photo lookup", () => {
+    it("loads photos only for requested IDs and normalized emails", async () => {
+        const db = makeDb([
+            { user_id: "owner", email: "owner@example.com", display_name: "Owner", profile_photo: "owner-photo" },
+            { user_id: "member", email: "member@example.com", display_name: "Member", profile_photo: "member-photo" },
+            { user_id: "unrelated", email: "unrelated@example.com", display_name: "Unrelated", profile_photo: "private-photo" },
+        ]);
+        const result = await loadProfileUsersByEmail(db as never, { userIds: ["owner"], emails: [" MEMBER@example.com "] });
+        expect(result.userById.size).toBe(2);
+        expect(result.userById.get("owner")?.profile_photo).toBe("owner-photo");
+        expect(result.userByEmail.get("member@example.com")?.profile_photo).toBe("member-photo");
+        expect(result.userById.has("unrelated")).toBe(false);
+        const empty = await loadProfileUsersByEmail(db as never, { userIds: [], emails: [] });
+        expect(empty.userById.size).toBe(0);
     });
 });

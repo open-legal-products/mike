@@ -384,6 +384,94 @@ describe("user.routes", () => {
         supabaseRpc.mockResolvedValue({ data: null, error: null });
     });
 
+    describe("profile photos", () => {
+        const photo = "data:image/png;base64,iVBORw0KGgo=";
+        it("saves, serializes and removes the caller's photo", async () => {
+            supabaseState.tables.user_profiles = { data: { ...profileRow(), profile_photo: photo }, error: null };
+            const saved = await request(app).put("/user/profile/photo").set(...AUTH).send({ data_url: photo, user_id: "another-user" });
+            expect(saved.status).toBe(200);
+            expect(saved.body).toEqual({ profilePhoto: photo });
+            expect(saved.headers["cache-control"]).toBe("private, no-store");
+            const loaded = await request(app).get("/user/profile").set(...AUTH);
+            expect(loaded.body.profilePhoto).toBe(photo);
+            const removed = await request(app).delete("/user/profile/photo").set(...AUTH);
+            expect(removed.status).toBe(200);
+            expect(removed.body).toEqual({ profilePhoto: null });
+        });
+        it.each([
+            "memory_curator_model", "project_memory_default",
+            "last_selected_reasoning_level", "last_selected_chat_model",
+            "dark_mode", "password_set_at", "onboarding_version",
+            "quick_actions_visible", "legal_research_us", "mfa_on_login", "title_model",
+        ])("keeps the saved photo on profile reload when %s is absent", async (column) => {
+            supabaseState.missingColumns = [column];
+            supabaseState.tables.user_profiles = {
+                data: { ...profileRow(), profile_photo: photo }, error: null,
+            };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body.profilePhoto).toBe(photo);
+            // The mock returns the seeded row; also assert the successful query
+            // actually requests the photo, as the live database requires.
+            const selects = supabaseState.selects.user_profiles;
+            expect(selects.length).toBeGreaterThan(1);
+            expect(selects.at(-1)?.split(/,\s*/)).toContain("profile_photo");
+        });
+        it("keeps profiles readable when both a preference and the photo column are absent", async () => {
+            supabaseState.missingColumns = ["memory_curator_model", "profile_photo"];
+            supabaseState.tables.user_profiles = { data: profileRow(), error: null };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ displayName: "Ada", profilePhoto: null });
+            const columns = supabaseState.selects.user_profiles.at(-1)?.split(/,\s*/);
+            expect(columns).not.toContain("profile_photo");
+            expect(columns).not.toContain("memory_curator_model");
+        });
+        it("rejects non-raster and missing data", async () => {
+            for (const data_url of [undefined, "data:image/svg+xml;base64,PHN2Zy8+", "data:image/png;base64,PHN2Zy8+"]) {
+                const res = await request(app).put("/user/profile/photo").set(...AUTH).send({ data_url });
+                expect(res.status).toBe(400);
+            }
+            expect(supabaseState.updates.user_profiles).toBeUndefined();
+        });
+        it("keeps older profiles readable before the migration", async () => {
+            supabaseState.missingColumns = ["profile_photo"];
+            supabaseState.tables.user_profiles = { data: profileRow(), error: null };
+            const res = await request(app).get("/user/profile").set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ displayName: "Ada", profilePhoto: null });
+        });
+    });
+
+    describe("GET /user/lookup", () => {
+        it("does not select or expose an unrelated user's photo", async () => {
+            supabaseState.tables.user_profiles = {
+                data: {
+                    user_id: "unrelated-user",
+                    email: "alice@example.com",
+                    display_name: "Alice",
+                    profile_photo: "data:image/png;base64,iVBORw0KGgo=",
+                },
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/user/lookup")
+                .query({ email: "ALICE@example.com" })
+                .set(...AUTH);
+
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual({
+                exists: true,
+                email: "alice@example.com",
+                display_name: "Alice",
+            });
+            expect(supabaseState.selects.user_profiles).toEqual([
+                "user_id, email, display_name",
+            ]);
+        });
+    });
+
     // ── GET /user/profile (MFA bootstrap path) ────────────────────────────
     describe("GET /user/profile", () => {
         it("returns the serialized profile plus apiKeyStatus", async () => {

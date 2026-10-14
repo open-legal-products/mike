@@ -10,7 +10,7 @@
 // so the module's facade is the one door into the audit surface.
 
 import type { Db } from "../../lib/supabase";
-import { parseQuery, queryEvents } from "../../lib/auditExport";
+import { canReadOrgAudit, parseQuery, queryEvents } from "../../lib/auditExport";
 import {
   failure,
   internalFailure,
@@ -34,8 +34,8 @@ export type AuditPage = {
 };
 
 /**
- * One page of audit history: the caller's own events plus events in projects
- * they own or that are shared with their email.
+ * One page of the caller's own activity, or the requested organization's
+ * audit log when the caller is an organization owner or admin.
  */
 export async function listAuditEvents(
   db: Db,
@@ -48,6 +48,8 @@ export async function listAuditEvents(
   const parsed = parseQuery(args.query, PAGE_SIZE);
   if (!parsed.ok) return failure("validation", parsed.error);
   const q = parsed.query;
+  if (q.orgId && !(await canReadOrgAudit(db, args.userId, q.orgId)))
+    return failure("forbidden", "Only organization owners and admins can view its audit log.");
   const { data, error, count } = await queryEvents(
     db,
     args.userId,
@@ -64,3 +66,4 @@ export async function listAuditEvents(
 }
 
 export { handleChatTurnAudit } from "./audit.jobs";
+export { listAuditActors } from "./audit.actors";

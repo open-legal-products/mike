@@ -36,6 +36,19 @@ implementations used by both targets. To style a link as a pill, apply
 `pillButtonUIClassName` from `PillButtonUI.styles` directly to the link; this
 keeps the correct link semantics and is safe in server components.
 
+## Icons
+
+Use the existing skeuomorphic feature, folder, file-type, and legal-source
+icons where available; use Lucide for other controls. Web SVG assets render
+through `components/ui/svg-asset-icon.tsx` with static imports from
+`frontend/public/icons/`. Static imports produce content-hashed URLs that can
+be cached immutably; avoid literal `/icons/...` URLs and manual version queries
+for these assets. Small UI icons load eagerly so they appear with their labels.
+The app layout preloads navigation and account-menu icons during the loading
+screen, before opening a menu can trigger an image request.
+`frontend/public/_headers` preserves immutable caching for `/_next/static/*`
+on Cloudflare, whose asset server otherwise revalidates even hashed files.
+
 ## Color tokens
 
 Two families coexist. Prefer a token over a raw Tailwind palette class whenever
@@ -122,6 +135,39 @@ remapping reaches its gradient stops. It subscribes to the document theme class
 itself and swaps its dark-glass blades for the white ones. Anything else drawing
 brand-colored SVG should follow the same pattern rather than hard-coding a
 single palette.
+
+### User avatars
+
+`components/ui/user-avatar.tsx` renders profile photos and the monogram fallback
+for the account button, People/share rows, member pickers, organization members,
+and audit-log identities. Pass the identity's email, display name, and
+`profile_photo` from the existing authorized roster response. Table avatars use
+`size="sm"`: 16px across with 8px white serif initials. Pickers and detail views
+use the default 20px size. Loading placeholders match the table's 16px size.
+The background colour is stable and keyed to the
+normalized email, falling back to the display name. A missing or
+unreadable image restores those initials.
+
+The general email lookup returns only identity fields. New direct-share
+recipients show a monogram until their photo is available through an authorized
+roster response; organization pickers can use their existing member photos.
+Audit logs resolve photos only for actors on the authorized organization page;
+personal activity and CSV exports do not fetch photos. Affected members and
+invitation recipients prefer their current display name, falling back to the
+recorded email, which also keeps their monogram color stable. These lookups
+fetch names only for affected people on the authorized page. The Performed by
+filter searches distinct actors from the organization audit log, including
+former members, in a scrollable list of 20 people per page. Selecting a person
+filters by their ID and preserves that filter in CSV exports.
+
+Settings > Profile offers upload and a blue Edit button for saved images. Profile photos
+and organization logos share `ImageCropModal`: both support dragging, keyboard
+positioning, zoom, preview, and explicit saving. Edit reopens the saved image.
+The footer places blue Save on the right and red Remove on the left.
+Save stays disabled until the image or framing changes.
+Photos use a circular preview
+and a crop that fills it. PNG, JPEG, and WebP source files up to 10 MB are
+rendered to a 256px PNG before upload; the API limits stored images to 512 KB.
 
 ## Typography
 

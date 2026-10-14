@@ -41,6 +41,7 @@ function memoryDb(seed: { members?: Row[]; organizations?: Row[] } = {}) {
             return { data: found, error: null };
         };
         const builder = {
+            is: () => builder,
             eq(column: string, value: unknown) {
                 filters.push([column, value]);
                 return builder;

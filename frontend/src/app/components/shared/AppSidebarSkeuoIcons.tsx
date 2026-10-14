@@ -1,31 +1,49 @@
-import Image, { type ImageProps } from "next/image";
+import { getImageProps } from "next/image";
+import { preload } from "react-dom";
+import { SvgAssetIcon, type SvgAssetIconProps } from "@/app/components/ui/svg-asset-icon";
+import chat from "../../../../public/icons/features/chat.svg";
+import chatComplete from "../../../../public/icons/features/chat-complete.svg";
+import ide from "../../../../public/icons/features/ide.svg";
+import project from "../../../../public/icons/file-system/project-closed.svg";
+import library from "../../../../public/icons/features/library.svg";
+import tabularReview from "../../../../public/icons/features/tabular-review.svg";
+import workflow from "../../../../public/icons/features/workflow.svg";
+import connector from "../../../../public/icons/features/connector.svg";
+import organization from "../../../../public/icons/features/organization.svg";
+import settings from "../../../../public/icons/settings.svg";
+import signOut from "../../../../public/icons/sign-out.svg";
 
-type IconProps = Omit<
-  ImageProps,
-  "alt" | "src" | "width" | "height" | "unoptimized"
->;
+type IconProps = Omit<SvgAssetIconProps, "width" | "height">;
 
-const ICON_BASE_PATH = "/icons";
-const ICON_VERSION = "60";
+const icons = {
+  "features/chat": chat,
+  "features/chat-complete": chatComplete,
+  "features/ide": ide,
+  "file-system/project-closed": project,
+  "features/library": library,
+  "features/tabular-review": tabularReview,
+  "features/workflow": workflow,
+  "features/connector": connector,
+  "features/organization": organization,
+  settings,
+  "sign-out": signOut,
+};
 
-function AppSidebarIcon({
-  name,
-  className,
-  ...props
-}: IconProps & { name: string }) {
-  return (
-    <Image
-      src={`${ICON_BASE_PATH}/${name}.svg?v=${ICON_VERSION}`}
-      alt=""
-      width={64}
-      height={64}
-      unoptimized
-      aria-hidden="true"
-      draggable={false}
-      className={`${className ?? ""} object-contain`}
-      {...props}
-    />
-  );
+/** Warm navigation and account-menu icons before authentication finishes. */
+export function preloadSidebarIcons() {
+  for (const src of [
+    chat, ide, project, library, tabularReview, workflow,
+    settings, organization, signOut,
+  ]) {
+    const { props } = getImageProps({
+      src, alt: "", width: 64, height: 64, unoptimized: true,
+    });
+    preload(props.src, { as: "image", type: "image/svg+xml" });
+  }
+}
+
+function AppSidebarIcon({ name, ...props }: IconProps & { name: keyof typeof icons }) {
+  return <SvgAssetIcon src={icons[name]} {...props} />;
 }
 
 export function ChatSkeuoIcon({

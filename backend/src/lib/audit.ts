@@ -9,6 +9,7 @@ export type AuditStatus = "completed" | "cancelled" | "failed";
 
 export type AuditEventInput = {
   userId: string;
+  orgId?: string | null;
   userEmail?: string | null;
   action: string;
   status?: AuditStatus;
@@ -33,6 +34,7 @@ export async function insertAuditEvent(
 ): Promise<void> {
   const { error } = await db.from("audit_events").insert({
     user_id: event.userId,
+    org_id: event.orgId ?? null,
     user_email: event.userEmail ?? null,
     action: event.action,
     status: event.status ?? "completed",
@@ -75,6 +77,7 @@ type TurnEvent = {
 
 export type ChatTurnAuditBase = {
   userId: string;
+  orgId?: string | null;
   userEmail?: string | null;
   chatId: string | null;
   projectId?: string | null;
@@ -106,6 +109,7 @@ export function chatTurnAuditEvents(
   const rows: AuditEventInput[] = [
     {
       userId: base.userId,
+      orgId: base.orgId,
       userEmail: base.userEmail,
       action: "chat.message",
       status: base.status ?? "completed",
@@ -126,6 +130,7 @@ export function chatTurnAuditEvents(
       for (const copy of ev.copies ?? []) {
         rows.push({
           userId: base.userId,
+      orgId: base.orgId,
           userEmail: base.userEmail,
           action: "document.generated",
           title: copy.new_filename ?? null,
@@ -150,6 +155,7 @@ export function chatTurnAuditEvents(
     if (!action) continue;
     rows.push({
       userId: base.userId,
+      orgId: base.orgId,
       userEmail: base.userEmail,
       action,
       title: ev.filename ?? ev.title ?? null,

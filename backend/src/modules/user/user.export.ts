@@ -4,7 +4,7 @@
 // Service layer behind user.routes.ts — see user.shared.ts for the module's
 // contract.
 
-import { AUDIT_EXPORT_LIMIT, parseQuery } from "../../lib/auditExport";
+import { AUDIT_EXPORT_LIMIT, canReadOrgAudit, parseQuery, type AuditQuery } from "../../lib/auditExport";
 import { enqueueDbJob } from "../../lib/dbq/enqueue";
 import {
     EXPORT_TYPES,
@@ -82,7 +82,7 @@ export function validateExportRequest(input: {
 
 export type StartUserExportResult =
     | { ok: true; exportId: string }
-    | { ok: false; detail: string };
+    | { ok: false; detail: string; forbidden?: boolean };
 
 /** Enqueues the durable build job for an already-validated export request. */
 export async function startUserExport(
@@ -94,6 +94,9 @@ export async function startUserExport(
     },
 ): Promise<StartUserExportResult> {
     const { userId, type, payload } = input;
+    const orgId = (payload.query as AuditQuery | undefined)?.orgId;
+    if (orgId && !(await canReadOrgAudit(db, userId, orgId)))
+        return { ok: false, forbidden: true, detail: "Only organization owners and admins can export its audit log." };
     try {
         // Deduped per (user, type) for the whole-account exports: double
         // clicks and impatient retries collapse into the already-running
@@ -137,6 +140,8 @@ async function loadOwnExportJob(
         .maybeSingle();
     if (!job || (job.payload as { userId?: string })?.userId !== userId)
         return null;
+    const orgId = (job.payload as { query?: AuditQuery })?.query?.orgId;
+    if (orgId && !(await canReadOrgAudit(db, userId, orgId))) return null;
     return job as Pick<DbJob, "id" | "status" | "result">;
 }
 

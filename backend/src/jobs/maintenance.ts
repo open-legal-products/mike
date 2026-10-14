@@ -2,7 +2,7 @@ import { createServerSupabase, type Db } from "../lib/supabase";
 import { logError } from "../lib/log";
 import { sweepStaleProcessingDocuments } from "../modules/documents/documents.service";
 import { sweepStaleGeneratingCells } from "../modules/tabular/tabular.service";
-import { expireDepartureArchives } from "../modules/orgs/orgs.service";
+import { expireDepartureArchives, purgeExpiredOrganizations } from "../modules/orgs/orgs.service";
 
 /** Run recovery/expiry sweeps; errors are contained per sweep. */
 export async function runStaleWorkSweep(
@@ -18,6 +18,9 @@ export async function runStaleWorkSweep(
     });
     await expireDepartureArchives(db).catch((err) => {
         logError("stale-sweep", err, { sweep: "organization-archives" });
+    });
+    await purgeExpiredOrganizations(db).catch((err) => {
+        logError("stale-sweep", err, { sweep: "organizations" });
     });
     return { documents, cells };
 }

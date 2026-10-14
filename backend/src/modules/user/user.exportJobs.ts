@@ -71,7 +71,7 @@ async function buildAuditCsvExport(
     const csv = await buildAuditCsv(db, userId, userEmail ?? undefined, query);
     return {
         body: Buffer.from(csv, "utf8"),
-        filename: AUDIT_CSV_FILENAME,
+        filename: query.orgId ? "organization-audit.csv" : AUDIT_CSV_FILENAME,
         contentType: "text/csv; charset=utf-8",
     };
 }

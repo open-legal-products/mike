@@ -3,6 +3,7 @@ import {
     deleteProjectGrant,
     listProjectAdminContacts,
     listProjectGrants,
+    listProjectPeople,
     removeGrantsForEmail,
     upsertProjectGrant,
 } from "../projectAccess";
@@ -459,4 +460,22 @@ describe("a failed grants read fails closed", () => {
         // The grant is still there for the retry to find.
         expect(db._tables.project_access_grants).toHaveLength(1);
     });
+});
+
+
+it("carries photos through direct project and inherited content rosters", async () => {
+    const { listContentPeople } = await import("../resourcePeople.js");
+    const photo = "data:image/png;base64,iVBORw0KGgo=";
+    const db = makeDb({
+        projects: [{ id: "p1", user_id: "owner", org_id: null }],
+        user_profiles: [
+            { user_id: "owner", email: "owner@example.com", display_name: "Owner", profile_photo: photo },
+            { user_id: "viewer", email: "viewer@example.com", display_name: "Viewer", profile_photo: photo },
+        ],
+        project_access_grants: [{ id: "g1", project_id: "p1", email: "viewer@example.com", role: "viewer" }],
+    });
+    const people = await listProjectPeople(db as never, { id: "p1", user_id: "owner" });
+    expect(people).toMatchObject({ ok: true, owner: { profile_photo: photo }, members: [{ profile_photo: photo, role: "viewer" }] });
+    const inherited = await listContentPeople(db as never, "chat", { id: "chat1", user_id: "owner", project_id: "p1" });
+    expect(inherited).toMatchObject({ ok: true, scope: "project", owner: { profile_photo: photo }, members: [{ profile_photo: photo }] });
 });

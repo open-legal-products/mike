@@ -77,10 +77,7 @@ export function organizationSettingsHref(
 }
 
 type OrganizationSettingsSection =
-  | "general"
-  | "members"
-  | "providers"
-  | "privacy-data";
+  "general" | "members" | "audit" | "providers" | "privacy-data";
 
 export function OrganizationSettingsProvider({
   orgId,
@@ -134,7 +131,7 @@ export function OrganizationSettingsProvider({
       <TableEmptyState>
         <EmptyState
           icon={<OrganizationSkeuoIcon />}
-          title="Organization settings"
+          title="Organization"
           description="These settings are not available."
           action={
             <PillButtonUI
@@ -158,12 +155,12 @@ export function OrganizationSettingsProvider({
       <TableEmptyState>
         <EmptyState
           icon={<OrganizationSkeuoIcon />}
-          title="Organization settings"
+          title="Organization"
           description={loadError}
           tone="error"
           action={
             <PillButtonUI
-              tone="white"
+              tone="black"
               size="sm"
               onClick={() => {
                 setLoadError(null);
@@ -210,6 +207,11 @@ export function OrganizationSettingsFrame({
       ...(canManage
         ? [
             {
+              id: "audit",
+              label: "Audit log",
+              href: organizationSettingsHref(orgId, "audit"),
+            },
+            {
               id: "providers",
               // Named as the same setting is in a person's own settings.
               label: "Bring Your Own Keys",
@@ -234,8 +236,8 @@ export function OrganizationSettingsFrame({
 
   return (
     <SettingsShell
-      title="Organization Settings"
-      navLabel="Organization settings"
+      title="Organization"
+      navLabel="Organization"
       tabs={tabs}
       rootHref={organizationSettingsHref(orgId)}
     >

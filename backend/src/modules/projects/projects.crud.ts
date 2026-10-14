@@ -245,7 +245,8 @@ export async function searchProjectDirectory(
   // member the matter's name, cm_number and its document filenames.
   const { data: membershipRows, error: membershipError } = await db
     .from("org_members")
-    .select("org_id, role")
+    .select("org_id, role, organizations!inner(id)")
+    .is("organizations.deleted_at", null)
     .eq("user_id", userId);
   if (membershipError) return { ok: false, error: membershipError };
   const orgRoleByOrgId = new Map<string, string>();
@@ -681,6 +682,10 @@ export type ProjectPeopleResult =
   | { ok: false; kind: "not_found" }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/**
+ * Authorizes project visibility before returning its creator, member photos, and admin contacts.
+ * Reading this roster does not grant permission to manage access.
+ */
 export async function getProjectPeople(
   db: Db,
   args: { projectId: string; userId: string; userEmail?: string },
@@ -723,6 +728,7 @@ export async function getProjectPeople(
               user_id: creator.user_id,
               email: creator.email,
               display_name: creator.display_name,
+              profile_photo: creator.profile_photo ?? null,
               role: "owner" as const,
             }
           : null,
@@ -735,7 +741,12 @@ export async function getProjectPeople(
   }
 
   // Personal projects keep email-addressed direct grants.
-  const { userByEmail, userById } = await loadProfileUsersByEmail(db);
+  const listed = await listProjectGrants(db, projectId);
+  if (!listed.ok) return { ok: false, kind: "db_error", error: listed.detail };
+  const { userByEmail, userById } = await loadProfileUsersByEmail(db, {
+    userIds: project.user_id ? [project.user_id] : [],
+    emails: listed.grants.map((grant) => grant.email),
+  });
 
   const ownerInfo = project.user_id
     ? userById.get(project.user_id)
@@ -748,13 +759,14 @@ export async function getProjectPeople(
         user_id: project.user_id,
         email: ownerInfo?.email ?? null,
         display_name: ownerInfo?.display_name ?? null,
+        profile_photo: ownerInfo?.profile_photo ?? null,
         role: "owner" as const,
       }
     : null;
-  const listed = await listProjectGrants(db, projectId);
-  if (!listed.ok) return { ok: false, kind: "db_error", error: listed.detail };
   const members = listed.grants.map((grant) => ({
     email: grant.email,
+    user_id: userByEmail.get(grant.email)?.id ?? null,
+    profile_photo: userByEmail.get(grant.email)?.profile_photo ?? null,
     display_name: userByEmail.get(grant.email)?.display_name ?? null,
     role: grant.role,
   }));

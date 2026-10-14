@@ -1,3 +1,5 @@
+import { listOrgPrivateContent, setOrgPrivateContentPermission, openOrgPrivateContent, closeOrgPrivateContent } from "./mikeApi";
+import { setUserProfilePhoto, listDeletedOrganizations, restoreOrganization } from "./mikeApi";
 import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArchives } from "./mikeApi";
 import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,6 +62,7 @@ import {
     getChat,
     getChatPeople,
     getAuditHistory,
+    getAuditActors,
     getPanelDocument,
     getDocument,
     getDocumentFile,
@@ -680,6 +683,26 @@ describe("blob requests (downloadUserExport)", () => {
 });
 
 describe("audit history", () => {
+    it("encodes audit actor search, pagination and exact person filters", async () => {
+        const result = { users: [], nextOffset: null };
+        fetchMock.mockResolvedValueOnce(jsonResponse(result));
+        expect(await getAuditActors({ orgId: "org-1", search: "Alex & Pat", offset: 20 })).toEqual(result);
+        expect(lastFetchCall().url).toBe("/api/audit/actors?org_id=org-1&q=Alex+%26+Pat&offset=20");
+        fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
+        await getAuditHistory({ orgId: "org-1", actorUserId: "actor-1" });
+        expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1&actor_user_id=actor-1");
+    });
+
+    it("encodes the organization username filter", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
+        await getAuditHistory({ orgId: "org-1", username: "Alex & Pat" });
+        expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1&username=Alex+%26+Pat");
+    });
+    it("includes the organization scope in audit requests", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({ events: [], total: 0, page: 1, pageSize: 50 }));
+        await getAuditHistory({ orgId: "org-1" });
+        expect(lastFetchCall().url).toBe("/api/audit?org_id=org-1");
+    });
     it("serializes server-side filters, sorting, pagination, and the abort signal", async () => {
         fetchMock.mockResolvedValue(
             jsonResponse({ events: [], total: 0, page: 3, pageSize: 50 }),
@@ -3053,6 +3076,8 @@ describe("thin endpoint wrappers", () => {
             method: "POST",
             body: { name: "Firm matter", org_id: "org-1" },
         },
+        { name: "listDeletedOrganizations", call: () => listDeletedOrganizations(), url: "/orgs/deleted" },
+        { name: "restoreOrganization", call: () => restoreOrganization("org-1"), url: "/orgs/org-1/restore", method: "POST" },
         {
             name: "listOrgs",
             call: () => listOrgs(),
@@ -3494,5 +3519,53 @@ describe("organization logos", () => {
         const error = new TypeError("Network unavailable");
         fetchMock.mockRejectedValueOnce(error);
         await expect(getOrgLogo("org-1")).rejects.toBe(error);
+    });
+});
+
+
+describe("profile photos", () => {
+    it("saves a raster data URL through the authenticated gateway", async () => {
+        const photo = "data:image/png;base64,iVBORw0KGgo=";
+        fetchMock.mockResolvedValue(jsonResponse({ profilePhoto: photo }));
+        expect(await setUserProfilePhoto(photo)).toEqual({ profilePhoto: photo });
+        const { url, init } = lastFetchCall();
+        expect(url).toContain("/user/profile/photo");
+        expect(init.method).toBe("PUT");
+        expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+        expect(JSON.parse(init.body as string)).toEqual({ data_url: photo });
+    });
+    it("removes a photo without sending image data", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({ profilePhoto: null }));
+        await setUserProfilePhoto(null);
+        const { url, init } = lastFetchCall();
+        expect(url).toContain("/user/profile/photo");
+        expect(init.method).toBe("DELETE");
+        expect(init.body).toBeUndefined();
+    });
+});
+
+
+describe("organization private content", () => {
+    it("paginates and encodes private-content search", async () => {
+        const page = { items: [], total: 0 };
+        fetchMock.mockImplementation(async () => jsonResponse(page));
+        expect(await listOrgPrivateContent("org-1")).toEqual(page);
+        expect(lastFetchCall().url).toBe("/api/orgs/org-1/private-content?limit=50&offset=0&search=");
+        await listOrgPrivateContent("org-1", 50, "Alex & Pat");
+        expect(lastFetchCall().url).toBe("/api/orgs/org-1/private-content?limit=50&offset=50&search=Alex+%26+Pat");
+    });
+    it.each([true, false])("sets private-content permission to %s", async (enabled) => {
+        fetchMock.mockResolvedValue(jsonResponse({}));
+        await setOrgPrivateContentPermission("org-1", "member-1", enabled);
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/members/member-1/private-content-permission", init: {
+            method: "PUT", body: JSON.stringify({ enabled }),
+        } });
+    });
+    it("opens and closes explicit read access to the requested item", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse({}));
+        await openOrgPrivateContent("org-1", "document", "doc-1");
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1/open", init: { method: "POST" } });
+        await closeOrgPrivateContent("org-1", "document", "doc-1");
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1", init: { method: "DELETE" } });
     });
 });

@@ -1,10 +1,8 @@
 // Bulk deletion of what an organization owns.
 //
-// Behind the facade, used two ways: an owner clearing one kind of content
-// from the organization's Privacy & data page, and `deleteOrg`, which clears
-// all of it before removing the organization row. Every `org_id` foreign key
-// on a content table is ON DELETE RESTRICT, so the organization cannot go
-// until these have run.
+// Behind the facade, used when an owner clears content from the
+// organization's Privacy & data page. Organization deletion itself retains
+// content during its recovery period; the lifecycle SQL sweep owns expiry.
 //
 // Callers authorize first (owner only). Nothing here checks a role, and every
 // function throws on a failed read or write so a partial purge is never

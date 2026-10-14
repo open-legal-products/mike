@@ -42,8 +42,12 @@ documentsRouter.get("/:documentId", requireAuth, asyncRoute(async (req, res) => 
     const db = createServerSupabase();
 
     const result = await getDocument(documentId, userId, userEmail, db);
-    if (!result.ok)
+    if (!result.ok) {
+        if (result.kind === "error") return void sendInternalError(res, result.error);
+        if (result.kind === "forbidden")
+            return void res.status(403).json({ detail: "You do not have access to this document." });
         return void res.status(404).json({ detail: "Document not found" });
+    }
     res.json(result.doc);
 }));
 

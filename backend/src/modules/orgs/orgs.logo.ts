@@ -12,60 +12,12 @@ import { getOrgRole, isOrgAdmin } from "../../lib/access";
 import type { OrgResult } from "../../lib/orgs";
 import type { Db } from "../../lib/supabase";
 
-/** The most image an organization may store, before base64. */
-export const MAX_ORG_LOGO_BYTES = 512 * 1024;
+import { MAX_PROFILE_IMAGE_BYTES, parseProfileImageDataUrl } from "../../lib/profileImage";
 
-type LogoContentType = "image/png" | "image/jpeg" | "image/webp";
-
-// What each accepted format begins with. The declared type is the client's
-// word; these are the file's. SVG is deliberately absent: it is a document
-// that can carry script, not a picture.
-function hasLogoSignature(contentType: LogoContentType, bytes: Buffer): boolean {
-    switch (contentType) {
-        case "image/png":
-            return bytes.subarray(0, 8).equals(
-                Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-            );
-        case "image/jpeg":
-            return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-        case "image/webp":
-            return bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
-                bytes.subarray(8, 12).toString("latin1") === "WEBP";
-    }
-}
-
-const DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
-
-const UNSUPPORTED = "The logo must be a PNG, JPEG or WebP image.";
-
-/**
- * Check a logo sent as a data URL: a supported type, really an image of that
- * type, and within the size an organization may store. Returns what is kept.
- */
-export function parseOrgLogoDataUrl(
-    value: unknown,
-):
-    | { ok: true; contentType: LogoContentType; base64: string }
-    | { ok: false; detail: string } {
-    if (typeof value !== "string" || !value)
-        return { ok: false, detail: "data_url is required" };
-    // Refuse an oversized body before running a pattern over it. Base64 is
-    // four characters for every three bytes, plus the short prefix.
-    if (value.length > Math.ceil(MAX_ORG_LOGO_BYTES / 3) * 4 + 64)
-        return { ok: false, detail: "The logo is too large. Use an image under 512 KB." };
-    const match = DATA_URL.exec(value);
-    if (!match) return { ok: false, detail: UNSUPPORTED };
-    const contentType = match[1];
-    if (contentType !== "image/png" && contentType !== "image/jpeg" && contentType !== "image/webp")
-        return { ok: false, detail: UNSUPPORTED };
-    const bytes = Buffer.from(match[2], "base64");
-    if (bytes.length === 0) return { ok: false, detail: UNSUPPORTED };
-    if (bytes.length > MAX_ORG_LOGO_BYTES)
-        return { ok: false, detail: "The logo is too large. Use an image under 512 KB." };
-    if (!hasLogoSignature(contentType, bytes))
-        return { ok: false, detail: UNSUPPORTED };
-    // Re-encoded from the decoded bytes, so what is stored is canonical.
-    return { ok: true, contentType, base64: bytes.toString("base64") };
+export const MAX_ORG_LOGO_BYTES = MAX_PROFILE_IMAGE_BYTES;
+/** Applies shared raster size, encoding, and signature validation with logo-specific error messages. */
+export function parseOrgLogoDataUrl(value: unknown) {
+    return parseProfileImageDataUrl(value, "logo");
 }
 
 /** The organization's logo, for any of its members. */

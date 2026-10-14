@@ -474,6 +474,21 @@ export interface OrgMemberHandover {
     documents: number;
 }
 
+export type OrgPrivateContentKind = "project" | "workflow" | "chat" | "tabular_review" | "document";
+export interface OrgPrivateContentItem {
+    kind: OrgPrivateContentKind;
+    item_id: string;
+    title: string | null;
+    user_id: string | null;
+    display_name: string | null;
+    email: string | null;
+    has_access: boolean;
+}
+export interface OrgPrivateContentPage {
+    items: OrgPrivateContentItem[];
+    nextOffset: number | null;
+}
+
 /** Owner-only recovery list; these items are excluded from normal access. */
 export interface OrgDepartureArchive {
     id: string;
@@ -516,4 +531,25 @@ export interface OrgDepartureList {
 export interface OrgDepartureResolution {
     resolved: number;
     unresolved: number;
+}
+
+/** A team organization still inside its owner-only recovery period. */
+export interface DeletedOrganization {
+    id: string;
+    name: string;
+    deleted_at: string;
+    purge_after: string;
+}
+
+/** An identity visible in an authorized organization's audit history. */
+export interface AuditActor {
+  user_id: string;
+  email: string | null;
+  display_name: string | null;
+  profile_photo: string | null;
+}
+
+export interface AuditActorPage {
+  users: AuditActor[];
+  nextOffset: number | null;
 }

@@ -142,15 +142,10 @@ test.describe("logout (isolated user)", () => {
            retries on the element this test goes on to click. networkidle
            never fires against an app with SSE and polling in flight. */
 
-    /* The AppSidebar renders a user-profile toggle button at the very bottom
-       of the sidebar. The button wraps a circular div that shows the user's
-       initial:
-           <div className="h-7 w-7 ... rounded-full bg-gray-700 ...">
-               {getUserInitials(user.email)}
-           </div>
-       Locate the button by the presence of that inner div. */
-    const userMenuButton = page.locator("button").filter({
-        has: page.locator("div.rounded-full.bg-gray-700"),
+    // The account menu has the same accessible name with a photo or monogram.
+    const userMenuButton = page.getByRole("button", {
+        name: "Account menu",
+        exact: true,
     });
     await expect(userMenuButton).toBeVisible({ timeout: 10_000 });
     await userMenuButton.click();

@@ -190,6 +190,18 @@
         opacity: 0;
     }
 
+    /* Wait for the sidebar's 300ms width transition before showing the
+       measured heading, so its compact layout cannot flash while expanding. */
+    .sidebar-heading-enter {
+        animation: sidebarFadeIn 0.15s ease-out 0.3s both;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .sidebar-heading-enter {
+            animation: none;
+        }
+    }
+
     .sidebar-fade-in-2 {
         animation: sidebarFadeIn 0.3s ease-out forwards;
         animation-delay: 0.2s;
