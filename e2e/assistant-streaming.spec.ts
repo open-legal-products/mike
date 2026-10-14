@@ -241,7 +241,7 @@ test("scoped document search activity streams, survives reload, and fits narrow 
     await expect(page.getByRole("button", { name: "Choose model", exact: true })).toHaveAttribute("title", "Choose model — Claude Sonnet 5.5");
     await input.fill("Find documents containing a change of control clause in my document library.");
     await input.press("Enter");
-    await expect(page.getByRole("button", { name: "Searching the document library for “change of control”...", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Searching the document library for “change of control”\s*\.\.\.$/ })).toBeVisible();
     const progress = testInfo.outputPath("document-search-progress.png");
     await page.screenshot({ path: progress });
     await testInfo.attach("Document search in progress", { path: progress, contentType: "image/png" });
