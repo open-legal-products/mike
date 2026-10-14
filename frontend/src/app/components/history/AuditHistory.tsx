@@ -25,6 +25,7 @@ import { appendUniqueRows } from "@/app/lib/paginatedRows";
 import { Modal } from "@/app/components/modals/Modal";
 import { ModalSelect } from "@/app/components/modals/ModalSelect";
 import { FieldLabel, FormTextInput } from "@/app/components/ui/form-field";
+import { UserAvatar } from "@/app/components/ui/user-avatar";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import {
   RowActions,
@@ -546,7 +547,7 @@ export function AuditHistory({
               {createdHeader}
             </TableStickyCell>
             {orgId && (
-              <TableHeaderCell className="w-48 pr-4">
+              <TableHeaderCell className="w-64 pr-4">
                 <span className="mr-1">Performed by</span>
                 {!initialLoading && (
                   <HistoryUsernameFilter
@@ -698,7 +699,7 @@ export function AuditHistory({
                   </TablePrimaryCell>
                   {orgId && (
                     <TableCell
-                      className="w-48 pr-4 text-xs text-gray-700"
+                      className="w-64 pr-4 text-xs text-gray-700"
                       title={[
                         actor,
                         event.user_email !== actor ? event.user_email : null,
@@ -706,7 +707,16 @@ export function AuditHistory({
                         .filter(Boolean)
                         .join(" · ")}
                     >
-                      {actor}
+                      <span className="flex min-w-0 items-center gap-2">
+                        {actor !== "System" && (
+                          <UserAvatar
+                            photo={event.user_profile_photo}
+                            name={event.user_display_name}
+                            email={event.user_email}
+                          />
+                        )}
+                        <span className="truncate">{actor}</span>
+                      </span>
                     </TableCell>
                   )}
                   <TableCell
@@ -1106,8 +1116,11 @@ function HistoryLoadingRows({ organization }: { organization: boolean }) {
             <SkeletonLine className="w-32" />
           </TableStickyCell>
           {organization && (
-            <TableCell className="w-48 pr-4">
-              <SkeletonLine className="w-28" />
+            <TableCell className="w-64 pr-4">
+              <span className="flex items-center gap-2">
+                <span className="h-5 w-5 shrink-0 animate-pulse rounded-full bg-gray-100" />
+                <SkeletonLine className="w-28" />
+              </span>
             </TableCell>
           )}
           <TableCell className="w-48 pr-4">

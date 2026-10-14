@@ -87,45 +87,14 @@ describe("SettingsPage Google email changes", () => {
         };
     });
 
-    it("keeps in-progress organisation text when the name autosave lands", async () => {
-        const user = userEvent.setup();
-        // The save must still be IN FLIGHT while the user types in the
-        // sibling field — an immediately-resolved mock closes the race
-        // window inside user.click()'s microtask flush and the test then
-        // passes even against the unfixed combined hydration effect.
-        let resolveNameSave!: () => void;
-        state.updateDisplayName.mockImplementation(
-            (name: string) =>
-                new Promise<boolean>((resolve) => {
-                    resolveNameSave = () => {
-                        // Mirror the real context: a successful save
-                        // refreshes the whole profile object.
-                        state.profile = {
-                            ...state.profile,
-                            displayName: name,
-                        };
-                        resolve(true);
-                    };
-                }),
-        );
+    it("keeps onboarding organisation out of account settings and places the photo below the name", () => {
         render(<SettingsPage />);
-
-        const name = screen.getByPlaceholderText("Enter your name");
-        const organisation = screen.getByPlaceholderText(
-            "Enter your organisation",
-        );
-        await user.clear(name);
-        await user.type(name, "Alexandra");
-        await user.click(organisation); // blurs the name field -> autosave
-        await user.type(organisation, " & Partners");
-
-        expect(state.updateDisplayName).toHaveBeenCalledWith("Alexandra");
-        resolveNameSave(); // profile refresh lands mid-typing
-        await waitFor(() =>
-            expect(screen.getByText("Saved")).toBeInTheDocument(),
-        );
-        expect(organisation).toHaveValue("Example LLP & Partners");
-        expect(name).toHaveValue("Alexandra");
+        expect(screen.queryByLabelText("Organisation")).not.toBeInTheDocument();
+        expect(screen.queryByDisplayValue("Example LLP")).not.toBeInTheDocument();
+        const name = screen.getByLabelText("Display Name");
+        const photo = screen.getByText("Profile photo");
+        expect(name.compareDocumentPosition(photo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(state.updateOrganisation).not.toHaveBeenCalled();
     });
 
     it("directs Google-created accounts without a password to Security", async () => {
@@ -172,7 +141,7 @@ describe("SettingsPage Google email changes", () => {
         ).not.toBeInTheDocument();
     });
 
-    it("auto-saves name and organisation when their fields lose focus", async () => {
+    it("auto-saves the name when it loses focus", async () => {
         const user = userEvent.setup();
         render(<SettingsPage />);
 
@@ -184,15 +153,7 @@ describe("SettingsPage Google email changes", () => {
             expect(state.updateDisplayName).toHaveBeenCalledWith("Alex Chen"),
         );
 
-        const organisation = screen.getByPlaceholderText(
-            "Enter your organisation",
-        );
-        await user.clear(organisation);
-        await user.type(organisation, "New LLP");
-        await user.tab();
-        await waitFor(() =>
-            expect(state.updateOrganisation).toHaveBeenCalledWith("New LLP"),
-        );
+        expect(state.updateOrganisation).not.toHaveBeenCalled();
     });
 
     it("keeps the session and shows the reason when deletion is refused", async () => {

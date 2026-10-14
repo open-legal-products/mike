@@ -1,4 +1,5 @@
-import { FileText, KeyRound, Mail, UserRound } from "lucide-react";
+import { FileText, KeyRound, UserRound } from "lucide-react";
+import { UserAvatar } from "@/app/components/ui/user-avatar";
 import { FileTypeIcon } from "@/app/components/shared/FileTypeIcon";
 import {
   ChatSkeuoIcon,
@@ -32,13 +33,16 @@ export function HistorySubjectIcon({ event }: { event: AuditEvent }) {
     return <TabularReviewSkeuoIcon className={className} />;
   if (type === "Workflow") return <WorkflowSkeuoIcon className={className} />;
   if (type === "Project") return <ClosedProjectSvgIcon className={className} />;
+  // Recipients without an authorized roster photo use the same monogram as
+  // new share recipients. Never look up photos by an arbitrary event email.
+  if (type === "Member" || type === "Recipient")
+    return (
+      <UserAvatar
+        name={name.includes("@") ? null : name}
+        email={name.includes("@") ? name : null}
+      />
+    );
   const Icon =
-    type === "Member" || type === "Account"
-      ? UserRound
-      : type === "Recipient"
-        ? Mail
-        : type === "Provider"
-          ? KeyRound
-          : FileText;
+    type === "Account" ? UserRound : type === "Provider" ? KeyRound : FileText;
   return <Icon aria-hidden="true" className={className} />;
 }

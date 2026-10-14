@@ -126,16 +126,19 @@ single palette.
 ### User avatars
 
 `components/ui/user-avatar.tsx` renders profile photos and the monogram fallback
-for the account button, People/share rows, member pickers, and organization
-members. Pass the identity's email, display name, and `profile_photo` from the
-existing authorized roster response. Row avatars are 20px across, with white
-serif initials for monograms. The background colour is stable and keyed to the
+for the account button, People/share rows, member pickers, organization members,
+and audit-log identities. Pass the identity's email, display name, and
+`profile_photo` from the existing authorized roster response. Row avatars are
+20px across, with white serif initials for monograms. The background colour is stable and keyed to the
 normalized email, falling back to the display name. A missing or
 unreadable image restores those initials.
 
 The general email lookup returns only identity fields. New direct-share
 recipients show a monogram until their photo is available through an authorized
 roster response; organization pickers can use their existing member photos.
+Audit logs resolve photos only for actors on the authorized organization page;
+personal activity and CSV exports do not fetch photos. Affected members and
+invitation recipients use monograms from the recorded identity.
 
 Settings > Profile offers upload, replace, and remove controls. Profile photos
 and organization logos share `ImageCropModal`: both support dragging, keyboard

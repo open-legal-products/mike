@@ -39,7 +39,7 @@ export function ProfilePhotoSettings() {
   return (
     <SettingsRow>
       <div className="flex min-w-0 items-center gap-3">
-        <UserAvatar photo={profile?.profilePhoto} name={profile?.displayName} email={user?.email} className="h-12 w-12 text-base" />
+        <UserAvatar photo={profile?.profilePhoto} name={profile?.displayName} email={user?.email} className="h-11 w-11 text-base" />
         <div className="min-w-0 space-y-1">
           <SettingsLabel>Profile photo</SettingsLabel>
           <SettingsDescription>Shown beside your name when you share or work with others.</SettingsDescription>

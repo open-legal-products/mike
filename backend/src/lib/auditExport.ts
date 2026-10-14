@@ -380,17 +380,27 @@ export async function queryEvents(
         ),
     ];
     const displayNameByUserId = new Map<string, string | null>();
-    if (resolveDisplayNames) {
-        const { data: profiles, error: profileError } = await db
-            .from("user_profiles")
-            .select("user_id, display_name")
-            .in("user_id", userIds);
+    const photoByUserId = new Map<string, string | null>();
+    if (resolveDisplayNames && userIds.length) {
+        // Photos belong only to actors on this authorized organization page.
+        // Personal activity omits identities, and CSV exports skip this lookup.
+        const profilesQuery = db.from("user_profiles");
+        const { data: profiles, error: profileError } = await (q.orgId
+            ? profilesQuery.select("user_id, display_name, profile_photo")
+            : profilesQuery.select("user_id, display_name")
+        ).in("user_id", userIds);
         if (!profileError) {
             for (const profile of profiles ?? []) {
                 displayNameByUserId.set(
                     profile.user_id as string,
                     normalizeDisplayName(profile.display_name),
                 );
+                if (q.orgId) {
+                    photoByUserId.set(
+                        profile.user_id as string,
+                        (profile as { profile_photo?: string | null }).profile_photo ?? null,
+                    );
+                }
             }
         }
     }
@@ -406,6 +416,9 @@ export async function queryEvents(
                 ...event,
                 user_display_name:
                     displayNameByUserId.get(userId as string) ?? null,
+                ...(q.orgId ? {
+                    user_profile_photo: photoByUserId.get(userId as string) ?? null,
+                } : {}),
             };
         }),
     };

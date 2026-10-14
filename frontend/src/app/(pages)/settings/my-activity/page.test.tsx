@@ -105,6 +105,22 @@ describe("MyActivitySettingsPage", () => {
     );
   });
 
+  it("renders actor photos and falls back to the shared monogram in organization rows", async () => {
+    const photo = "data:image/png;base64,cGhvdG8=";
+    mockedGetAuditHistory.mockResolvedValue({
+      events: [{ ...EVENT, user_profile_photo: photo }],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+    });
+    render(<AuditHistory orgId="org-a" />);
+    const avatar = await screen.findByRole("img", { name: "Alex Lawyer" });
+    expect(avatar.querySelector("img")).toHaveAttribute("src", photo);
+    fireEvent.error(avatar.querySelector("img")!);
+    expect(avatar).toHaveTextContent("AL");
+    expect(avatar.querySelector("img")).toBeNull();
+  });
+
   beforeEach(() => {
     // Pin local calendar dates while retaining real timers for user-event.
     vi.useFakeTimers({ toFake: ["Date"] });

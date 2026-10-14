@@ -44,6 +44,7 @@ const event: AuditEvent = {
   created_at: "2026-10-14T02:42:00Z",
   user_display_name: "Alex Chen",
   user_email: "alex@example.com",
+  user_profile_photo: "data:image/png;base64,cGhvdG8=",
   surface: "organization",
   project_id: null,
   chat_id: null,
@@ -104,6 +105,12 @@ describe("HistoryEventModal", () => {
     expect(screen.getByText("Alex Chen (alex@example.com)")).toBeVisible();
     const modal = within(screen.getByRole("dialog"));
     expect(
+      modal.getByRole("img", { name: "Alex Chen" }).querySelector("img"),
+    ).toHaveAttribute("src", event.user_profile_photo);
+    expect(
+      modal.getByRole("img", { name: "jamie@example.com" }),
+    ).toHaveTextContent("J");
+    expect(
       modal
         .getAllByText("jamie@example.com")
         .some((el) => el.closest("td") && !el.closest("details")),
@@ -130,6 +137,9 @@ describe("HistoryEventModal", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText("Performed by")).toBeNull();
+    expect(
+      screen.queryByRole("img", { name: "Alex Chen" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("alex@example.com")).toBeNull();
   });
   it("does not offer links for an event whose content was redacted", () => {

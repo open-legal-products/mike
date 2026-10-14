@@ -3519,6 +3519,7 @@ describe("profile photos", () => {
         const { url, init } = lastFetchCall();
         expect(url).toContain("/user/profile/photo");
         expect(init.method).toBe("PUT");
+        expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
         expect(JSON.parse(init.body as string)).toEqual({ data_url: photo });
     });
     it("removes a photo without sending image data", async () => {

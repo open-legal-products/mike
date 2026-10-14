@@ -813,7 +813,11 @@ export interface UserProfile extends RouterProfileLists {
 export async function setUserProfilePhoto(photo: string | null): Promise<{ profilePhoto: string | null }> {
     return apiRequest("/user/profile/photo", photo === null
         ? { method: "DELETE" }
-        : { method: "PUT", body: JSON.stringify({ data_url: photo }) });
+        : {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data_url: photo }),
+        });
 }
 
 export interface UserLookupResult {
@@ -831,6 +835,8 @@ export interface AuditEvent {
     id: string;
     created_at: string;
     user_display_name: string | null;
+    /** Current photo of an actor in the authorized organization audit page. */
+    user_profile_photo?: string | null;
     user_email: string | null;
     action: string;
     status: string;

@@ -35,7 +35,10 @@ function database(
         let filterIdCount = 0;
         const orders: { column: string; ascending: boolean }[] = [];
         const q = {
-            select: () => q,
+            select(columns: string) {
+                calls.push([table, "select", columns]);
+                return q;
+            },
             eq(column: string, value: unknown) {
                 rows = rows.filter((row) => row[column] === value);
                 return q;
@@ -98,9 +101,9 @@ function database(
                 );
             },
             then(resolve: (result: unknown) => unknown) {
-                return Promise.resolve({ data: rows, error: null }).then(
-                    resolve,
-                );
+                return Promise.resolve(profileError && table === "user_profiles"
+                    ? { data: null, error: { message: "profile unavailable" } }
+                    : { data: rows, error: null }).then(resolve);
             },
         };
         return q;
@@ -428,4 +431,55 @@ describe("organization username filtering", () => {
             expect(calls).toEqual([]);
         },
     );
+});
+
+
+describe("audit actor photos", () => {
+    const photo = "data:image/png;base64,cGhvdG8=";
+    const events = [
+        { id: eventId(1), org_id: orgId, user_id: "actor", created_at: "2026-10-14", title: "Latest" },
+        { id: eventId(2), org_id: orgId, user_id: "colleague", created_at: "2026-10-13", title: "Older" },
+    ];
+    const profiles = [
+        { user_id: "actor", display_name: "Alex Morgan", profile_photo: photo },
+        { user_id: "colleague", display_name: "Jamie", profile_photo: "other-photo" },
+        { user_id: "stranger", display_name: "Unrelated", profile_photo: "private-photo" },
+    ];
+
+    it("resolves photos only for actors on the authorized organization page", async () => {
+        const { db, calls } = database(events, profiles);
+        const result = await queryEvents(db, "actor", undefined, { ...query, orgId, limit: 1 });
+        expect(result.data).toEqual([
+            expect.objectContaining({ title: "Latest", user_display_name: "Alex Morgan", user_profile_photo: photo }),
+        ]);
+        expect(calls.filter(([table, operation]) => table === "user_profiles" && operation === "in"))
+            .toEqual([["user_profiles", "in", "user_id", ["actor"]]]);
+        expect(calls).toContainEqual(["user_profiles", "select", "user_id, display_name, profile_photo"]);
+    });
+
+    it("does not request photos for personal activity or profile data for CSV exports", async () => {
+        const personal = database(events, profiles);
+        const result = await queryEvents(personal.db, "actor", undefined, query);
+        expect(personal.calls).toContainEqual(["user_profiles", "select", "user_id, display_name"]);
+        expect(result.data?.[0]).not.toHaveProperty("user_profile_photo");
+        const csv = database(events, profiles);
+        expect(await buildAuditCsv(csv.db, "actor", undefined, { ...query, orgId })).not.toContain(photo);
+        expect(csv.calls).not.toContainEqual(["read", "user_profiles"]);
+    });
+
+    it("does not resolve profiles when organization access is denied", async () => {
+        access.role = "member";
+        const { db, calls } = database(events, profiles);
+        const result = await queryEvents(db, "actor", undefined, { ...query, orgId });
+        expect(result.error).toEqual({ message: "Organization audit access denied" });
+        expect(calls).toEqual([]);
+    });
+
+    it("keeps events readable with monogram fallbacks when profiles are unavailable", async () => {
+        const { db } = database(events, profiles, 1000, true);
+        const result = await queryEvents(db, "actor", undefined, { ...query, orgId });
+        expect(result.error).toBeNull();
+        expect(result.data).toHaveLength(2);
+        expect(result.data?.[0]).toMatchObject({ title: "Latest", user_display_name: null, user_profile_photo: null });
+    });
 });

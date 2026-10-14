@@ -3,6 +3,8 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { UserAvatar } from "@/app/components/ui/user-avatar";
+import { HistorySubjectIcon } from "./HistorySubjectIcon";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { workflowDetailPath } from "@/app/components/workflows/workflowRoutes";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
@@ -183,11 +185,39 @@ export function HistoryEventModal({
       ? [
           {
             label: "Performed by",
-            value: `${auditActor(event)}${event.user_email && event.user_display_name ? ` (${event.user_email})` : ""}`,
+            value: (
+              <span className="inline-flex max-w-full items-start justify-end gap-2">
+                {auditActor(event) !== "System" && (
+                  <UserAvatar
+                    photo={event.user_profile_photo}
+                    name={event.user_display_name}
+                    email={event.user_email}
+                    className="mt-0.5"
+                  />
+                )}
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  {`${auditActor(event)}${event.user_email && event.user_display_name ? ` (${event.user_email})` : ""}`}
+                </span>
+              </span>
+            ),
           },
         ]
       : []),
-    { label: subject.type, value: subject.name },
+    {
+      label: subject.type,
+      value:
+        ["Member", "Recipient"].includes(subject.type) &&
+        subject.name !== "-" ? (
+          <span className="inline-flex max-w-full items-start justify-end gap-2">
+            <HistorySubjectIcon event={event} />
+            <span className="min-w-0 [overflow-wrap:anywhere]">
+              {subject.name}
+            </span>
+          </span>
+        ) : (
+          subject.name
+        ),
+    },
     ...auditDetailFields(event).filter(
       (field) => !privateAccess || field.label !== "Access",
     ),
