@@ -46,8 +46,14 @@ describe("buildMemoryArchive", () => {
         const builder: Record<string, unknown> = {
           then: (resolve: (value: typeof result) => unknown) => resolve(result),
         };
-        for (const name of ["select", "eq", "is", "not", "in"])
+        for (const name of ["select", "eq", "not", "in"])
           builder[name] = () => builder;
+        builder.is = (column: string) => {
+          // Unlike organizations, projects have no deleted_at column.
+          if (table === "projects" && column === "deleted_at")
+            throw new Error("column projects.deleted_at does not exist");
+          return builder;
+        };
         return builder;
       }),
     };

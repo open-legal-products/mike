@@ -11,6 +11,7 @@ import { Modal } from "@/app/components/modals/Modal";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import {
   ORG_LOGO_MAX_ZOOM,
+  ORG_LOGO_MAX_FILE_BYTES,
   clampOrgLogoFrame,
   initialOrgLogoFrame,
   orgLogoMinZoom,
@@ -121,6 +122,8 @@ export function ImageCropModal({
         // Stored images are bounded raster data URLs, never external URLs.
         let picked: File;
         if (typeof source === "string") {
+          // Bound allocation before decoding or creating a File.
+          if (source.length > Math.ceil(ORG_LOGO_MAX_FILE_BYTES / 3) * 4 + 32) throw new Error("Image too large");
           const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\s]+)$/.exec(source);
           if (!match) throw new Error("Unsupported image");
           const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));

@@ -1,3 +1,4 @@
+import { listOrgPrivateContent, setOrgPrivateContentPermission, openOrgPrivateContent, closeOrgPrivateContent } from "./mikeApi";
 import { setUserProfilePhoto, listDeletedOrganizations, restoreOrganization } from "./mikeApi";
 import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArchives } from "./mikeApi";
 import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
@@ -3540,5 +3541,31 @@ describe("profile photos", () => {
         expect(url).toContain("/user/profile/photo");
         expect(init.method).toBe("DELETE");
         expect(init.body).toBeUndefined();
+    });
+});
+
+
+describe("organization private content", () => {
+    it("paginates and encodes private-content search", async () => {
+        const page = { items: [], total: 0 };
+        fetchMock.mockImplementation(async () => jsonResponse(page));
+        expect(await listOrgPrivateContent("org-1")).toEqual(page);
+        expect(lastFetchCall().url).toBe("/api/orgs/org-1/private-content?limit=50&offset=0&search=");
+        await listOrgPrivateContent("org-1", 50, "Alex & Pat");
+        expect(lastFetchCall().url).toBe("/api/orgs/org-1/private-content?limit=50&offset=50&search=Alex+%26+Pat");
+    });
+    it.each([true, false])("sets private-content permission to %s", async (enabled) => {
+        fetchMock.mockResolvedValue(jsonResponse({}));
+        await setOrgPrivateContentPermission("org-1", "member-1", enabled);
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/members/member-1/private-content-permission", init: {
+            method: "PUT", body: JSON.stringify({ enabled }),
+        } });
+    });
+    it("opens and closes explicit read access to the requested item", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse({}));
+        await openOrgPrivateContent("org-1", "document", "doc-1");
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1/open", init: { method: "POST" } });
+        await closeOrgPrivateContent("org-1", "document", "doc-1");
+        expect(lastFetchCall()).toMatchObject({ url: "/api/orgs/org-1/private-content/document/doc-1", init: { method: "DELETE" } });
     });
 });

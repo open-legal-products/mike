@@ -79,9 +79,9 @@ MIKE_TEST_POSTGRES_CONTAINER=supabase_db_backend npm test --prefix backend -- \
 
 ## Organization audit log
 
-Owners and admins open **Organization Settings → Audit log**. It uses the
+Owners and admins open **Organization → Audit log**. It uses the
 same table, date selector, type/status/application filters, search, scrolling,
-event details and export modal as individual History. It has no entry in the
+event details and export modal as **Settings → My Activity**. It has no entry in the
 account dropdown. CSV exports preserve the selected organization and filters,
 include its ID, and contain up to 2,000 events; narrow the period for larger logs.
 Authorization is rechecked when listing, queuing, building and downloading.
@@ -129,12 +129,14 @@ No additional service or production dependency is required.
 
 ## Access to active private organization content
 
-Owners open active private organization items from **Org Settings → Audit log →
+Owners open active private organization items from **Organization → Audit log →
 Event details**, using the footer's Open button. There is no separate Private
 Content page; its former URL redirects to the audit log. Projects, workflows,
 chats, reviews and documents are supported. Personal workspaces are excluded.
 Admins do not receive private access automatically; existing explicit private
-content permissions continue to apply.
+content permissions continue to apply. The permissions API remains available,
+but the UI for granting new admin permissions is intentionally omitted with the
+removed Private Content page.
 
 Permission allows discovery of organization item names and their owners. It
 does not grant ordinary content access until the event's **Open** button is
@@ -160,3 +162,11 @@ disposable local database:
 MIKE_TEST_POSTGRES_CONTAINER=supabase_db_backend npm test --prefix backend -- \
   src/modules/orgs/__tests__/orgs.privateContent.postgres.test.ts
 ```
+
+
+The audit pagination and lifecycle review fixes ship in
+`20261014_07_org_lifecycle_review_fixes.sql` and
+`20261014_08_paginate_organization_audit.sql`. Apply all pending migrations
+before deploying the backend. Organization username searches stay within the
+organization's audit actors, and ordinary pages resolve resource access only
+for the selected events. Sensitive title searches and sorts redact first.

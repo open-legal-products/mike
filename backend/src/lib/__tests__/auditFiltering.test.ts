@@ -21,7 +21,7 @@ const query = parsed.ok ? parsed.query : (undefined as never);
 type Row = Record<string, unknown>;
 
 // Apply scope and id predicates before pagination, as PostgREST does. A low
-// response cap checks that matching users and selected events are all read.
+// response cap checks that matching events and selected events are all read.
 function database(
     events: Row[],
     profiles: Row[] = [],
@@ -64,6 +64,15 @@ function database(
                         .toLowerCase()
                         .includes(literal),
                 );
+                return q;
+            },
+            username(pattern: string) {
+                const literal = pattern.slice(1, -1).replace(/\\([\\%_])/g, "$1").toLowerCase();
+                rows = rows.filter((row) => {
+                    const profile = profiles.find((p) => p.user_id === row.user_id);
+                    return [row.user_email, profile?.display_name, profile?.email]
+                        .some((value) => String(value ?? "").toLowerCase().includes(literal));
+                });
                 return q;
             },
             order(column: string, options?: { ascending: boolean }) {
@@ -111,7 +120,28 @@ function database(
     return {
         db: {
             from: builder,
-            rpc: () => builder("organization_audit_events"),
+            rpc: async (name: string, args: {
+                p_org_id: string; p_filter: Record<string, unknown>;
+                p_sort_by: string; p_sort_direction: string; p_offset: number; p_limit: number;
+            }) => {
+                calls.push(["rpc", name, args]);
+                const q = builder(name).eq("org_id", args.p_org_id);
+                const filter = args.p_filter;
+                if (filter.username_pattern) {
+                    if (profileError) return { data: null, error: { message: "profile unavailable" } };
+                    q.username(String(filter.username_pattern));
+                }
+                for (const key of ["action", "status", "surface"]) {
+                    if (filter[key]) q.eq(key, filter[key]);
+                }
+                if (filter.actor_user_id) q.eq("user_id", filter.actor_user_id);
+                if (filter.title_pattern) q.ilike("title", String(filter.title_pattern));
+                if (filter.event_ids) q.in("id", filter.event_ids as string[]);
+                if (filter.user_ids) q.in("user_id", filter.user_ids as string[]);
+                const result = await q.order(args.p_sort_by, { ascending: args.p_sort_direction === "asc" })
+                    .order("id", { ascending: true }).range(args.p_offset, args.p_offset + args.p_limit - 1);
+                return { data: { events: result.data, total: result.count }, error: result.error };
+            },
         } as never,
         calls,
     };
@@ -332,7 +362,7 @@ describe("organization username filtering", () => {
         expect(csv).not.toContain("Other org");
     });
 
-    it("reads all matching profiles across capped pages and batches the user filter", async () => {
+    it("pages matching org events without fetching or partitioning platform-wide profiles", async () => {
         const profiles = Array.from({ length: 205 }, (_, i) => ({
             user_id: `user-${i}`,
             display_name: "Alex",
@@ -361,24 +391,10 @@ describe("organization username filtering", () => {
         expect(out.data?.map((row) => row.id)).toEqual(
             events.map((row) => row.id),
         );
-        expect(
-            calls
-                .filter(
-                    (call) =>
-                        call[0] === "user_profiles" && call[1] === "range",
-                )
-                .map((call) => call[2]),
-        ).toEqual([0, 50, 100, 150, 200, 0]);
-        expect(
-            calls
-                .filter((call) => call[1] === "in" && call[2] === "user_id")
-                .every((call) => (call[3] as string[]).length <= 200),
-        ).toBe(true);
-        expect(
-            calls
-                .filter((call) => call[1] === "filter-id-count")
-                .every((call) => Number(call[2]) <= 200),
-        ).toBe(true);
+        expect(calls).not.toContainEqual(["read", "user_profiles"]);
+        expect(calls.filter((call) => call[0] === "rpc")).toHaveLength(5);
+        expect(calls.filter((call) => call[0] === "rpc").map((call) =>
+            (call[2] as { p_offset: number }).p_offset)).toEqual([0, 50, 100, 150, 200]);
     });
 
     it("escapes wildcard characters and returns an empty result for no match", async () => {
@@ -393,15 +409,10 @@ describe("organization username filtering", () => {
                 userName: "A%_",
             }),
         ).toMatchObject({ data: [], count: 0, error: null });
-        expect(calls).toContainEqual([
-            "user_profiles",
-            "ilike",
-            "display_name",
-            "%A\\%\\_%",
-        ]);
-        expect(
-            calls.some((call) => call[1] === "organization_audit_events"),
-        ).toBe(false);
+        expect(calls).not.toContainEqual(["read", "user_profiles"]);
+        expect(calls).toContainEqual(["rpc", "organization_audit_events_page", expect.objectContaining({
+            p_filter: expect.objectContaining({ username_pattern: "%A\\%\\_%" }),
+        })]);
     });
 
     it("fails closed when the profile lookup fails", async () => {

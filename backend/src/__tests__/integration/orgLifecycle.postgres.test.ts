@@ -45,11 +45,6 @@ const value = async (s: string) =>
     embedded
         ? String(Object.values((await embedded.query(s)).rows[0])[0])
         : dockerSql(s);
-const migration = () =>
-    readFileSync(
-        resolve("migrations/20261014_03_organization_audit_lifecycle.sql"),
-        "utf8",
-    );
 const remove = (actor = 1) =>
     execute(`select public.soft_delete_organization(${q(10)},${q(actor)})`);
 const restore = (actor = 1) =>
@@ -87,8 +82,18 @@ describe.skipIf(!container && !pgliteModule)(
                 "create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}',created_at timestamptz default now());",
             );
             await execute(readFileSync(resolve("schema.sql"), "utf8"));
-            await execute(migration());
-            await execute(migration());
+            // Replay the complete chain: older migrations must not overwrite
+            // the access rules exercised by these regression tests.
+            for (let replay = 0; replay < 2; replay++) {
+                for (const name of [
+                    "20261014_03_organization_audit_lifecycle.sql",
+                    "20261014_04_org_private_content_access.sql",
+                    "20261014_05_audit_private_content_access.sql",
+                    "20261014_06_audit_actor_picker.sql",
+                    "20261014_07_org_lifecycle_review_fixes.sql",
+                    "20261014_08_paginate_organization_audit.sql",
+                ]) await execute(readFileSync(resolve("migrations", name), "utf8"));
+            }
         }, 60_000);
         afterAll(async () => {
             if (embedded) await embedded.close();
@@ -286,7 +291,7 @@ describe.skipIf(!container && !pgliteModule)(
             insert into public.audit_events(user_id,org_id,action,title) values (${q(1)},${q(10)},'org.created','Synthetic Firm'),(${q(4)},${q(11)},'org.created','Other Firm');`);
             const feed = (actor: number) =>
                 `public.organization_audit_events(${q(10)},${q(actor)},'actor@example.test')`;
-            for (const actor of [1, 3]) {
+            for (const actor of [3]) {
                 expect(await value(`select count(*) from ${feed(actor)}`)).toBe(
                     "2",
                 );
@@ -301,6 +306,10 @@ describe.skipIf(!container && !pgliteModule)(
                     ),
                 ).toMatch(/^(true|t)$/);
             }
+            // Owners can discover private content, but must explicitly open
+            // it before receiving read-only resource access.
+            expect(await value(`select count(*) from ${feed(1)} where title ilike '%Secret%'`)).toBe("1");
+            expect(await value(`select public.org_private_access_role(${q(10)},'project',${q(20)},'${uid(1)}') is null`)).toMatch(/^(true|t)$/);
             for (const actor of [2, 4])
                 expect(await value(`select count(*) from ${feed(actor)}`)).toBe(
                     "0",
@@ -317,6 +326,23 @@ describe.skipIf(!container && !pgliteModule)(
                     `select archived_at is not null from public.projects where id=${q(20)}`,
                 ),
             ).toMatch(/^(true|t)$/);
+        });
+        it("archives departing work while deleted so restoration cannot expose ownerless items", async () => {
+            await execute(`
+              insert into public.workflows(id,org_id,user_id,title,type) values (${q(60)},${q(10)},${q(2)},'Private workflow','assistant');
+              insert into public.projects(id,org_id,user_id,name,visibility) values (${q(21)},${q(10)},${q(2)},'Shared matter','organization');
+            `);
+            await remove();
+            await execute(`select public.prepare_account_org_departures(${q(2)}); delete from auth.users where id=${q(2)};`);
+            expect(await value(`select count(*) from public.org_departure_archives where org_id=${q(10)}`)).toBe("6");
+            expect(await value(`select count(*) from public.org_departure_events where org_id=${q(10)} and action='item.archived'`)).toBe("6");
+            expect(await value(`select count(*) from public.org_departure_events where org_id=${q(10)} and action='item.transferred'`)).toBe("0");
+            await restore();
+            for (const [table, id] of [["projects",20],["projects",21],["workflows",60],["chats",30],["tabular_reviews",40],["documents",50]] as const) {
+                expect(await value(`select archived_at is not null and user_id is null from public.${table} where id=${q(id)}`)).toMatch(/^(true|t)$/);
+            }
+            expect(await value(`select public.project_access_role(${q(20)},null,${q(10)},'${uid(1)}','owner@example.test') is null`)).toMatch(/^(true|t)$/);
+            expect(await value(`select public.workflow_access_role(${q(60)},null,${q(10)},'${uid(1)}','owner@example.test') is null`)).toMatch(/^(true|t)$/);
         });
         it("permits account deletion while its organization awaits purge and keeps audit records", async () => {
             await remove();

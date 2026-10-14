@@ -32,7 +32,6 @@ async function loadProjectLabels(
     const { data, error } = await db
       .from("projects")
       .select("id, name")
-    .is("deleted_at", null)
       .in("id", batch);
     if (error) throw new Error("Failed to load projects for memory export");
     projects.push(...((data ?? []) as ProjectLabel[]));

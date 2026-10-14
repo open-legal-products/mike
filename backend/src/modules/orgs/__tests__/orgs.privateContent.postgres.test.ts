@@ -28,12 +28,18 @@ describe.skipIf(!container)("private organization content in PostgreSQL", () => 
         const assertions = readFileSync(resolve(process.cwd(), "src/modules/orgs/__tests__/orgs.privateContent.sql"), "utf8");
         const auditMigration = readFileSync(resolve(process.cwd(), "migrations/20261014_05_audit_private_content_access.sql"), "utf8");
         const auditAssertions = readFileSync(resolve(process.cwd(), "src/modules/orgs/__tests__/orgs.auditPrivateContent.sql"), "utf8");
+        const paginationMigration = readFileSync(resolve(process.cwd(), "migrations/20261014_08_paginate_organization_audit.sql"), "utf8");
+        const paginationAssertions = readFileSync(resolve(process.cwd(), "src/modules/orgs/__tests__/orgs.auditPagination.sql"), "utf8");
         sql(assertions);
         sql(auditAssertions);
+        sql(paginationAssertions);
         sql(migration);
         sql(auditMigration);
         sql(auditMigration);
+        sql(paginationMigration);
+        sql(paginationMigration);
         sql(assertions);
         sql(auditAssertions);
+        sql(paginationAssertions);
     }, 60_000);
 });

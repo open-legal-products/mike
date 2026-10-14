@@ -6,6 +6,7 @@
 // surface.
 
 import { getOrgRole, isOrgAdmin } from "./access";
+import { mapWithConcurrency } from "./concurrency";
 import { normalizeDisplayName, normalizeEmail } from "./userLookup";
 import type { Db } from "./supabase";
 
@@ -133,7 +134,7 @@ export function parseQuery(
     };
 }
 
-/** Total selected-event and matching-user ids per request, below proxy URL limits. */
+/** Selected-event IDs per personal-history request, below proxy URL limits. */
 const ID_FILTER_CHUNK = 200;
 
 /**
@@ -237,7 +238,7 @@ function chunk<T>(values: T[], size: number): T[][] {
 const AUDIT_READ_PAGE_SIZE = 1000;
 
 async function readEventWindow(
-    makeQuery: () => EventsQuery,
+    makeQuery: () => Pick<EventsQuery, "range">,
     from: number,
     limit: number,
 ): Promise<EventsResult> {
@@ -289,37 +290,11 @@ export async function queryEvents(
     q: AuditQuery,
     resolveDisplayNames = true,
 ) {
-    // Organization access and username lookups must fail closed. Personal
+    // Organization access must fail closed. Personal
     // activity is scoped directly to its actor, independent of project access.
-    let matchingUserIds: string[] | undefined;
     try {
         if (q.orgId && !(await canReadOrgAudit(db, userId, q.orgId))) {
             return { data: null, error: { message: "Organization audit access denied" }, count: null } satisfies EventsResult;
-        }
-        if (q.orgId && q.userName) {
-            // Resolve names and emails, including former members. These
-            // ids only narrow the authorized, redacted organization query.
-            const matches = new Set<string>();
-            // Separate literal predicates avoid interpolating user input into
-            // PostgREST's OR grammar. A person may match both columns.
-            for (const column of ["display_name", "email"] as const) {
-                let offset = 0;
-                while (true) {
-                    const { data, error, count } = await db.from("user_profiles")
-                        .select("user_id", { count: "exact" })
-                        .ilike(column, `%${escapeLikePattern(q.userName)}%`)
-                        .order("user_id")
-                        .range(offset, offset + AUDIT_READ_PAGE_SIZE - 1);
-                    if (error) return { data: null, error, count: null } satisfies EventsResult;
-                    if (!data?.length) break;
-                    for (const profile of data) matches.add(profile.user_id as string);
-                    offset += data.length;
-                    if (count !== null && offset >= count) break;
-                }
-            }
-            matchingUserIds = [...matches];
-            if (!matchingUserIds.length)
-                return { data: [], error: null, count: 0 } satisfies EventsResult;
         }
     } catch (err) {
         // Hand back the underlying PostgREST error when there is one, so the
@@ -345,7 +320,6 @@ export async function queryEvents(
 
     const applyFilters = (query: EventsQuery): EventsQuery => {
         let next = query;
-        if (q.orgId && q.actorUserId) next = next.eq("user_id", q.actorUserId);
         if (q.action) next = next.eq("action", q.action);
         if (q.status) next = next.eq("status", q.status);
         if (q.surface) next = next.eq("surface", q.surface);
@@ -358,46 +332,62 @@ export async function queryEvents(
         }).order("id", { ascending: true, nullsFirst: false });
     };
 
-    const base = () => (q.orgId
-        ? db.rpc("organization_audit_events", {
-            p_org_id: q.orgId, p_actor_id: userId, p_actor_email: email ?? null,
-          }, { count: "exact" }).select(AUDIT_EVENT_COLUMNS)
-        : db.from("audit_events").select(AUDIT_EVENT_COLUMNS, { count: "exact" })
-    ) as unknown as EventsQuery;
+    const base = () => db.from("audit_events")
+        .select(AUDIT_EVENT_COLUMNS, { count: "exact" }) as unknown as EventsQuery;
 
     const offset = (q.page - 1) * q.limit;
     let result: EventsResult;
 
-    // Selected ids can share a URL with username ids. Budget the
-    // lists together, not separately, to stay within proxy request limits.
-    const idChunkSize = q.eventIds && matchingUserIds
-        ? ID_FILTER_CHUNK / 2
-        : ID_FILTER_CHUNK;
-    const scope = (query: EventsQuery) => q.orgId
-        ? query.eq("org_id", q.orgId)
-        : query.eq("user_id", userId);
-    // Keep all id lists below proxy URL limits. Every partition retains its
-    // visibility scope and every requested filter; ids never grant access.
-    const eventChunks = q.eventIds ? chunk(q.eventIds, idChunkSize) : [undefined];
-    const userChunks = matchingUserIds ? chunk(matchingUserIds, idChunkSize) : [undefined];
-    const queries = eventChunks.flatMap((eventIds) =>
-        userChunks.map((userIds) => () => {
-            let query = scope(base());
-            if (eventIds) query = query.in("id", eventIds);
-            if (userIds) query = query.in("user_id", userIds);
-            return applyFilters(query);
-        }),
-    );
+    // Organization RPCs send selected IDs in a JSON body. Personal queries
+    // retain bounded URL partitions; username matching stays inside org SQL.
+    const eventChunks = q.orgId ? [q.eventIds]
+        : q.eventIds ? chunk(q.eventIds, ID_FILTER_CHUNK) : [undefined];
+    const queries = eventChunks.map((eventIds) => () => {
+        if (q.orgId) {
+            return {
+                range: async (from: number, to: number): Promise<EventsResult> => {
+                    // Pagination must happen inside the RPC, before its
+                    // resource joins and access checks. PostgREST's outer
+                    // range cannot push through a function with SET.
+                    const { data, error } = await db.rpc("organization_audit_events_page", {
+                        p_org_id: q.orgId,
+                        p_actor_id: userId,
+                        p_actor_email: email ?? null,
+                        p_filter: {
+                            username_pattern: q.userName ? `%${escapeLikePattern(q.userName)}%` : undefined,
+                            action: q.action,
+                            status: q.status,
+                            surface: q.surface,
+                            actor_user_id: q.actorUserId,
+                            title_pattern: q.q ? `%${escapeLikePattern(q.q)}%` : undefined,
+                            from: q.from,
+                            to: q.to ? `${q.to}T23:59:59.999Z` : undefined,
+                            ...(eventIds ? { event_ids: eventIds } : {}),
+                        },
+                        p_sort_by: q.sortBy,
+                        p_sort_direction: q.sortDirection,
+                        p_offset: from,
+                        p_limit: to - from + 1,
+                    });
+                    const page = data as { events: AuditRow[]; total: number } | null;
+                    return { data: page?.events ?? null, count: page?.total ?? null, error };
+                },
+            };
+        }
+        let query = base().eq("user_id", userId);
+        if (eventIds) query = query.in("id", eventIds);
+        return applyFilters(query);
+    });
 
     if (queries.length === 1) {
         result = await readEventWindow(queries[0], offset, q.limit);
     } else {
-        // Distinct selected-event and matching-user partitions are disjoint,
+        // Distinct selected-event partitions are disjoint,
         // so their exact counts can be summed before merging the sorted rows.
         const window = Math.min(offset + q.limit, MERGE_WINDOW_ROWS);
-        const responses = await Promise.all(queries.map((makeQuery) =>
+        const responses = await mapWithConcurrency(queries, 4, (makeQuery) =>
             readEventWindow(makeQuery, 0, window),
-        ));
+        );
 
         const failed = responses.find((response) => response.error);
         if (failed) return failed;

@@ -49,7 +49,7 @@ function database(job?: Record<string, unknown>) {
             from: (t: string) => builder(t),
             rpc: vi.fn((name: string, args: unknown) => {
                 calls.push([name, args]);
-                return builder(name);
+                return Promise.resolve({ data: { events, total: events.length }, error: null });
             }),
         } as never,
         calls,
@@ -84,24 +84,17 @@ describe("organization audit authorization", () => {
                 }),
             ).toMatchObject({ ok: true, data: { total: 1 } });
             expect(calls).toContainEqual([
-                "organization_audit_events",
-                {
+                "organization_audit_events_page",
+                expect.objectContaining({
                     p_org_id: orgId,
                     p_actor_id: "actor",
                     p_actor_email: "actor@example.test",
-                },
-            ]);
-            expect(calls).toContainEqual([
-                "organization_audit_events",
-                "eq",
-                "org_id",
-                orgId,
-            ]);
-            expect(calls).toContainEqual([
-                "organization_audit_events",
-                "eq",
-                "action",
-                "org.created",
+                    p_filter: expect.objectContaining({ action: "org.created" }),
+                    p_sort_by: "created_at",
+                    p_sort_direction: "desc",
+                    p_offset: 0,
+                    p_limit: 50,
+                }),
             ]);
         },
     );

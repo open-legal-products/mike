@@ -91,6 +91,27 @@ function observeLoadMore() {
 }
 
 describe("MyActivitySettingsPage", () => {
+  it("uses organization-specific loading and empty-state messages", async () => {
+    mockedGetAuditHistory.mockRejectedValueOnce(new Error("unavailable"));
+    const { unmount } = render(<AuditHistory orgId="org-a" />);
+    expect(await screen.findByText("The audit log could not be loaded.")).toBeInTheDocument();
+    unmount();
+    mockedGetAuditHistory.mockResolvedValue({ events: [], total: 0, page: 1, pageSize: 50 });
+    render(<AuditHistory orgId="org-a" />);
+    expect(await screen.findByText("Actions taken in this organization appear here.")).toBeInTheDocument();
+  });
+
+  it("uses organization-specific export failure text", async () => {
+    const user = userEvent.setup();
+    mockedGetUserExportStatus.mockResolvedValue({ status: "failed" });
+    render(<AuditHistory orgId="org-a" />);
+    await screen.findByText(EVENT.title!);
+    await user.click(screen.getByRole("button", { name: "Audit log actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export" }));
+    await user.click(screen.getByRole("button", { name: "Export CSV" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The audit log could not be exported. Please try again.");
+  });
+
   it("shows the affected member's name and initials, keeping email in the tooltip", async () => {
     mockedGetAuditHistory.mockResolvedValue({
       events: [{ ...EVENT, action: "org.member.role_changed", title: "jamie@example.com", affected_user_display_name: "Jamie Morgan" }],
