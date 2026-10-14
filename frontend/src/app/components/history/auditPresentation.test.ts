@@ -49,7 +49,7 @@ describe("audit event presentation", () => {
     expect(auditSubject(event)).toEqual({
       type: "Member",
       name: "jamie@example.com",
-      context: "Org Settings",
+      context: "Organization",
     });
     expect(auditDetailFields(event)).toEqual([
       { label: "Role", value: "Member → Admin" },

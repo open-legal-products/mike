@@ -78,7 +78,7 @@ export const SURFACE_LABELS: Record<string, string> = {
   tabular: "Tabular",
   workflows: "Workflows",
   account: "Account",
-  organization: "Org Settings",
+  organization: "Organization",
 };
 
 export function auditLabel(value: string): string {
