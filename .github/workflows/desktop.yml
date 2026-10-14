@@ -67,7 +67,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -81,7 +81,7 @@ jobs:
       # The pinned Postgres build (~60 MB); the key is the fetch script, so a
       # pin bump invalidates it.
       - name: Cache bundled Postgres
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: desktop/local-stack/bin/pg
           key: local-stack-pg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/fetch-local-stack.sh') }}
@@ -104,7 +104,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -116,7 +116,7 @@ jobs:
       # GoTrue has no usable macOS release binary (the darwin-arm64 asset is
       # Linux ELF — see fetch-local-stack.sh), so the pinned tag is built
       # from source. Cached with the other binaries below.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
           cache: false
@@ -129,7 +129,7 @@ jobs:
       - run: npm ci --prefix desktop
 
       - name: Cache bundled service binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: desktop/local-stack/bin
           key: local-stack-bin-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/fetch-local-stack.sh', 'desktop/scripts/fetch-service-notices.mjs') }}
@@ -161,7 +161,7 @@ jobs:
 
       - name: Upload e2e artifacts (screenshots, summary)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-local-e2e
           path: desktop/e2e/artifacts/
