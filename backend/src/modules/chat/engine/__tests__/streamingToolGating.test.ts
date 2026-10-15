@@ -226,12 +226,13 @@ it.each([
   { match_count: 2, next_offset: null },
   { error_code: "internal_error", error: "Document search could not be completed. Try again." },
   { error_code: "schema_out_of_date", error: "Document search is unavailable because the server's database needs an update. Please contact your administrator." },
-])("retains scoped search events in the saved assistant response: %j", async (details) => {
+])("retains scoped search events and sanitizes raw errors in the saved assistant response: %j", async (details) => {
   const search = { type: "doc_search" as const, search_id: "search", scope: "library", query: "assignment", offset: 0, ...details };
   runToolCalls.mockResolvedValueOnce({
     toolResults: [], docsRead: [], docsFound: [], docsCreated: [], docsReplicated: [],
     workflowsApplied: [], docsEdited: [], askInputsEvents: [], courtlistenerEvents: [],
-    caseCitationEvents: [], mcpEvents: [], documentSearchEvents: [search],
+    caseCitationEvents: [], mcpEvents: [],
+    documentSearchEvents: [details.error ? { ...search, error: "private database details" } : search],
   } as never);
   streamChatWithTools.mockImplementationOnce(async (params) => {
     await params.runTools?.([{ id: "search", name: "find_documents", input: { scope: "library", query: "assignment" } }]);

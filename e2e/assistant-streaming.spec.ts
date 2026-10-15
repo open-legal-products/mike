@@ -187,7 +187,7 @@ for (const scope of ["assistant", "project", "tabular"] as const) {
 
 // Use the actual chat renderer and stream adapter, with synthetic search results.
 // The screenshots also provide review evidence for the new pre-response activity.
-test("scoped document search activity streams, survives reload, and fits narrow screens", async ({ page }, testInfo) => {
+test("scoped document search activity streams, renders mocked history after reload, and fits narrow screens", async ({ page }, testInfo) => {
     test.setTimeout(120_000);
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));

@@ -879,6 +879,7 @@ export function DocTable({
         setContextMenu(null);
         selectionAnchorKeyRef.current = null;
         setTypeFilter(null);
+        setCreatorFilter(null);
         setSort(null);
     }, [scopeKey]);
 

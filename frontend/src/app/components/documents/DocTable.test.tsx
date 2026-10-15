@@ -327,4 +327,38 @@ describe("DocTable creator filter", () => {
         expect(screen.getByText("Two.pdf")).toBeInTheDocument();
         expect(screen.queryByText("One.pdf")).toBeNull();
     });
+
+    it("keeps the creator filter on refresh and clears it when switching scope", async () => {
+        const user = userEvent.setup();
+        const props: ComponentProps<typeof DocTable> = {
+            showCreator: true,
+            enableHeaderFilters: true,
+            scopeKey: "project-1",
+            documents: [
+                { ...document("doc-1", "One.pdf"), folder_id: null },
+                { ...document("doc-2", "Two.pdf"), folder_id: null, user_id: "user-2", owner_display_name: "Ada Lovelace" },
+            ],
+            setDocuments: vi.fn(),
+            folders: [],
+            setFolders: vi.fn(),
+            loading: false,
+            search: "",
+            operations: operations(vi.fn()),
+            emptyStateTitle: "Documents",
+            canDo: allowAll,
+        };
+        const { rerender } = render(<DocTable {...props} />);
+        await user.click(screen.getByRole("button", { name: "Filter by creator" }));
+        await user.click(await screen.findByRole("button", { name: /Ada Lovelace/ }));
+
+        rerender(<DocTable {...props} documents={[...props.documents]} />);
+        expect(screen.getByText("Two.pdf")).toBeInTheDocument();
+        expect(screen.queryByText("One.pdf")).not.toBeInTheDocument();
+
+        rerender(<DocTable {...props} scopeKey="project-2" documents={[
+            { ...document("doc-3", "Three.pdf"), project_id: "project-2", folder_id: null },
+        ]} />);
+        expect(screen.getByText("Three.pdf")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Filter by creator" })).toBeInTheDocument();
+    });
 });
