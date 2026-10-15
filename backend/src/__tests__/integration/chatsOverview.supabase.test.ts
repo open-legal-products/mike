@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getAccessibleChat, leaveChat, listChats } from "../../modules/chat/chat.service";
 
 // Gated: runs only against a real (local) Supabase stack.
 //   supabase start, then export:
@@ -330,4 +331,36 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         expect(page.error).toBeNull();
         expect((page.data as unknown[]).length).toBe(1);
     });
+
+    it("leaves a directly shared chat without deleting it, its messages or other access", async () => {
+        const message = await admin.from("chat_messages").insert({
+            chat_id: chats.sharedDirectly, role: "user", content: "Synthetic shared message", author_user_id: strangerId,
+        });
+        expect(message.error).toBeNull();
+        const args = { chatId: chats.sharedDirectly, userId: callerId, userEmail: callerEmail };
+        const before = await listChats(admin, { ...args, limit: null, offset: 0, beforeUpdatedAt: null, beforeId: null });
+        expect(before.ok && before.data).toContainEqual(expect.objectContaining({ id: chats.sharedDirectly, can_leave: true }));
+        try {
+            expect(await leaveChat(admin, args)).toEqual({ ok: true, data: undefined });
+            expect(await getAccessibleChat(admin, args)).toEqual({ ok: false });
+            const after = await listChats(admin, { ...args, limit: null, offset: 0, beforeUpdatedAt: null, beforeId: null });
+            expect(after.ok && after.data).not.toContainEqual(expect.objectContaining({ id: chats.sharedDirectly }));
+            const retained = await admin.from("chats").select("id").eq("id", chats.sharedDirectly).single();
+            expect(retained.error).toBeNull();
+            const messages = await admin.from("chat_messages").select("id").eq("chat_id", chats.sharedDirectly);
+            expect(messages.error).toBeNull();
+            expect(messages.data).toHaveLength(1);
+            const owner = await getAccessibleChat(admin, { chatId: chats.sharedDirectly, userId: strangerId, userEmail: null });
+            expect(owner.ok && owner.projectRole).toBe("owner");
+            const otherGrant = await admin.from("project_access_grants").select("role").eq("project_id", grantedProjectId).eq("email", callerEmail.toLowerCase()).single();
+            expect(otherGrant.error).toBeNull();
+            expect(otherGrant.data?.role).toBe("editor");
+        } finally {
+            const restored = await admin.from("chat_access_grants").upsert({
+                chat_id: chats.sharedDirectly, email: callerEmail.toLowerCase(), role: "editor", created_by: strangerId,
+            }, { onConflict: "chat_id,email" });
+            if (restored.error) throw restored.error;
+        }
+    });
+
 });

@@ -1694,9 +1694,17 @@ describe("scoped document search activity", () => {
     expect(events!.some(e => e.type === "tool_call_start")).toBe(false);
   });
   it("retains a completion without a start on reconnect, including failure", async () => {
-    const events = await eventsOf([{ type: "doc_search", ...search, error: "Document search could not be completed. Try again." }]);
-    expect(events![0]).toMatchObject({ type: "doc_search", ...search, isStreaming: false, error: expect.any(String) });
+    const failure = { error_code: "schema_out_of_date", error: "Document search is unavailable because the server's database needs an update. Please contact your administrator." };
+    const events = await eventsOf([{ type: "doc_search", ...search, ...failure }]);
+    expect(events![0]).toMatchObject({ type: "doc_search", ...search, isStreaming: false, ...failure });
     expect(events![0]).not.toHaveProperty("match_count", 0);
+  });
+  it("completes a live search with the failure reason", async () => {
+    const failure = { error_code: "search_timeout", error: "Document search took too long. Try a more specific phrase or a smaller search scope." };
+    const events = await eventsOf([{ type: "doc_search_start", ...search }, { type: "doc_search", ...search, ...failure }]);
+    expect(events!.filter(e => e.type === "doc_search")).toEqual([
+      expect.objectContaining({ type: "doc_search", ...search, ...failure, isStreaming: false }),
+    ]);
   });
   it("updates a replayed start instead of duplicating it", async () => {
     const events = await eventsOf([{ type: "doc_search_start", ...search }, { type: "doc_search_start", ...search }]);

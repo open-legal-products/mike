@@ -14,6 +14,8 @@ export {
   listChatGrants,
   grantChatAccess,
   revokeChatAccess,
+  leaveChat,
+  withChatLeaveAccess,
 } from "./chat.sharing";
 export { updateChatSettings } from "./chat.settings";
 export { updateChatTitle } from "./chat.titles";

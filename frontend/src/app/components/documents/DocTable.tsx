@@ -48,6 +48,16 @@ import {
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { DropdownAtPoint } from "@/shared/ui/dropdown";
 import { useAuth } from "@/app/contexts/AuthContext";
+import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
+import {
+    CreatorLabel,
+    CreatorLabelSkeleton,
+} from "@/app/components/shared/CreatorLabel";
+import {
+    PersonFilter,
+    distinctPeople,
+    localPeople,
+} from "@/app/components/shared/PersonFilter";
 import {
     creatorScopedAllowed,
     type Capability,
@@ -264,6 +274,8 @@ interface DocTableProps {
      * from the catalog's own URLs, and the only action is adding copies.
      */
     catalog?: DocTableCatalog;
+    /** Adds a Creator column; the project directory shows who added each row. */
+    showCreator?: boolean;
 }
 
 export interface DocTableCatalog {
@@ -300,7 +312,7 @@ function documentVersionNumber(doc: Document): number | null {
     return doc.active_version_number ?? doc.latest_version_number ?? null;
 }
 
-function ProjectTableLoadingHeader() {
+function ProjectTableLoadingHeader({ showCreator }: { showCreator: boolean }) {
     return (
         <TableHeaderRow className="pr-3">
             <TableStickyCell
@@ -319,6 +331,11 @@ function ProjectTableLoadingHeader() {
             <TableHeaderCell className="flex w-20 items-center gap-1">
                 <span>Version</span>
             </TableHeaderCell>
+            {showCreator && (
+                <TableHeaderCell className="flex w-32 items-center gap-1">
+                    <span>Creator</span>
+                </TableHeaderCell>
+            )}
             <TableHeaderCell className="flex w-32 items-center gap-1">
                 <span>Created</span>
             </TableHeaderCell>
@@ -330,7 +347,7 @@ function ProjectTableLoadingHeader() {
     );
 }
 
-function ProjectTableLoading() {
+function ProjectTableLoading({ showCreator }: { showCreator: boolean }) {
     return (
         <div className="flex-1 flex flex-col min-h-0">
             {[1, 2, 3, 4, 5].map((i) => (
@@ -354,6 +371,11 @@ function ProjectTableLoading() {
                     <div className="w-20 shrink-0">
                         <div className="h-3 w-5 rounded bg-gray-100 animate-pulse" />
                     </div>
+                    {showCreator && (
+                        <div className="w-32 shrink-0">
+                            <CreatorLabelSkeleton className="w-16" />
+                        </div>
+                    )}
                     <div className="w-32 shrink-0">
                         <div className="h-3 w-16 rounded bg-gray-100 animate-pulse" />
                     </div>
@@ -420,9 +442,11 @@ export function DocTable({
     autoLoadOnScroll = false,
     defaultSort = null,
     catalog,
+    showCreator = false,
 }: DocTableProps) {
     const [addDocsOpen, setAddDocsOpen] = useState(false);
     const { user } = useAuth();
+    const ownProfile = useOptionalUserProfile()?.profile;
     const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
     const [viewingDocVersion, setViewingDocVersion] = useState<{
         id: string;
@@ -436,6 +460,7 @@ export function DocTable({
     const [selectingAllDocuments, setSelectingAllDocuments] = useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
     const [typeFilter, setTypeFilter] = useState<string | null>(null);
+    const [creatorFilter, setCreatorFilter] = useState<string | null>(null);
     const [sort, setSort] = useState<DocumentSort | null>(null);
     const serverQueryActive = serverDocuments !== null;
     const documentUploadInputRef = useRef<HTMLInputElement>(null);
@@ -447,6 +472,25 @@ export function DocTable({
     const renderAddDocumentsModalRef = useRef(renderAddDocumentsModal);
     const setOwnerOnlyAction = useMemo(() => onOwnerOnlyAction ?? (() => {}), [onOwnerOnlyAction]);
     const allowed = canDo;
+
+    /** The Creator cell; the caller's own rows read "Me" with their current photo. */
+    function renderCreatorCell(row: {
+        user_id?: string | null;
+        owner_display_name?: string | null;
+        owner_profile_photo?: string | null;
+    }) {
+        if (!showCreator) return null;
+        const mine = !!user?.id && row.user_id === user.id;
+        return (
+            <div className="w-32 shrink-0 text-xs text-gray-500">
+                <CreatorLabel
+                    label={mine ? "Me" : row.owner_display_name?.trim() || "Shared"}
+                    photo={mine ? ownProfile?.profilePhoto ?? row.owner_profile_photo : row.owner_profile_photo}
+                    name={mine ? ownProfile?.displayName ?? row.owner_display_name : row.owner_display_name}
+                />
+            </div>
+        );
+    }
     /** Guard: false + popup when the caller's role lacks the capability. */
     const requireCapability = useCallback(
         (
@@ -2112,6 +2156,7 @@ export function DocTable({
                 <div className="ml-auto w-20 shrink-0" />
                 <div className="w-24 shrink-0" />
                 <div className="w-20 shrink-0" />
+                {showCreator && <div className="w-32 shrink-0" />}
                 <div className="w-32 shrink-0" />
                 <div className="w-32 shrink-0" />
                 <div className="w-8 shrink-0" />
@@ -2176,6 +2221,7 @@ export function DocTable({
                 </div>
                 <div className="w-24 shrink-0 text-xs text-gray-300">{statusLabel}</div>
                 <div className="w-20 shrink-0 text-xs text-gray-300">—</div>
+                {renderCreatorCell({ user_id: user?.id })}
                 <div className="w-32 shrink-0 text-xs text-gray-300">—</div>
                 <div className="w-32 shrink-0 text-xs text-gray-300">—</div>
                 <div className="w-8 shrink-0" />
@@ -2774,6 +2820,7 @@ export function DocTable({
                                                     <span className="text-gray-300 pl-1">—</span>
                                                 )}
                                             </div>
+                                            {renderCreatorCell(doc)}
                                             <div className="w-32 shrink-0 text-xs text-gray-500 truncate">
                                                 {doc.created_at ? (
                                                     formatDate(doc.created_at)
@@ -2828,6 +2875,7 @@ export function DocTable({
                             {isVersionsOpen && (
                                 <DocVersionHistory
                                     docId={doc.id}
+                                    showCreator={showCreator}
                                     filename={docName}
                                     activeVersionNumber={versionNumber}
                                     loading={loadingVersionDocIds.has(doc.id)}
@@ -3091,6 +3139,7 @@ export function DocTable({
                                 <div className="ml-auto w-20 shrink-0 text-xs text-gray-300">—</div>
                                 <div className="w-24 shrink-0 text-xs text-gray-300">—</div>
                                 <div className="w-20 shrink-0 text-xs text-gray-300">—</div>
+                                {renderCreatorCell(folder)}
                                 <div className="w-32 shrink-0 truncate text-xs text-gray-500">
                                     {formatDate(folder.created_at)}
                                 </div>
@@ -3563,6 +3612,11 @@ export function DocTable({
         clearCollectionSelection();
     }
 
+    function handleCreatorFilterChange(value: string | null) {
+        setCreatorFilter(value);
+        clearCollectionSelection();
+    }
+
     function handleSortChange(key: DocumentSortKey, direction: TableSortDirection | null) {
         setSort(direction ? { key, direction } : null);
         clearCollectionSelection();
@@ -3573,7 +3627,10 @@ export function DocTable({
 
         const rows = docs
             .filter((doc) => !q || doc.filename.toLowerCase().includes(q))
-            .filter((doc) => !enableHeaderFilters || !typeFilter || documentTypeValue(doc) === typeFilter);
+            .filter((doc) => !enableHeaderFilters || !typeFilter || documentTypeValue(doc) === typeFilter)
+            // Like the type filter, this narrows documents only: folders stay
+            // as the way in to whatever matches inside them.
+            .filter((doc) => !showCreator || !creatorFilter || doc.user_id === creatorFilter);
 
         if (!enableHeaderFilters || !effectiveSort) return rows;
 
@@ -3598,7 +3655,7 @@ export function DocTable({
 
             return a.filename.localeCompare(b.filename) * multiplier;
         });
-    }, [docs, effectiveSort, enableHeaderFilters, q, serverQueryActive, typeFilter]);
+    }, [creatorFilter, docs, effectiveSort, enableHeaderFilters, q, serverQueryActive, showCreator, typeFilter]);
     const hasVisibleCollectionUpload =
         collectionUploadProgress.some(
             (upload) =>
@@ -3640,6 +3697,43 @@ export function DocTable({
             widthClassName="w-40"
             options={typeOptions}
             onChange={handleTypeFilterChange}
+        />
+    ) : null;
+    const creatorPeople = useMemo(
+        () =>
+            distinctPeople(
+                [...documents, ...folders].map((row) => {
+                    const mine = !!user?.id && row.user_id === user.id;
+                    const owner = row as {
+                        owner_display_name?: string | null;
+                        owner_profile_photo?: string | null;
+                    };
+                    return {
+                        user_id: row.user_id,
+                        display_name: mine
+                            ? ownProfile?.displayName ?? owner.owner_display_name ?? "Me"
+                            : owner.owner_display_name,
+                        profile_photo: mine
+                            ? ownProfile?.profilePhoto ?? owner.owner_profile_photo
+                            : owner.owner_profile_photo,
+                    };
+                }),
+            ),
+        [documents, folders, ownProfile, user?.id],
+    );
+    const creatorFilterButton = enableHeaderFilters && showCreator ? (
+        <PersonFilter
+            label="Filter by creator"
+            selectedTitle={(name) => `Created by ${name}`}
+            value={
+                creatorPeople.find(
+                    (person) => person.user_id === creatorFilter,
+                ) ?? null
+            }
+            onChange={(person) =>
+                handleCreatorFilterChange(person?.user_id ?? null)
+            }
+            loadPeople={localPeople(creatorPeople)}
         />
     ) : null;
     const sizeFilterButton = enableHeaderFilters ? (
@@ -4236,7 +4330,7 @@ export function DocTable({
                 }
                 header={
                     loading || (serverQueryActive && serverQueryLoading) ? (
-                        <ProjectTableLoadingHeader />
+                        <ProjectTableLoadingHeader showCreator={showCreator} />
                     ) : (
                         <TableHeaderRow className="pr-3">
                             <TableStickyCell header widthClassName={DOC_NAME_COL_W}>
@@ -4273,6 +4367,12 @@ export function DocTable({
                                 <span>Version</span>
                                 {versionFilterButton}
                             </TableHeaderCell>
+                            {showCreator && (
+                                <TableHeaderCell className="flex w-32 items-center gap-1">
+                                    <span>Creator</span>
+                                    {creatorFilterButton}
+                                </TableHeaderCell>
+                            )}
                             <TableHeaderCell className="flex w-32 items-center gap-1">
                                 <span>Created</span>
                                 {createdFilterButton}
@@ -4287,7 +4387,7 @@ export function DocTable({
                 }
             >
                 {loading || (serverQueryActive && serverQueryLoading) ? (
-                    <ProjectTableLoading />
+                    <ProjectTableLoading showCreator={showCreator} />
                 ) : (
                     <div className="flex-1 flex flex-col min-h-0">
                         <div
@@ -4608,6 +4708,7 @@ export function DocTable({
                                                                     <span className="text-gray-300 pl-1">—</span>
                                                                 )}
                                                             </div>
+                                                            {renderCreatorCell(doc)}
                                                             <div className="w-32 shrink-0 text-xs text-gray-500 truncate">
                                                                 {doc.created_at ? (
                                                                     formatDate(doc.created_at)
@@ -4656,6 +4757,7 @@ export function DocTable({
                                                         {isVersionsOpen && (
                                                             <DocVersionHistory
                                                                 docId={doc.id}
+                                                                showCreator={showCreator}
                                                                 filename={docName}
                                                                 activeVersionNumber={versionNumber}
                                                                 loading={loadingVersionDocIds.has(doc.id)}

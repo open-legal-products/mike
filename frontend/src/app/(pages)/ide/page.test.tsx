@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listProjects } from "@/app/lib/mikeApi";
@@ -11,6 +11,10 @@ const state = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
     useRouter: () => ({ push: state.push }),
+}));
+
+vi.mock("@/app/contexts/WorkspaceContext", () => ({
+    useWorkspaceParam: () => "personal",
 }));
 
 vi.mock("next/image", () => ({
@@ -37,6 +41,7 @@ vi.mock("@/app/components/modals/ProjectPickerModal", () => ({
         onSelect: (id: string) => void;
         primaryAction?: {
             label: ReactNode;
+            variant?: string;
             onClick?: () => void;
             disabled?: boolean;
         };
@@ -56,6 +61,7 @@ vi.mock("@/app/components/modals/ProjectPickerModal", () => ({
                     type="button"
                     onClick={primaryAction?.onClick}
                     disabled={primaryAction?.disabled}
+                    data-variant={primaryAction?.variant}
                 >
                     {primaryAction?.label}
                 </button>
@@ -120,13 +126,14 @@ describe("IDE page", () => {
         );
         await user.click(screen.getByRole("button", { name: "Open project" }));
         await user.click(await screen.findByRole("button", { name: "Matter Alpha" }));
-        await user.click(
-            screen.getByRole("dialog", { name: "Open project" }).querySelector(
-                "button:last-child",
-            )!,
-        );
+        const open = within(
+            screen.getByRole("dialog", { name: "Open project" }),
+        ).getByRole("button", { name: "Open" });
+        expect(open).toHaveAttribute("data-variant", "blue");
+        await user.click(open);
 
         expect(listProjects).toHaveBeenCalledOnce();
+        expect(listProjects).toHaveBeenCalledWith({ participatingOnly: true, workspace: "personal" });
         expect(state.push).toHaveBeenCalledWith(
             "/projects/project-1/assistant/chat",
         );

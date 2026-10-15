@@ -3326,7 +3326,8 @@ begin
   end if;
 
   update public.tabular_reviews
-     set active_generation_id = target_generation_id,
+     set updated_at = now(),
+         active_generation_id = target_generation_id,
          generation_lease_expires_at = now()
            + make_interval(secs => greatest(60, least(lease_seconds, 3600)))
    where id = target_review_id;
@@ -3363,7 +3364,8 @@ security definer
 set search_path = public, pg_temp
 as $$
   update public.tabular_reviews
-     set active_generation_id = null,
+     set updated_at = now(),
+         active_generation_id = null,
          generation_lease_expires_at = null
    where id = target_review_id
      and active_generation_id = target_generation_id
@@ -3377,6 +3379,47 @@ create index if not exists idx_tabular_cells_review_row
   on public.tabular_cells(review_id, row_id, column_index);
 
 drop function if exists public.get_tabular_reviews_overview(text, text, text, text, integer, integer, text, text, text);
+-- Small, authorized status snapshots for sidebar rows, without document content.
+create or replace function public.get_tabular_review_history_status(
+  p_user_id text,
+  p_user_email text,
+  p_review_ids uuid[]
+)
+returns table (id uuid, is_running boolean, is_complete boolean)
+language sql
+stable
+set search_path = public
+as $$
+  select tr.id,
+    coalesce(tr.active_generation_id is not null and tr.generation_lease_expires_at > now(), false) as is_running,
+    not coalesce(tr.active_generation_id is not null and tr.generation_lease_expires_at > now(), false)
+      and jsonb_array_length(coalesce(tr.columns_config, '[]'::jsonb)) > 0
+      and exists (select 1 from public.tabular_review_rows r where r.review_id = tr.id)
+      and not exists (
+        select 1
+        from public.tabular_review_rows r
+        cross join jsonb_array_elements(coalesce(tr.columns_config, '[]'::jsonb)) col
+        where r.review_id = tr.id
+          and not exists (
+            select 1 from public.tabular_cells c
+            where c.review_id = tr.id and c.row_id = r.id
+              and c.column_index = (col->>'index')::integer
+              and c.status = 'done' and c.content is not null
+          )
+      ) as is_complete
+  from public.tabular_reviews tr
+  where tr.id = any(p_review_ids)
+    and public.review_access_role(
+      tr.id, tr.user_id, tr.project_id, tr.org_id, p_user_id, p_user_email
+    ) is not null;
+$$;
+
+revoke all on function public.get_tabular_review_history_status(text, text, uuid[])
+  from public, anon, authenticated;
+grant execute on function public.get_tabular_review_history_status(text, text, uuid[])
+  to service_role;
+
+drop function if exists public.get_tabular_reviews_overview(text, text, text, text, integer, integer, text, text, text, text);
 create or replace function public.get_tabular_reviews_overview(
   p_user_id text,
   p_user_email text,
@@ -3387,7 +3430,8 @@ create or replace function public.get_tabular_reviews_overview(
   p_search_term text,
   p_sort_key text,
   p_sort_direction text,
-  p_workspace text default null
+  p_workspace text default null,
+  p_owner_user_id text default null
 )
 returns table (
   id uuid,
@@ -3418,6 +3462,7 @@ as $$
     from public.tabular_reviews tr
     where (p_project_id is null or tr.project_id::text = p_project_id)
       and public.workspace_matches(p_workspace, tr.org_id)
+      and (p_owner_user_id is null or tr.user_id::text = p_owner_user_id)
       and (
         coalesce(p_scope, 'all') = 'all'
         or (p_scope = 'in-project' and tr.project_id is not null)
@@ -3506,6 +3551,8 @@ as $$
     case when p_sort_key = 'columns' and p_sort_direction = 'desc' then jsonb_array_length(coalesce(vr.columns_config, '[]'::jsonb)) else null end desc,
     case when p_sort_key = 'documents' and p_sort_direction = 'asc' then rdc.document_count else null end asc,
     case when p_sort_key = 'documents' and p_sort_direction = 'desc' then rdc.document_count else null end desc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'asc' then coalesce(vr.updated_at, vr.created_at) else null end asc,
+    case when p_sort_key = 'updated' and p_sort_direction = 'desc' then coalesce(vr.updated_at, vr.created_at) else null end desc,
     case when p_sort_key = 'created' and p_sort_direction = 'asc' then vr.created_at else null end asc,
     case when p_sort_key = 'created' and p_sort_direction = 'desc' then vr.created_at else null end desc,
     vr.created_at desc,
@@ -3544,6 +3591,7 @@ as $$
 $$;
 
 drop function if exists public.get_tabular_review_ids_overview(text, text, text, text, text, integer, integer);
+drop function if exists public.get_tabular_review_ids_overview(text, text, text, text, text, integer, integer, text);
 create or replace function public.get_tabular_review_ids_overview(
   p_user_id text,
   p_user_email text,
@@ -3552,7 +3600,8 @@ create or replace function public.get_tabular_review_ids_overview(
   p_search_term text,
   p_limit integer,
   p_offset integer,
-  p_workspace text default null
+  p_workspace text default null,
+  p_owner_user_id text default null
 )
 returns table (
   id uuid,
@@ -3572,6 +3621,7 @@ as $$
   from public.tabular_reviews tr
   where (p_project_id is null or tr.project_id::text = p_project_id)
     and public.workspace_matches(p_workspace, tr.org_id)
+    and (p_owner_user_id is null or tr.user_id::text = p_owner_user_id)
     and (
       coalesce(p_scope, 'all') = 'all'
       or (p_scope = 'in-project' and tr.project_id is not null)
@@ -10653,5 +10703,9 @@ insert into public.schema_migrations (filename) values
   ('20261014_06_audit_actor_picker.sql'),
   ('20261014_07_org_lifecycle_review_fixes.sql'),
   ('20261014_08_paginate_organization_audit.sql'),
-  ('20261015_01_document_text_search.sql')
+  ('20261015_01_document_text_search.sql'),
+  ('20261015_02_tabular_review_updated_sort.sql'),
+  ('20261015_03_tabular_review_history_status.sql'),
+  ('20261015_04_tabular_review_creator_filter.sql'),
+  ('20261016_01_tabular_review_generation_activity.sql')
 on conflict (filename) do nothing;

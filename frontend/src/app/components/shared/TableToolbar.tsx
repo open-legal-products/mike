@@ -75,7 +75,7 @@ export function TableToolbar<T extends string>({
             )}
         >
             {(leading || hasItems) && (
-                <div className="-my-2 flex flex-1 items-center gap-1.5 py-2">
+                <div className="-my-2 flex min-w-0 flex-1 items-center gap-1.5 py-2">
                     {leading}
                     {items.map((item) => (
                         <TabPillButtonUI

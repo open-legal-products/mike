@@ -14,7 +14,7 @@ import {
     type SetStateAction,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Columns2, Pencil, Trash2 } from "lucide-react";
+import { Brain, MessageSquare, Pencil, Trash2, X } from "lucide-react";
 import { findPendingAskInput } from "@/app/lib/pendingAskInput";
 import { deleteChat } from "@/app/lib/mikeApi";
 import { loadAssistantChat } from "@/app/lib/assistantTurns";
@@ -188,6 +188,8 @@ interface Props {
     onActivate: () => void;
     /** Offers opening a second chat beside this one. */
     onOpenSideChat?: () => void;
+    /** Offers closing the second chat from the primary chat. */
+    onCloseSideChat?: () => void;
     /** Offers closing this panel. */
     onClose?: () => void;
     /** Quotes a passage of this chat in the chat beside it. */
@@ -235,6 +237,7 @@ export function ProjectChatPanel({
     onActionError,
     onActivate,
     onOpenSideChat,
+    onCloseSideChat,
     onClose,
     onAskInSideChat,
     incomingExcerpt,
@@ -329,7 +332,7 @@ export function ProjectChatPanel({
     const canEditContent = can(projectRole, "content.edit");
     // There is no creator exception on a PROJECT chat. The server derives the
     // caller's whole standing here from the project role
-    // (ensureSharedRowAccess): content.edit to write or rename, and
+    // (ensureSharedRowAccess): content.edit to write, access.manage to rename, and
     // container.delete to delete. Adding "…or I started this thread" to the
     // client made all three gates disagree with the server in both
     // directions — an editor who created the chat was offered a Delete that
@@ -344,14 +347,8 @@ export function ProjectChatPanel({
     // without asserting anything about who the reader is.
     const canSendChat = projectRole === null ? null : canEditContent;
     const canDeleteChat = can(projectRole, "container.delete");
+    const canRenameChat = can(projectRole, "access.manage");
     const composerReady = chatLoaded && projectLoaded && !authLoading;
-    // Rename and Delete are offered by the header menu, whose handlers return
-    // in silence while the role is unknown — deliberately, since accusing
-    // somebody before the payload lands is a guess, but a menu item that
-    // quietly does nothing when clicked is indistinguishable from a broken
-    // one. Disable them for that window, the way the upload button already
-    // does with `!canEditContent`.
-    const roleKnown = projectRole !== null;
     const pendingInitialUserMessageRef = useRef<Message | null>(
         initialMessages.length === 1 && initialMessages[0].role === "user"
             ? initialMessages[0]
@@ -619,8 +616,8 @@ export function ProjectChatPanel({
 
     async function handleRenameChat(nextTitle?: string) {
         if (!activeChatId) return;
-        if (!canEditContent) {
-            if (projectRole) onEditorGate("rename this chat");
+        if (!canRenameChat) {
+            if (projectRole) onOwnerGate("rename this chat");
             return;
         }
         if (nextTitle === undefined) {
@@ -773,8 +770,17 @@ export function ProjectChatPanel({
                                         ? [
                                               {
                                                   label: "Open side chat",
-                                                  icon: Columns2,
+                                                  icon: MessageSquare,
                                                   onSelect: onOpenSideChat,
+                                              },
+                                          ]
+                                        : []),
+                                    ...(onCloseSideChat
+                                        ? [
+                                              {
+                                                  label: "Close side chat",
+                                                  icon: X,
+                                                  onSelect: onCloseSideChat,
                                               },
                                           ]
                                         : []),
@@ -785,7 +791,7 @@ export function ProjectChatPanel({
                                         disabled:
                                             !chatLoaded ||
                                             !activeChatId ||
-                                            !roleKnown,
+                                            !canRenameChat,
                                     },
                                     {
                                         label: "Memory",
@@ -803,15 +809,15 @@ export function ProjectChatPanel({
                                             deletingChat ||
                                             !chatLoaded ||
                                             !activeChatId ||
-                                            !roleKnown,
+                                            !canDeleteChat,
                                         variant: "danger" as const,
                                     },
-                                ].filter((item) =>
-                                    activeChatId
-                                        ? true
-                                        : item.label === "Memory" ||
-                                          item.label === "Open side chat",
-                                )}
+                                ].filter((item) => {
+                                    if (item.label === "Rename") return !!activeChatId && canRenameChat;
+                                    if (item.label === "Delete" || item.label === "Deleting...") return !!activeChatId && canDeleteChat;
+                                    return !!activeChatId || item.label === "Memory" ||
+                                        item.label === "Open side chat" || item.label === "Close side chat";
+                                })}
                             />
                         }
                     />
@@ -962,12 +968,12 @@ export function ProjectChatPanel({
                                 chatKey={activeChatId}
                                 canSend={canSendChat}
                                 chatLoading={!chatLoaded}
-                                onSubmit={(response, content, files) => {
-                                    void handleSubmit(
+                                onSubmit={(response, content, files, onAccepted) =>
+                                    handleSubmit(
                                         { role: "user", content, files },
-                                        { askInputsResponse: response },
-                                    );
-                                }}
+                                        { askInputsResponse: response, onAccepted },
+                                    )
+                                }
                                 onCancel={cancel}
                             >
                                 <ChatInput

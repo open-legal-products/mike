@@ -1,4 +1,6 @@
 import type {
+    TabularReviewHistoryStatus,
+    AuditActor,
     AuditActorPage,
     OrgMemberHandover,
     OrgDepartureList,
@@ -21,6 +23,7 @@ export type {
 
 import { isPanelDocument } from "@/app/components/shared/types";
 import { authenticatedFetch } from "@/app/lib/authEvents";
+import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
 import type { RouterProfileLists } from "@/shared/lib/modelCatalog";
 import {
     markErrorHandled,
@@ -399,16 +402,35 @@ async function toApiError(
 
 export async function listProjects(options?: {
     includeDocuments?: boolean;
+    participatingOnly?: boolean;
+    workspace?: string;
 }): Promise<Project[]> {
-    const query = options?.includeDocuments ? "?include=documents" : "";
+    const params = new URLSearchParams();
+    if (options?.includeDocuments) params.set("include", "documents");
+    if (options?.participatingOnly) params.set("participating", "true");
+    if (options?.workspace) params.set("workspace", options.workspace);
+    // Workspace filters select the paginated backend overload. Pickers still
+    // need the full list, including projects beyond its default first page.
+    if (options?.workspace && !options.participatingOnly) {
+        const projects: Project[] = [];
+        const pageSize = 100;
+        params.set("limit", String(pageSize));
+        for (;;) {
+            params.set("offset", String(projects.length));
+            const page = await apiRequest<Project[]>(`/projects?${params.toString()}`);
+            projects.push(...page);
+            if (page.length < pageSize) return projects;
+        }
+    }
+    const query = params.size ? `?${params.toString()}` : "";
     return apiRequest<Project[]>(`/projects${query}`);
 }
 
 // Paginated overview sibling of listProjects(), used by ProjectsOverview.tsx.
 // Deliberately a separate function, not an overload of listProjects — the
 // backend route decides whether to paginate based on whether any of these
-// query params are present at all, so listProjects() must keep sending none
-// of them (legacy project pickers still need the full unpaginated list).
+// query params are present. Participation pickers keep the full unpaginated
+// list when only the workspace filter is supplied.
 export async function listProjectsPage(pagination?: {
     limit?: number;
     offset?: number;
@@ -546,7 +568,13 @@ export async function listProjectIds(options?: {
 
 export interface ProjectFilterOptions {
     practices: string[];
-    owners: { value: string; label: string }[];
+    owners: {
+        value: string;
+        label: string;
+        display_name?: string | null;
+        email?: string | null;
+        profile_photo?: string | null;
+    }[];
 }
 
 export async function getProjectFilterOptions(
@@ -2879,6 +2907,10 @@ export async function updateLastSelectedChatSettings(payload: {
     });
 }
 
+export async function leaveChat(chatId: string): Promise<void> {
+    await apiRequest(`/chat/${chatId}/leave`, { method: "POST" });
+}
+
 export async function deleteChat(chatId: string): Promise<void> {
     await apiRequest(`/chat/${chatId}`, { method: "DELETE" });
 }
@@ -2992,6 +3024,8 @@ export async function listTabularReviews(
         sortDirection?: "asc" | "desc";
         scope?: "all" | "in-project" | "standalone";
         workspace?: string;
+        includeStatus?: boolean;
+        ownerUserId?: string;
         signal?: AbortSignal;
     },
 ): Promise<TabularReview[]> {
@@ -3006,11 +3040,22 @@ export async function listTabularReviews(
     if (pagination?.scope && pagination.scope !== "all")
         params.set("scope", pagination.scope);
     if (pagination?.workspace) params.set("workspace", pagination.workspace);
+    if (pagination?.includeStatus) params.set("include", "status");
+    if (pagination?.ownerUserId)
+        params.set("owner_user_id", pagination.ownerUserId);
 
     const qs = params.toString() ? `?${params.toString()}` : "";
     return apiRequest<TabularReview[]>(`/tabular-review${qs}`, {
         signal: pagination?.signal,
     });
+}
+
+export async function getTabularReviewHistoryStatuses(
+    ids: string[],
+    signal?: AbortSignal,
+): Promise<TabularReviewHistoryStatus[]> {
+    const params = new URLSearchParams({ ids: ids.join(",") });
+    return apiRequest(`/tabular-review/history-status?${params}`, { signal });
 }
 
 export async function listTabularReviewIds(
@@ -3019,6 +3064,7 @@ export async function listTabularReviewIds(
         search?: string;
         scope?: "all" | "in-project" | "standalone";
         workspace?: string;
+        ownerUserId?: string;
         signal?: AbortSignal;
     },
 ): Promise<{ id: string; user_id: string }[]> {
@@ -3028,12 +3074,22 @@ export async function listTabularReviewIds(
     if (options?.scope && options.scope !== "all")
         params.set("scope", options.scope);
     if (options?.workspace) params.set("workspace", options.workspace);
+    if (options?.ownerUserId) params.set("owner_user_id", options.ownerUserId);
 
     const qs = params.toString() ? `?${params.toString()}` : "";
     return apiRequest<{ id: string; user_id: string }[]>(
         `/tabular-review/ids${qs}`,
         { signal: options?.signal },
     );
+}
+
+/** Everyone who created a review in a project, for its Creator filter. */
+export async function listProjectReviewCreators(
+    projectId: string,
+    signal?: AbortSignal,
+): Promise<AuditActor[]> {
+    const params = new URLSearchParams({ project_id: projectId });
+    return apiRequest(`/tabular-review/creators?${params}`, { signal });
 }
 
 export async function createTabularReview(payload: {
@@ -3050,11 +3106,13 @@ export async function createTabularReview(payload: {
     document_grouping?: "document" | "folder";
     model: string;
 }): Promise<TabularReview> {
-    return apiRequest<TabularReview>("/tabular-review", {
+    const review = await apiRequest<TabularReview>("/tabular-review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
     });
+    notifyTabularReviewsChanged();
+    return review;
 }
 
 export async function getTabularReview(
@@ -3074,11 +3132,13 @@ export async function updateTabularReview(
         model?: string;
     },
 ): Promise<TabularReview> {
-    return apiRequest<TabularReview>(`/tabular-review/${reviewId}`, {
+    const review = await apiRequest<TabularReview>(`/tabular-review/${reviewId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
     });
+    notifyTabularReviewsChanged();
+    return review;
 }
 
 export async function getTabularReviewPeople(
@@ -3166,6 +3226,7 @@ export async function uploadReviewDocument(
 
 export async function deleteTabularReview(reviewId: string): Promise<void> {
     await apiRequest(`/tabular-review/${reviewId}`, { method: "DELETE" });
+    notifyTabularReviewsChanged();
 }
 
 export async function streamTabularGeneration(
@@ -3439,7 +3500,7 @@ export async function regenerateTabularCell(
     // HTTP 202 — regeneration continues in the background
     | { status: "generating" }
 > {
-    return apiRequest(`/tabular-review/${reviewId}/regenerate-cell`, {
+    const result = await apiRequest<Awaited<ReturnType<typeof regenerateTabularCell>>>(`/tabular-review/${reviewId}/regenerate-cell`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3447,6 +3508,8 @@ export async function regenerateTabularCell(
             column_index: columnIndex,
         }),
     });
+    notifyTabularReviewsChanged();
+    return result;
 }
 
 export async function clearTabularCells(
@@ -3458,6 +3521,7 @@ export async function clearTabularCells(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ row_ids: rowIds }),
     });
+    notifyTabularReviewsChanged();
 }
 
 // ---------------------------------------------------------------------------

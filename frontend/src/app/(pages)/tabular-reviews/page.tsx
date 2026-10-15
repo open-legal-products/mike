@@ -26,7 +26,7 @@ import { userFacingApiError } from "@/app/lib/userFacingError";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
-import { useWorkspaceOrgId } from "@/app/contexts/WorkspaceContext";
+import { useWorkspaceOrgId, useWorkspaceParam } from "@/app/contexts/WorkspaceContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { PAGE_HEADER_TITLE_CLASS } from "@/app/components/shared/pageHeaderStyles";
 import type { TableSortDirection } from "@/app/components/shared/TablePrimitive";
@@ -48,6 +48,13 @@ const REVIEW_SCOPES: { id: ReviewScope; label: string }[] = [
 const REVIEW_SCOPE_IDS = REVIEW_SCOPES.map((scope) => scope.id);
 
 export default function TabularReviewsPage() {
+    const workspace = useWorkspaceParam();
+    // Filters, selections and open dialogs belong to the workspace that
+    // supplied their projects and reviews.
+    return <TabularReviewsWorkspacePage key={workspace} workspace={workspace} />;
+}
+
+function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [projects, setProjects] = useState<Project[]>([]);
@@ -88,6 +95,7 @@ export default function TabularReviewsPage() {
         getReviewOwnerId,
     } = usePaginatedTabularReviews({
         projectId: projectFilter ?? undefined,
+        scopeToWorkspace: true,
         search: debouncedSearch,
         selectionKey: search,
         scope: activeScope,
@@ -130,7 +138,7 @@ export default function TabularReviewsPage() {
 
     useEffect(() => {
         let cancelled = false;
-        void listProjects()
+        void listProjects({ workspace })
             .then((loadedProjects) => {
                 if (!cancelled) setProjects(loadedProjects);
             })
@@ -140,7 +148,7 @@ export default function TabularReviewsPage() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [workspace]);
 
 
     const allSelected =

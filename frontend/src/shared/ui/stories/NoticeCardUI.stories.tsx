@@ -1,3 +1,4 @@
+import { Lock } from "lucide-react";
 import { NoticeCardUI, noticeActionClassName } from "@/shared/ui/NoticeCardUI";
 
 const meta = { title: "Shared UI / Notice card" };
@@ -19,5 +20,20 @@ export const Tones = () => (
         />
         <NoticeCardUI tone="success" message="Changes saved" onDismiss={() => {}} />
         <NoticeCardUI tone="info" message="Your export is ready" onDismiss={() => {}} />
+    </div>
+);
+
+export const SupplementaryText = () => (
+    <div className="w-full max-w-[460px]">
+        <NoticeCardUI
+            title="Editors only"
+            message="You need editor access to make changes."
+            icon={<Lock className="h-3.5 w-3.5 text-red-600" aria-hidden />}
+            onDismiss={() => {}}
+        >
+            <p className="mt-1 text-xs text-gray-600">
+                Ask Tom Okafor (tom.okafor@example.test) if you need editor access.
+            </p>
+        </NoticeCardUI>
     </div>
 );

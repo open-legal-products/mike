@@ -5,6 +5,7 @@
 // reconciling the cell grid to the active column set.
 
 import { recordAudit } from "../../lib/audit";
+import type { TabularReviewHistoryStatus } from "@mike/contracts";
 import {
     checkProjectAccess,
     creatorScopedAllowed,
@@ -21,7 +22,7 @@ import {
     findDocumentsOutsideWorkspace,
 } from "../../lib/documentWorkspace";
 import { can, type ProjectRole } from "../../lib/permissions";
-import { loadProfileUsersByEmail } from "../../lib/userLookup";
+import { loadCreatorProfiles, loadProfileUsersByEmail } from "../../lib/userLookup";
 import { type WorkspaceFilter } from "../../lib/workspace";
 import {
     deleteContentGrant,
@@ -342,6 +343,21 @@ export async function syncCellsForReviewRows(
 // `db` and returns a typed result; the route only maps that result onto a
 // status code.
 
+export async function getTabularReviewHistoryStatuses(
+    db: Db,
+    userId: string,
+    userEmail: string | undefined,
+    reviewIds: string[],
+): Promise<TabularResult<TabularReviewHistoryStatus[]>> {
+    const { data, error } = await db.rpc("get_tabular_review_history_status", {
+        p_user_id: userId,
+        p_user_email: userEmail?.trim().toLowerCase() ?? null,
+        p_review_ids: reviewIds,
+    });
+    if (error) return internalFailure(error);
+    return { ok: true, data: data ?? [] };
+}
+
 export type ListReviewsFilters = {
     userId: string;
     userEmail: string | undefined;
@@ -351,6 +367,8 @@ export type ListReviewsFilters = {
     searchTerm: string | null;
     sort: { key: string; direction: string };
     workspace?: WorkspaceFilter;
+    includeStatus?: boolean;
+    ownerUserIdFilter?: string | null;
 };
 
 export async function listTabularReviews(
@@ -363,7 +381,90 @@ export async function listTabularReviews(
         rpcArgs,
     );
     if (error) return internalFailure(error);
-    return { ok: true, data: (data ?? []) as unknown[] };
+    const reviews = (data ?? []) as {
+        id: string;
+        project_id?: string | null;
+        project_name?: string | null;
+        user_id?: string | null;
+        owner_display_name?: string | null;
+        owner_profile_photo?: string | null;
+    }[];
+    // A project's review list shows a Creator column; the cross-project list
+    // does not, so it skips the profile lookup.
+    if (filters.projectIdFilter) {
+        const profileByUserId = await loadCreatorProfiles(db, reviews);
+        for (const review of reviews) {
+            if (!review.user_id) continue;
+            const profile = profileByUserId.get(review.user_id);
+            review.owner_display_name = profile?.display_name ?? null;
+            review.owner_profile_photo = profile?.profile_photo ?? null;
+        }
+    }
+    if (filters.includeStatus && reviews.length) {
+        // Only resolve projects from this authorized page, including those
+        // outside the sidebar's independently paginated Recent Projects list.
+        const projectIds = [...new Set(reviews.flatMap(review => review.project_id ? [review.project_id] : []))];
+        if (projectIds.length) {
+            const { data: projects, error: projectError } = await db
+                .from("projects")
+                .select("id, name")
+                .in("id", projectIds);
+            if (projectError) return internalFailure(projectError);
+            const names = new Map((projects ?? []).map(project => [project.id, project.name]));
+            for (const review of reviews) {
+                review.project_name = review.project_id ? names.get(review.project_id) ?? null : null;
+            }
+        }
+        const result = await getTabularReviewHistoryStatuses(
+            db, filters.userId, filters.userEmail, reviews.map(review => review.id),
+        );
+        if (!result.ok) return result;
+        const byId = new Map(result.data.map(status => [status.id, status]));
+        return { ok: true, data: reviews.map(review => ({ ...review, ...byId.get(review.id) })) };
+    }
+    return { ok: true, data: reviews };
+}
+
+export type ReviewCreator = {
+    user_id: string;
+    display_name: string | null;
+    email: null;
+    profile_photo: string | null;
+};
+
+/**
+ * Everyone who created a review in a project, for its Creator filter. Every
+ * project review inherits the project's access, so a caller who can open the
+ * project can see each of these rows and therefore who made them.
+ */
+export async function listProjectReviewCreators(
+    db: Db,
+    args: { projectId: string; userId: string; userEmail: string | undefined },
+): Promise<TabularResult<ReviewCreator[]>> {
+    const access = await checkProjectAccess(
+        args.projectId,
+        args.userId,
+        args.userEmail,
+        db,
+    );
+    if (!access.ok) return failure("not_found", "Project not found");
+    const { data, error } = await db
+        .from("tabular_reviews")
+        .select("user_id")
+        .eq("project_id", args.projectId)
+        .not("user_id", "is", null);
+    if (error) return internalFailure(error);
+    const rows = (data ?? []) as { user_id: string }[];
+    const profileByUserId = await loadCreatorProfiles(db, rows);
+    const creators = [...new Set(rows.map((row) => row.user_id))].map(
+        (userId) => ({
+            user_id: userId,
+            display_name: profileByUserId.get(userId)?.display_name ?? null,
+            email: null,
+            profile_photo: profileByUserId.get(userId)?.profile_photo ?? null,
+        }),
+    );
+    return { ok: true, data: creators };
 }
 
 // PostgREST enforces its own row cap on every RPC response (db-max-rows),
@@ -385,6 +486,7 @@ export async function listTabularReviewIds(
         scope: TabularReviewScope;
         searchTerm: string | null;
         workspace?: WorkspaceFilter;
+        ownerUserIdFilter?: string | null;
     },
 ): Promise<TabularResult<ReviewIdRow[]>> {
     const ids: ReviewIdRow[] = [];

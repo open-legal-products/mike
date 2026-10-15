@@ -66,6 +66,15 @@ import {
     type TableSortDirection,
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
+import {
+    CreatorLabel,
+    CreatorLabelSkeleton,
+} from "@/app/components/shared/CreatorLabel";
+import {
+    PersonFilter,
+    localPeople,
+    type PersonOption,
+} from "@/app/components/shared/PersonFilter";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
@@ -214,7 +223,16 @@ export function ProjectsOverview() {
 
 
     const practices = filterOptions.practices;
-    const ownerOptions = filterOptions.owners;
+    const ownerPeople = useMemo<PersonOption[]>(
+        () =>
+            filterOptions.owners.map((owner) => ({
+                user_id: owner.value,
+                display_name: owner.display_name ?? owner.label,
+                email: owner.email ?? null,
+                profile_photo: owner.profile_photo ?? null,
+            })),
+        [filterOptions.owners],
+    );
 
     const allSelected =
         visibleProjects.length > 0 &&
@@ -319,13 +337,17 @@ export function ProjectsOverview() {
         />
     );
     const ownerFilterButton = (
-        <TableFilters
+        <PersonFilter
             label="Filter by creator"
-            value={ownerFilter}
-            allLabel="All Creators"
-            widthClassName="w-44"
-            options={ownerOptions}
-            onChange={handleOwnerFilterChange}
+            selectedTitle={(name) => `Created by ${name}`}
+            value={
+                ownerPeople.find((person) => person.user_id === ownerFilter) ??
+                null
+            }
+            onChange={(person) =>
+                handleOwnerFilterChange(person?.user_id ?? null)
+            }
+            loadPeople={localPeople(ownerPeople)}
         />
     );
     const filesFilterButton = (
@@ -619,7 +641,7 @@ export function ProjectsOverview() {
                         </TableHeaderCell>
                         <TableHeaderCell className="w-32">
                             <div className="flex items-center gap-1">
-                                <span>Created by</span>
+                                <span>Creator</span>
                                 {!loading && ownerFilterButton}
                             </div>
                         </TableHeaderCell>
@@ -673,7 +695,7 @@ export function ProjectsOverview() {
                                     <SkeletonLine className="w-20" />
                                 </TableCell>
                                 <TableCell className="w-32">
-                                    <SkeletonLine className="w-16" />
+                                    <CreatorLabelSkeleton className="w-16" />
                                 </TableCell>
                                 <TableCell className="w-24">
                                     <SkeletonLine className="w-8" />
@@ -840,10 +862,15 @@ export function ProjectsOverview() {
                                         )}
                                     </TableCell>
                                     <TableCell className="w-32">
-                                        {getProjectCreatorLabel(
-                                            project,
-                                            user?.id,
-                                        )}
+                                        <CreatorLabel
+                                            label={getProjectCreatorLabel(
+                                                project,
+                                                user?.id,
+                                            )}
+                                            photo={project.owner_profile_photo}
+                                            name={project.owner_display_name}
+                                            email={project.owner_email}
+                                        />
                                     </TableCell>
                                     <TableCell className="w-24">
                                         {project.document_count ?? 0}

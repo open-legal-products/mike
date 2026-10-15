@@ -1,4 +1,5 @@
 import type { Db } from "./supabase";
+import { safeError } from "./safeError";
 
 export type ProfileUserInfo = {
     id: string;
@@ -68,6 +69,49 @@ export async function loadProfileUsersByEmail(
     }
 
     return { userByEmail, userById };
+}
+
+export type CreatorProfile = {
+    display_name: string | null;
+    /** Only lists that already expose creator emails may pass this on. */
+    email: string | null;
+    profile_photo: string | null;
+};
+
+/**
+ * Loads the name and photo of each creator of rows the caller is already
+ * authorized to list, keyed by user ID. A failed lookup only warns: a missing
+ * avatar must never fail the listing that wanted it.
+ */
+export async function loadCreatorProfiles(
+    db: Db,
+    rows: { user_id?: string | null }[],
+): Promise<Map<string, CreatorProfile>> {
+    const byUserId = new Map<string, CreatorProfile>();
+    const userIds = [
+        ...new Set(
+            rows
+                .map((row) => row.user_id)
+                .filter((id): id is string => typeof id === "string" && id.length > 0),
+        ),
+    ];
+    if (userIds.length === 0) return byUserId;
+    const { data, error } = await db
+        .from("user_profiles")
+        .select("user_id, display_name, email, profile_photo")
+        .in("user_id", userIds);
+    if (error) {
+        console.warn("[userLookup] failed to load creator profiles", safeError(error));
+        return byUserId;
+    }
+    for (const row of data ?? []) {
+        byUserId.set(row.user_id as string, {
+            display_name: normalizeDisplayName(row.display_name),
+            email: normalizeEmail(row.email) || null,
+            profile_photo: (row as { profile_photo?: string | null }).profile_photo ?? null,
+        });
+    }
+    return byUserId;
 }
 
 /** Finds public sharing identity fields without exposing an unscoped photo. */

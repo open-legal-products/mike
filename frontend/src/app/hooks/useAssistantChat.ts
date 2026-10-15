@@ -238,6 +238,12 @@ export function useAssistantChat({
       AssistantEvent,
       { type: "ask_inputs_response" }
     >;
+    /**
+     * Called once the server has accepted the turn, before its answer
+     * streams. From then on a dropped connection resumes the server's copy
+     * rather than re-sending, so the caller can let go of what it sent.
+     */
+    onAccepted?: () => void;
   };
 
   /**
@@ -462,7 +468,8 @@ export function useAssistantChat({
       threadKey: threadKeyFor(chatIdRef.current),
       chatId: chatIdRef.current,
       message,
-      opts,
+      // A retry is a new send; the original caller has already moved on.
+      opts: opts && { ...opts, onAccepted: undefined },
       transcriptLength: optimisticResponseEvent
         ? displayMessages.length
         : apiMessagesForTurn.length,
@@ -537,40 +544,45 @@ export function useAssistantChat({
         document_id: f.document_id as string,
       }));
 
+      const openTurn = () =>
+        projectId
+          ? streamProjectChat({
+              projectId,
+              messages: apiMessages,
+              chat_id: sendChatId,
+              model,
+              reasoning,
+              displayed_doc: displayedDoc
+                ? {
+                    filename: displayedDoc.filename,
+                    document_id: displayedDoc.documentId,
+                  }
+                : undefined,
+              attached_documents:
+                attachedDocs.length > 0 ? attachedDocs : undefined,
+              ask_inputs_response: opts?.askInputsResponse,
+              signal: controller.signal,
+            })
+          : streamChat({
+              messages: apiMessages,
+              chat_id: sendChatId,
+              // Where a new chat is filed: the workspace it is started in.
+              org_id: workspaceOrgId,
+              model,
+              reasoning,
+              ask_inputs_response: opts?.askInputsResponse,
+              signal: controller.signal,
+            });
       // The frames go to the turn record (lib/assistantTurnStream), which
       // every hook viewing the thread mirrors. Only this hook's own state
       // and navigation are gated on the request still being its own; a
       // dropped connection is resumed from the server's copy of the turn.
       await readAssistantTurn({
-        open: () =>
-          projectId
-            ? streamProjectChat({
-                projectId,
-                messages: apiMessages,
-                chat_id: sendChatId,
-                model,
-                reasoning,
-                displayed_doc: displayedDoc
-                  ? {
-                      filename: displayedDoc.filename,
-                      document_id: displayedDoc.documentId,
-                    }
-                  : undefined,
-                attached_documents:
-                  attachedDocs.length > 0 ? attachedDocs : undefined,
-                ask_inputs_response: opts?.askInputsResponse,
-                signal: controller.signal,
-              })
-            : streamChat({
-                messages: apiMessages,
-                chat_id: sendChatId,
-                // Where a new chat is filed: the workspace it is started in.
-                org_id: workspaceOrgId,
-                model,
-                reasoning,
-                ask_inputs_response: opts?.askInputsResponse,
-                signal: controller.signal,
-              }),
+        open: async () => {
+          const response = await openTurn();
+          if (response.ok) opts?.onAccepted?.();
+          return response;
+        },
         turn,
         sink,
         cursor,

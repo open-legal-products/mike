@@ -46,6 +46,7 @@ import { teamOrgIdOf } from "../../lib/personalOrgs";
 import { can } from "../../lib/permissions";
 import { generateAssistantChatTitle, logChatTitleFailure } from "./chat.title";
 import { sendInternalError } from "../../lib/httpError";
+import { sendServiceFailure } from "../../lib/serviceResult";
 import { titleModelForChat } from "../../lib/modelSelection";
 import {
     releaseMemoryConversationTurn,
@@ -63,6 +64,8 @@ import {
     listChats,
     prepareChatStream,
     revokeChatAccess,
+    leaveChat,
+    withChatLeaveAccess,
     updateChatSettings,
     updateChatTitle,
 } from "./chat.service";
@@ -171,11 +174,17 @@ chatRouter.get("/:chatId", requireAuth, asyncRoute(async (req, res) => {
     if (!access.ok)
         return void res.status(404).json({ detail: "Chat not found" });
 
+    const leaveAccess = await withChatLeaveAccess(
+        db,
+        [{ ...access.chat, access_role: access.projectRole }],
+        userEmail,
+    );
+    if (!leaveAccess.ok) return void sendServiceFailure(res, leaveAccess);
     const messages = await getChatMessages(db, chatId);
     // access_role/is_owner mirror the project and review detail responses so
     // the client can render per-role affordances instead of re-deriving them.
     res.json({
-        chat: access.chat,
+        chat: { ...access.chat, can_leave: leaveAccess.data[0].can_leave },
         is_owner: access.isCreator,
         access_role: access.projectRole,
         messages,
@@ -184,6 +193,17 @@ chatRouter.get("/:chatId", requireAuth, asyncRoute(async (req, res) => {
         // showing the hidden reservation as "no answer".
         active_turn: getActiveAssistantTurn(chatId),
     });
+}));
+
+// POST /chat/:chatId/leave — revoke only the authenticated recipient.
+chatRouter.post("/:chatId/leave", requireAuth, asyncRoute(async (req, res) => {
+    const result = await leaveChat(createServerSupabase(), {
+        chatId: req.params.chatId,
+        userId: res.locals.userId as string,
+        userEmail: res.locals.userEmail as string | undefined,
+    });
+    if (!result.ok) return void sendServiceFailure(res, result);
+    res.status(204).end();
 }));
 
 // GET /chat/:chatId/turn/:turnId/stream?from=<seq>
@@ -419,9 +439,9 @@ chatRouter.patch("/:chatId", requireAuth, asyncRoute(async (req, res) => {
     const access = await getAccessibleChat(db, { chatId, userId, userEmail });
     if (!access.ok)
         return void res.status(404).json({ detail: "Chat not found" });
-    // Title edits are content collaboration (the same tier that may send
-    // messages into the chat).
-    if (title != null && !can(access.projectRole, "content.edit"))
+    // Managing the chat title belongs to owners; editors can still send
+    // messages and choose the model/reasoning used for their responses.
+    if (title != null && !can(access.projectRole, "access.manage"))
         return void res
             .status(403)
             .json({ detail: "You do not have permission to modify this chat" });

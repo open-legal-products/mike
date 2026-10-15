@@ -67,6 +67,26 @@ function renderTable(selectedChatIds: string[], canCreateChat = true, rows = cha
 }
 
 describe("ProjectAssistantTable row context actions", () => {
+    it.each(["viewer", "editor"] as const)("hides owner actions and Leave for a project %s on every menu", async (role) => {
+        const user = userEvent.setup();
+        renderTable(["chat-1"], true, chats.map((chat) => ({ ...chat, access_role: role })));
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["View"]);
+        await user.keyboard("{Escape}");
+        fireEvent.contextMenu(screen.getByText("First chat"));
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["View"]);
+        await user.keyboard("{Escape}");
+        await user.click(screen.getAllByRole("button", { name: "Open row actions" })[0]);
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["View"]);
+    });
+
+    it("does not offer bulk deletion for a selection containing a non-owner chat", async () => {
+        const user = userEvent.setup();
+        renderTable(["chat-1", "chat-2"], true, [chats[0], { ...chats[1], access_role: "editor" }]);
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        expect(screen.queryByRole("menuitem", { name: /Delete/ })).toBeNull();
+    });
+
     it.each([1, 2])("matches toolbar and right-click actions for %i selected chats", async (count) => {
         const user = userEvent.setup();
         renderTable(chats.slice(0, count).map((chat) => chat.id));
@@ -188,5 +208,31 @@ describe("ProjectAssistantTable row context actions", () => {
         expect(firstSelection).toEqual(["chat-1"]);
         expect(secondUpdate(firstSelection)).toEqual(["chat-1", "chat-2"]);
         expect(onOpenChat).not.toHaveBeenCalled();
+    });
+});
+
+describe("ProjectAssistantTable creator column", () => {
+    it("shows the creator's avatar beside their label", () => {
+        renderTable([], true, [
+            chats[0],
+            { ...chats[1], user_id: "user-2", creator_display_name: "Ada Lovelace" },
+        ]);
+        expect(screen.getByText("Me")).toBeVisible();
+        expect(screen.getAllByRole("img", { name: /User|Ada Lovelace/ })).toHaveLength(2);
+        expect(screen.getByRole("img", { name: "Ada Lovelace" })).toHaveTextContent("AL");
+    });
+});
+
+describe("ProjectAssistantTable creator filter", () => {
+    it("narrows the chats to the chosen creator", async () => {
+        const user = userEvent.setup();
+        renderTable([], true, [
+            chats[0],
+            { ...chats[1], user_id: "user-2", creator_display_name: "Ada Lovelace" },
+        ]);
+        await user.click(screen.getByRole("button", { name: "Filter by creator" }));
+        await user.click(await screen.findByRole("button", { name: /Ada Lovelace/ }));
+        expect(screen.getByText("Second chat")).toBeVisible();
+        expect(screen.queryByText("First chat")).toBeNull();
     });
 });

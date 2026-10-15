@@ -258,6 +258,44 @@ neighbours, never by clipping content:
   primary chat renders, at full width, and the action that opens the side
   chat is not offered. The IDE is a desktop workspace and has no such gate.
 
+The IDE's Open project picker and project switcher list projects in the active
+workspace that the user created or was directly added to, whether public or
+private. Public visibility alone does not make someone a participant. Switching
+workspace clears the picker cache and selection. Inherited organization permissions and
+audited private-content access do not put projects in this picker. The backend
+applies this participation filter to its already-authorized project list.
+The picker and FileDirectory share the compact native `SelectionCheckbox` in
+`components/ui/selection-checkbox.tsx`, including its mixed and disabled states.
+
+The app sidebar's History combines assistant chats and tabular reviews from
+the active workspace, including reviews inside projects. Both sources are
+fetched by last update and merged newest first. Older rows stay buffered until
+both paginated sources reach them, so fetching another page does not reveal
+newer items below older ones. Review rows use the tabular-review SVG icon and
+open the review's project or standalone route. Project reviews prefix their
+title with the project name. Project prefixes and chat Shared labels use the
+same muted `text-gray-400` treatment. Edits and generation starts/completions
+advance review activity and promote it in History; lease heartbeats do not.
+Running reviews show a spinner, including after navigating away. A review
+that finishes successfully while elsewhere shows a tick using the Excel SVG's
+green gradient until
+opened, matching unread chat completion. Failed, stopped, and incomplete
+reviews do not get the completion icon. Status polling reads small authorized
+snapshots only for running reviews; it never downloads their documents.
+Activity refreshes keep the loaded History rows and pagination visible; only
+the affected review's icon changes. A workspace change still clears the old list.
+Review overview project filters, create choices and move destinations also stay
+within their workspace; selecting a project filter must not disable workspace
+scoping. A workspace switch resets those filters and dialogs. Detail pages opened
+by link follow the item's own workspace, with project children inheriting theirs.
+Late list pages and chat creations must not populate a newly selected workspace.
+Chat Share, Rename and Delete actions are visible only to owners. Directly shared
+standalone chats offer Leave to viewers and editors; project chats never offer
+Leave because their access comes from project membership. Audited organization
+access is not a direct sharing grant and does not offer Leave.
+When opening a chat, missing workspace metadata means the detail is still loading;
+only an explicit null organization means Personal. Prefer the matching chat detail
+over a lightweight History row for workspace and attachment scope.
 
 ## Elevation and the glass surface
 
@@ -370,7 +408,7 @@ keep their own spacing and should not receive this attribute.
 | --- | --- | --- |
 | `PillButtonUI` | `shared/ui` | Primary action button (`tone`: black/white/blue/danger). |
 | `TextButtonUI` | `shared/ui` | Background-free actions, with optional icons and loading state. Use `textButtonUIClassName` from `TextButtonUI.styles` for links. No background, border, or shadow; hover changes text color. |
-| `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. |
+| `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. Resting text matches PageHeader actions (`text-gray-500`), with `text-gray-900` on hover or selection. |
 | `GlassIconButtonUI` | `shared/ui` | Circular glass icon button — modal close, panel dismiss. Requires `aria-label`. |
 | `CloseButton` | `shared/ui` | The small white ✕ that dismisses a modal, side panel, confirmation, toast, or `WarningPopup`. `size`: `sm` for side panels, confirmations, and notices; `md` for modals. |
 | `GlassCardUI` | `shared/ui` | Canonical liquid-glass card surface. |
@@ -460,6 +498,10 @@ change to how a notice looks goes in `NoticeCardUI.tsx`, never in one of the
 wrappers; `WarningPopup.test.tsx` fails if a popup and an error toast stop
 rendering the same card. The card's dismiss control is the shared
 `CloseButton`.
+
+The title, message and supplementary content share one text column beside
+the icon. Callers should not add their own left padding to supplementary
+content.
 
 Both appear in one column at the top centre of the page. `ToastViewportUI`
 owns that column, and a `WarningPopup` renders into it, so a popup and a

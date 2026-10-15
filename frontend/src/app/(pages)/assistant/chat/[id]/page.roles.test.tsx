@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Grant-reachable chats appear in the global sidebar since the parity
@@ -105,7 +105,7 @@ vi.mock("@/app/components/assistant/ChatView", () => ({
                 </button>
             </div>
         ) : (
-            <>
+            <div data-testid="primary-chat">
                 <span data-testid="can-send">{String(canSend)}</span>
                 <span data-testid="access-resolved">
                     {String(accessResolved)}
@@ -118,13 +118,18 @@ vi.mock("@/app/components/assistant/ChatView", () => ({
                         Open side chat
                     </button>
                 )}
+                {onCloseSideChat && (
+                    <button type="button" onClick={onCloseSideChat}>
+                        Close side chat
+                    </button>
+                )}
                 <button
                     type="button"
                     onClick={() => onAskInSideChat?.({ text: "a passage" })}
                 >
                     Ask in side chat
                 </button>
-            </>
+            </div>
         ),
 }));
 
@@ -150,7 +155,7 @@ beforeEach(() => {
 });
 
 describe("side chat", () => {
-    it("opens a second chat beside the first, and closes it again", async () => {
+    it.each(["primary-chat", "side-chat"])("opens a second chat and closes it from %s", async (pane) => {
         getChat.mockResolvedValue(chatDetail("owner"));
         render(<AssistantChatPage />);
         expect(screen.queryByTestId("side-chat")).not.toBeInTheDocument();
@@ -177,10 +182,16 @@ describe("side chat", () => {
         expect(window.location.search).toBe("?side=chat-2");
 
         await act(async () => {
-            screen.getByRole("button", { name: "Close side chat" }).click();
+            within(screen.getByTestId(pane))
+                .getByRole("button", { name: "Close side chat" })
+                .click();
         });
         expect(screen.queryByTestId("side-chat")).not.toBeInTheDocument();
         expect(window.location.search).toBe("");
+        expect(window.location.pathname).toBe("/assistant/chat/chat-1");
+        expect(
+            screen.getByRole("button", { name: "Open side chat" }),
+        ).toBeInTheDocument();
     });
 
     it("opens the chat a sidebar row asked for, and clears the request", async () => {

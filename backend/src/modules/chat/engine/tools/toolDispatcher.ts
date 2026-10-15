@@ -4,7 +4,9 @@ import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
 } from "../../../../lib/integrations/googleWorkspace";
-import { safeError } from "../../../../lib/safeError";
+import { logError } from "../../../../lib/log";
+import { diagnosticErrorTags } from "../../../../lib/observability/sentryPrivacy";
+import { documentSearchFailure } from "./documentSearchErrors";
 import { findDocumentText, createDocumentVersions } from "../../../documents/documents.service";
 import {
   getCourtlistenerCases,
@@ -645,10 +647,14 @@ export async function runToolCalls(
         limit: args.limit as number | undefined, offset: args.offset as number | undefined,
       }).catch(internalFailure);
       if (!result.ok) {
-        if (result.kind === "error") devLog("[find_documents] failed", safeError(result.error));
-        finishSearch({ error: "Document search could not be completed. Try again." });
+        const failure = documentSearchFailure(result);
+        logError("find_documents", {
+          category: failure.error_code,
+          ...(result.kind === "error" ? diagnosticErrorTags(result.error) : {}),
+        });
+        finishSearch(failure);
         toolResults.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({
-          ok: false, error: result.kind === "error" ? "Document search is unavailable." : result.detail,
+          ok: false, ...failure,
         }) });
         continue;
       }

@@ -16,6 +16,7 @@ import { type Db } from "../../lib/supabase";
 import { resolveContentOrgId, resolveStandaloneOrgId } from "../../lib/access";
 import { workspaceRpcArg, type WorkspaceFilter } from "../../lib/workspace";
 import { validateAccessibleProjectId } from "./chat.access";
+import { withChatLeaveAccess } from "./chat.sharing";
 
 // ---------------------------------------------------------------------------
 // Non-streaming endpoints
@@ -49,7 +50,10 @@ export async function listChats(
         ...workspaceRpcArg(args.workspace),
     });
     if (error) return { ok: false, error };
-    return { ok: true, data: data ?? [] };
+    const result = await withChatLeaveAccess(db, data ?? [], args.userEmail);
+    if (!result.ok)
+        return { ok: false, error: result.kind === "error" ? result.error : result.detail };
+    return { ok: true, data: result.data };
 }
 
 // POST /chat/create

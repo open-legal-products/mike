@@ -188,13 +188,12 @@ export function HistoryEventModal({
           {
             label: "Performed by",
             value: (
-              <span className="inline-flex max-w-full items-start justify-end gap-2">
+              <span className="flex max-w-full items-center justify-end gap-2">
                 {auditActor(event) !== "System" && (
                   <UserAvatar
                     photo={event.user_profile_photo}
                     name={event.user_display_name}
                     email={event.user_email}
-                    className="mt-0.5"
                   />
                 )}
                 <span className="min-w-0 [overflow-wrap:anywhere]">
@@ -210,7 +209,7 @@ export function HistoryEventModal({
       value:
         ["Member", "Recipient"].includes(subject.type) &&
         subject.name !== "-" ? (
-          <span className="inline-flex max-w-full items-start justify-end gap-2">
+          <span className="flex max-w-full items-center justify-end gap-2">
             <HistorySubjectIcon event={event} />
             <span className="min-w-0 [overflow-wrap:anywhere]">
               {`${subject.name}${subjectEmail && subjectEmail !== subject.name ? ` (${subjectEmail})` : ""}`}
@@ -323,26 +322,28 @@ export function HistoryEventModal({
             <h2 className="font-serif text-2xl text-gray-900 [overflow-wrap:anywhere]">
               {auditAction(event)}
             </h2>
-            <table
-              className="mt-4 w-full table-fixed text-left"
-              aria-label="Event details"
-            >
-              <tbody className="divide-y divide-border">
-                {fields.map(({ label, value }) => (
-                  <tr key={label}>
-                    <th
-                      scope="row"
-                      className="w-1/3 py-2 pr-4 align-top text-xs font-normal text-gray-500 [overflow-wrap:anywhere]"
-                    >
-                      {label}
-                    </th>
-                    <td className="py-2 text-right align-top whitespace-pre-wrap text-sm text-gray-800 [overflow-wrap:anywhere]">
-                      {value}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="mt-4 rounded-xl bg-gray-100 p-4">
+              <table
+                className="w-full table-fixed text-left"
+                aria-label="Event details"
+              >
+                <tbody className="divide-y divide-border">
+                  {fields.map(({ label, value }) => (
+                    <tr key={label}>
+                      <th
+                        scope="row"
+                        className="w-1/3 py-2 pr-4 align-middle text-xs font-normal text-gray-500 [overflow-wrap:anywhere]"
+                      >
+                        {label}
+                      </th>
+                      <td className="py-2 text-right align-middle whitespace-pre-wrap text-sm text-gray-800 [overflow-wrap:anywhere]">
+                        {value}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             <details className="group mt-5">
               <summary className="flex cursor-pointer list-none items-center gap-2 rounded text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 [&::-webkit-details-marker]:hidden">
                 <ChevronDown
@@ -351,42 +352,44 @@ export function HistoryEventModal({
                 />
                 Technical details
               </summary>
-              <table
-                className="mt-3 w-full table-fixed text-left"
-                aria-label="Technical details"
-              >
-                <tbody className="divide-y divide-border">
-                  {Object.entries({
-                    "Event ID": event.id,
-                    "Event code": event.action,
-                    "Recorded title": event.title,
-                    "Organization ID": event.org_id,
-                    "Project ID": event.project_id,
-                    "Document ID": event.document_id,
-                    "Chat ID": event.chat_id,
-                    "Review ID": event.review_id,
-                    ...(event.detail && Object.keys(event.detail).length
-                      ? { Metadata: event.detail }
-                      : {}),
-                  })
-                    .filter(([, value]) => value != null)
-                    .map(([label, value]) => (
-                      <tr key={label}>
-                        <th
-                          scope="row"
-                          className="w-1/3 py-2 pr-4 align-top text-xs font-normal text-gray-500 [overflow-wrap:anywhere]"
-                        >
-                          {label}
-                        </th>
-                        <td className="py-2 text-right align-top whitespace-pre-wrap text-xs text-gray-700 [overflow-wrap:anywhere]">
-                          {typeof value === "object"
-                            ? JSON.stringify(value, null, 2)
-                            : String(value)}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
+              <div className="mt-3 rounded-xl bg-gray-100 p-4">
+                <table
+                  className="w-full table-fixed text-left"
+                  aria-label="Technical details"
+                >
+                  <tbody className="divide-y divide-border">
+                    {Object.entries({
+                      "Event ID": event.id,
+                      "Event code": event.action,
+                      "Recorded title": event.title,
+                      "Organization ID": event.org_id,
+                      "Project ID": event.project_id,
+                      "Document ID": event.document_id,
+                      "Chat ID": event.chat_id,
+                      "Review ID": event.review_id,
+                      ...(event.detail && Object.keys(event.detail).length
+                        ? { Metadata: event.detail }
+                        : {}),
+                    })
+                      .filter(([, value]) => value != null)
+                      .map(([label, value]) => (
+                        <tr key={label}>
+                          <th
+                            scope="row"
+                            className="w-1/3 py-2 pr-4 align-top text-xs font-normal text-gray-500 [overflow-wrap:anywhere]"
+                          >
+                            {label}
+                          </th>
+                          <td className="py-2 text-right align-top whitespace-pre-wrap text-xs text-gray-700 [overflow-wrap:anywhere]">
+                            {typeof value === "object"
+                              ? JSON.stringify(value, null, 2)
+                              : String(value)}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
             </details>
           </div>
         )}

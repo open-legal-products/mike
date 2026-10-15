@@ -13,6 +13,7 @@ import type { Document, LibraryFolder, Project } from "./types";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { ProjectSvgIcon, SubfolderSvgIcon } from "./FolderSvgIcon";
 import { SearchBar } from "@/app/components/ui/search-bar";
+import { SelectionCheckbox as DirectorySelectionCheckbox } from "@/app/components/ui/selection-checkbox";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
 import { SkeletonLine } from "./TablePrimitive";
 import { TableLoadMoreRow } from "./TableLoadMoreRow";
@@ -37,8 +38,6 @@ const DIRECTORY_GRID_CLASS =
     "grid grid-cols-[14px_14px_minmax(0,1fr)_48px_84px_64px] items-center gap-2";
 const DIRECTORY_ROW_ACTION_CLASS =
     "col-span-5 grid min-w-0 grid-cols-[14px_minmax(0,1fr)_48px_84px_64px] items-center gap-2 text-left";
-const DIRECTORY_CHECKBOX_CLASS =
-    "h-2.5 w-2.5 shrink-0 justify-self-center cursor-pointer rounded border-gray-200 accent-black disabled:cursor-not-allowed";
 
 const DIRECTORY_TABS: { value: DirectoryTab; label: string }[] = [
     { value: "files", label: "Documents" },
@@ -58,41 +57,6 @@ const EMPTY_LEVEL_STATE: Record<
   Record<string, boolean>
 > = { files: {}, templates: {} };
 const DIRECTORY_SEARCH_PAGE_SIZE = 40;
-
-function DirectorySelectionCheckbox({
-  checked,
-  disabled,
-  indeterminate,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  disabled: boolean;
-  indeterminate: boolean;
-  label: string;
-  onChange: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.indeterminate = indeterminate;
-    }
-  }, [indeterminate]);
-
-  return (
-    <input
-      ref={inputRef}
-      type="checkbox"
-      checked={checked}
-      disabled={disabled}
-      onChange={onChange}
-      aria-checked={indeterminate ? "mixed" : checked}
-      aria-label={label}
-      className={DIRECTORY_CHECKBOX_CLASS}
-    />
-  );
-}
 
 function mergeDirectoryRows<T extends { id: string }>(current: T[], next: T[]) {
   const rows = new Map(current.map((row) => [row.id, row]));

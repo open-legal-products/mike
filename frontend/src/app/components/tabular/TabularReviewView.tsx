@@ -93,6 +93,7 @@ import {
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { LIQUID_GLASS_SUBTLE_CLASS } from "@/app/components/ui/liquid-surface";
 import { ModelToggle } from "../assistant/ModelToggle";
 import {
     type NoModelsReason,
@@ -100,6 +101,7 @@ import {
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";
+import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
 
 interface Props {
     reviewId: string;
@@ -114,6 +116,11 @@ export function TRView({ reviewId, projectId }: Props) {
     );
     const { setSidebarOpen } = useSidebar();
     const [review, setReview] = useState<TabularReview | null>(null);
+    // Generation and row/column edits can update the review outside PATCH.
+    // Refresh History when the authoritative detail reports new activity.
+    useEffect(() => {
+        if (review?.updated_at) notifyTabularReviewsChanged();
+    }, [review?.id, review?.updated_at]);
     // Opening a review opens its workspace. One in a project follows its
     // project, which says so itself.
     useItemWorkspace(
@@ -297,18 +304,6 @@ export function TRView({ reviewId, projectId }: Props) {
                         if (!cancelled) setProjectLoadWarning(true);
                     }),
             );
-        } else {
-            fetches.push(
-                listProjects()
-                    .then((loaded) => {
-                        if (!cancelled) setAvailableProjects(loaded);
-                    })
-                    .catch(() => {
-                        if (!cancelled) {
-                            setAvailableProjects([]);
-                        }
-                    }),
-            );
         }
         Promise.all(fetches).finally(() => {
             if (!cancelled) setLoading(false);
@@ -317,6 +312,25 @@ export function TRView({ reviewId, projectId }: Props) {
             cancelled = true;
         };
     }, [reviewId, projectId]);
+
+    // A review opened by link may change the active workspace. Its move
+    // destinations follow the review itself, including while that switch loads.
+    const reviewWorkspace = review?.id === reviewId
+        ? (review.org_id ?? PERSONAL_WORKSPACE)
+        : undefined;
+    useEffect(() => {
+        let cancelled = false;
+        setAvailableProjects([]);
+        if (projectId || reviewWorkspace === undefined) return;
+        void listProjects({ workspace: reviewWorkspace })
+            .then((loaded) => {
+                if (!cancelled) setAvailableProjects(loaded);
+            })
+            .catch(() => {
+                if (!cancelled) setAvailableProjects([]);
+            });
+        return () => { cancelled = true; };
+    }, [projectId, reviewWorkspace]);
 
     function getNextColumnIndex() {
         return (
@@ -562,6 +576,9 @@ export function TRView({ reviewId, projectId }: Props) {
                     ? { ...prev, status: "done" as const, content: result }
                     : null,
             );
+            await refreshAfterGeneration().catch((err) =>
+                console.error("Failed to refresh the regenerated review", err),
+            );
         } catch (err) {
             if (
                 err instanceof MikeApiError &&
@@ -584,7 +601,7 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    async function refreshAfterStoppedGeneration() {
+    async function refreshAfterGeneration() {
         for (let attempt = 0; attempt < 40; attempt += 1) {
             const detail = await getTabularReview(reviewId);
             if (!detail.review.is_running) {
@@ -692,17 +709,20 @@ export function TRView({ reviewId, projectId }: Props) {
             if (!response.ok) {
                 throw new Error(`Resume failed: ${response.status}`);
             }
+            notifyTabularReviewsChanged();
             await consumeGenerationStream(response);
+            if (ownedAbort && !ownedAbort.signal.aborted) await refreshAfterGeneration();
         } catch (err) {
             if (!ownedAbort?.signal.aborted) throw err;
         } finally {
             resumeStreamOpenRef.current = false;
+            notifyTabularReviewsChanged();
             if (ownedAbort && generationAbortRef.current === ownedAbort)
                 generationAbortRef.current = null;
             if (ownsToolbar) {
                 if (stopRequestedRef.current) {
                     try {
-                        await refreshAfterStoppedGeneration();
+                        await refreshAfterGeneration();
                     } catch (err) {
                         console.error(
                             "Failed to refresh the stopped tabular review",
@@ -755,6 +775,7 @@ export function TRView({ reviewId, projectId }: Props) {
         setStoppingGeneration(false);
         setGenerating(true);
 
+        let generationStarted = false;
         try {
             const response = await streamTabularGeneration(
                 reviewId,
@@ -789,6 +810,8 @@ export function TRView({ reviewId, projectId }: Props) {
                 );
             }
             if (!response.body) throw new Error("No body");
+            generationStarted = true;
+            notifyTabularReviewsChanged();
 
             // Optimistically set empty/pending/error cells to generating (skip done cells)
             setCells((prev) =>
@@ -842,13 +865,14 @@ export function TRView({ reviewId, projectId }: Props) {
                 console.error("Generation failed", err);
             }
         } finally {
+            notifyTabularReviewsChanged();
             if (generationAbortRef.current === generationAbort) {
-                if (stopRequestedRef.current) {
+                if (stopRequestedRef.current || (generationStarted && !generationAbort.signal.aborted)) {
                     try {
-                        await refreshAfterStoppedGeneration();
+                        await refreshAfterGeneration();
                     } catch (err) {
                         console.error(
-                            "Failed to refresh the stopped tabular review",
+                            "Failed to refresh the tabular review after generation",
                             err,
                         );
                     }
@@ -871,7 +895,7 @@ export function TRView({ reviewId, projectId }: Props) {
         if (!requireContent("change the tabular review model")) return;
         const updated = await updateTabularReview(reviewId, { model });
         setReview((current) =>
-            current ? { ...current, model: updated.model } : current,
+            current ? { ...current, ...updated } : current,
         );
     }
 
@@ -1116,6 +1140,9 @@ export function TRView({ reviewId, projectId }: Props) {
         setActionsOpen(false);
         try {
             await clearTabularCells(reviewId, rowIds);
+            await refreshAfterGeneration().catch((err) =>
+                console.error("Failed to refresh the cleared review", err),
+            );
         } catch (err) {
             if (
                 err instanceof MikeApiError &&
@@ -1403,20 +1430,19 @@ export function TRView({ reviewId, projectId }: Props) {
                                 onChange: setSearch,
                                 placeholder: "Search rows…",
                             },
-                            !projectId
-                                ? {
-                                      onClick: () => setAccessModalOpen(true),
-                                      disabled: loading,
-                                      iconOnly: true,
-                                      title: "Access",
-                                      icon: <Users className="h-4 w-4" />,
-                                  }
-                                : null,
                             {
                                 type: "custom",
                                 render: (
                                     <HeaderActionsMenu
                                         items={[
+                                            ...(!projectId
+                                                ? [{
+                                                      label: "Access",
+                                                      icon: Users,
+                                                      onSelect: () => setAccessModalOpen(true),
+                                                      disabled: loading,
+                                                  }]
+                                                : []),
                                             {
                                                 label: "Edit details",
                                                 icon: Pencil,
@@ -1469,9 +1495,107 @@ export function TRView({ reviewId, projectId }: Props) {
                         {
                             actions: [
                                 {
-                                    type: "custom",
-                                    render: (
+                                    onClick: () => {
+                                        if (!chatOpen) setSidebarOpen(false);
+                                        if (chatOpen) setSelectedChatId(null);
+                                        setChatOpen((v) => !v);
+                                    },
+                                    disabled:
+                                        loading ||
+                                        columns.length === 0 ||
+                                        rows.length === 0,
+                                    title: chatOpen
+                                        ? "Close chat"
+                                        : "Open chat",
+                                    icon: chatOpen ? (
+                                        <MessageSquareX className="h-4 w-4" />
+                                    ) : (
+                                        <MessageSquare className="h-4 w-4" />
+                                    ),
+                                    label: (
+                                        <span className="hidden sm:inline">
+                                            Chat
+                                        </span>
+                                    ),
+                                },
+                            ],
+                        },
+                    ]}
+                />
+
+                {/* Toolbar + table column, chat panel beside it */}
+                <div className="flex flex-1 overflow-hidden">
+                    {/* On mobile the chat panel replaces the table entirely */}
+                    <div
+                        className={`flex flex-1 flex-col overflow-hidden ${
+                            chatOpen ? "max-md:hidden" : ""
+                        }`}
+                    >
+                        <TableToolbar
+                            className="h-auto min-h-10 shrink-0"
+                            leading={
+                                <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                                    <fieldset
+                                        disabled={loading}
+                                        aria-label="Review generation"
+                                        // The group owns the glass surface; its buttons only add hover states.
+                                        className={[
+                                            `flex h-7 min-w-0 max-w-full items-center rounded-full p-0 ${LIQUID_GLASS_SUBTLE_CLASS}`,
+                                            "[&_[data-slot=tab-pill-button]]:[--liquid-glass-shadow-subtle:none]",
+                                            "[&_[data-slot=tab-pill-button]]:[--liquid-glass-background-subtle:transparent]",
+                                            "[&_[data-slot=tab-pill-button]]:[--liquid-glass-border-subtle:transparent]",
+                                        ].join(" ")}
+                                    >
+                                        <ModelToggle
+                                            toolbar
+                                            tone="default"
+                                            triggerClassName="rounded-r-none"
+                                            value={tabularModel}
+                                            onChange={(model) =>
+                                                void handleReviewModelChange(
+                                                    model,
+                                                )
+                                            }
+                                            apiKeys={apiKeys}
+                                            apiKeysLoading={
+                                                profileLoading && !profile
+                                            }
+                                            routerSelections={
+                                                modelRouterSelections
+                                            }
+                                            onNoModelsClick={setNoModelsWarning}
+                                        />
+                                        <TabPillButtonUI
+                                            onClick={generating ? handleStopGeneration : handleGenerate}
+                                            disabled={
+                                                loading ||
+                                                stoppingGeneration ||
+                                                columns.length === 0 ||
+                                                rows.length === 0 ||
+                                                savingColumnsConfig
+                                            }
+                                            title={
+                                                stoppingGeneration
+                                                    ? "Stopping generation"
+                                                    : generating
+                                                      ? "Stop generation"
+                                                      : "Run review"
+                                            }
+                                            className="shrink-0 whitespace-nowrap rounded-l-none"
+                                        >
+                                            {stoppingGeneration ? (
+                                                <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                                            ) : generating ? (
+                                                <Square aria-hidden="true" className="h-3.5 w-3.5" />
+                                            ) : (
+                                                <Play aria-hidden="true" className="h-3.5 w-3.5" />
+                                            )}
+                                            {stoppingGeneration ? "Stopping…" : generating ? "Stop" : "Run"}
+                                        </TabPillButtonUI>
+                                    </fieldset>
+                                    <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                                         <DocumentUploadMenu
+                                            toolbar
                                             onSavedFiles={() => {
                                                 // Same pre-modal gate as
                                                 // openNewReview: stop viewers
@@ -1511,134 +1635,26 @@ export function TRView({ reviewId, projectId }: Props) {
                                                     0
                                             }
                                         />
-                                    ),
-                                },
-                            ],
-                        },
-                        {
-                            actions: [
-                                {
-                                    type: "custom",
-                                    render: (
-                                        <ModelToggle
-                                            tone="default"
-                                            value={tabularModel}
-                                            onChange={(model) =>
-                                                void handleReviewModelChange(
-                                                    model,
-                                                )
-                                            }
-                                            apiKeys={apiKeys}
-                                            apiKeysLoading={
-                                                profileLoading && !profile
-                                            }
-                                            routerSelections={
-                                                modelRouterSelections
-                                            }
-                                            onNoModelsClick={setNoModelsWarning}
-                                        />
-                                    ),
-                                },
-                                {
-                                    onClick: generating
-                                        ? handleStopGeneration
-                                        : handleGenerate,
-                                    disabled:
-                                        stoppingGeneration ||
-                                        columns.length === 0 ||
-                                        rows.length === 0 ||
-                                        savingColumnsConfig,
-                                    title: stoppingGeneration
-                                        ? "Stopping generation"
-                                        : generating
-                                          ? "Stop generation"
-                                          : "Run review",
-                                    icon: stoppingGeneration ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : generating ? (
-                                        <Square className="h-3.5 w-3.5" />
-                                    ) : (
-                                        <Play className="h-4 w-4" />
-                                    ),
-                                    label: (
-                                        <span className="hidden sm:inline">
-                                            {stoppingGeneration
-                                                ? "Stopping…"
-                                                : generating
-                                                  ? "Stop"
-                                                  : "Run"}
-                                        </span>
-                                    ),
-                                },
-                            ],
-                        },
-                        {
-                            actions: [
-                                {
-                                    onClick: () => {
-                                        if (!chatOpen) setSidebarOpen(false);
-                                        if (chatOpen) setSelectedChatId(null);
-                                        setChatOpen((v) => !v);
-                                    },
-                                    disabled:
-                                        loading ||
-                                        columns.length === 0 ||
-                                        rows.length === 0,
-                                    title: chatOpen
-                                        ? "Close chat"
-                                        : "Open chat",
-                                    icon: chatOpen ? (
-                                        <MessageSquareX className="h-4 w-4" />
-                                    ) : (
-                                        <MessageSquare className="h-4 w-4" />
-                                    ),
-                                    label: (
-                                        <span className="hidden sm:inline">
-                                            Chat
-                                        </span>
-                                    ),
-                                },
-                            ],
-                        },
-                    ]}
-                />
-
-                {/* Toolbar + table column, chat panel beside it */}
-                <div className="flex flex-1 overflow-hidden">
-                    {/* On mobile the chat panel replaces the table entirely */}
-                    <div
-                        className={`flex flex-1 flex-col overflow-hidden ${
-                            chatOpen ? "max-md:hidden" : ""
-                        }`}
-                    >
-                        <TableToolbar
-                            items={[]}
-                            active="table"
-                            onChange={() => undefined}
-                            actions={
-                                <div className="flex items-center gap-1.5">
-                                    {loading ? (
-                                        <div className="h-3 w-24 rounded bg-gray-100 animate-pulse" />
-                                    ) : null}
-                                    {!loading && selectedRowIds.length > 0 && (
-                                        <SelectionActionsMenu
-                                            open={actionsOpen}
-                                            onOpenChange={setActionsOpen}
-                                            renderItems={(close) => renderReviewRowActions(selectedRowIds, close)}
-                                        />
-                                    )}
-                                    {!loading && (
-                                        <TabPillButtonUI
-                                            onClick={openAddColumns}
-                                            disabled={
-                                                savingColumn ||
-                                                savingColumnsConfig
-                                            }
-                                        >
-                                            <Plus className="h-3.5 w-3.5" />
-                                            Add Columns
-                                        </TabPillButtonUI>
-                                    )}
+                                        {loading ? (
+                                            <div className="h-7 w-28 animate-pulse rounded-full bg-gray-100" />
+                                        ) : (
+                                            <TabPillButtonUI
+                                                onClick={openAddColumns}
+                                                disabled={savingColumn || savingColumnsConfig}
+                                                className="pl-2"
+                                            >
+                                                <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                                                Add Columns
+                                            </TabPillButtonUI>
+                                        )}
+                                        {!loading && selectedRowIds.length > 0 && (
+                                            <SelectionActionsMenu
+                                                open={actionsOpen}
+                                                onOpenChange={setActionsOpen}
+                                                renderItems={(close) => renderReviewRowActions(selectedRowIds, close)}
+                                            />
+                                        )}
+                                    </div>
                                 </div>
                             }
                         />

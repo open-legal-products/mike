@@ -14,9 +14,11 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
     ArrowDown,
-    Columns2,
     History,
-    PanelRight,
+    LogOut,
+    MessageSquare,
+    PanelRightClose,
+    PanelRightOpen,
     Pencil,
     Plus,
     Trash2,
@@ -43,6 +45,7 @@ import {
 } from "./useAssistantDocumentPanel";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { ChatAccessModal } from "./ChatAccessModal";
+import { LeaveChatPopup } from "./LeaveChatPopup";
 import type {
     AssistantEvent,
     Chat,
@@ -99,6 +102,7 @@ interface Props {
                 AssistantEvent,
                 { type: "ask_inputs_response" }
             >;
+            onAccepted?: () => void;
         },
     ) => Promise<string | null>;
     /** Stop control: aborts the turn in flight. */
@@ -159,7 +163,7 @@ interface ColumnProps extends Props {
     onLoadChat?: (chatId: string) => void;
     /** The chat in the other column, which the history list leaves out. */
     hiddenChatId?: string | null;
-    /** Makes this the side chat, and offers closing it. */
+    /** Offers closing the side chat from either column. */
     onCloseSideChat?: () => void;
     /** This column's share of the width when two chats split the page. */
     widthShare?: number;
@@ -226,7 +230,9 @@ export function AssistantChatColumn({
         tabs,
         activeTabId,
         upsertTab,
+        panelVisible,
         show: showPanel,
+        closeAllTabs: closePanel,
         reloadingDocIds,
         reloadingEditIds,
         resolvedEditStatuses,
@@ -238,7 +244,7 @@ export function AssistantChatColumn({
         setActivePane,
     } = documentPanel;
     const columnRef = useRef<HTMLDivElement>(null);
-    const isSideChat = !!onCloseSideChat;
+    const isSideChat = paneId === "side";
     // The header actions render twice (in the column, and in the page chrome
     // on a small screen); the history menu opens on the one that asked.
     const [historyOpenIn, setHistoryOpenIn] = useState<
@@ -274,6 +280,7 @@ export function AssistantChatColumn({
         message?: string;
     } | null>(null);
     const [renameOpen, setRenameOpen] = useState(false);
+    const [leaveChatId, setLeaveChatId] = useState<string | null>(null);
     const [renaming, setRenaming] = useState(false);
     const [actionError, setActionError] = useState<{
         title: string;
@@ -290,16 +297,22 @@ export function AssistantChatColumn({
     } = useChatHistoryContext();
     const activeChat =
         (chatId ? chats?.find((entry) => entry.id === chatId) : null) ??
-        chat ??
+        (chat?.id === chatId ? chat : null) ??
         null;
-    const activeChatRole = activeChat ? roleFrom(activeChat) : null;
+    const permissionChat = chat?.id === chatId ? chat : activeChat;
+    const activeChatRole = permissionChat ? roleFrom(permissionChat) : null;
+    const canLeaveChat = permissionChat?.can_leave === true && permissionChat.project_id === null && activeChatRole !== "owner";
     // Where documents attached here come from and are uploaded to: the
     // workspace a chat started on its own belongs to. A project chat follows
     // its project, and a chat not yet begun the active workspace — neither
     // is said here.
+    // Overview/optimistic rows may omit org_id. Undefined means we are still
+    // waiting, not Personal (explicit null). Prefer the matching detail for
+    // workspace metadata while keeping optimistic history titles above.
+    const workspaceChat = chat?.id === chatId ? chat : activeChat;
     const attachmentOrgId =
-        activeChat && !activeChat.project_id
-            ? (activeChat.org_id ?? null)
+        workspaceChat && !workspaceChat.project_id
+            ? workspaceChat.org_id
             : undefined;
     // Opening a chat opens its workspace. The chat beside it follows along:
     // two chats on one page cannot each decide where the page is.
@@ -710,10 +723,10 @@ export function AssistantChatColumn({
 
     const handleRenameChat = async () => {
         if (!activeChat) return;
-        if (!can(activeChatRole, "content.edit")) {
+        if (!can(activeChatRole, "access.manage")) {
             setActionGate({
                 action: "rename this chat",
-                requiredRole: "editor",
+                requiredRole: "owner",
             });
             return;
         }
@@ -764,7 +777,7 @@ export function AssistantChatColumn({
         }
     };
 
-    const chatActionItems: HeaderActionsMenuItem[] = [
+    const chatActionItems: HeaderActionsMenuItem[] = can(activeChatRole, "access.manage") ? [
         {
             label: "Share",
             icon: Users,
@@ -784,7 +797,11 @@ export function AssistantChatColumn({
             disabled: !activeChat,
             variant: "danger",
         },
-    ];
+    ] : canLeaveChat ? [{
+        label: "Leave",
+        icon: LogOut,
+        onSelect: () => setLeaveChatId(permissionChat?.id ?? null),
+    }] : [];
 
     const renderChatHeaderActions = (mobile = false) => {
         const slot = mobile ? "mobile" : "desktop";
@@ -858,16 +875,18 @@ export function AssistantChatColumn({
                               ]
                             : []),
                         {
-                            label: "Open side panel",
-                            icon: PanelRight,
-                            onSelect: showPanel,
+                            label: panelVisible
+                                ? "Close side panel"
+                                : "Open side panel",
+                            icon: panelVisible ? PanelRightClose : PanelRightOpen,
+                            onSelect: panelVisible ? closePanel : showPanel,
                         },
                         // Two chats need a wide page.
                         ...(onOpenSideChat && !mobile
                             ? [
                                   {
                                       label: "Open side chat",
-                                      icon: Columns2,
+                                      icon: MessageSquare,
                                       onSelect: onOpenSideChat,
                                   },
                               ]
@@ -1223,10 +1242,10 @@ export function AssistantChatColumn({
                                             chatKey={chatId}
                                             canSend={canSend}
                                             chatLoading={chatLoading}
-                                            onSubmit={(response, content, files) =>
+                                            onSubmit={(response, content, files, onAccepted) =>
                                                 handleChat(
                                                     { role: "user", content, files },
-                                                    { askInputsResponse: response },
+                                                    { askInputsResponse: response, onAccepted },
                                                 )
                                             }
                                             onCancel={cancel}
@@ -1303,6 +1322,15 @@ export function AssistantChatColumn({
                 } was rejected. If it is your own key, check it in Settings; otherwise contact your administrator.`}
                 onClose={() => onDismissInvalidApiKey?.()}
             />
+            {leaveChatId && leaveChatId === permissionChat?.id && <LeaveChatPopup
+                key={permissionChat.id}
+                chatId={permissionChat.id}
+                onClose={() => setLeaveChatId(null)}
+                onLeft={() => {
+                    if (onChatDeleted) onChatDeleted();
+                    else router.push("/assistant");
+                }}
+            />}
             <RenameModal
                 open={renameOpen}
                 breadcrumbs={["Assistant", "Rename Chat"]}

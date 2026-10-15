@@ -8,7 +8,7 @@ import ProjectAssistantChatPage from "./page";
 //
 //   1. Who is offered what. The server derives the caller's whole standing
 //      here from the project role (ensureSharedRowAccess): delete needs
-//      container.delete, rename and send need content.edit. The page used to
+//      container.delete, rename needs access.manage and send needs content.edit. The page used to
 //      add "…or I created this chat", which disagreed with the server in both
 //      directions — an editor who started the thread was offered a Delete that
 //      came back 403, a project owner who did not start it was refused one the
@@ -190,7 +190,7 @@ async function renderPage() {
             </Suspense>,
         );
     });
-    await screen.findByText("Rename");
+    await screen.findByText("Memory");
 }
 
 beforeEach(() => {
@@ -201,19 +201,11 @@ beforeEach(() => {
 });
 
 describe("project chat page — the project ladder, not the creator", () => {
-    it("refuses an editor the delete of a chat they created themselves", async () => {
-        // The headline reversal. content.edit does not reach
-        // container.delete, and the server would answer 403 — so the client
-        // must not fire the request at all.
+    it("hides Rename, Delete and Leave for an editor, including their own chat", async () => {
         getProject.mockResolvedValue(project("editor"));
         await renderPage();
-        await waitFor(() =>
-            expect(screen.getByTestId("can-send")).toHaveTextContent("true"),
-        );
-
-        fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-
-        await screen.findByText("Owner-only action");
+        await screen.findByTestId("can-send");
+        for (const name of ["Rename", "Delete", "Leave"]) expect(screen.queryByRole("button", { name })).toBeNull();
         expect(deleteChat).not.toHaveBeenCalled();
     });
 
@@ -241,42 +233,20 @@ describe("project chat page — the project ladder, not the creator", () => {
         );
     });
 
-    it("refuses a viewer's rename at the editor tier, not the owner one", async () => {
+    it("hides Rename, Delete and Leave for a viewer", async () => {
         getProject.mockResolvedValue(project("viewer"));
         await renderPage();
-
-        fireEvent.click(screen.getByRole("button", { name: "Rename" }));
-
-        expect(await screen.findByText("Editors only")).toBeInTheDocument();
+        await screen.findByTestId("can-send");
+        for (const name of ["Rename", "Delete", "Leave"]) expect(screen.queryByRole("button", { name })).toBeNull();
         expect(renameChatInHistory).not.toHaveBeenCalled();
-        // The refusal comes before the inline editor opens, so a viewer never
-        // gets a title field to type a rename into.
-        expect(
-            screen.queryByLabelText("Chat title"),
-        ).not.toBeInTheDocument();
     });
 
-    it("raises no refusal while the project role is still unknown", async () => {
-        // `roleFromLoaded(null)` is "not known", not "not allowed". Telling
-        // somebody they lack a role before the payload lands is a guess.
+    it("hides management actions while the project role is unknown", async () => {
         getProject.mockReturnValue(new Promise(() => {}));
         await renderPage();
-
-        fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-
-        await waitFor(() => expect(deleteChat).not.toHaveBeenCalled());
-        expect(screen.queryByText("Owner-only action")).not.toBeInTheDocument();
-    });
-
-    it("disables Rename and Delete while the project role is unknown", async () => {
-        // Silence was the right answer to "should we accuse them?" and the
-        // wrong one to "what does this menu item do?": clicking did nothing,
-        // with no refusal and no disabled state, which reads as broken.
-        getProject.mockReturnValue(new Promise(() => {}));
-        await renderPage();
-
-        expect(screen.getByRole("button", { name: "Rename" })).toBeDisabled();
-        expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+        expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+        expect(screen.queryByText("Owner-only action")).toBeNull();
     });
 
     it("re-enables them once the role arrives", async () => {

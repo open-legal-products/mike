@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { CheckSquare } from "@/app/components/ui/check-square";
+import { SelectionCheckbox } from "@/app/components/ui/selection-checkbox";
 import { SearchBar } from "@/app/components/ui/search-bar";
 import { ClosedProjectSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import type { Project } from "../shared/types";
@@ -16,6 +16,7 @@ type PrimaryAction = Omit<
     "className"
 > & {
     label: ReactNode;
+    variant?: "primary" | "blue";
 };
 
 interface Props {
@@ -71,7 +72,7 @@ export function ProjectPickerModal({
                                 key={i}
                                 className="flex items-center gap-2 rounded-md px-2 py-2"
                             >
-                                <div className="h-3.5 w-3.5 rounded border border-gray-200 shrink-0" />
+                                <div className="h-2.5 w-2.5 rounded border border-gray-200 shrink-0" />
                                 <div className="h-3.5 w-3.5 rounded bg-gray-100 animate-pulse shrink-0" />
                                 <div
                                     className="h-3 rounded bg-gray-100 animate-pulse"
@@ -99,21 +100,14 @@ export function ProjectPickerModal({
                                     project.documents?.length ??
                                     0;
                                 return (
-                                    <button
+                                    <label
                                         key={project.id}
-                                        onClick={() =>
-                                            onSelect(
-                                                isSelected ? null : project.id,
-                                            )
-                                        }
-                                        className={`w-full flex rounded-md items-center gap-2 px-2 py-2 text-xs transition-all text-left ${isSelected ? LIQUID_GLASS_MODAL_ROW_SELECTED_CLASS : LIQUID_GLASS_MODAL_ROW_HOVER_CLASS}`}
+                                        className={`w-full flex cursor-pointer rounded-md items-center gap-2 px-2 py-2 text-xs transition-all text-left ${isSelected ? LIQUID_GLASS_MODAL_ROW_SELECTED_CLASS : LIQUID_GLASS_MODAL_ROW_HOVER_CLASS}`}
                                     >
-                                        <CheckSquare
-                                            state={
-                                                isSelected
-                                                    ? "checked"
-                                                    : "unchecked"
-                                            }
+                                        <SelectionCheckbox
+                                            checked={isSelected}
+                                            label={`Select ${project.name}`}
+                                            onChange={() => onSelect(isSelected ? null : project.id)}
                                         />
                                         <ClosedProjectSvgIcon className="h-3.5 w-3.5 shrink-0" />
                                         <span
@@ -129,7 +123,7 @@ export function ProjectPickerModal({
                                         <span className="shrink-0 text-gray-400">
                                             {documentCount}
                                         </span>
-                                    </button>
+                                    </label>
                                 );
                             })}
                         </div>

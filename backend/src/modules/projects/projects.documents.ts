@@ -24,7 +24,7 @@ import { can, DOCS_ORGANIZE_FORBIDDEN } from "../../lib/permissions";
 import {
   type Db,
   type RoleForbidden,
-  attachDocumentOwnerLabels,
+  attachDirectoryCreatorLabels,
 } from "./projects.shared";
 
 export async function listProjectDocuments(
@@ -116,7 +116,7 @@ export async function getProjectDirectoryLevel(
   }[];
   await attachLatestVersionNumbers(db, page);
   await attachActiveVersionPaths(db, page);
-  await attachDocumentOwnerLabels(db, page);
+  await attachDirectoryCreatorLabels(db, page, folders ?? []);
   return {
     ok: true,
     body: {

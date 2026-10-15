@@ -1057,11 +1057,11 @@ export async function consumeAssistantTurnStream(
         if (data.type === "doc_search_start" || data.type === "doc_search") {
           if (typeof data.search_id !== "string" || typeof data.scope !== "string"
             || typeof data.query !== "string" || typeof data.offset !== "number") continue;
-          const { search_id, scope, query, offset, match_count, next_offset, coverage, error } =
+          const { search_id, scope, query, offset, match_count, next_offset, coverage, error, error_code } =
             data as unknown as Extract<AssistantEvent, { type: "doc_search" }>;
           const event: Extract<AssistantEvent, { type: "doc_search" }> = {
             type: "doc_search", search_id, scope, query, offset,
-            match_count, next_offset, coverage, error,
+            match_count, next_offset, coverage, error, error_code,
             isStreaming: data.type === "doc_search_start",
           };
           // Match the call ID, so repeated queries and pagination stay separate.

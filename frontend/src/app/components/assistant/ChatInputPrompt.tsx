@@ -5,6 +5,8 @@ import type { Message } from "../shared/types";
 import { AskInputPopup } from "./AskInputPopup";
 import { findPendingAskInput } from "@/app/lib/pendingAskInput";
 
+type AskInputSubmit = NonNullable<Parameters<typeof AskInputPopup>[0]["onSubmit"]>;
+
 function pendingInput(messages: Message[]) {
     const pending = findPendingAskInput(messages);
     // The prompt answers a stored message, so it waits for the message's id.
@@ -35,7 +37,15 @@ export function ChatInputPrompt({
     canSend?: boolean | null;
     /** The thread's history is still arriving; prompt nothing until it has. */
     chatLoading?: boolean;
-    onSubmit: NonNullable<Parameters<typeof AskInputPopup>[0]["onSubmit"]>;
+    /**
+     * Sends the answer. The prompt closes when `onAccepted` is called (the
+     * server took the turn, so the answer can resume) or the returned
+     * promise settles, whichever comes first; `null` or a rejection before
+     * then keeps the form open for a retry.
+     */
+    onSubmit: (
+        ...args: [...Parameters<AskInputSubmit>, onAccepted: () => void]
+    ) => ReturnType<AskInputSubmit>;
     onCancel: () => void;
     children: ReactNode;
 }) {
@@ -93,7 +103,15 @@ export function ChatInputPrompt({
                 submissionRef.current = submission;
                 setSubmittedInput({ chatKey, input });
                 try {
-                    const result = await onSubmit(response, content, files);
+                    // Settles on acceptance, without waiting for the answer
+                    // to finish streaming.
+                    const result = await new Promise<Awaited<ReturnType<AskInputSubmit>>>(
+                        (resolve, reject) => {
+                            Promise.resolve(
+                                onSubmit(response, content, files, () => resolve()),
+                            ).then(resolve, reject);
+                        },
+                    );
                     if (result === null || submissionRef.current !== submission) return null;
                     setHiddenInputs((current) => current.chatKey === chatKey
                         ? { chatKey, keys: new Set(current.keys).add(input.key) }

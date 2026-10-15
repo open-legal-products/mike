@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
     getProject,
+    listProjects,
     getTabularReview,
     getTabularReviewAccess,
     grantTabularReviewAccess,
@@ -287,6 +288,9 @@ describe("the workspace a review opens", () => {
         await waitFor(() =>
             expect(useItemWorkspace).toHaveBeenLastCalledWith("r1", expected),
         );
+        await waitFor(() => expect(listProjects).toHaveBeenCalledWith({
+            workspace: orgId ?? "personal",
+        }));
     });
 
     it("is left to the project for a review inside one", async () => {

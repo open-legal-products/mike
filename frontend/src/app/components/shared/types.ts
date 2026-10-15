@@ -19,6 +19,9 @@ export interface Folder {
   user_id: string;
   name: string;
   parent_folder_id: string | null;
+  /** The creator's name and photo; the project directory carries them. */
+  owner_display_name?: string | null;
+  owner_profile_photo?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -64,6 +67,8 @@ export interface Project {
   direct_grant_count?: number;
   owner_display_name?: string | null;
   owner_email?: string | null;
+  /** The creator's photo; only the paginated overview list carries it. */
+  owner_profile_photo?: string | null;
   /**
    * Everyone who can administer this project, with an address. The
    * permission-denied popup needs it: telling somebody they were refused
@@ -103,6 +108,8 @@ export interface Document {
   filename: string;
   owner_email?: string | null;
   owner_display_name?: string | null;
+  /** The creator's photo; the project directory carries it. */
+  owner_profile_photo?: string | null;
   file_type: string | null; // pdf | docx | doc | xlsx | xlsm | xls | pptx | ppt
   storage_path: string | null;
   pdf_storage_path: string | null;
@@ -158,10 +165,14 @@ export interface StructureNode {
 
 export interface Chat {
   id: string;
+  /** True only for non-owner recipients of a standalone direct grant. */
+  can_leave?: boolean;
   project_id: string | null;
   user_id: string;
   org_id?: string | null;
   creator_display_name?: string | null;
+  /** The creator's photo; a project's chat list carries it. */
+  creator_profile_photo?: string | null;
   project_name?: string | null;
   title: string | null;
   model?: string | null;
@@ -704,6 +715,8 @@ export interface ColumnConfig {
 export interface TabularReview {
   id: string;
   project_id: string | null;
+  /** Project label included with sidebar history results. */
+  project_name?: string | null;
   user_id: string;
   org_id?: string | null;
   title: string | null;
@@ -718,11 +731,15 @@ export interface TabularReview {
   is_owner?: boolean;
   /** Server-set: true while another generation request holds the review lease. */
   is_running?: boolean;
+  /** Every current row/column cell has a completed result. */
+  is_complete?: boolean;
   /** Server-computed role for the caller, from the detail endpoint and the
    *  overview RPC alike. */
   access_role?: "owner" | "editor" | "viewer";
   owner_email?: string | null;
   owner_display_name?: string | null;
+  /** The creator's photo; a project's review list carries it. */
+  owner_profile_photo?: string | null;
   created_at: string;
   updated_at: string;
   document_count?: number;

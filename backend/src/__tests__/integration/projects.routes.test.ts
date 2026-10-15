@@ -210,6 +210,43 @@ describe("projects.routes", () => {
 
     // ── GET /projects (overview) ──────────────────────────────────────────
     describe("GET /projects", () => {
+        it.each(["owner", "admin"])("keeps an org %s's public and private project participation scoped to its workspace", async (orgRole) => {
+            const orgId = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
+            const inheritedRole = orgRole === "owner" ? "owner" : "editor";
+            const projects = [
+                { id: "created-public", user_id: "u1", access_scope: "organization", access_role: "owner" },
+                { id: "created-private", user_id: "u1", access_scope: "private", access_role: "owner" },
+                { id: "shared-private", user_id: "other", access_scope: "shared", access_role: "viewer" },
+                { id: "other-public", user_id: "other", access_scope: "organization", access_role: inheritedRole },
+                { id: "audited-private", user_id: "other", access_scope: "private", access_role: "viewer" },
+                { id: "ownerless-private", user_id: null, access_scope: "private", access_role: "owner" },
+            ].map(project => ({ ...project, org_id: orgId, organization_name: "Example Org" }));
+            // Public-item roles for org owners are implicit. Admins can also
+            // hold an explicit project role, which does count as participation.
+            if (orgRole === "admin") projects.push({
+                id: "shared-public", user_id: "other", access_scope: "organization",
+                access_role: "editor", org_id: orgId, organization_name: "Example Org",
+            });
+            const otherWorkspace = { ...projects[0], id: "other-workspace", org_id: "another-org" };
+            const personal = { ...projects[1], id: "personal", org_id: null, organization_name: null };
+            supabaseState.tables.org_members = { data: { org_id: orgId, role: orgRole }, error: null };
+            supabaseState.rpc = { data: [...projects, otherWorkspace, personal], error: null };
+            supabaseState.tables.project_org_access_overrides = {
+                data: ["shared-private", ...(orgRole === "admin" ? ["shared-public"] : [])].map(project_id => ({ project_id })),
+                error: null,
+            };
+            const picker = await request(app).get(`/projects?participating=true&workspace=${orgId}`).set(...AUTH);
+            expect(picker.status).toBe(200);
+            expect(picker.body.map((p: { id: string }) => p.id)).toEqual([
+                "created-public", "created-private", "shared-private",
+                ...(orgRole === "admin" ? ["shared-public"] : []),
+            ]);
+            expect(supabaseState.rpcCalls[0]).toEqual({ fn: "get_projects_overview", args: { p_user_id: "u1", p_user_email: "u1@test.local" } });
+            const overview = await request(app).get("/projects").set(...AUTH);
+            expect(overview.status).toBe(200);
+            expect(overview.body.map((p: { id: string }) => p.id)).toEqual([...projects, otherWorkspace, personal].map(p => p.id));
+        });
+
         it("returns the overview rows from the RPC", async () => {
             supabaseState.rpc = {
                 data: [
@@ -239,6 +276,24 @@ describe("projects.routes", () => {
                     memory_enabled: true,
                 },
             ]);
+        });
+
+        it("adds creator photos to the paginated overview only", async () => {
+            supabaseState.rpc = {
+                data: [{ id: "p1", user_id: "u2", access_scope: "private", organization_name: null }],
+                error: null,
+            };
+            supabaseState.tables.user_profiles = {
+                data: [{ user_id: "u2", display_name: "Ada", profile_photo: "data:image/png;base64,AAAA" }],
+                error: null,
+            };
+            const overview = await request(app).get("/projects?limit=20").set(...AUTH);
+            expect(overview.status).toBe(200);
+            expect(overview.body[0].owner_profile_photo).toBe("data:image/png;base64,AAAA");
+
+            const picker = await request(app).get("/projects").set(...AUTH);
+            expect(picker.status).toBe(200);
+            expect(picker.body[0]).not.toHaveProperty("owner_profile_photo");
         });
 
         it("backfills organization access when the overview RPC is stale", async () => {
@@ -727,6 +782,34 @@ describe("projects.routes", () => {
   describe("workspace filter", () => {
     const ORG = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
 
+    it.each(["personal", ORG])("keeps the full participation picker scoped to %s", async (workspace) => {
+      supabaseState.tables.org_members = { data: { org_id: ORG }, error: null };
+      const project = (id: string, org_id: string | null, user_id = "u1") => ({
+        id, org_id, user_id, access_role: "owner",
+        access_scope: org_id ? "organization" : "private",
+        organization_name: org_id ? "Example Org" : null,
+      });
+      const personal = Array.from({ length: 40 }, (_, index) => project(`personal-${index}`, null));
+      const organization = Array.from({ length: 40 }, (_, index) => project(`org-${index}`, ORG));
+      supabaseState.rpc = {
+        data: [...personal, ...organization, project("other-org", "another-org"), project("inherited", ORG, "other")],
+        error: null,
+      };
+      supabaseState.tables.project_org_access_overrides = { data: [], error: null };
+      const res = await request(app)
+        .get(`/projects?participating=true&workspace=${workspace}`)
+        .set(...AUTH);
+      expect(res.status).toBe(200);
+      expect(res.body.map((p: { id: string }) => p.id)).toEqual(
+        (workspace === "personal" ? personal : organization).map(p => p.id),
+      );
+      // Workspace scoping must not opt the picker into the default page limit.
+      expect(supabaseState.rpcCalls[0]).toEqual({
+        fn: "get_projects_overview",
+        args: { p_user_id: "u1", p_user_email: "u1@test.local" },
+      });
+    });
+
     it.each([
       ["/projects?limit=20", "get_projects_overview"],
       ["/projects?view=summary", "get_project_summaries"],
@@ -790,6 +873,7 @@ describe("projects.routes", () => {
 
     it.each([
       "/projects?limit=20",
+      "/projects?participating=true",
       "/projects?view=summary",
       "/projects/ids",
       "/projects/filter-options",
@@ -835,15 +919,26 @@ describe("projects.routes", () => {
         ],
         error: null,
       };
+      supabaseState.tables.user_profiles = {
+        data: [{ user_id: "u1", display_name: "Ada", email: "Ada@Test.local", profile_photo: "data:image/png;base64,AAAA" }],
+        error: null,
+      };
 
       const res = await request(app)
         .get("/projects/filter-options")
         .set(...AUTH);
 
       expect(res.status).toBe(200);
+      // The Creator filter shows each owner with their avatar.
       expect(res.body).toEqual({
         practices: ["Litigation"],
-        owners: [{ value: "u1", label: "Me" }],
+        owners: [{
+          value: "u1",
+          label: "Me",
+          display_name: "Ada",
+          email: "ada@test.local",
+          profile_photo: "data:image/png;base64,AAAA",
+        }],
       });
       expect(captured.args).toEqual({
         p_user_id: "u1",
@@ -1380,6 +1475,34 @@ describe("projects.routes", () => {
                 folders: [{ id: "f1" }],
             });
         });
+
+        it("labels documents and folders with their creator's name and photo", async () => {
+            supabaseState.tables.projects = {
+                data: { id: "p1", user_id: "u1" },
+                error: null,
+            };
+            supabaseState.tables.documents = {
+                data: [{ id: "d1", user_id: "u2" }],
+                error: null,
+            };
+            supabaseState.tables.project_subfolders = {
+                data: [{ id: "f1", user_id: "u2" }],
+                error: null,
+            };
+            supabaseState.tables.user_profiles = {
+                data: [{ user_id: "u2", display_name: "Ada", profile_photo: "data:image/png;base64,AAAA" }],
+                error: null,
+            };
+
+            const res = await request(app)
+                .get("/projects/p1")
+                .set(...AUTH);
+
+            const creator = { owner_display_name: "Ada", owner_profile_photo: "data:image/png;base64,AAAA" };
+            expect(res.status).toBe(200);
+            expect(res.body.documents).toEqual([{ id: "d1", user_id: "u2", owner_email: null, ...creator }]);
+            expect(res.body.folders).toEqual([{ id: "f1", user_id: "u2", ...creator }]);
+        });
     });
 
     // ── GET /projects/:projectId/people ─────────────────────────────────
@@ -1627,6 +1750,35 @@ describe("projects.routes", () => {
                 { id: "c-theirs", access_role: "editor", is_owner: false },
                 // Child grants do not alter inherited access.
                 { id: "c-shared", access_role: "editor", is_owner: false },
+            ]);
+        });
+
+        it("labels each chat with its creator's name and photo", async () => {
+            seedChats();
+            supabaseState.tables.user_profiles = {
+                data: [{ user_id: "u2", display_name: "Ada", profile_photo: "data:image/png;base64,AAAA" }],
+                error: null,
+            };
+            checkProjectAccess.mockResolvedValue({
+                ok: true,
+                isCreator: true,
+                orgRole: null,
+                projectRole: "owner",
+                project: { id: "p1", user_id: "u1", org_id: null },
+            });
+
+            const res = await request(app)
+                .get("/projects/p1/chats")
+                .set(...AUTH);
+
+            expect(
+                (res.body as { id: string; creator_display_name: string | null; creator_profile_photo: string | null }[]).map(
+                    ({ id, creator_display_name, creator_profile_photo }) => ({ id, creator_display_name, creator_profile_photo }),
+                ),
+            ).toEqual([
+                { id: "c-mine", creator_display_name: null, creator_profile_photo: null },
+                { id: "c-theirs", creator_display_name: "Ada", creator_profile_photo: "data:image/png;base64,AAAA" },
+                { id: "c-shared", creator_display_name: "Ada", creator_profile_photo: "data:image/png;base64,AAAA" },
             ]);
         });
 

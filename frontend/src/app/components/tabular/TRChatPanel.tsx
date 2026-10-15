@@ -1968,7 +1968,9 @@ export function TRChatPanel({
                 // Mobile: replaces the table, filling the row minus margins.
                 // md+: fixed width beside the table, top-aligned with it
                 // (below the toolbar).
-                "flex-1 min-w-0 mx-3 mb-3 md:flex-none md:w-[var(--tr-chat-panel-width)] md:mt-12 md:-ml-6 md:mr-6",
+                // The table's 26px right margin minus this 20px overlap
+                // leaves the same 6px gap as the IDE panel dividers.
+                "flex-1 min-w-0 mx-3 mb-3 md:flex-none md:w-[var(--tr-chat-panel-width)] md:mt-12 md:-ml-5 md:mr-6",
                 "rounded-2xl",
                 LIQUID_GLASS_FLAT_CLASS,
                 "overflow-hidden",

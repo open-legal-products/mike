@@ -9,19 +9,24 @@ import { useEffect } from "react";
 
 const listChats = vi.fn();
 const createChat = vi.fn();
+const renameChat = vi.fn();
+const deleteChat = vi.fn();
+const leaveChat = vi.fn();
 const workspace = vi.hoisted(() => ({
     current: "personal" as string | undefined,
 }));
 const STABLE_USER = vi.hoisted(() => ({ id: "u1", email: "u1@example.com" }));
+const auth = vi.hoisted(() => ({ signedIn: true }));
 
 vi.mock("@/app/lib/mikeApi", () => ({
     createChat: (...args: unknown[]) => createChat(...args),
     listChats: (...args: unknown[]) => listChats(...args),
-    renameChat: vi.fn(),
-    deleteChat: vi.fn(async () => undefined),
+    renameChat: (...args: unknown[]) => renameChat(...args),
+    deleteChat: (...args: unknown[]) => deleteChat(...args),
+    leaveChat: (...args: unknown[]) => leaveChat(...args),
 }));
 vi.mock("@/app/contexts/AuthContext", () => ({
-    useAuth: () => ({ user: STABLE_USER }),
+    useAuth: () => ({ user: auth.signedIn ? STABLE_USER : null }),
 }));
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
     useWorkspaceParam: () => workspace.current,
@@ -46,10 +51,12 @@ const chat = (id: string, title: string) => ({
 });
 
 let saveChat: ReturnType<typeof useChatHistoryContext>["saveChat"];
+let latest: ReturnType<typeof useChatHistoryContext>;
 function Probe() {
     const context = useChatHistoryContext();
     useEffect(() => {
         saveChat = context.saveChat;
+        latest = context;
     });
     const { chats } = context;
     return (
@@ -70,6 +77,7 @@ const tree = () => (
 beforeEach(() => {
     vi.clearAllMocks();
     workspace.current = "personal";
+    auth.signedIn = true;
 });
 
 // A chat started on its own belongs to the workspace it is started in.
@@ -113,6 +121,90 @@ describe("starting a chat", () => {
 });
 
 describe("ChatHistoryProvider and the active workspace", () => {
+    it("ignores a reload callback retained by a detached turn in another workspace", async () => {
+        listChats.mockImplementation(async ({ workspace: scope }) => [chat(scope, scope)]);
+        const { rerender } = render(tree());
+        await screen.findByText("personal");
+        const oldReload = latest.loadChats;
+        workspace.current = "org-1";
+        rerender(tree());
+        await screen.findByText("org-1");
+        const callCount = listChats.mock.calls.length;
+        await act(() => oldReload());
+        expect(listChats).toHaveBeenCalledTimes(callCount);
+        expect(latest.chats?.map(row => row.id)).toEqual(["org-1"]);
+    });
+
+    it("does not insert a pending creation into the newly selected workspace", async () => {
+        listChats.mockImplementation(async ({ workspace: scope }) => [chat(scope, scope)]);
+        let resolve!: (value: { id: string }) => void;
+        createChat.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+        const { rerender } = render(tree());
+        await screen.findByText("personal");
+        const pending = saveChat();
+        workspace.current = "org-1";
+        rerender(tree());
+        await screen.findByText("org-1");
+        await act(async () => { resolve({ id: "created-in-personal" }); await pending; });
+        expect(latest.chats?.map(row => row.id)).toEqual(["org-1"]);
+    });
+
+    it.each(["renameChat", "deleteChat"] as const)("does not reload the old workspace when a pending %s fails", async (operation) => {
+        listChats.mockImplementation(async ({ workspace: scope }) => [chat(scope, scope)]);
+        let reject!: (reason: Error) => void;
+        (operation === "renameChat" ? renameChat : deleteChat)
+            .mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
+        const { rerender } = render(tree());
+        await screen.findByText("personal");
+        let pending!: Promise<unknown>;
+        act(() => { pending = latest[operation]("personal", "Renamed").catch(error => error); });
+        workspace.current = "org-1";
+        rerender(tree());
+        await screen.findByText("org-1");
+        const callCount = listChats.mock.calls.length;
+        await act(async () => { reject(new Error("Denied")); await pending; });
+        expect(listChats).toHaveBeenCalledTimes(callCount);
+        expect(latest.chats?.map(row => row.id)).toEqual(["org-1"]);
+    });
+
+    it("drops old pagination after switching away and back and permits the new workspace to paginate", async () => {
+        const page = (scope: string) => Array.from({ length: 21 }, (_, i) => chat(`${scope}-${i}`, `${scope}-${i}`));
+        let resolveOld!: (rows: unknown[]) => void;
+        listChats.mockImplementation(({ workspace: scope, beforeId }) => {
+            if (!beforeId) return Promise.resolve(page(scope));
+            if (scope === "personal") return new Promise(done => { resolveOld = done; });
+            return Promise.resolve([chat("org-more", "Organization next page")]);
+        });
+        const { rerender } = render(tree());
+        await waitFor(() => expect(latest.hasMoreChats).toBe(true));
+        let pending!: Promise<void>;
+        act(() => { pending = latest.loadMoreChats(); });
+        workspace.current = "org-1";
+        rerender(tree());
+        await waitFor(() => expect(latest.chats?.[0].id).toBe("org-1-0"));
+        expect(latest.loadingMoreChats).toBe(false);
+        await act(() => latest.loadMoreChats());
+        expect(latest.chats?.some(row => row.id === "org-more")).toBe(true);
+        workspace.current = "personal";
+        rerender(tree());
+        await waitFor(() => expect(latest.chats?.[0].id).toBe("personal-0"));
+        await act(async () => { resolveOld([chat("stale-personal", "Old page")]); await pending; });
+        expect(latest.chats).toHaveLength(20);
+        expect(latest.chats?.some(row => row.id === "stale-personal")).toBe(false);
+    });
+
+    it("drops a pending first page after sign-out", async () => {
+        let resolve!: (rows: unknown[]) => void;
+        listChats.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+        const { rerender } = render(tree());
+        await screen.findByText("loading");
+        auth.signedIn = false;
+        rerender(tree());
+        await screen.findByText("empty");
+        await act(async () => resolve([chat("old-account", "Old account")]));
+        expect(latest.chats).toEqual([]);
+    });
+
     it("asks for the active workspace's chats", async () => {
         listChats.mockResolvedValue([chat("c1", "Personal note")]);
         render(tree());
@@ -169,5 +261,58 @@ describe("ChatHistoryProvider and the active workspace", () => {
         await act(async () => resolvePersonal([chat("c1", "Personal note")]));
         expect(screen.getByText("Firm matter")).toBeInTheDocument();
         expect(screen.queryByText("Personal note")).not.toBeInTheDocument();
+    });
+});
+
+
+describe("leaving shared chats", () => {
+    it("replaces an in-flight initial history read after leaving a directly opened chat", async () => {
+        let finishOld!: (rows: ReturnType<typeof chat>[]) => void;
+        listChats.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }))
+            .mockResolvedValueOnce([chat("other", "Other chat")]);
+        leaveChat.mockResolvedValue(undefined);
+        render(tree());
+        await screen.findByText("loading");
+        await act(async () => { await latest.leaveChat("left"); });
+        await screen.findByText("Other chat");
+        await act(async () => { finishOld([chat("left", "Left chat")]); });
+        expect(screen.getByText("Other chat")).toBeVisible();
+        expect(screen.queryByText("Left chat")).toBeNull();
+    });
+
+    it("removes only the left chat after success and clears its active selection", async () => {
+        listChats.mockResolvedValue([chat("left", "Shared chat"), chat("other", "Other chat")]);
+        leaveChat.mockResolvedValue(undefined);
+        render(tree());
+        await screen.findByText("Shared chat,Other chat");
+        act(() => latest.setCurrentChatId("left"));
+        await act(async () => { await latest.leaveChat("left"); });
+        expect(screen.getByText("Other chat")).toBeVisible();
+        expect(latest.currentChatId).toBeNull();
+        expect(deleteChat).not.toHaveBeenCalled();
+    });
+
+    it("keeps the chat when leaving fails", async () => {
+        listChats.mockResolvedValue([chat("left", "Shared chat")]);
+        leaveChat.mockRejectedValue(new Error("denied"));
+        render(tree());
+        await screen.findByText("Shared chat");
+        await act(async () => { await expect(latest.leaveChat("left")).rejects.toThrow("denied"); });
+        expect(screen.getByText("Shared chat")).toBeVisible();
+    });
+
+    it("does not remove an org row when a Personal leave finishes after a workspace switch", async () => {
+        let finish!: () => void;
+        leaveChat.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+        listChats.mockResolvedValueOnce([chat("same", "Personal chat")]).mockResolvedValueOnce([chat("same", "Org chat")]);
+        const view = render(tree());
+        await screen.findByText("Personal chat");
+        let leaving!: Promise<void>;
+        act(() => { leaving = latest.leaveChat("same"); });
+        workspace.current = "org-1";
+        view.rerender(tree());
+        await screen.findByText("Org chat");
+        await act(async () => { finish(); await leaving; });
+        expect(screen.getByText("Org chat")).toBeVisible();
     });
 });

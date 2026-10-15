@@ -81,7 +81,14 @@ The assistant emits `doc_search_start` and `doc_search` with a per-call search I
 The completed event is retained in conversation history. The pre-response timeline
 shows a collapsed search dropdown labelled with the query and scope. Expanding it
 shows only the match count for that page. Failed searches show a safe error instead
-of a count. Coverage and pagination remain available to the agent in the tool result.
+of a count. The failure code and message are retained in history, distinguishing
+missing database updates, invalid searches, timeouts, and temporary outages.
+Backend error logs include the failure category and an allowlisted database or
+network code, without query text or raw database error details. A `PGRST202` failure
+means the search function is missing from PostgREST's schema cache: check that
+`20261015_01_document_text_search.sql` is applied and reload the schema cache with
+`NOTIFY pgrst, 'reload schema';` if needed.
+Coverage and pagination remain available to the agent in the tool result.
 
 Existing versions receive a constant initial revision through PostgreSQL's
 metadata-only column default, avoiding a rewrite of the versions table. Cache

@@ -135,7 +135,7 @@ describe("SidebarProjectItem", () => {
       expect.objectContaining({
         offset: 0,
         limit: 11,
-        sortKey: "created",
+        sortKey: "updated",
         sortDirection: "desc",
       }),
     );
@@ -262,7 +262,7 @@ describe("SidebarProjectItem", () => {
   });
 
   it("drops a See more page that started before a refresh", async () => {
-    // Reviews page newest-created first. A review created while a page is in
+    // Reviews page newest-updated first. A review created while a page is in
     // flight shifts every offset by one, so that page no longer lines up
     // with the refreshed list: merging it would skip a review and could
     // carry a stale "no more pages" flag.

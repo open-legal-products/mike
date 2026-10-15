@@ -2,7 +2,17 @@
 
 import { use, useCallback, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { deleteTabularReview, updateTabularReview } from "@/app/lib/mikeApi";
+import {
+    deleteTabularReview,
+    listProjectReviewCreators,
+    updateTabularReview,
+} from "@/app/lib/mikeApi";
+import {
+    distinctPeople,
+    localPeople,
+    type LoadPeople,
+    type PersonOption,
+} from "@/app/components/shared/PersonFilter";
 import { ReviewsListTable } from "@/app/components/tabular/ReviewsListTable";
 import { TabularReviewDetailsModal } from "@/app/components/tabular/TabularReviewDetailsModal";
 import {
@@ -48,6 +58,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         direction: TabularReviewSortDirection;
     } | null>(null);
     const debouncedSearch = useDebouncedValue(search, 250);
+    const [creator, setCreator] = useState<PersonOption | null>(null);
     const {
         reviews,
         setReviews,
@@ -68,7 +79,18 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         search: debouncedSearch,
         selectionKey: search,
         sort,
+        ownerUserId: creator?.user_id,
     });
+    // Every creator in the project, not just those on the loaded page.
+    const loadCreators = useCallback<LoadPeople>(
+        async (query, signal) =>
+            localPeople(
+                distinctPeople(
+                    await listProjectReviewCreators(projectId, signal),
+                ),
+            )(query, signal),
+        [projectId],
+    );
     const docs = project?.documents ?? [];
     const visibleReviews = useMemo(
         () => (previewEmptyStates ? [] : reviews),
@@ -204,6 +226,12 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
             <ReviewsListTable
                 renderToolbar={(actions) => <ProjectSectionToolbar actions={actions} />}
                 rowClassName="pr-8 md:pr-8"
+                showCreator
+                creatorFilter={{
+                    value: creator,
+                    onChange: setCreator,
+                    loadPeople: loadCreators,
+                }}
                 reviews={visibleReviews}
                 selectedReviewIds={selectedReviewIds}
                 createDisabled={workspace.creatingReview || docs.length === 0}
@@ -216,7 +244,9 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 onToggleAll={handleToggleAllReviews}
                 selectingAll={selectingAll}
                 deletingReviewIds={deletingReviewIds}
-                hasActiveFilters={debouncedSearch.trim().length > 0}
+                hasActiveFilters={
+                    debouncedSearch.trim().length > 0 || creator !== null
+                }
                 sort={sort}
                 onSortChange={(key, direction) => {
                     setSelectedReviewIds([]);

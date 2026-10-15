@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { MikeApiError } from "@/app/lib/mikeApi";
+import { listProjects, MikeApiError } from "@/app/lib/mikeApi";
 import type { TabularReview } from "@/app/components/shared/types";
 import TabularReviewsPage from "./page";
 
@@ -35,6 +35,7 @@ const workspaceOrg = vi.hoisted(() => ({ id: undefined as string | undefined }))
 vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>()),
     useWorkspaceOrgId: () => workspaceOrg.id,
+    useWorkspaceParam: () => workspaceOrg.id ?? "personal",
 }));
 
 vi.mock("next/navigation", () => ({
@@ -213,6 +214,17 @@ describe("Tabular reviews page creation", () => {
             removeEventListener: vi.fn(),
             dispatchEvent: vi.fn(),
         }));
+    });
+
+    it("reloads project choices and closes the old workspace's create dialog on a switch", async () => {
+        const { rerender } = render(<TabularReviewsPage />);
+        await waitFor(() => expect(listProjects).toHaveBeenLastCalledWith({ workspace: "personal" }));
+        fireEvent.click(screen.getByRole("button", { name: "New tabular review" }));
+        expect(screen.getByRole("dialog")).toBeInTheDocument();
+        workspaceOrg.id = "org-1";
+        rerender(<TabularReviewsPage />);
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        await waitFor(() => expect(listProjects).toHaveBeenLastCalledWith({ workspace: "org-1" }));
     });
 
     // A review started on its own belongs to the workspace it is started in.

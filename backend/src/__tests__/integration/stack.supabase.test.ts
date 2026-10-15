@@ -135,6 +135,50 @@ maybeDescribe("Supabase stack — auth contract + RLS deny-all firewall", () => 
     expect(data.user?.email).toBe(emailA);
   });
 
+  it("review history sorts updates and reports only authorized complete tables", async () => {
+    const oldId = randomUUID();
+    const recentId = randomUUID();
+    const rowId = randomUUID();
+    const statusArgs = { p_user_id: userA, p_user_email: emailA, p_review_ids: [oldId] };
+    try {
+      const inserted = await admin.from("tabular_reviews").insert([
+        { id: oldId, user_id: userA, project_id: projectId, title: "Old review updated", columns_config: [{ index: 0, name: "Summary", prompt: "Summarize" }], created_at: "2020-01-01T00:00:00Z", updated_at: "2099-10-15T00:00:00Z" },
+        { id: recentId, user_id: userA, title: "Newer creation", columns_config: [], created_at: "2099-10-14T00:00:00Z", updated_at: "2099-10-14T00:00:00Z" },
+      ]);
+      expect(inserted.error).toBeNull();
+      const overview = await admin.rpc("get_tabular_reviews_overview", {
+        p_user_id: userA, p_user_email: emailA, p_project_id: null, p_scope: "all",
+        p_limit: 1, p_offset: 0, p_search_term: null, p_sort_key: "updated", p_sort_direction: "desc", p_workspace: "personal",
+      });
+      expect(overview.error).toBeNull();
+      expect(overview.data.map((row: { id: string }) => row.id)).toEqual([oldId]);
+      const snapshot = async () => {
+        const result = await admin.rpc("get_tabular_review_history_status", statusArgs);
+        expect(result.error).toBeNull();
+        return result.data;
+      };
+      expect(await snapshot()).toEqual([{ id: oldId, is_running: false, is_complete: false }]);
+      expect((await admin.from("tabular_review_rows").insert({ id: rowId, review_id: oldId, label: "Synthetic folder", row_type: "folder" })).error).toBeNull();
+      // Missing cells cannot count as a finished table.
+      expect((await snapshot())[0].is_complete).toBe(false);
+      expect((await admin.from("tabular_cells").insert({ review_id: oldId, row_id: rowId, column_index: 0, status: "done", content: "Synthetic result" })).error).toBeNull();
+      expect((await snapshot())[0].is_complete).toBe(true);
+      expect((await admin.from("tabular_reviews").update({ active_generation_id: randomUUID(), generation_lease_expires_at: "2099-10-16T00:00:00Z" }).eq("id", oldId)).error).toBeNull();
+      expect(await snapshot()).toEqual([{ id: oldId, is_running: true, is_complete: false }]);
+      expect((await admin.from("tabular_reviews").update({ active_generation_id: null, generation_lease_expires_at: null }).eq("id", oldId)).error).toBeNull();
+      expect((await admin.from("tabular_cells").update({ status: "error" }).eq("review_id", oldId)).error).toBeNull();
+      expect((await snapshot())[0].is_complete).toBe(false);
+      const denied = await admin.rpc("get_tabular_review_history_status", { ...statusArgs, p_user_id: userB, p_user_email: emailB });
+      expect(denied.error).toBeNull();
+      expect(denied.data).toEqual([]);
+      // Knowing ids and passing someone else's identity cannot bypass the API.
+      const direct = await asUser(tokenA).rpc("get_tabular_review_history_status", statusArgs);
+      expect(direct.error).not.toBeNull();
+    } finally {
+      await admin.from("tabular_reviews").delete().in("id", [oldId, recentId]);
+    }
+  });
+
   it("signup profile uses the OAuth-style full_name metadata", async () => {
     const { data, error } = await admin
       .from("user_profiles")

@@ -108,6 +108,32 @@ describe("usePaginatedWorkflows", () => {
 });
 
 describe("usePaginatedTabularReviews", () => {
+    it("keeps an overview's project filter workspace-scoped for pages and select-all", async () => {
+        const list = vi.mocked(listTabularReviews);
+        list.mockResolvedValue(fullPage("personal") as never);
+        const { result, rerender } = renderHook(() => usePaginatedTabularReviews({
+            projectId: "personal-project", scopeToWorkspace: true,
+        }));
+        await waitFor(() => expect(result.current.loading).toBe(false));
+        await act(() => result.current.loadMore());
+        expect(list).toHaveBeenLastCalledWith("personal-project",
+            expect.objectContaining({ workspace: "personal", offset: 30 }));
+        await act(() => result.current.selectAllMatching());
+        expect(listTabularReviewIds).toHaveBeenLastCalledWith("personal-project",
+            expect.objectContaining({ workspace: "personal" }));
+
+        let resolve!: (rows: never[]) => void;
+        list.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+        workspace.current = ORG;
+        rerender();
+        expect(result.current.reviews).toEqual([]);
+        expect(result.current.selectedReviewIds).toEqual([]);
+        expect(list).toHaveBeenLastCalledWith("personal-project",
+            expect.objectContaining({ workspace: ORG }));
+        await act(async () => resolve([]));
+        expect(result.current.reviews).toEqual([]);
+    });
+
     it("sends the workspace for the cross-project list and reloads on a switch", async () => {
         const list = vi.mocked(listTabularReviews);
         list.mockResolvedValue([]);

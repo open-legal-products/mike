@@ -321,6 +321,35 @@ describe("ProjectsOverview tabs", () => {
         ).toBeVisible();
     });
 
+    it("shows each project's creator with their avatar", () => {
+        projectRows.current = [
+            {
+                id: "colleague-project",
+                user_id: "user-2",
+                name: "Colleague matter",
+                cm_number: null,
+                practice: null,
+                access_scope: "organization",
+                owner_display_name: "Ada Lovelace",
+                owner_email: "ada@example.com",
+                owner_profile_photo: "data:image/png;base64,AAAA",
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-01T00:00:00Z",
+            },
+        ];
+
+        render(<ProjectsOverview />);
+
+        expect(screen.getByText("Creator")).toBeInTheDocument();
+        expect(screen.queryByText("Created by")).toBeNull();
+        const row = within(
+            screen.getByText("Colleague matter").closest(".group") as HTMLElement,
+        );
+        expect(row.getByText("Ada Lovelace")).toBeInTheDocument();
+        const avatar = row.getByRole("img", { name: "Ada Lovelace" });
+        expect(avatar.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
+    });
+
     it("refetches when the new-project modal closes on a project it never handed over", async () => {
         // A project created behind a failed grant or upload never reaches
         // onCreated, so without this refetch the row the user just made is

@@ -4,6 +4,8 @@ import { listOrgDepartures, reassignOrgDepartureArchives, deleteOrgDepartureArch
 import { getGoogleWorkspaceStatus, startGoogleWorkspaceOAuth, cancelGoogleWorkspaceOAuth, disconnectGoogleWorkspace, updateGoogleWorkspaceSettings, setGoogleWorkspaceToolEnabled, updateGoogleDriveSettings, setGoogleDriveToolEnabled } from "./mikeApi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantEvent, Chat } from "@/app/components/shared/types";
+import { subscribeTabularReviewChanges } from "./tabularReviewChanges";
+import { getTabularReviewHistoryStatuses } from "./mikeApi";
 
 // Backend 5xx responses are reported to Sentry from the client with the
 // request id; the reporter is mocked so these tests assert the call, and
@@ -42,6 +44,7 @@ import {
     deleteAllProjects,
     deleteAllTabularReviews,
     deleteChat,
+    leaveChat,
     deleteDocument,
     deleteDocumentVersion,
     deleteLibraryFolder,
@@ -147,6 +150,7 @@ import {
     listSystemWorkflows,
     listTabularReviewIds,
     listTabularReviews,
+    listProjectReviewCreators,
     listWorkflowIds,
     listWorkflowAddons,
     listWorkflowAssets,
@@ -352,6 +356,27 @@ describe("apiRequest plumbing (via thin wrappers)", () => {
         await listProjects({ includeDocuments: true });
 
         expect(lastFetchCall().url).toBe("/api/projects?include=documents");
+    });
+
+    it("requests actual project participation for the IDE without enabling pagination", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+        await listProjects({ participatingOnly: true });
+        expect(lastFetchCall().url).toBe("/api/projects?participating=true");
+        await listProjects({ includeDocuments: true, participatingOnly: true });
+        expect(lastFetchCall().url).toBe("/api/projects?include=documents&participating=true");
+    });
+
+    it("fetches every project-choice page within the requested workspace", async () => {
+        const first = Array.from({ length: 100 }, (_, i) => ({ id: `project-${i}` }));
+        fetchMock.mockResolvedValueOnce(jsonResponse(first));
+        fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "last-project" }]));
+        const projects = await listProjects({ workspace: "org-1" });
+        expect(projects).toHaveLength(101);
+        expect(projects.at(-1)?.id).toBe("last-project");
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+            "/api/projects?workspace=org-1&limit=100&offset=0",
+            "/api/projects?workspace=org-1&limit=100&offset=100",
+        ]);
     });
 
     // Regression guard: legacy tabular-review project pickers call
@@ -1372,6 +1397,23 @@ describe("listTabularReviews", () => {
 
         expect(lastFetchCall().url).toBe("/api/tabular-review?limit=10");
     });
+
+    it("filters a list and its select-all ids by creator", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+
+        await listTabularReviews("p1", { ownerUserId: "u2" });
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review?project_id=p1&owner_user_id=u2",
+        );
+        await listTabularReviewIds("p1", { ownerUserId: "u2" });
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/ids?project_id=p1&owner_user_id=u2",
+        );
+        await listProjectReviewCreators("p1");
+        expect(lastFetchCall().url).toBe(
+            "/api/tabular-review/creators?project_id=p1",
+        );
+    });
 });
 
 describe("listTabularReviewIds", () => {
@@ -1917,6 +1959,36 @@ describe("Library search", () => {
 });
 
 describe("tabular review CRUD", () => {
+    it("requests the sidebar's status fields and polls only the named reviews", async () => {
+        fetchMock.mockImplementation(async () => jsonResponse([]));
+        await listTabularReviews(undefined, { workspace: "personal", sortKey: "updated", sortDirection: "desc", includeStatus: true });
+        const url = new URL(lastFetchCall().url, "http://localhost");
+        expect(url.searchParams.get("include")).toBe("status");
+        expect(url.searchParams.get("workspace")).toBe("personal");
+        expect(url.searchParams.get("sort_key")).toBe("updated");
+        const controller = new AbortController();
+        await getTabularReviewHistoryStatuses(["r1", "r2"], controller.signal);
+        expect(lastFetchCall().url).toBe("/api/tabular-review/history-status?ids=r1%2Cr2");
+        expect(lastFetchCall().init.signal).toBe(controller.signal);
+    });
+
+    it("refreshes review history after successful writes, but not a refused write", async () => {
+        const listener = vi.fn();
+        const unsubscribe = subscribeTabularReviewChanges(listener);
+        try {
+            fetchMock.mockImplementation(async () => jsonResponse({ id: "r1" }));
+            await createTabularReview({ document_ids: [], columns_config: [], model: "test-model" });
+            await updateTabularReview("r1", { title: "Renamed" });
+            await deleteTabularReview("r1");
+            await clearTabularCells("r1", ["row-1"]);
+            await regenerateTabularCell("r1", "row-1", 0);
+            expect(listener).toHaveBeenCalledTimes(5);
+            fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "Forbidden" }, { status: 403 }));
+            await expect(updateTabularReview("r1", { title: "Refused" })).rejects.toThrow();
+            expect(listener).toHaveBeenCalledTimes(5);
+        } finally { unsubscribe(); }
+    });
+
     it("createTabularReview posts the folder grouping mode through unchanged", async () => {
         fetchMock.mockResolvedValue(jsonResponse({ id: "r1" }));
 
@@ -2839,6 +2911,12 @@ describe("thin endpoint wrappers", () => {
             },
         },
         {
+            name: "leaveChat",
+            call: () => leaveChat("c1"),
+            url: "/chat/c1/leave",
+            method: "POST",
+        },
+        {
             name: "deleteChat",
             call: () => deleteChat("c1"),
             url: "/chat/c1",
@@ -3429,6 +3507,7 @@ describe("workspace parameter on list requests", () => {
     const ORG = "7b1d9d0e-3c5a-4f6e-9a51-0c2f7d3e8a11";
     const requests: [string, (workspace?: string) => Promise<unknown>, string][] = [
         ["searchProjectDirectory", (workspace) => searchProjectDirectory({ search: "matter", workspace }), "/api/projects"],
+        ["listProjects (IDE)", (workspace) => listProjects({ participatingOnly: true, workspace }), "/api/projects"],
         ["listProjectsPage", (workspace) => listProjectsPage({ workspace }), "/api/projects"],
         [
             "listProjectSummaries",

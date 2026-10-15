@@ -256,6 +256,38 @@ async function renderWorkspace(canSend = true, strict = false) {
     });
 }
 
+describe("project side chat menu", () => {
+    it("closes the side chat from the main chat and offers opening it again", async () => {
+        await renderWorkspace();
+        const primary = screen
+            .getByRole("button", { name: "Send question" })
+            .closest<HTMLElement>('[data-chat-pane="primary"]')!;
+        const openActions = () => {
+            const trigger = within(primary).getByRole("button", { name: "Actions" });
+            fireEvent.pointerDown(
+                trigger,
+                new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+            );
+            fireEvent.click(trigger);
+        };
+
+        openActions();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Open side chat" }));
+        expect(await screen.findAllByRole("button", { name: "Send question" })).toHaveLength(2);
+        expect(window.location.search).toBe("?side=new");
+
+        openActions();
+        expect(screen.queryByRole("menuitem", { name: "Open side chat" })).toBeNull();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Close side chat" }));
+        expect(screen.getAllByRole("button", { name: "Send question" })).toHaveLength(1);
+        expect(window.location.search).toBe("");
+        expect(window.location.pathname).toBe("/projects/p1/assistant/chat");
+
+        openActions();
+        expect(await screen.findByRole("menuitem", { name: "Open side chat" })).toBeInTheDocument();
+    });
+});
+
 describe("project document deletion", () => {
     async function openMenu() {
         fireEvent.click(screen.getByRole("button", { name: "Open draft" }));
