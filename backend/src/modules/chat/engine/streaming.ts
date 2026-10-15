@@ -1,3 +1,4 @@
+import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { buildGoogleWorkspaceTools } from "../../../lib/integrations/googleWorkspace";
 import {
   streamChatWithTools,
@@ -303,8 +304,10 @@ export async function runLLMStream(params: {
   const write = (chunk: string) =>
     unsafeWrite(sanitizeAssistantSseChunk(chunk));
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
-  const mcpTools = await buildUserMcpTools(userId, db);
-  const googleDriveTools = await buildGoogleDriveTools(userId, db);
+  // Account-owned credentials are enabled only in Personal.
+  const personalConnectors = (await teamOrgIdOf(db, orgId)) === null;
+  const mcpTools = personalConnectors ? await buildUserMcpTools(userId, db) : [];
+  const googleDriveTools = personalConnectors ? await buildGoogleDriveTools(userId, db) : [];
   const conversationTools = includeAskInputs
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
@@ -313,7 +316,7 @@ export async function runLLMStream(params: {
     ...baseTools,
     ...mcpTools,
     ...googleDriveTools,
-    ...(await buildGoogleWorkspaceTools(userId, db)),
+    ...(personalConnectors ? await buildGoogleWorkspaceTools(userId, db) : []),
     ...(extraTools ?? []),
     ...(clientTools?.schemas ?? []),
   ];

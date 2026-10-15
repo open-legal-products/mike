@@ -1,3 +1,4 @@
+import { wordChatHasWorkspaceAttachments } from "../../lib/wordWorkspace";
 // Business logic + data-access for the word-chat module.
 //
 // Service layer behind wordChat.routes.ts. Every function takes an explicit
@@ -612,6 +613,17 @@ export async function prepareWordChatStream(
   let chatReasoningLevel: string | null = null;
   let wordDocumentRowId: string | null = null;
 
+  // Validate before model selection, persistence or memory scheduling. Existing
+  // history is checked too: Word has no organization-scoped destination.
+  try {
+    if (await wordChatHasWorkspaceAttachments(db, messages)) {
+      return { ok: false, status: 400, code: "document_workspace_mismatch",
+        detail: "Word chats support Personal workspace attachments only. Start a new chat with Personal documents and workflows." };
+    }
+  } catch (error) {
+    return { ok: false, status: 500, detail: "Could not validate Word chat attachments", error };
+  }
+
   if (persistChat) {
     wordDocumentRowId = await ensureWordDocumentRow(
       clientDocumentId,
@@ -641,6 +653,14 @@ export async function prepareWordChatStream(
     const existing = existingLookup.value;
     if (!existing) {
       return { ok: false, status: 404, detail: "Chat not found" };
+    }
+    try {
+      if (await wordChatHasWorkspaceAttachments(db, [], chatId)) {
+        return { ok: false, status: 400, code: "document_workspace_mismatch",
+          detail: "This Word chat contains attachments from another workspace. Start a new chat with Personal attachments." };
+      }
+    } catch (error) {
+      return { ok: false, status: 500, detail: "Could not validate Word chat attachments", error };
     }
     chatTitle = typeof existing.title === "string" ? existing.title : null;
     chatModel = typeof existing.model === "string" ? existing.model : null;

@@ -1,3 +1,6 @@
+import { canUseWorkflowInWorkspace } from "../../../../lib/workflowWorkspace";
+import { catalogKeyFromWorkflowId } from "../../../../lib/workflowCatalog";
+import { teamOrgIdOf } from "../../../../lib/personalOrgs";
 import {
   isGoogleWorkspaceTool,
   executeGoogleWorkspaceToolCall,
@@ -470,6 +473,14 @@ export async function runToolCalls(
       tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
       isGoogleWorkspaceTool(tc.function.name) ||
       tc.function.name.startsWith("mcp_");
+    if (isConnectorTool && (await teamOrgIdOf(db, options.orgId)) !== null) {
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: "Connectors are available only in the Personal workspace.",
+      });
+      continue;
+    }
     if (isConnectorTool) {
       const plan = await planConnectorToolCall(
         userId,
@@ -770,7 +781,15 @@ export async function runToolCalls(
       });
     } else if (tc.function.name === "read_workflow") {
       const wfId = args.workflow_id as string;
-      const wf = workflowStore?.get(wfId);
+      const candidate = workflowStore?.get(wfId);
+      const allowed = candidate && (
+        catalogKeyFromWorkflowId(wfId) !== null ||
+        await canUseWorkflowInWorkspace(
+          db, wfId, userId, options.userEmail,
+          (await teamOrgIdOf(db, options.orgId)) ?? "personal",
+        )
+      );
+      const wf = allowed ? candidate : undefined;
       if (wf) {
         write(
           `data: ${JSON.stringify({ type: "workflow_applied", workflow_id: wfId, title: wf.title })}\n\n`,

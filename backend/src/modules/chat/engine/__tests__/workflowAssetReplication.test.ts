@@ -23,6 +23,7 @@ vi.mock("../../../../lib/downloadTokens", async (importOriginal) => {
     };
 });
 
+import { scriptedDb } from "../../../../__tests__/helpers/scriptedDb";
 import { runToolCalls } from "../tools/toolDispatcher";
 import { PROJECT_EXTRA_TOOLS, TOOLS } from "../tools/toolSchemas";
 import type { DocIndex, DocStore, WorkflowStore } from "../types";
@@ -135,7 +136,7 @@ describe("workflow asset replication", () => {
             ],
             store,
             "user-1",
-            {} as never,
+            scriptedDb([{ table: "workflows", data: { id: "workflow-12345678", user_id: "user-1", org_id: null } }]).db,
             () => undefined,
             workflows,
             undefined,

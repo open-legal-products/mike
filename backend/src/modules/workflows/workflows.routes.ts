@@ -110,7 +110,6 @@ const WORKFLOW_PAGINATION_QUERY_KEYS = [
   "practice",
   "language",
   "jurisdiction",
-  "workspace",
 ];
 
 // GET /workflows
@@ -146,7 +145,7 @@ workflowsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
         jurisdiction: normalizeSearchTerm(req.query.jurisdiction),
         workspace: workspace.workspace,
       })
-    : await listWorkflows(db, { userId, userEmail, type: workflowType });
+    : await listWorkflows(db, { userId, userEmail, type: workflowType, workspace: workspace.workspace });
   if (!result.ok) {
     return void sendInternalError(res, result.error);
   }

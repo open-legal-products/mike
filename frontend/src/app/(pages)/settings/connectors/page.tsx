@@ -1271,6 +1271,9 @@ export default function ConnectorsPage() {
 
   return (
     <div className="@container">
+      <p className="mb-4 text-sm text-app-text-muted">
+        Connections belong to your Personal workspace and are available only in Personal chats.
+      </p>
       <section aria-labelledby="installed-connectors-heading">
         <div className="mb-4 flex items-center justify-between gap-3">
           <SettingsHeading id="installed-connectors-heading">

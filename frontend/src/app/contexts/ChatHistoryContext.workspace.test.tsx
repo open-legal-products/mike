@@ -171,3 +171,30 @@ describe("ChatHistoryProvider and the active workspace", () => {
         expect(screen.queryByText("Personal note")).not.toBeInTheDocument();
     });
 });
+
+
+it("never hands pending workflow messages or stale creation callbacks to the next workspace", async () => {
+    let context!: ReturnType<typeof useChatHistoryContext>;
+    function PendingProbe() {
+        const value = useChatHistoryContext();
+        useEffect(() => { context = value; });
+        return <span>{value.newChatMessages?.[0]?.content ?? "no draft"}</span>;
+    }
+    listChats.mockResolvedValue([]);
+    workspace.current = "firm-a";
+    const view = render(<ChatHistoryProvider><PendingProbe /></ChatHistoryProvider>);
+    const oldSetter = context.setNewChatMessages;
+    act(() => oldSetter([{ role: "user", content: "confidential draft" }]));
+    expect(screen.getByText("confidential draft")).toBeInTheDocument();
+    let finish!: (value: { id: string }) => void;
+    createChat.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    let pending!: Promise<string | null>;
+    act(() => { pending = context.saveChat(); });
+    workspace.current = "firm-b";
+    view.rerender(<ChatHistoryProvider><PendingProbe /></ChatHistoryProvider>);
+    expect(screen.getByText("no draft")).toBeInTheDocument();
+    act(() => oldSetter([{ role: "user", content: "late secret" }]));
+    expect(screen.getByText("no draft")).toBeInTheDocument();
+    await act(async () => { finish({ id: "old-chat" }); expect(await pending).toBeNull(); });
+    expect(context.chats).not.toContainEqual(expect.objectContaining({ id: "old-chat" }));
+});

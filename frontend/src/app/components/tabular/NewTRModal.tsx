@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import type { Document, Folder, Project, Workflow } from "../shared/types";
@@ -81,7 +83,7 @@ interface Props {
 }
 
 /** Collects tabular-review configuration and pending access choices before creating a review. */
-export function NewTRModal({
+function NewTRModalForWorkspace({
     open,
     onClose,
     onAdd,
@@ -175,7 +177,7 @@ export function NewTRModal({
         if (!open) return;
 
         setLoadingWorkflows(true);
-        listWorkflows("tabular")
+        listWorkflows("tabular", workspace ?? "personal")
             .then((workflows) => {
                 devLog("[workflows/ui:tabular-review-modal] loaded", {
                     workflowCount: workflows.length,
@@ -750,4 +752,9 @@ export function NewTRModal({
             />
         </Modal>
     );
+}
+
+export function NewTRModal(props: Props) {
+    const identity = useWorkspaceIdentity();
+    return <NewTRModalForWorkspace key={identity} {...props} />;
 }

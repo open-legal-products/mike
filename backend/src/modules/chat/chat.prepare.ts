@@ -278,6 +278,7 @@ export async function prepareChatStream(
             if (!projectOrg.ok)
                 return { ok: false, internal: true, error: projectOrg.detail };
             workspaceOrgId = projectOrg.orgId;
+            contentOrgId = projectOrg.orgId;
         }
         const outside = await findNewAttachmentsOutsideWorkspace(db, {
             messages,
@@ -412,6 +413,7 @@ export async function prepareChatStream(
             messageId: args.askInputsResponse.assistant_message_id,
             askEventId: args.askInputsResponse.ask_event_id,
             userId,
+            orgId: contentOrgId,
         });
     } else if (lastUser) {
         const { error: userMessageError } = await db
@@ -503,7 +505,7 @@ export async function prepareChatStream(
             { timeZone, now: new Date(), userSentAt },
         );
 
-        const workflowStore = await buildWorkflowStore(userId, userEmail, db);
+        const workflowStore = await buildWorkflowStore(userId, userEmail, db, contentOrgId);
 
         return {
             ok: true,

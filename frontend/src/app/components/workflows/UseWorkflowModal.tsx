@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
+
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Document, Workflow } from "../shared/types";
 import { createTabularReview, listWorkflows } from "@/app/lib/mikeApi";
 import { useRouter } from "next/navigation";
@@ -50,7 +53,13 @@ function SelectedWorkflowSummary({ workflow }: { workflow: Workflow }) {
 // ---------------------------------------------------------------------------
 // UseWorkflowModal
 // ---------------------------------------------------------------------------
-export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Props) {
+function UseWorkflowModalForWorkspace({ workflow, onClose, skipSelect = false }: Props) {
+    const workspace = useDocumentWorkspace();
+    const active = useRef(true);
+    useLayoutEffect(() => {
+        active.current = true;
+        return () => { active.current = false; };
+    }, []);
     const [screen, setScreen] = useState<"select" | "details" | "documents">("select");
     const [selected, setSelected] = useState<Workflow | null>(workflow);
     const [listSearch, setListSearch] = useState("");
@@ -69,7 +78,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
     useEffect(() => {
         if (!workflow) return;
         let cancelled = false;
-        listWorkflows()
+        listWorkflows(undefined, workspace ?? "personal")
             .then((workflows) => {
                 if (cancelled) return;
                 setPickerWorkflows(workflows);
@@ -86,7 +95,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workflow?.id]);
+    }, [workflow?.id, workspace]);
 
     // Configure screen state
     const [inProject, setInProject] = useState(false);
@@ -135,7 +144,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             setSelected(null);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [workflow?.id]);
+    }, [workflow?.id, workspace]);
 
     useEffect(() => {
         const activeWorkflow = selected ?? workflow;
@@ -213,7 +222,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
                 projectId,
                 projectRow ? roleFrom(projectRow) : null,
             );
-            if (!chatId) return;
+            if (!chatId || !active.current) return;
             const files = selectedDocuments.map((document) => ({
                 filename: document.filename,
                 document_id: document.id,
@@ -260,6 +269,7 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
                 org_id: projectId ? undefined : workspaceOrgId,
                 model: selectedModel,
             });
+            if (!active.current) return;
             handleClose();
             router.push(
                 projectId ? `/projects/${projectId}/tabular-reviews/${review.id}` : `/tabular-reviews/${review.id}`,
@@ -560,4 +570,12 @@ export function UseWorkflowModal({ workflow, onClose, skipSelect = false }: Prop
             />
         </Modal>
     );
+}
+
+export function UseWorkflowModal(props: Props) {
+    const identity = useWorkspaceIdentity();
+    const workspace = useDocumentWorkspace() ?? "personal";
+    const workflow = props.workflow;
+    const inWorkspace = workflow?.is_system || (workflow?.org_id ?? "personal") === workspace;
+    return <UseWorkflowModalForWorkspace key={identity} {...props} workflow={inWorkspace ? workflow : null} />;
 }

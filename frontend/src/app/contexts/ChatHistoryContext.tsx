@@ -5,6 +5,7 @@ import {
     useCallback,
     useContext,
     useEffect,
+    useLayoutEffect,
     useMemo,
   useRef,
     useState,
@@ -79,6 +80,12 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
     // the first page, through loadChats's identity changing below.
     const workspace = useWorkspaceParam();
     const workspaceOrgId = useWorkspaceOrgId();
+    const identity = JSON.stringify([user?.id ?? null, workspace ?? "personal"]);
+    const activeIdentity = useRef<string | null>(identity);
+    useLayoutEffect(() => {
+        activeIdentity.current = identity;
+        return () => { activeIdentity.current = null; };
+    }, [identity]);
     const [chats, setChats] = useState<Chat[] | null>(null);
     const [hasMoreChats, setHasMoreChats] = useState(false);
     const [loadingMoreChats, setLoadingMoreChats] = useState(false);
@@ -92,10 +99,20 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
     const loadedWorkspaceRef = useRef<string | undefined>(undefined);
     const [currentChatId, setCurrentChatId] = useState<string | null>(null);
     const [sideChatId, setSideChatId] = useState<string | null>(null);
-    const [sideChatRequest, requestSideChat] = useState<string | null>(null);
-    const [newChatMessages, setNewChatMessages] = useState<Message[] | null>(
-        null,
-    );
+    const [pendingSideChat, setPendingSideChat] = useState<{ identity: string; id: string | null } | null>(null);
+    const sideChatRequest = pendingSideChat?.identity === identity ? pendingSideChat.id : null;
+    const requestSideChat = useCallback((id: string | null) => {
+        if (activeIdentity.current === identity) setPendingSideChat({ identity, id });
+    }, [identity]);
+    const [pendingMessages, setPendingMessages] = useState<{
+        identity: string;
+        messages: Message[] | null;
+    } | null>(null);
+    const newChatMessages = pendingMessages?.identity === identity
+        ? pendingMessages.messages : null;
+    const setNewChatMessages = useCallback((messages: Message[] | null) => {
+        if (activeIdentity.current === identity) setPendingMessages({ identity, messages });
+    }, [identity]);
 
     const loadChats = useCallback(async () => {
         if (!user) {
@@ -105,8 +122,8 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
         }
 
         const request = ++chatsRequestRef.current;
-        if (loadedWorkspaceRef.current !== workspace) {
-            loadedWorkspaceRef.current = workspace;
+        if (loadedWorkspaceRef.current !== identity) {
+            loadedWorkspaceRef.current = identity;
             setChats(null);
             setHasMoreChats(false);
             nextChatCursorRef.current = null;
@@ -116,18 +133,18 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
                 limit: INITIAL_CHAT_LIMIT + 1,
                 workspace,
             });
-            if (request !== chatsRequestRef.current) return;
+            if (request !== chatsRequestRef.current || activeIdentity.current !== identity) return;
             const page = data.slice(0, INITIAL_CHAT_LIMIT);
             setChats(sortChatsByActivity(page));
             nextChatCursorRef.current = cursorFor(page.at(-1));
             setHasMoreChats(data.length > INITIAL_CHAT_LIMIT);
         } catch {
-            if (request !== chatsRequestRef.current) return;
+            if (request !== chatsRequestRef.current || activeIdentity.current !== identity) return;
             setChats([]);
             nextChatCursorRef.current = null;
             setHasMoreChats(false);
         }
-    }, [user, workspace]);
+    }, [user, workspace, identity]);
 
     useEffect(() => {
         if (!user) {
@@ -169,7 +186,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             });
             // The workspace changed while this page was in flight: it
             // belongs to a list that is no longer on screen.
-            if (loadedWorkspaceRef.current !== workspace) return;
+            if (loadedWorkspaceRef.current !== identity) return;
             const page = data.slice(0, CHAT_PAGE_SIZE);
             nextChatCursorRef.current = cursorFor(page.at(-1));
             setChats((current) => {
@@ -188,7 +205,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             loadingMoreChatsRef.current = false;
             setLoadingMoreChats(false);
         }
-    }, [chats, hasMoreChats, user, workspace]);
+    }, [chats, hasMoreChats, user, workspace, identity]);
 
     useEffect(
         () =>
@@ -233,6 +250,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             projectId?: string,
             projectRole?: ProjectRole | null,
         ): Promise<string | null> => {
+            if (activeIdentity.current !== identity) return null;
             try {
                 // A chat started on its own belongs to the workspace it is
                 // started in; inside a project, the project decides.
@@ -243,6 +261,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
                           ? { org_id: workspaceOrgId }
                           : undefined,
                 );
+                if (activeIdentity.current !== identity) return null;
                 const now = new Date().toISOString();
                 // The optimistic row must say what the server would say.
                 // The overview RPC serves is_owner + access_role on every
@@ -283,7 +302,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
                 return null;
             }
         },
-        [user, workspaceOrgId],
+        [user, workspaceOrgId, identity],
     );
 
     const renameChatFn = useCallback(
@@ -368,12 +387,14 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             currentChatId,
             sideChatId,
             sideChatRequest,
+            requestSideChat,
             loadChats,
             loadMoreChats,
             saveChat,
             renameChatFn,
             updateChatTitle,
             newChatMessages,
+            setNewChatMessages,
             replaceChatId,
             deleteChatFn,
         ],

@@ -1,6 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const scope = vi.hoisted(() => ({ accountId: "u1", workspace: "personal" }));
+vi.mock("@/app/contexts/WorkspaceContext", async importOriginal => ({
+    ...await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>(),
+    useWorkspace: () => ({ accountId: scope.accountId }),
+    useDocumentWorkspace: () => scope.workspace,
+}));
+
 const apiMocks = vi.hoisted(() => ({
     uploadStandaloneDocuments: vi.fn(),
     uploadProjectDocuments: vi.fn(),
@@ -42,7 +49,7 @@ function document(id: string, filename: string) {
 }
 
 describe("AddDocumentsModal upload progress", () => {
-    beforeEach(() => vi.clearAllMocks());
+    beforeEach(() => { vi.clearAllMocks(); scope.accountId = "u1"; scope.workspace = "personal"; });
 
     it("replaces each loading row as that file completes and names failures", async () => {
         let finishUpload!: () => void;
@@ -255,5 +262,33 @@ describe("AddDocumentsModal upload progress", () => {
         expect(screen.getByTestId("loading-files")).toHaveTextContent(
             "renamed.pdf",
         );
+    });
+});
+
+
+describe("upload workspace identity", () => {
+    it.each(["workspace", "account"])("isolates in-flight uploads and late results after a %s switch", async boundary => {
+        scope.accountId = "u1"; scope.workspace = "firm-a";
+        let finish!: () => void;
+        apiMocks.uploadStandaloneDocuments.mockImplementation((inputs, options) => new Promise(resolve => {
+            finish = () => {
+                const result = document("private-doc", "confidential.pdf");
+                const progress = { clientId: inputs[0].clientId, filename: result.filename, status: "completed", result, errorCode: null };
+                options.onProgress(progress);
+                resolve([progress]);
+            };
+        }));
+        const props = { open: true, onClose: vi.fn(), onSelect: vi.fn(), breadcrumb: ["Workspace"], uploadStateId: crypto.randomUUID() };
+        const view = render(<AddDocumentsModal {...props} />);
+        fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [new File(["secret"], "confidential.pdf", { type: "application/pdf" })] } });
+        await waitFor(() => expect(screen.getByTestId("loading-files")).toHaveTextContent("confidential.pdf"));
+        if (boundary === "workspace") scope.workspace = "firm-b";
+        else scope.accountId = "u2";
+        view.rerender(<AddDocumentsModal {...props} />);
+        expect(screen.getByTestId("loading-files")).toBeEmptyDOMElement();
+        await act(async () => finish());
+        expect(screen.getByTestId("loading-files")).toBeEmptyDOMElement();
+        expect(screen.getByTestId("loaded-files")).toBeEmptyDOMElement();
+        expect(props.onSelect).not.toHaveBeenCalled();
     });
 });

@@ -39,6 +39,7 @@ export async function findDocumentsOutsideWorkspace(
     db: Db,
     documentIds: string[],
     orgId: string | null | undefined,
+    options: { includeWorkflowAssets?: boolean } = {},
 ): Promise<string[]> {
     const ids = [...new Set(documentIds)];
     if (ids.length === 0) return [];
@@ -48,7 +49,7 @@ export async function findDocumentsOutsideWorkspace(
         .in("id", ids);
     if (error) throw new Error("Failed to read the documents' workspaces");
     const documents = ((data ?? []) as DocumentPlacement[]).filter(
-        (document) => !document.workflow_id,
+        (document) => options.includeWorkflowAssets || !document.workflow_id,
     );
     if (documents.length === 0) return [];
 
@@ -75,7 +76,15 @@ export async function findDocumentsOutsideWorkspace(
             projectOrg.set(project.id, project.org_id ?? null);
         }
     }
+    const workflowOrg = new Map<string, string | null>();
+    const workflowIds = [...new Set(documents.flatMap(document => document.workflow_id ? [document.workflow_id] : []))];
+    if (workflowIds.length) {
+        const { data, error } = await db.from("workflows").select("id, org_id").in("id", workflowIds);
+        if (error) throw new Error("Failed to read the documents' workflows");
+        for (const row of data ?? []) workflowOrg.set(row.id, row.org_id ?? null);
+    }
     const storedOrg = (document: DocumentPlacement) =>
+        document.workflow_id ? workflowOrg.get(document.workflow_id) ?? document.org_id ?? null :
         document.project_id
             ? (projectOrg.get(document.project_id) ?? null)
             : (document.org_id ?? null);

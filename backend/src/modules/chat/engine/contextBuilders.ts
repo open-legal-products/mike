@@ -2,6 +2,8 @@ import { responseLanguageName } from "../../../lib/responseLanguages";
 import { deadlineMessage, type StreamStopReason } from "../../../lib/streamRuns";
 import crypto from "crypto";
 import type { Db } from "../../../lib/supabase";
+import { listWorkspaceWorkflows } from "../../../lib/workflowWorkspace";
+import { teamOrgIdOf } from "../../../lib/personalOrgs";
 import { ensureDocAccess } from "../../../lib/access";
 import { attachActiveVersionPaths } from "../../../lib/documentVersions";
 import {
@@ -1489,14 +1491,13 @@ export async function buildWorkflowStore(
   userId: string,
   userEmail: string | null | undefined,
   db: Db,
+  orgId: string | null = null,
 ): Promise<WorkflowStore> {
   const store: WorkflowStore = new Map();
-  const normalizedUserEmail = (userEmail ?? "").trim().toLowerCase();
+  const workspace = (await teamOrgIdOf(db, orgId)) ?? "personal";
 
-  // Best-effort: the chat routes call this outside their try blocks, so a
-  // thrown error here becomes an unhandled rejection that kills the process
-  // (Express 4 does not forward async errors). A chat must never fail —
-  // let alone crash the backend — because default installation failed.
+  // Default installation is best-effort; authorization and catalog reads below
+  // still fail closed if the workspace cannot be resolved.
   try {
     await ensureDefaultWorkflows(userId, db);
   } catch (err) {
@@ -1529,46 +1530,16 @@ export async function buildWorkflowStore(
     }
   }
 
-  // Then overlay user-owned assistant workflows.
-  const { data: workflows } = await db
-    .from("workflows")
-    .select("id, title, prompt_md")
-    .eq("user_id", userId)
-    .eq("type", "assistant");
-  for (const wf of workflows ?? []) {
+  // Only workflows currently authorized in the conversation's workspace.
+  // Global catalog entries above are the sole workspace-independent exception.
+  const workflows = await listWorkspaceWorkflows<{
+    id: string;
+    title: string;
+    prompt_md: string;
+  }>(db, { userId, userEmail, type: "assistant", workspace });
+  for (const wf of workflows) {
     if (wf.prompt_md) {
-      store.set(wf.id, {
-        title: wf.title,
-        skill_md: wf.prompt_md,
-        listed: true,
-      });
-    }
-  }
-
-  // Shared assistant workflows must also be readable by workflow tools.
-  if (normalizedUserEmail) {
-    const { data: shares } = await db
-      .from("workflow_shares")
-      .select("workflow_id")
-      .eq("shared_with_email", normalizedUserEmail);
-    const sharedIds = [
-      ...new Set((shares ?? []).map((share) => share.workflow_id)),
-    ];
-    if (sharedIds.length > 0) {
-      const { data: sharedWorkflows } = await db
-        .from("workflows")
-        .select("id, title, prompt_md")
-        .in("id", sharedIds)
-        .eq("type", "assistant");
-      for (const wf of sharedWorkflows ?? []) {
-        if (wf.prompt_md) {
-          store.set(wf.id, {
-            title: wf.title,
-            skill_md: wf.prompt_md,
-            listed: true,
-          });
-        }
-      }
+      store.set(wf.id, { title: wf.title, skill_md: wf.prompt_md, listed: true });
     }
   }
   const databaseWorkflowIds = [...store.entries()]

@@ -32,6 +32,7 @@ import {
 import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
 import { reportError } from "@/app/lib/errorReporting";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useWorkspaceOrgId } from "@/app/contexts/WorkspaceContext";
 import {
   UserVisibleError,
@@ -75,6 +76,11 @@ export function useAssistantChat({
     if (tracksCurrentChat) setHistoryCurrentChatId(id);
   };
   const workspaceOrgId = useWorkspaceOrgId();
+  const workspaceIdentity = useWorkspaceIdentity();
+  const workspaceIdentityRef = useRef(workspaceIdentity);
+  useLayoutEffect(() => {
+    workspaceIdentityRef.current = workspaceIdentity;
+  }, [workspaceIdentity]);
 
   const [messages, setRawMessages] = useState<Message[]>(initialMessages);
   // Mirrors `messages` for the async send path: a turn started from a toast
@@ -183,7 +189,7 @@ export function useAssistantChat({
   // ignores a superseded request the turn stalled on its empty placeholder with
   // no error. A layout effect still runs inside the switching commit, so no
   // async continuation from the old request can land in the new thread first.
-  const threadKey = `${projectId ?? ""}:${initialChatId ?? ""}`;
+  const threadKey = `${workspaceIdentity}:${projectId ?? ""}:${initialChatId ?? ""}`;
   const threadKeyRef = useRef(threadKey);
   const adoptedThreadKeyRef = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -276,7 +282,7 @@ export function useAssistantChat({
   };
 
   const threadKeyFor = (id: string | undefined) =>
-    `${projectId ?? ""}:${id ?? "new"}`;
+    `${workspaceIdentity}:${projectId ?? ""}:${id ?? "new"}`;
 
   const lastUserMessage = (transcript: Message[]): Message | undefined => {
     for (let i = transcript.length - 1; i >= 0; i--) {
@@ -391,7 +397,7 @@ export function useAssistantChat({
     message: Message,
     opts?: ChatTurnOptions,
   ): Promise<string | null> => {
-    if (!message.content.trim() || hasAssistantTurn(chatIdRef.current)) return null;
+    if (!mountedRef.current || workspaceIdentityRef.current !== workspaceIdentity || !message.content.trim() || hasAssistantTurn(chatIdRef.current)) return null;
 
     setIsResponseLoading(true);
 
@@ -475,7 +481,7 @@ export function useAssistantChat({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const isCurrentRequest = () =>
-      mountedRef.current && requestGenerationRef.current === generation;
+      mountedRef.current && workspaceIdentityRef.current === workspaceIdentity && requestGenerationRef.current === generation;
     // The live id, never the render-time state this closure captured: a turn
     // re-sent from a toast must land in the chat the first attempt created,
     // not open a second one.
@@ -589,7 +595,7 @@ export function useAssistantChat({
             setChatId(streamed);
             setCurrentChatId(streamed);
             if (isNewChatId && onChatCreated) {
-              adoptedThreadKeyRef.current = `${projectId ?? ""}:${streamed}`;
+              adoptedThreadKeyRef.current = `${workspaceIdentity}:${projectId ?? ""}:${streamed}`;
               onChatCreated(streamed);
             }
           },

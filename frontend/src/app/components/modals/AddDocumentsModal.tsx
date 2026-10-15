@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
+
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Upload, Loader2, X } from "lucide-react";
 import {
@@ -55,7 +57,7 @@ interface Props {
 
 const DIRECTORY_PAGE_SIZE = 40;
 
-export function AddDocumentsModal({
+function AddDocumentsModalForWorkspace({
     open,
     onClose,
     onSelect,
@@ -80,7 +82,8 @@ export function AddDocumentsModal({
             projectDocumentsOnly ? "project" : "all",
             initialTab,
         ].join(":");
-    const uploadStateKey = `add-documents-upload:${uploadSurfaceId}`;
+    const identity = useWorkspaceIdentity();
+    const uploadStateKey = `add-documents-upload:${identity}:${uploadSurfaceId}`;
     const [selectedDocuments, setSelectedDocuments] = useState<Document[]>([]);
     const [uploading, setUploading] = useRemountPersistentState(
         `${uploadStateKey}:active`,
@@ -468,4 +471,9 @@ export function AddDocumentsModal({
             </div>
         </Modal>
     );
+}
+
+export function AddDocumentsModal(props: Props) {
+    const identity = useWorkspaceIdentity();
+    return <AddDocumentsModalForWorkspace key={identity} {...props} />;
 }

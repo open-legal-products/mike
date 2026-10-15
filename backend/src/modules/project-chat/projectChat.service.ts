@@ -415,6 +415,7 @@ export async function prepareProjectChatStream(
             messageId: args.askInputsResponse.assistant_message_id,
             askEventId: args.askInputsResponse.ask_event_id,
             userId,
+            orgId: projectAccess.project.org_id ?? null,
         });
     } else if (lastUser) {
         const { error: userMessageError } = await db
@@ -558,7 +559,7 @@ export async function prepareProjectChatStream(
             { timeZone, now: new Date(), userSentAt },
         );
 
-        const workflowStore = await buildWorkflowStore(userId, userEmail, db);
+        const workflowStore = await buildWorkflowStore(userId, userEmail, db, projectAccess.project.org_id ?? null);
 
         return {
             ok: true,

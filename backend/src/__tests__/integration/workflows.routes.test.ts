@@ -310,6 +310,21 @@ describe("workflows.routes", () => {
         });
     });
 
+    it("keeps instructions and tabular columns in workspace-only picker responses", async () => {
+        const workflow = { id: "w1", user_id: "u1", org_id: null, access_scope: "private", title: "Scoped template", type: "tabular", prompt_md: "Full instructions", columns_config: [{ index: 0, name: "Clause", prompt: "Find clause" }] };
+        checkWorkflowAccess.mockResolvedValue({ ok: true, workflow });
+        const overview = vi.fn(async (_name: string, args: Record<string, unknown>) => ({ data: args.p_offset === 0 ? [workflow] : [], error: null }));
+        vi.mocked(createServerSupabase).mockImplementationOnce(() => {
+            const db = mockSupabase();
+            db.rpc = vi.fn((name: string, args: Record<string, unknown>) => name === "get_workflows_overview" ? overview(name, args) : Promise.resolve({ data: null, error: null })) as typeof db.rpc;
+            return db as unknown as Db;
+        });
+        const res = await request(app).get("/workflows?workspace=personal&type=tabular").set(...AUTH);
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([expect.objectContaining({ skill_md: workflow.prompt_md, columns_config: workflow.columns_config })]);
+        expect(overview.mock.calls[0][1]).toMatchObject({ p_workspace: "personal", p_type: "tabular" });
+    });
+
     // ── GET /workflows/ids (select-all-matching support) ──────────────────
     describe("GET /workflows/ids", () => {
         it("pages through the RPC until an empty page is returned", async () => {

@@ -1,5 +1,8 @@
 "use client";
 
+import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
+
 import { useEffect, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import type { QuickAction, Workflow } from "../shared/types";
@@ -28,13 +31,14 @@ interface QuickActionsModalProps {
   onClose: () => void;
 }
 
-export function QuickActionsModal({
+function QuickActionsModalForWorkspace({
   open,
   actions,
   onSave,
   onCreate,
   onClose,
 }: QuickActionsModalProps) {
+    const workspace = useDocumentWorkspace();
   const [screen, setScreen] = useState<Screen>("list");
   const [selected, setSelected] = useState<QuickAction | null>(null);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
@@ -48,10 +52,10 @@ export function QuickActionsModal({
 
   useEffect(() => {
     if (!open || workflows.length > 0) return;
-    void listWorkflows("assistant")
+    void listWorkflows("assistant", workspace ?? "personal")
       .then((rows) => setWorkflows(rows))
       .catch(() => setError("Could not load assistant workflows."));
-  }, [open, workflows.length]);
+  }, [open, workflows.length, workspace]);
 
   const availableWorkflows = useMemo(() => {
     const used = new Set(actions.map((action) => action.workflow_id));
@@ -411,4 +415,9 @@ function ToggleRow({
       />
     </div>
   );
+}
+
+export function QuickActionsModal(props: QuickActionsModalProps) {
+    const identity = useWorkspaceIdentity();
+    return <QuickActionsModalForWorkspace key={identity} {...props} />;
 }

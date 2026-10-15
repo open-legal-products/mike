@@ -5,7 +5,12 @@ tracked-edit review into a Word task pane.
 
 It uses the same backend-managed HttpOnly cookie session, Mike API, model
 providers, and workflow library as the web app. Word conversations are stored
-separately from the web assistant's chat history.
+separately from the web assistant's chat history. Word currently uses the
+Personal workspace for models, memory, workflows, quick actions and document
+pickers. Organization documents and workflow assets cannot be attached to Word
+chats. Older chats with organization attachments must be replaced with a new
+Personal chat before continuing; they are also excluded from new Personal
+memory learning. This does not purge previously stored chats or memory.
 
 ## Prerequisites
 
