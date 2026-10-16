@@ -192,7 +192,8 @@ therefore initially share the source document's chat history.
 The task pane never renders a raw `error.message`. `describeError` (shared
 with the web app, `frontend/src/shared/lib/userError.ts`) classifies a thrown
 value once, and `word-addin/src/taskpane/lib/notify.ts` shows the result as a
-toast with an honest "Retry". Transport failures go through
+toast with an honest "Retry", built on the toast core it shares with the web
+app (`frontend/src/shared/lib/errorNotifier.ts`). Transport failures go through
 `word-addin/src/taskpane/lib/networkError.ts`, which calls the shared
 `networkMessage(origin)` so both clients say the same sentence; the add-in
 passes the API origin, because a self-hoster whose own container is down is
