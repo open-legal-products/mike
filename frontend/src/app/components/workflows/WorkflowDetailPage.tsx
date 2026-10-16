@@ -520,8 +520,8 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
           action={
             <PillButtonUI
               type="button"
-              tone="white"
-              size="normal"
+              tone="black"
+              size="sm"
               onClick={retryLoad}
             >
               Try again
