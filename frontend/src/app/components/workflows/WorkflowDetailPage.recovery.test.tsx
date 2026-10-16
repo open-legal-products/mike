@@ -349,4 +349,38 @@ describe("WorkflowDetailPage failures", () => {
         });
         expect(screen.getByText("Couldn't save")).toBeVisible();
     });
+
+    it("does not let an older failed column save undo a newer one that succeeded", async () => {
+        vi.mocked(getWorkflow).mockResolvedValue(tabularWorkflow());
+        let failFirst!: (error: unknown) => void;
+        vi.mocked(updateWorkflow)
+            .mockImplementationOnce(
+                () =>
+                    new Promise((_, reject) => {
+                        failFirst = reject;
+                    }),
+            )
+            .mockResolvedValueOnce(tabularWorkflow());
+        const user = userEvent.setup();
+        render(
+            <>
+                <WorkflowDetailPage id="wf-1" workflowType="tabular" />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await deleteColumn(user, "Party");
+        await deleteColumn(user, "Date");
+        await waitFor(() => expect(updateWorkflow).toHaveBeenCalledTimes(2));
+        expect(await screen.findByText("Saved")).toBeVisible();
+
+        await act(async () => {
+            failFirst(new Error("boom"));
+            await Promise.resolve();
+        });
+
+        // The server has the newer (empty) list; the table must too.
+        expect(screen.queryByText("Party")).toBeNull();
+        expect(screen.queryByText("Date")).toBeNull();
+    });
 });

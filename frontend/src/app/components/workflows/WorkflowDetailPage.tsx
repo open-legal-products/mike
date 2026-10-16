@@ -424,9 +424,14 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
     // and then calls this, so this closure still holds the pre-edit list.
     const previous = columns;
     lastColumnsAttemptRef.current = next;
+    // A newer column save carries this edit too (each caller builds on the
+    // list on screen) and settles the table and status itself. Letting this
+    // one roll back or report would undo or contradict it.
+    const superseded = () => lastColumnsAttemptRef.current !== next;
     showSaveStatus("saving");
     try {
       const updated = await updateWorkflow(id, { columns_config: next });
+      if (superseded()) return;
       setWorkflow((current) => ({
         ...updated,
         open_source_submission:
@@ -436,6 +441,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       }));
       showSaveStatus("saved");
     } catch (error) {
+      if (superseded()) return;
       // Put the table back before saying so, so the screen never shows a
       // column layout the server never accepted.
       setColumns(previous);
