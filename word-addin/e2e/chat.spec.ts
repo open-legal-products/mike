@@ -2291,7 +2291,7 @@ test("keeps an edit reviewable through its passage when Word withholds revision 
   expect(calls.rejectedChanges).toEqual([]);
 });
 
-test("does not claim an edit was applied when the mutation sync failed before Word changed the document", async ({
+test("says it cannot confirm the outcome when the mutation sync failed mid-batch", async ({
   addin,
   page,
 }) => {
@@ -2308,7 +2308,14 @@ test("does not claim an edit was applied when the mutation sync failed before Wo
   await page.getByRole("button", { name: "Send" }).click();
   await page.getByRole("button", { name: "Apply", exact: true }).click();
 
-  await expect(page.getByText("Couldn’t apply this change.")).toBeVisible();
+  // Word was sent the mutation and then faulted. Re-reading the exact target
+  // ranges proves nothing either way, so the card must not claim the change
+  // failed (it might have landed) nor invite a retry that would double-apply.
+  await expect(
+    page.getByText(
+      "Mike couldn't confirm whether this change was applied — check the document before retrying.",
+    ),
+  ).toBeVisible();
   await expect(
     page.getByText("Applied in Word — review it from Word’s Review tab."),
   ).toHaveCount(0);

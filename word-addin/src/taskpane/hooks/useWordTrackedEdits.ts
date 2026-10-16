@@ -54,6 +54,14 @@ function editFailureState(result: {
   reason?: string;
   error?: string;
 }): Pick<EditRuntimeState, "status" | "error"> {
+  // Checked before `status`: an unverified apply is an "error" status whose
+  // wording and (absent) actions differ from every other failure.
+  if (result.reason === "unverified") {
+    return { status: "unverified", error: UNVERIFIED_APPLY_MESSAGE };
+  }
+  if (result.reason === "already-applied") {
+    return { status: "already-applied", error: ALREADY_APPLIED_MESSAGE };
+  }
   if (result.status === "error") {
     return { status: "error", error: result.error };
   }
@@ -95,6 +103,10 @@ import type { WordEditApplyMode } from "../lib/wordChatSettings";
 import { getEditKey, parseEditKey } from "../lib/wordTrackedEditKeys";
 import { listWordEditAnchorIds } from "../lib/wordEditAnchors";
 import { userMessage } from "../lib/notify";
+import {
+  ALREADY_APPLIED_MESSAGE,
+  UNVERIFIED_APPLY_MESSAGE,
+} from "../lib/editApplyOutcome";
 
 export function useWordTrackedEdits({
   sessionKey,
@@ -680,6 +692,40 @@ export function useWordTrackedEdits({
           });
           return;
         }
+        if (first.reason === "already-applied") {
+          // The document already carries this edit; a replayed frame must not
+          // add a second revision over the first.
+          setEditRuntimeState(key, {
+            status: "already-applied",
+            matches: matchesFound,
+            busy: false,
+            error: ALREADY_APPLIED_MESSAGE,
+          });
+          void updatePersistedEdit(key, {
+            apply_status: "applied",
+            matched_occurrences: matchesFound,
+            applied_occurrences: 0,
+            error_code: "already-applied",
+            error_message: ALREADY_APPLIED_MESSAGE,
+          });
+          return;
+        }
+        if (first.reason === "unverified") {
+          setEditRuntimeState(key, {
+            status: "unverified",
+            matches: matchesFound,
+            busy: false,
+            error: UNVERIFIED_APPLY_MESSAGE,
+          });
+          void updatePersistedEdit(key, {
+            apply_status: "failed",
+            matched_occurrences: matchesFound,
+            applied_occurrences: 0,
+            error_code: "unverified",
+            error_message: UNVERIFIED_APPLY_MESSAGE,
+          });
+          return;
+        }
         if (first.reason === "pre-existing-revisions") {
           conflictedRetryRef.current.set(key, {
             edit,
@@ -931,6 +977,21 @@ export function useWordTrackedEdits({
               status: "skipped",
               reason: "pre-existing-revisions",
               ...(state.error ? { error: state.error } : {}),
+            };
+          // The document already carries it: tell the model it is applied so
+          // it does not propose the same change a third time.
+          case "already-applied":
+            return {
+              index,
+              status: "applied",
+              matches: state.matches,
+            };
+          case "unverified":
+            return {
+              index,
+              status: "error",
+              reason: "unverified",
+              error: UNVERIFIED_APPLY_MESSAGE,
             };
           case "error":
             return {

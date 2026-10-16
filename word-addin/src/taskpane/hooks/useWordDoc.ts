@@ -14,9 +14,16 @@ import { createSecureUuid } from "../lib/secureUuid";
 import {
   bookmarkNameForEdit,
   getWordEditAnchor,
+  listAppliedWordEditIds,
+  markWordEditApplied,
   persistWordEditAnchor,
   removeWordEditAnchor,
 } from "../lib/wordEditAnchors";
+import {
+  ALREADY_APPLIED_MESSAGE,
+  classifyApplyFailure,
+  isEditAlreadyApplied,
+} from "../lib/editApplyOutcome";
 import { userMessage } from "../lib/notify";
 import {
   ANCHOR_CLEANUP_FAILURE,
@@ -56,6 +63,10 @@ type TrackedEditApplyReason =
   | "pre-existing-revisions"
   | "no-tracked-changes"
   | "unexpected-revisions"
+  /** The document already carries this stable edit ID (retry idempotency). */
+  | "already-applied"
+  /** Word faulted mid-batch and nothing could prove whether it landed. */
+  | "unverified"
   | "word-error";
 
 /** Result for one logical ORIGINAL/REPLACEMENT edit. */
@@ -2385,6 +2396,20 @@ export function useWordDoc() {
             bookmarkName: string;
             result: TrackedEditApplyResult;
           }[] = [];
+          // Idempotency: a rejoined turn replays every edit frame of its
+          // assistant message, including edits this document already
+          // carries (a user Retry is a new message with new IDs). Read
+          // the durable set once — it cannot change while this batch runs,
+          // because every Word mutation is serialized through one queue.
+          let appliedEditIds: ReadonlySet<string>;
+          try {
+            appliedEditIds = listAppliedWordEditIds();
+          } catch (error) {
+            // No registry means no idempotency, not a failed edit.
+            console.warn("[tracked-edit/apply] applied-id read failed", error);
+            appliedEditIds = new Set<string>();
+          }
+          const newlyAppliedEditIds: string[] = [];
 
           try {
             // Sync this separately so every later insert is guaranteed to be
@@ -2410,6 +2435,16 @@ export function useWordDoc() {
               let candidateCollections: Word.TrackedChangeCollection[] = [];
               let candidateChanges: Word.TrackedChange[] = [];
               let candidateRanges: Word.Range[] = [];
+
+              if (isEditAlreadyApplied(edit.stableEditId, appliedEditIds)) {
+                // Applying again would insert a SECOND revision over the
+                // first, which is what the user would have to clean up.
+                result.status = "skipped";
+                result.reason = "already-applied";
+                result.error = ALREADY_APPLIED_MESSAGE;
+                report.edits.push(result);
+                continue;
+              }
 
               if (!isSearchableOriginal(original)) {
                 result.status = "skipped";
@@ -2884,6 +2919,9 @@ export function useWordDoc() {
                 });
                 result.status = "applied";
                 result.handle = handle;
+                if (edit.stableEditId) {
+                  newlyAppliedEditIds.push(edit.stableEditId);
+                }
                 report.edits.push(result);
               } catch (error) {
                 if (mutationQueued && !mutationApplied) {
@@ -2906,14 +2944,33 @@ export function useWordDoc() {
                     // cleanup is unavailable; the UI hands review back to Word.
                   }
                 }
-                result.status = mutationApplied ? "applied-unmanaged" : "error";
-                result.reason = "word-error";
-                result.error = mutationApplied
-                  ? "Applied in Word, but Mike couldn’t retain its review controls. Review it from Word’s Review tab."
-                  : describeWordFailure(
-                      error,
-                      "Word couldn’t apply this change.",
-                    );
+                const outcome = classifyApplyFailure({
+                  mutationQueued,
+                  mutationApplied,
+                });
+                result.status = outcome.status;
+                result.reason = outcome.reason;
+                if (outcome.status === "applied-unmanaged") {
+                  result.error =
+                    "Applied in Word, but Mike couldn’t retain its review controls. Review it from Word’s Review tab.";
+                  if (edit.stableEditId) {
+                    newlyAppliedEditIds.push(edit.stableEditId);
+                  }
+                } else if (outcome.reason === "unverified") {
+                  // Word executed part of the batch and then faulted, and the
+                  // verification read could not settle it either way. Say so
+                  // instead of inviting a retry that might double-apply.
+                  console.warn(
+                    "[tracked-edit/apply] unverified mutation",
+                    logErrorMessage(error),
+                  );
+                  result.error = outcome.message;
+                } else {
+                  result.error = describeWordFailure(
+                    error,
+                    "Word couldn’t apply this change.",
+                  );
+                }
                 report.edits.push(result);
               }
             }
@@ -2945,6 +3002,20 @@ export function useWordDoc() {
               anchor.result.error = describeWordFailure(
                 error,
                 "The change is reviewable now, but its View link may not survive reopening the document.",
+              );
+            }
+          }
+          // Record what is now in the document, so a replayed edit frame
+          // does not apply it a second time. Failing to persist the marker
+          // costs idempotency on a later replay, never this edit, so it is
+          // logged rather than reported.
+          for (const stableEditId of newlyAppliedEditIds) {
+            try {
+              await markWordEditApplied(stableEditId);
+            } catch (error) {
+              console.warn(
+                "[tracked-edit/apply] applied-id write failed",
+                logErrorMessage(error),
               );
             }
           }
