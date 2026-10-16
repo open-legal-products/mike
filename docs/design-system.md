@@ -428,6 +428,63 @@ keep their own spacing and should not receive this attribute.
 For a real standalone checkbox use `<input type="checkbox">` with
 `TABLE_CHECKBOX_CLASS` (see `TablePrimitive.tsx`), not `check-square`.
 
+## Reporting failures
+
+Every failure that stops something the user asked for must be shown to them,
+with a concise and accurate message and honest next steps. "Notices: toast or
+WarningPopup" below says what the notice looks like; this section says what
+goes in it and when.
+
+1. **Classify once.** `describeError` from `frontend/src/app/lib/userFacingError.ts`
+   (the shared classifier in `frontend/src/shared/lib/userError.ts` plus the
+   web app's fixed sentences for server-reported codes such as
+   `schema_out_of_date`) turns any thrown value into
+   `{ kind, title, message, retryable, supportable, requestId }`. Pass
+   `action` in the imperative ("save the document") so the title reads
+   "Couldn't save the document". 4xx `detail` from the backend is written for
+   users and is shown; 5xx bodies and stack text never are.
+2. **Show it in the right place.**
+   - A form field the user is editing: inline text next to the field, using
+     the description's `message`.
+   - Anything else (saves, deletes, loads, exports, background refreshes):
+     `notifyError(error, { action, onRetry, dedupeKey })`. `AppToasts` draws
+     it as a `WarningPopup` with "Retry" (only when the failure is retryable
+     and a closure is given) and "Contact support" (only for a failure the
+     user cannot fix: a pre-filled email to `SUPPORT_EMAIL` carrying the
+     request id, code, page and time). A component may call it for a failure
+     on its own screen when it needs those actions; render a `WarningPopup`
+     directly only for a warning with its own content or action.
+   - A batch that failed for some items (a bulk delete, a multi-file move or
+     upload): `notifyPartialFailure(message, { action, onRetry })`, one notice
+     naming what did not happen, with a Retry that re-runs only those items.
+   - A whole screen that cannot render: `EmptyState tone="error"` (wrapped
+     in `TableEmptyState` inside a table) with a "Try again" action. An empty table must never stand in
+     for "this did not load".
+   - A route that threw: `app/error.tsx` and `app/global-error.tsx` offer
+     "Try again" and "Contact support" with the error digest, never the
+     message.
+3. **Revert optimistic state** before notifying, so the screen never shows a
+   change that did not happen, and revert only the item that failed. Use a
+   functional updater (and `restoreOptimisticallyDeletedRows` in
+   `app/lib/optimisticRows.ts` for a removed row) rather than restoring a
+   snapshot of the whole list.
+4. **Retry re-runs the current code.** By the time "Retry" is pressed the
+   handler that failed has usually been re-created. Read it through a ref
+   kept current with `useLatestRef` / `useAssignLatest`
+   (`app/hooks/useLatestRef.ts`), and re-send only what did not land.
+5. **Destructive actions are retried through their confirmation.** Retry
+   after a failed delete re-opens the confirmation; it never deletes from the
+   notice.
+6. **Cancellation is not an error.** `notifyError` returns `null` for an
+   `AbortError` and shows nothing.
+7. **Repeats collapse.** Polling and autosave loops pass a `dedupeKey` so a
+   failing loop shows one notice, not one per tick.
+8. **Silence needs a reason.** A catch that intentionally shows nothing
+   (cleanup, a local-storage JSON fallback, a body drain) carries a one-line
+   comment saying why.
+
+Never call `window.alert`.
+
 ## Choosing: existing primitive, shadcn registry, or a one-off
 
 Work down this list and stop at the first that fits.
@@ -516,11 +573,12 @@ toast stack instead of covering each other.
 | Word add-in | Yes | No (web only) |
 
 In the web app a warning is always a **`WarningPopup`**. A component that
-reports a failure on its own screen (a rejected upload, a failed save from a
-form, a permission refusal) renders one directly. Code with no component of
-its own (the API client, a stream callback, the offline listener) calls
-`notifyError`; `AppToasts` draws what it raises with `WarningPopup`,
-including any Retry and Contact support actions.
+reports a failure on its own screen with custom content or its own action (a
+rejected upload, a permission refusal) renders one directly. Everything else,
+including a component failure that needs Retry or Contact support and any
+code with no component of its own (the API client, a stream callback, the
+offline listener), calls `notifyError`; `AppToasts` draws what it raises with
+`WarningPopup`, including those actions. See "Reporting failures" above.
 
 No two actions on one notice share a look. The last action in the row is the
 primary one and is a black pill (`WarningPopup`'s `primaryAction` always
