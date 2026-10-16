@@ -35,6 +35,12 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
+# Sweep stacks left behind by earlier runs, worktrees, and reviews before
+# adding another one (see scripts/stack.sh; MIKE_GC=0 skips it).
+if [ "${MIKE_GC:-1}" != 0 ]; then
+    bash "$ROOT/scripts/stack.sh" gc
+fi
+
 cd "$BACKEND"
 
 if [ ! -f supabase/config.toml ]; then
