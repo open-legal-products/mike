@@ -18,7 +18,11 @@ import {
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { deleteAccount, isMfaRequiredError } from "@/app/lib/mikeApi";
 import { authMessages } from "@/app/lib/authMessages";
-import { describeError, notifyError } from "@/app/lib/userFacingError";
+import {
+  NOT_SAVED_STATUS,
+  describeError,
+  notifyError,
+} from "@/app/lib/userFacingError";
 import {
   SettingsDescription,
   SettingsLabel,
@@ -37,7 +41,6 @@ interface EmailWarning {
   message: string;
 }
 
-/** Composes authenticated account settings, including profile-photo editing and account security controls. */
 /** Keyed by the `code` GoTrue returns from `PATCH /api/auth/email`. */
 // One auth message source (authMessages.ts); only the email-field wording
 // differs here, because a validation failure on this screen can only mean
@@ -54,6 +57,7 @@ const EMAIL_RATE_LIMIT_CODES = new Set([
   "over_request_rate_limit",
 ]);
 
+/** Composes authenticated account settings, including profile-photo editing and account security controls. */
 export default function SettingsPage() {
   const router = useRouter();
   const { user, signOut, updateEmail } = useAuth();
@@ -220,7 +224,7 @@ export default function SettingsPage() {
       // The profile context classified the failure and raised the notice
       // (message, Retry, support). This line is only the field's status, so
       // the user never reads two different explanations of one failure.
-      setNameError("Not saved");
+      setNameError(NOT_SAVED_STATUS);
     }
   };
 

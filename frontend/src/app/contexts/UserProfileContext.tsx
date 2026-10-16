@@ -201,7 +201,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     // churn, but a failure is never silent any more: the context classifies
     // the error once and raises the notice that carries the sentence, an
     // honest "Retry" and the support link. Callers therefore keep at most a
-    // short inline status ("Not saved") and never a second, competing
+    // short inline status (NOT_SAVED_STATUS) and never a second, competing
     // explanation of the same failure.
     //
     // The `if (!user) return false` guards stay silent on purpose: there is

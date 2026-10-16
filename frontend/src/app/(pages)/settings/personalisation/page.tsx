@@ -14,6 +14,7 @@ import {
 import { SettingsPersonalisationFields } from "@/app/components/settings/SettingsPersonalisationFields";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { NOT_SAVED_STATUS } from "@/app/lib/userFacingError";
 import type { PersonalisationDetails } from "@/app/lib/mikeApi";
 
 function fieldStatus(
@@ -112,7 +113,7 @@ function PersonalisationForm({
         if (!success) {
           // The profile context classified the failure and raised the notice;
           // this row keeps only the status and its own Retry.
-          setError("Not saved");
+          setError(NOT_SAVED_STATUS);
           return;
         }
         setSavedField(field);

@@ -256,6 +256,14 @@ export function notifyPartialFailure(
     );
 }
 
+/**
+ * The inline status beside a field whose save failed after the failure was
+ * already reported as a notice (the profile context's mutators do this).
+ * The notice carries the explanation, Retry and support; the field only says
+ * it did not save, in one wording everywhere.
+ */
+export const NOT_SAVED_STATUS = "Not saved";
+
 export function notifySuccess(message: string, title?: string): string {
     return showToast({ tone: "success", title, message });
 }

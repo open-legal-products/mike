@@ -11,6 +11,7 @@ import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { NOT_SAVED_STATUS } from "@/app/lib/userFacingError";
 
 export default function FeaturesPage() {
   const {
@@ -41,7 +42,7 @@ export default function FeaturesPage() {
     setSavingQuickActions(false);
     // The profile context raised the notice that explains the failure and
     // offers Retry; this is only the row's status.
-    if (!ok) setQuickActionsError("Not saved");
+    if (!ok) setQuickActionsError(NOT_SAVED_STATUS);
   };
 
   const handleCourtListenerChange = async (enabled: boolean) => {
@@ -53,7 +54,7 @@ export default function FeaturesPage() {
     setSaving(false);
     setOptimisticLegalResearchUs(null);
     if (!ok) {
-      setSaveError("Not saved");
+      setSaveError(NOT_SAVED_STATUS);
     }
   };
 

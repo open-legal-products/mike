@@ -12,6 +12,7 @@ import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
+import { NOT_SAVED_STATUS } from "@/app/lib/userFacingError";
 
 export default function OnboardingPracticePage() {
     const router = useRouter();
@@ -58,7 +59,7 @@ function PracticeDetailsForm({
             // `updatePersonalisation` classified the failure and raised the
             // notice that carries the sentence, Retry and support; this line
             // only tells the user the form did not go through.
-            setError("Not saved.");
+            setError(NOT_SAVED_STATUS);
             setSubmitting(false);
         }
     };
