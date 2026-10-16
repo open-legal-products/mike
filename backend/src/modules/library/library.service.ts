@@ -519,15 +519,16 @@ export async function resolveLibraryFolderPath(
   return ok(data);
 }
 
+/** Create a named library folder in the authorized parent or current workspace. */
 export async function createLibraryFolder(
   db: Db,
   userId: string,
   kind: LibraryKind,
-  body: { name?: string; parent_folder_id?: string | null },
+  body: { name?: unknown; parent_folder_id?: string | null },
   workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<unknown>> {
   const { name, parent_folder_id } = body;
-  if (!name?.trim()) return err(400, "name is required");
+  if (typeof name !== "string" || !name.trim()) return err(400, "name is required");
 
   // A folder is in its parent's workspace; at the top level, the one the
   // caller is working in.
@@ -559,12 +560,13 @@ export async function createLibraryFolder(
   return ok(data);
 }
 
+/** Rename or move a library folder after checking its workspace and parent tree. */
 export async function updateLibraryFolder(
   db: Db,
   userId: string,
   kind: LibraryKind,
   folderId: string,
-  body: { name?: string; parent_folder_id?: string | null },
+  body: { name?: unknown; parent_folder_id?: string | null },
   workspace: WorkspaceFilter = null,
 ): Promise<ServiceResult<unknown>> {
   const folder = await loadLibraryFolder(db, userId, kind, folderId, workspace);
@@ -573,7 +575,8 @@ export async function updateLibraryFolder(
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
-  if (body.name != null) {
+  if ("name" in body) {
+    if (typeof body.name !== "string") return err(400, "name must be a non-empty string");
     const trimmed = body.name.trim();
     if (!trimmed) return err(400, "name is required");
     updates.name = trimmed;

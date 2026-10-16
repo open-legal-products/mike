@@ -25,8 +25,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: docker-images-${{ github.ref }}
-  cancel-in-progress: true
+  group: docker-images-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

@@ -1,3 +1,4 @@
+import { chunkArray } from "./arrays";
 import type { Db } from "./supabase";
 import { safeError } from "./safeError";
 
@@ -29,29 +30,24 @@ export function profileAttributionName(
 
 /**
  * Indexes normalized profile identities by email and user ID.
- * Only explicit, caller-authorized roster identities include photos; legacy unscoped reads return names alone.
+ * Reads only explicit, caller-authorized roster identities, in bounded batches.
  */
 export async function loadProfileUsersByEmail(
     db: Db,
-    people?: { userIds: string[]; emails: string[] },
+    people: { userIds: string[]; emails: string[] },
 ) {
-    // Photos are loaded only for an authorized roster's explicit identities.
-    // Legacy callers that need names alone retain the smaller projection.
-    const results = people
-        ? await Promise.all([
-            people.userIds.length ? db.from("user_profiles")
-                .select("user_id, email, display_name, profile_photo")
-                .in("user_id", [...new Set(people.userIds)])
-                : Promise.resolve({ data: [], error: null }),
-            people.emails.length ? db.from("user_profiles")
-                .select("user_id, email, display_name, profile_photo")
-                .in("email", [...new Set(people.emails.map(normalizeEmail))])
-                : Promise.resolve({ data: [], error: null }),
-        ])
-        : [await db.from("user_profiles").select("user_id, email, display_name")
-            .not("email", "is", null)];
-    for (const result of results) if (result.error) throw result.error;
-    const data = results.flatMap((result) => result.data ?? []);
+    const data: { user_id: string; email: string | null; display_name: string | null; profile_photo?: string | null }[] = [];
+    for (const [column, values] of [
+        ["user_id", people.userIds],
+        ["email", people.emails.map(normalizeEmail).filter(Boolean)],
+    ] as const) {
+        for (const batch of chunkArray([...new Set(values)], 50)) {
+            const result = await db.from("user_profiles")
+                .select("user_id, email, display_name, profile_photo").in(column, batch);
+            if (result.error) throw result.error;
+            data.push(...(result.data ?? []));
+        }
+    }
 
     const userByEmail = new Map<string, ProfileUserInfo>();
     const userById = new Map<string, ProfileUserInfo>();
@@ -62,7 +58,7 @@ export async function loadProfileUsersByEmail(
             id: row.user_id as string,
             email,
             display_name: normalizeDisplayName(row.display_name),
-            ...(people ? { profile_photo: (row as { profile_photo?: string | null }).profile_photo ?? null } : {}),
+            profile_photo: row.profile_photo ?? null,
         };
         userByEmail.set(email, info);
         userById.set(info.id, info);

@@ -114,6 +114,7 @@ interface Props {
     projectId?: string;
 }
 
+/** Display a review grid and resume its active generation through the latest stream handler. */
 export function TRView({ reviewId, projectId }: Props) {
     const configuredModels = useConfiguredModels();
     const configuredModelIds = useMemo(
@@ -238,7 +239,7 @@ export function TRView({ reviewId, projectId }: Props) {
     }, [columns]);
 
     const retryRef = useRef<{
-        resume: () => Promise<void>;
+        resume: (opts?: { stoppable?: boolean }) => Promise<void>;
         reloadReview: () => Promise<void>;
         generate: () => void;
         updateColumn: (column: ColumnConfig) => void;
@@ -247,7 +248,7 @@ export function TRView({ reviewId, projectId }: Props) {
     // These handlers are re-created every render, and a retry must always
     // land on the newest one.
     useAssignLatest(retryRef, {
-        resume: () => resumeGenerationStream(),
+        resume: (opts) => resumeGenerationStream(opts),
         reloadReview: () => loadLatestReview(),
         generate: () => void handleGenerate(),
         updateColumn: (column: ColumnConfig) => void handleUpdateColumn(column),
@@ -327,7 +328,7 @@ export function TRView({ reviewId, projectId }: Props) {
                     // be watched, not stopped.
                     lastFrameIdRef.current = 0;
                     if (active_generation) {
-                        resumeGenerationStream({ stoppable: true }).catch(
+                        retryRef.current?.resume({ stoppable: true }).catch(
                             (err) =>
                                 console.error("Generation resume failed", err),
                         );
@@ -335,7 +336,7 @@ export function TRView({ reviewId, projectId }: Props) {
                         review.is_running ||
                         cells.some((c) => c.status === "generating")
                     ) {
-                        resumeGenerationStream().catch((err) =>
+                        retryRef.current?.resume().catch((err) =>
                             notifyError(err, {
                                 action: "reconnect to the running review",
                                 fallback:

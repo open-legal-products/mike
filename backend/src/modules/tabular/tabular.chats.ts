@@ -606,13 +606,18 @@ export async function prepareTabularChat(
         .from("tabular_cells")
         .select("*")
         .eq("review_id", reviewId);
-    const { rows } = await filterReadableReviewRows(
-        db,
-        await loadReviewRows(db, reviewId),
-        [],
-        userId,
-        userEmail,
-    );
+    let rows: Awaited<ReturnType<typeof loadReviewRows>>;
+    try {
+        ({ rows } = await filterReadableReviewRows(
+            db,
+            await loadReviewRows(db, reviewId),
+            [],
+            userId,
+            userEmail,
+        ));
+    } catch (error) {
+        return internalFailure(error);
+    }
     const visibleRowIds = new Set(rows.map((row) => row.id));
     const cells = (allCells ?? []).filter((c: { row_id?: string }) =>
         visibleRowIds.has(c.row_id as string),

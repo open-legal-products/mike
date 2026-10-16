@@ -55,6 +55,7 @@ import {
 import {
     createChat,
     deleteChat,
+    discardRejectedChatInput,
     devLog,
     getAccessibleChat,
     getChatMessages,
@@ -485,13 +486,13 @@ chatRouter.delete("/:chatId", requireAuth, asyncRoute(async (req, res) => {
     const userEmail = res.locals.userEmail as string | undefined;
     const { chatId } = req.params;
     const db = createServerSupabase();
-    // container.delete keeps chat deletion at the top of the ladder: the
-    // chat's creator, or an admin of the project it lives in (who could
-    // already delete the whole project). Members and viewers get 403.
+    // Owners may delete any chat. An editor may delete a chat they started;
+    // authorship never restores write access after a downgrade to Viewer.
     const access = await getAccessibleChat(db, { chatId, userId, userEmail });
     if (!access.ok)
         return void res.status(404).json({ detail: "Chat not found" });
-    if (!can(access.projectRole, "container.delete"))
+    if (!can(access.projectRole, "container.delete") &&
+        !(access.isCreator && can(access.projectRole, "content.edit")))
         return void res
             .status(403)
             .json({ detail: "You do not have permission to delete this chat" });
@@ -625,6 +626,12 @@ chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 "",
         });
         if (!run) {
+            if (inputMessageId) {
+                const discarded = await discardRejectedChatInput(db, {
+                    chatId, inputMessageId, userId,
+                });
+                if (!discarded.ok) return void sendInternalError(res, discarded.error);
+            }
             return void res.status(409).json({
                 code: "turn_in_progress",
                 detail: "A response is already being generated for this chat.",

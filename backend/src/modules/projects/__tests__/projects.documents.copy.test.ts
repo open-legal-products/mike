@@ -148,3 +148,21 @@ describe("adding a document to a project by id", () => {
     fake.done();
   });
 });
+
+it.each([
+  { workflow_id: "workflow", library_kind: null },
+  { workflow_id: null, library_kind: "template" },
+])("copies rather than reassigning a workflow asset or template: %j", async placement => {
+  mocks.projectAccess.mockResolvedValue({ ok: true, projectRole: "owner", project: { org_id: null } });
+  mocks.docAccess.mockResolvedValue({ ok: true, projectRole: "owner", isCreator: true });
+  const source = { ...firmDoc, project_id: null, org_id: null, ...placement };
+  const fake = scriptedDb([
+    { table: "documents", data: source },
+    { table: "documents", data: [source] },
+    { table: "document_versions", data: null },
+  ]);
+  expect(await assignOrCopyDocument(fake.db, { projectId: "destination", documentId: "doc", userId: "actor" }))
+    .toEqual({ ok: false, kind: "no_active_version" });
+  expect(fake.calls.some(c => c.table === "documents" && c.op === "update")).toBe(false);
+  fake.done();
+});

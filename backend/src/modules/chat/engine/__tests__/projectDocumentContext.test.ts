@@ -67,6 +67,7 @@ function contextDatabase() {
         return query;
       }),
       is: vi.fn((field: string, value: unknown) => query.eq(field, value)),
+      maybeSingle: () => Promise.resolve({ data: rows[0] ?? null, error: null }),
       then: (resolve: (value: unknown) => unknown) =>
         Promise.resolve({
           data: rows.map((row) => ({ ...row })),
@@ -78,6 +79,7 @@ function contextDatabase() {
   return {
     db: { from } as unknown as ReturnType<typeof createServerSupabase>,
     documents,
+    tables,
     from,
   };
 }
@@ -141,4 +143,15 @@ describe("project chat document context", () => {
       from.mock.calls.filter(([table]) => table === "documents"),
     ).toHaveLength(1);
   });
+});
+
+it("includes an attachment shared through the project caller's email", async () => {
+  const { db, documents, tables } = contextDatabase();
+  Object.assign(documents[2], { workflow_id: "shared-workflow" });
+  tables.workflows = [{ id: "shared-workflow", user_id: "other", org_id: null }];
+  tables.workflow_shares = [{ workflow_id: "shared-workflow", shared_with_email: "reader@example.com", role: "viewer" }];
+  const context = await buildProjectDocContext("p1", "u1", db, [{
+    role: "user", content: "read attachment", files: [{ document_id: "private-doc", filename: "private-doc.pdf" }],
+  }], "reader@example.com");
+  expect(Object.values(context.docIndex).map(d => d.document_id)).toContain("private-doc");
 });

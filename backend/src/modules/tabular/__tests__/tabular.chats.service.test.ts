@@ -468,6 +468,19 @@ describe("prepareTabularChat", () => {
         });
     });
 
+    it("returns an internal failure before persisting a chat or input when document access lookup fails", async () => {
+        const error = new Error("Document access lookup failed");
+        loadReviewRows.mockResolvedValueOnce([
+            { id: "row-1", label: "Contract.pdf", source_document_ids: ["doc-1"] },
+        ]);
+        filterAccessibleDocumentIds.mockRejectedValueOnce(error);
+        const fake = makeFakeDb({
+            tables: { tabular_reviews: { data: REVIEW, error: null } },
+        });
+        await expect(prepareTabularChat(fake.db, base)).resolves.toEqual({ ok: false, kind: "error", error });
+        expect(fake.calls.some(call => call.op === "insert")).toBe(false);
+    });
+
     it("creates a chat, stores the user turn, and builds the prompt", async () => {
         const fake = makeFakeDb({
             tables: {

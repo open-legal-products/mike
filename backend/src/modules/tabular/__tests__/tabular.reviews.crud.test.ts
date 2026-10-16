@@ -5,6 +5,7 @@
 // the ids RPC until it runs dry).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { attachActiveVersionPaths } from "../../../lib/documentVersions";
 
 const {
     ensureReviewAccess,
@@ -140,6 +141,16 @@ beforeEach(() => {
 });
 
 describe("createTabularReview", () => {
+    it("returns an internal failure without inserting a review when document access lookup fails", async () => {
+        const error = new Error("Document access lookup failed");
+        filterAccessibleDocumentIds.mockRejectedValueOnce(error);
+        const { db, calls } = makeFakeDb();
+        await expect(createTabularReview(db, {
+            ...WHO, document_ids: ["doc-1"], columns_config: [], model: "claude-sonnet-5",
+        })).resolves.toEqual({ ok: false, kind: "error", error });
+        expect(calls.some(call => call.op === "insert")).toBe(false);
+    });
+
     it("rejects a missing model before touching the database", async () => {
         const { db, calls } = makeFakeDb();
         const result = await createTabularReview(db, {
@@ -488,6 +499,99 @@ describe("getTabularReviewDetail", () => {
 });
 
 describe("getTabularReviewDetail document visibility", () => {
+    it("returns an internal failure when the document access lookup fails", async () => {
+        const error = new Error("Document access lookup failed");
+        filterAccessibleDocumentIds.mockRejectedValueOnce(error);
+        const { db, calls } = makeFakeDb({
+            tables: {
+                tabular_reviews: {
+                    data: { id: "rev-1", document_ids: ["d1"] },
+                    error: null,
+                },
+                tabular_cells: { data: [], error: null },
+            },
+        });
+        await expect(
+            getTabularReviewDetail(db, { reviewId: "rev-1", ...WHO }),
+        ).resolves.toEqual({ ok: false, kind: "error", error });
+        expect(callTo(calls, "documents")).toBeUndefined();
+    });
+
+    it("loads all authorised document metadata in bounded batches", async () => {
+        const ids = Array.from({ length: 120 }, (_, index) => `d-${index}`);
+        loadReviewRows.mockResolvedValue([
+            { id: "row-folder", label: "Folder", source_document_ids: ids },
+        ]);
+        filterAccessibleDocumentIds.mockResolvedValueOnce(ids);
+        const docs = ids.map((id) => ({
+            id,
+            current_version_id: `version-${id}`,
+        }));
+        const { db, calls } = makeFakeDb({
+            tables: {
+                tabular_reviews: {
+                    data: { id: "rev-1", document_ids: ids },
+                    error: null,
+                },
+                tabular_cells: {
+                    data: [
+                        { id: "c1", row_id: "row-folder", content: "Answer" },
+                    ],
+                    error: null,
+                },
+                documents: [
+                    { data: docs.slice(0, 50), error: null },
+                    { data: docs.slice(50, 100), error: null },
+                    { data: docs.slice(100), error: null },
+                ],
+            },
+        });
+        const result = await getTabularReviewDetail(db, {
+            reviewId: "rev-1",
+            ...WHO,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.data.documents).toEqual(docs);
+        expect(result.data.rows.map((row) => row.id)).toEqual(["row-folder"]);
+        expect(result.data.cells.map((cell) => cell.id)).toEqual(["c1"]);
+        const lookups = calls.filter((call) => call.table === "documents");
+        expect(
+            lookups.map((call) => (call.filters.id as string[]).length),
+        ).toEqual([50, 50, 20]);
+        expect(lookups.flatMap((call) => call.filters.id)).toEqual(ids);
+        expect(
+            vi
+                .mocked(attachActiveVersionPaths)
+                .mock.calls.map(([, batch]) => batch.length),
+        ).toEqual([50, 50, 20]);
+    });
+
+    it("returns an internal failure instead of partial metadata when a later batch fails", async () => {
+        const ids = Array.from({ length: 60 }, (_, index) => `d-${index}`);
+        filterAccessibleDocumentIds.mockResolvedValueOnce(ids);
+        const error = { message: "Database unavailable" };
+        const { db } = makeFakeDb({
+            tables: {
+                tabular_reviews: {
+                    data: { id: "rev-1", document_ids: ids },
+                    error: null,
+                },
+                tabular_cells: { data: [], error: null },
+                documents: [
+                    {
+                        data: ids.slice(0, 50).map((id) => ({ id })),
+                        error: null,
+                    },
+                    { data: null, error },
+                ],
+            },
+        });
+        await expect(
+            getTabularReviewDetail(db, { reviewId: "rev-1", ...WHO }),
+        ).resolves.toEqual({ ok: false, kind: "error", error });
+    });
+
     // Review access is not document access: a review in project Y can be
     // built from project X's documents, and a Y member without X access must
     // not read X's filenames or extracted cell text through the review.
@@ -828,6 +932,70 @@ describe("updateTabularReview", () => {
                 ],
             },
         });
+
+    it("returns an internal failure without changing the review when document access lookup fails", async () => {
+        const error = new Error("Document access lookup failed");
+        filterAccessibleDocumentIds.mockRejectedValueOnce(error);
+        const { db, calls } = seeded({ user_id: "user-1", document_ids: ["doc-1"] });
+        await expect(updateTabularReview(db, {
+            reviewId: "rev-1", ...WHO, body: { document_ids: ["doc-1", "doc-2"] },
+        })).resolves.toEqual({ ok: false, kind: "error", error });
+        expect(calls.every(call => call.op === "select")).toBe(true);
+    });
+
+    it.each([null, "proj-2"])("keeps rows and cell results on a move to %s", async project_id => {
+        const { db, calls } = seeded({ user_id: "user-1", project_id: "proj-1", document_ids: ["d1"] });
+        expect((await updateTabularReview(db, { reviewId: "rev-1", ...WHO, body: { project_id } })).ok).toBe(true);
+        expect(calls.some(call => ["tabular_review_rows", "tabular_cells"].includes(call.table))).toBe(false);
+    });
+
+    it("keeps an editor's hidden sources and does not rebuild an unchanged document set", async () => {
+        ensureReviewAccess.mockResolvedValue({ ...OWNER, isCreator: false, projectRole: "editor" });
+        filterAccessibleDocumentIds.mockResolvedValue(["visible"]);
+        const { db, calls } = seeded({ user_id: "other", document_ids: ["visible", "hidden"] });
+        expect((await updateTabularReview(db, {
+            reviewId: "rev-1", ...WHO, body: { document_ids: ["visible"] },
+        })).ok).toBe(true);
+        expect(calls.find(call => call.op === "update")?.payload).toMatchObject({ document_ids: ["visible", "hidden"] });
+        expect(calls.some(call => ["tabular_review_rows", "tabular_cells"].includes(call.table))).toBe(false);
+    });
+
+    it.each([
+        { document_ids: ["d1", "d1", "d2"] },
+        { document_ids: ["d2", "d1", "d2"] },
+    ])("keeps saved results when normalizing legacy document IDs %j", async ({ document_ids }) => {
+        filterAccessibleDocumentIds.mockResolvedValue(["d1", "d2"]);
+        const { db, calls } = seeded({ user_id: "user-1", document_ids });
+
+        const result = await updateTabularReview(db, {
+            reviewId: "rev-1", ...WHO, body: { document_ids: ["d2", "d1"] },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(calls.find(call => call.op === "update")?.payload).toMatchObject({
+            document_ids: [...new Set(document_ids)],
+        });
+        expect(calls.some(call => ["tabular_review_rows", "tabular_cells"].includes(call.table))).toBe(false);
+    });
+
+    it.each([
+        { document_ids: ["d1", "d2", "d3"] },
+        { document_ids: ["d1"] },
+        { document_ids: ["d1", "d3"] },
+        { document_grouping: "folder" },
+    ])("rebuilds rows for a changed document set or grouping: %j", async body => {
+        filterAccessibleDocumentIds.mockResolvedValue(["d1", "d2", "d3"]);
+        const { db, calls } = seeded({
+            user_id: "user-1", document_ids: ["d1", "d1", "d2"], document_grouping: "document",
+        });
+
+        const result = await updateTabularReview(db, { reviewId: "rev-1", ...WHO, body });
+
+        expect(result.ok).toBe(true);
+        expect(calls).toContainEqual(expect.objectContaining({
+            table: "tabular_review_rows", op: "delete", filters: { review_id: "rev-1" },
+        }));
+    });
 
     it("rejects a project_id that is neither null nor a non-empty string", async () => {
         const { db, calls } = makeFakeDb();

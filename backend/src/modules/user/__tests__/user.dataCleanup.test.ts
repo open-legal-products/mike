@@ -92,6 +92,9 @@ function makeDb(
                     removedIds.includes(String(row.project_id)),
                 ),
             );
+        } else if (table === "project_subfolders") {
+            cascadeDelete("project_subfolders", removeRows("project_subfolders", row =>
+                removedIds.includes(String(row.parent_folder_id))));
         } else if (table === "documents") {
             removeRows("document_versions", (row) =>
                 removedIds.includes(String(row.document_id)),
@@ -622,7 +625,11 @@ describe("deleteUserAccountData", () => {
                 },
             ],
             tabular_review_chats: [{ id: "rc1", user_id: "u1" }],
-            project_subfolders: [{ id: "f1", user_id: "u1" }],
+            project_subfolders: [
+                { id: "f1", user_id: "u1", project_id: "p1" },
+                { id: "contributed", user_id: "u1", project_id: "p-other", parent_folder_id: null },
+                { id: "nested", user_id: "u2", project_id: "p-other", parent_folder_id: "contributed" },
+            ],
             hidden_workflows: [{ id: "h1", user_id: "u1" }],
             workflow_open_source_submissions: [
                 { id: "s1", submitted_by_user_id: "u1" },
@@ -689,7 +696,10 @@ describe("deleteUserAccountData", () => {
         expect(ids(tables.chats)).toEqual(["c-other"]);
         expect(tables.tabular_review_chats).toEqual([]);
         expect(ids(tables.tabular_reviews)).toEqual(["r-other"]);
-        expect(tables.project_subfolders).toEqual([]);
+        expect(tables.project_subfolders).toEqual([
+            { id: "contributed", user_id: null, project_id: "p-other", parent_folder_id: null },
+            { id: "nested", user_id: "u2", project_id: "p-other", parent_folder_id: "contributed" },
+        ]);
         expect(tables.hidden_workflows).toEqual([]);
         expect(tables.workflow_open_source_submissions).toEqual([]);
         expect(ids(tables.workflows)).toEqual(["w-other"]);

@@ -212,12 +212,17 @@ export async function regenerateTabularCell(
     const row = rows.find((candidate) => candidate.id === rowId);
     if (!row) return failure("not_found", "Review row not found");
     const sourceIds = row.source_document_ids ?? [];
-    const allowedSourceIds = await filterAccessibleDocumentIds(
-        sourceIds,
-        userId,
-        userEmail,
-        db,
-    );
+    let allowedSourceIds: string[];
+    try {
+        allowedSourceIds = await filterAccessibleDocumentIds(
+            sourceIds,
+            userId,
+            userEmail,
+            db,
+        );
+    } catch (error) {
+        return internalFailure(error);
+    }
     if (allowedSourceIds.length !== sourceIds.length)
         return failure("not_found", "Review row not found");
 

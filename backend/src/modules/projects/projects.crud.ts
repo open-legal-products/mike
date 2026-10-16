@@ -1,6 +1,7 @@
 // Project CRUD service functions: overview, create, detail, people, update,
 // delete, and the tamper-evident export manifest.
 
+import { chunkArray } from "../../lib/arrays";
 import {
   attachActiveVersionPaths,
   attachLatestVersionNumbers,
@@ -225,9 +226,11 @@ export async function getProjectSummaries(
   return { ok: true, data: withMemory.rows };
 }
 
-// GET /projects?view=directory-search
-// Flat filename/project matches for the document picker. Search results do
-// not pretend that a partially loaded project tree is a complete result set.
+/**
+ * Find project and current-filename matches for the document picker.
+ * Page document matches within accessible project batches rather than searching
+ * a capped global version list or returning a partially loaded project tree.
+ */
 export async function searchProjectDirectory(
   db: Db,
   args: {
@@ -388,36 +391,26 @@ export async function searchProjectDirectory(
   const accessibleProjectIds = [...projectsById.keys()];
   if (accessibleProjectIds.length === 0) return { ok: true, data: [] };
 
-  const escaped = searchTerm.replace(/[%_]/g, (value) => `\\${value}`);
-  const { data: versions, error: versionsError } = await db
-    .from("document_versions")
-    .select("id")
-    .ilike("filename", `%${escaped}%`)
-    .is("deleted_at", null);
-  if (versionsError) return { ok: false, error: versionsError };
-
-  const versionIds = (versions ?? []).map((version) => version.id as string);
-  let matchedDocuments: Record<string, unknown>[] = [];
-  if (versionIds.length > 0) {
-    const { data, error } = await db
-      .from("documents")
-      .select("*")
-      .in("project_id", accessibleProjectIds)
-      .in("current_version_id", versionIds);
-    if (error) return { ok: false, error };
-    matchedDocuments = (data ?? []) as Record<string, unknown>[];
-    await attachLatestVersionNumbers(
-      db,
-      matchedDocuments as { id: string; current_version_id?: string | null }[],
-    );
-    await attachActiveVersionPaths(
-      db,
-      matchedDocuments as { id: string; current_version_id?: string | null }[],
-    );
-    await attachDocumentOwnerLabels(
-      db,
-      matchedDocuments as { user_id?: string | null }[],
-    );
+  const escaped = searchTerm.replace(/[\\%_]/g, (value) => `\\${value}`);
+  const matchedDocuments: Record<string, unknown>[] = [];
+  for (const projectIds of chunkArray(accessibleProjectIds, 50)) {
+    for (let offset = 0; ; offset += 50) {
+      const { data, error } = await db
+        .from("documents")
+        .select("*, active_version:document_versions!documents_current_version_id_fkey!inner(filename, deleted_at)")
+        .in("project_id", projectIds)
+        .ilike("active_version.filename", `%${escaped}%`)
+        .is("active_version.deleted_at", null)
+        .order("id", { ascending: true })
+        .range(offset, offset + 49);
+      if (error) return { ok: false, error };
+      const documents = (data ?? []).map(({ active_version: _version, ...document }) => document);
+      await attachLatestVersionNumbers(db, documents);
+      await attachActiveVersionPaths(db, documents);
+      await attachDocumentOwnerLabels(db, documents);
+      matchedDocuments.push(...documents);
+      if (documents.length < 50) break;
+    }
   }
 
   const normalized = searchTerm.toLowerCase();
@@ -576,11 +569,12 @@ export type CreateProjectResult =
   | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/** Create a project with a non-blank name in a workspace the caller may use. */
 export async function createProject(
   db: Db,
   args: {
     userId: string;
-    name: string;
+    name: unknown;
     cm_number?: string;
     practice?: string;
     org_id?: string | null;
@@ -589,7 +583,7 @@ export async function createProject(
   },
 ): Promise<CreateProjectResult> {
   const { userId, name, cm_number, practice, org_id, memory_enabled } = args;
-  if (!name?.trim())
+  if (typeof name !== "string" || !name.trim())
     return { ok: false, kind: "validation", detail: "name is required" };
   if (memory_enabled !== undefined && typeof memory_enabled !== "boolean") {
     return {
@@ -838,6 +832,7 @@ export type UpdateProjectResult =
   | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/** Validate project metadata and apply only changes allowed by the caller's role. */
 export async function updateProject(
   db: Db,
   args: {
@@ -849,7 +844,11 @@ export async function updateProject(
 ): Promise<UpdateProjectResult> {
   const { projectId, userId, userEmail, body } = args;
   const updates: Record<string, unknown> = {};
-  if (body.name != null) updates.name = body.name;
+  if ("name" in body) {
+    if (typeof body.name !== "string" || !body.name.trim())
+      return { ok: false, kind: "validation", detail: "name must be a non-empty string" };
+    updates.name = body.name.trim();
+  }
   if (body.cm_number != null) updates.cm_number = body.cm_number;
   if ("practice" in body) {
     updates.practice = normalizeOptionalString(body.practice);

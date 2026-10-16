@@ -72,3 +72,17 @@ it("resolves permissions after StrictMode remounts its effects", async () => {
     });
     await waitFor(() => expect(result.current("first").canEdit).toBe(true));
 });
+
+it("retries failed permissions when a document is reopened without resetting the session", async () => {
+    vi.mocked(getDocument).mockRejectedValueOnce(new Error("temporary outage"))
+        .mockResolvedValueOnce({ can_edit: true, can_delete: false } as Document);
+    const { result, rerender } = renderHook(({ ids }) => useDocumentPermissions(ids, true), {
+        initialProps: { ids: ["doc"] },
+    });
+    await act(async () => {});
+    expect(result.current("doc").canEdit).toBe(false);
+    rerender({ ids: [] });
+    rerender({ ids: ["doc"] });
+    await waitFor(() => expect(result.current("doc").canEdit).toBe(true));
+    expect(getDocument).toHaveBeenCalledTimes(2);
+});

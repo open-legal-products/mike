@@ -8,8 +8,9 @@ vi.mock("../../../lib/access", async (original) => ({
 vi.mock("../../../lib/dbq/enqueue", () => ({
   enqueueStorageCleanup: mocks.cleanup,
 }));
-import { updateProjectFolder, deleteProjectFolder } from "../projects.service";
+import { createProject, updateProject, createProjectFolder, updateProjectFolder, deleteProjectFolder } from "../projects.service";
 import {
+  createLibraryFolder,
   updateLibraryFolder,
   deleteLibraryFolder,
 } from "../../library/library.service";
@@ -208,4 +209,15 @@ describe("folder callers retain their scope and failure policies", () => {
     });
     fake.done();
   });
+});
+
+it.each([null, 7, {}, [], "", "   "])("rejects an invalid project/folder name: %j", async name => {
+  mocks.access.mockResolvedValue({ ok: true, projectRole: "owner" });
+  const fake = scriptedDb([]);
+  expect(await createProject(fake.db, { userId: "actor", name })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await updateProject(fake.db, { ...actor, body: { name } })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await createProjectFolder(fake.db, { ...actor, name })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await updateProjectFolder(fake.db, { ...actor, body: { name } })).toMatchObject({ ok: false, kind: "validation" });
+  expect(await createLibraryFolder(fake.db, "actor", "file", { name })).toMatchObject({ ok: false, status: 400 });
+  fake.done();
 });

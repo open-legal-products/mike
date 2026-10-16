@@ -138,6 +138,7 @@ export type PreparedProjectChatStream = {
     nonce: ReturnType<typeof generateSpotlightNonce>;
 };
 
+/** Authorize a project chat turn and assemble its caller-scoped document context. */
 export async function prepareProjectChatStream(
     db: Db,
     args: {
@@ -455,6 +456,7 @@ export async function prepareProjectChatStream(
             userId,
             db,
             messages,
+            userEmail,
         );
         const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
             doc_id,

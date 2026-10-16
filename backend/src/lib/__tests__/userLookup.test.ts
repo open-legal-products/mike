@@ -165,17 +165,19 @@ describe("loadProfileUsersByEmail", () => {
             { user_id: "u2", email: "bob@example.com", display_name: null },
         ]);
         const { userByEmail, userById } = await loadProfileUsersByEmail(
-            db as any,
+            db as any, { userIds: ["u1", "u2"], emails: [] },
         );
         expect(userByEmail.get("alice@example.com")).toEqual({
             id: "u1",
             email: "alice@example.com",
             display_name: "Alice",
+            profile_photo: null,
         });
         expect(userById.get("u2")).toEqual({
             id: "u2",
             email: "bob@example.com",
             display_name: null,
+            profile_photo: null,
         });
         expect(userByEmail.size).toBe(2);
     });
@@ -185,7 +187,7 @@ describe("loadProfileUsersByEmail", () => {
             { user_id: "u1", email: "   ", display_name: null },
             { user_id: "u2", email: "ok@example.com", display_name: null },
         ]);
-        const { userByEmail } = await loadProfileUsersByEmail(db as any);
+        const { userByEmail } = await loadProfileUsersByEmail(db as any, { userIds: ["u1", "u2"], emails: [] });
         expect(userByEmail.size).toBe(1);
         expect(userByEmail.has("ok@example.com")).toBe(true);
     });
@@ -321,4 +323,10 @@ describe("scoped photo lookup", () => {
         const empty = await loadProfileUsersByEmail(db as never, { userIds: [], emails: [] });
         expect(empty.userById.size).toBe(0);
     });
+});
+
+it("finds requested profiles beyond the first thousand without reading unrelated profiles", async () => {
+    const db = makeDb(Array.from({ length: 1200 }, (_, i) => ({ user_id: `u${i}`, email: `u${i}@example.com` })));
+    const result = await loadProfileUsersByEmail(db as any, { userIds: ["u1199"], emails: ["u1150@example.com"] });
+    expect([...result.userById.keys()]).toEqual(["u1199", "u1150"]);
 });

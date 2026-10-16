@@ -3083,6 +3083,12 @@ describe("chat grants, deletion and roster", () => {
         ]);
     });
 
+    it("lets an editor delete their own project chat", async () => {
+        mockedCreate.mockImplementation(() => makeRbacDb("member", "u1") as never);
+        const res = await request(app).delete("/chat/chat-1").set("Authorization", "Bearer test");
+        expect(res.status).toBe(204);
+    });
+
     it("403s an org member deleting a colleague's chat", async () => {
         // container.delete is the admin rung: a member may write in the chat
         // and rename it, but erasing a colleague's container is not theirs.
@@ -3528,6 +3534,8 @@ describe("server-owned turns: resume, stop, concurrency", () => {
             code: "turn_in_progress",
             detail: "A response is already being generated for this chat.",
         });
+        expect(dbInserts.filter(entry => entry.table === "chat_messages" &&
+            (entry.value as { role?: string }).role === "user")).toHaveLength(1);
         held.release();
         expect((await firstDone).text).toContain("data: [DONE]");
         expect(runLLMStream).toHaveBeenCalledTimes(1);

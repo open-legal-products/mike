@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createClient } from "@supabase/supabase-js";
 import {
     canManageOrgRole,
     checkProjectAccess,
@@ -27,6 +28,7 @@ function makeDb(
         selectErrors?: Record<string, string>;
         maxRows?: number;
         pageError?: (table: string, from: number) => string | undefined;
+        inError?: (table: string, values: unknown[]) => string | undefined;
     } = {},
 ) {
     return {
@@ -41,7 +43,7 @@ function makeDb(
         from(table: string) {
             let rows: Row[] = (tables[table] ?? []).map(row => ({ archived_at: null, ...row }));
             let pageFrom = 0;
-            const failure = options.selectErrors?.[table]
+            let failure = options.selectErrors?.[table]
                 ? { message: options.selectErrors[table] }
                 : null;
             const query = {
@@ -73,6 +75,8 @@ function makeDb(
                     return query;
                 },
                 in: (column: string, values: unknown[]) => {
+                    const message = options.inError?.(table, values);
+                    if (message) failure = { message };
                     rows = rows.filter((row) => values.includes(row[column]));
                     return query;
                 },
@@ -411,6 +415,116 @@ describe("access helpers", () => {
                 db,
             ),
         ).resolves.toEqual(["granted-doc"]);
+    });
+});
+
+describe("bounded document access lookups", () => {
+    const docs = Array.from({ length: 120 }, (_, index) => ({
+        id: `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+        user_id: "reviewer",
+        project_id: null,
+    }));
+
+    it("retains all readable documents when the gateway rejects oversized filters", async () => {
+        // Exercise the actual PostgREST URL serializer, with a local transport
+        // standing in for the gateway's 4 KiB response-header limit. No network
+        // or credentials are used; PostgREST echoes the query in Content-Location.
+        const db = createClient("https://supabase.test", "test-key", {
+            auth: { persistSession: false, autoRefreshToken: false },
+            global: {
+                fetch: async (input) => {
+                    const url = new URL(
+                        typeof input === "string"
+                            ? input
+                            : input instanceof URL
+                              ? input.href
+                              : input.url,
+                    );
+                    if (url.search.length > 4096) {
+                        return new Response("upstream sent too big header", {
+                            status: 502,
+                        });
+                    }
+                    const ids = url.searchParams
+                        .get("id")!
+                        .slice(4, -1)
+                        .split(",");
+                    return new Response(
+                        JSON.stringify(
+                            docs.filter((doc) => ids.includes(doc.id)),
+                        ),
+                        {
+                            headers: { "Content-Type": "application/json" },
+                        },
+                    );
+                },
+            },
+        });
+        await expect(
+            filterAccessibleDocumentIds(
+                docs.map((doc) => doc.id),
+                "reviewer",
+                "reviewer@example.com",
+                db,
+            ),
+        ).resolves.toEqual(docs.map((doc) => doc.id));
+    });
+
+    it("rejects a failed lookup instead of reporting no readable documents", async () => {
+        const db = makeDb(
+            { documents: docs },
+            {
+                selectErrors: { documents: "Database unavailable" },
+            },
+        );
+        await expect(
+            filterAccessibleDocumentIds(
+                [docs[0].id],
+                "reviewer",
+                "reviewer@example.com",
+                db,
+            ),
+        ).rejects.toThrow("Document access lookup failed");
+    });
+
+    it("rejects a later failed batch instead of returning a partial verdict", async () => {
+        const db = makeDb(
+            { documents: docs },
+            {
+                inError: (_table, values) =>
+                    values.includes(docs[60].id)
+                        ? "Gateway unavailable"
+                        : undefined,
+            },
+        );
+        await expect(
+            filterAccessibleDocumentIds(
+                docs.map((doc) => doc.id),
+                "reviewer",
+                "reviewer@example.com",
+                db,
+            ),
+        ).rejects.toThrow("Document access lookup failed");
+    });
+
+    it("does not admit private or missing documents across batch boundaries", async () => {
+        const mixed = docs.map((doc, index) => ({
+            ...doc,
+            user_id: index % 3 === 0 ? "other-owner" : "reviewer",
+        }));
+        const db = makeDb({ documents: mixed });
+        await expect(
+            filterAccessibleDocumentIds(
+                [...mixed.map((doc) => doc.id), "missing"],
+                "reviewer",
+                "reviewer@example.com",
+                db,
+            ),
+        ).resolves.toEqual(
+            mixed
+                .filter((doc) => doc.user_id === "reviewer")
+                .map((doc) => doc.id),
+        );
     });
 });
 
@@ -1998,4 +2112,23 @@ describe("explicit private organization access", () => {
             ? Promise.resolve({ data: [{ kind: "project", item_id: "private" }], error: null }) : original(name, args));
         expect(await listAccessibleProjectIds("admin", "admin@example.test", db)).toEqual(["private"]);
     });
+});
+
+it("checks each project/workflow once across document batches and never shares standalone verdicts", async () => {
+    const docs = Array.from({ length: 120 }, (_, i) => ({
+        id: `d${i}`, user_id: i % 2 ? "other" : "reader",
+        project_id: i < 60 ? "p" : null, workflow_id: i >= 60 ? "w" : null,
+    }));
+    const db = makeDb({
+        documents: [...docs,
+            { id: "own", user_id: "reader", project_id: null },
+            { id: "private", user_id: "other", project_id: null }],
+        projects: [{ id: "p", user_id: "reader", org_id: null }],
+        workflows: [{ id: "w", user_id: "reader", org_id: null }],
+    });
+    const from = vi.spyOn(db, "from");
+    expect(await filterAccessibleDocumentIds([...docs.map(d => d.id), "own", "private"], "reader", null, db))
+        .toEqual([...docs.map(d => d.id), "own"]);
+    expect(from.mock.calls.filter(([table]) => table === "projects")).toHaveLength(1);
+    expect(from.mock.calls.filter(([table]) => table === "workflows")).toHaveLength(1);
 });

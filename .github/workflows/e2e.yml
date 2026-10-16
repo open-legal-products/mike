@@ -31,8 +31,8 @@ on:
 
 # Don't pile up runs on rapid pushes to the same PR.
 concurrency:
-  group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Development stress (the `next dev` renderer) is 3-4x slower than the
 # production suite — ~25-35 min against ~7 — and was the last check to finish

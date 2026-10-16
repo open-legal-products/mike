@@ -85,6 +85,7 @@ export function DocxView(props: Props) {
     return <DocxViewContent key={JSON.stringify([props.documentId, props.versionId, props.displayUrl])} {...props} />;
 }
 
+/** Manage the mounted document editor and its unsaved-change close guard. */
 function DocxViewContent(props: Props) {
     const {
         documentId, versionId, displayUrl, refetchKey, cacheBytes = true,
@@ -126,10 +127,11 @@ function DocxViewContent(props: Props) {
         }
     }, [fetched.bytes, editedBytes, adoptSnapshot]);
     const { dirty, status, error: saveError, hasUnsavedChanges, prepareClose, discard } = autosave;
+    const { onCloseGuardReady } = props;
     useEffect(() => {
-        props.onCloseGuardReady?.({ hasUnsavedChanges, prepareClose, discard });
-        return () => props.onCloseGuardReady?.(null);
-    }, [props.onCloseGuardReady, hasUnsavedChanges, prepareClose, discard]);
+        onCloseGuardReady?.({ hasUnsavedChanges, prepareClose, discard });
+        return () => onCloseGuardReady?.(null);
+    }, [onCloseGuardReady, hasUnsavedChanges, prepareClose, discard]);
     const saveReady = !!bytes && !error && !displayUrl && readyKey === renderKey && failedKey !== renderKey;
     useEffect(() => {
         onSaveStateChange?.(documentId, { ready: saveReady, dirty, status, error: saveError });

@@ -7,6 +7,7 @@ export {
   listChats,
   createChat,
   deleteChat,
+  discardRejectedChatInput,
   type ChatWriteResult,
 } from "./chat.crud";
 export {

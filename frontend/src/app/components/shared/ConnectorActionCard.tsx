@@ -36,12 +36,16 @@ const labels: Record<string, string> = {
   email: "Email",
 };
 
+function argumentLabel(key: string): string {
+  return Object.hasOwn(labels, key) ? labels[key] : key;
+}
+
 function display(value: unknown): string {
   if (Array.isArray(value)) return value.map(display).join("\n");
   if (value && typeof value === "object")
     return Object.entries(value)
       .filter(([, nested]) => nested !== undefined && nested !== null)
-      .map(([key, nested]) => `${labels[key] ?? key}: ${display(nested)}`)
+      .map(([key, nested]) => `${argumentLabel(key)}: ${display(nested)}`)
       .join("\n");
   return String(value ?? "");
 }
@@ -90,7 +94,7 @@ export function ConnectorActionCard({ item }: { item: ConnectorApprovalItem }) {
         <dl className="space-y-2 text-sm">
           {args.map(([key, value]) => (
             <div key={key}>
-              <dt className="text-xs text-gray-500">{labels[key] ?? key}</dt>
+              <dt className="text-xs text-gray-500">{argumentLabel(key)}</dt>
               <dd className="whitespace-pre-wrap text-gray-800 [overflow-wrap:anywhere]">
                 {display(value)}
               </dd>

@@ -285,6 +285,19 @@ describe("regenerateTabularCell", () => {
             log: LOG,
         });
 
+    it("returns an internal failure before taking a lease when document access lookup fails", async () => {
+        const error = new Error("Document access lookup failed");
+        filterAccessibleDocumentIds.mockRejectedValueOnce(error);
+        const fake = makeFakeDb({
+            tables: { tabular_reviews: { data: REVIEW, error: null } },
+        });
+        await expect(regenerateTabularCell(fake.db, {
+            reviewId: "rev-1", ...WHO, rowId: "row-1", columnIndex: 0, log: LOG,
+        })).resolves.toEqual({ ok: false, kind: "error", error });
+        expect(fake.rpcCalls).toEqual([]);
+        expect(queryTabularCell).not.toHaveBeenCalled();
+    });
+
     it("400s an unknown column", async () => {
         const result = await regenerateTabularCell(
             makeFakeDb({

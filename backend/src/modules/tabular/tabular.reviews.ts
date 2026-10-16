@@ -5,6 +5,7 @@
 // reconciling the cell grid to the active column set.
 
 import { recordAudit } from "../../lib/audit";
+import { chunkArray } from "../../lib/arrays";
 import type { TabularReviewHistoryStatus } from "@mike/contracts";
 import {
     checkProjectAccess,
@@ -523,6 +524,7 @@ export type CreateReviewInput = {
     model?: unknown;
 };
 
+/** Create an authorized review, returning lookup failures before any review is saved. */
 export async function createTabularReview(
     db: Db,
     input: CreateReviewInput,
@@ -589,9 +591,14 @@ export async function createTabularReview(
         project_id ? projectOrgId : standaloneOrgId,
     );
     if (!selectedModel.ok) return modelFailure(selectedModel);
-    const allowedDocumentIds = Array.isArray(document_ids)
-        ? await filterAccessibleDocumentIds(document_ids, userId, userEmail, db)
-        : [];
+    let allowedDocumentIds: string[];
+    try {
+        allowedDocumentIds = Array.isArray(document_ids)
+            ? await filterAccessibleDocumentIds(document_ids, userId, userEmail, db)
+            : [];
+    } catch (error) {
+        return internalFailure(error);
+    }
     const grouping = normalizeGrouping(document_grouping);
     // Project reviews inherit their project's organization as tenant
     // provenance.
@@ -684,6 +691,7 @@ export type ReviewDetail = {
     documents: Record<string, unknown>[];
 };
 
+/** Load an accessible review with rows, cells and metadata limited to readable sources. */
 export async function getTabularReviewDetail(
     db: Db,
     args: { reviewId: string; userId: string; userEmail: string | undefined },
@@ -714,24 +722,35 @@ export async function getTabularReviewDetail(
     // Review access says who may open the grid, not whose documents they may
     // read. Rows, cells, and document metadata are narrowed to the caller's
     // own document access (see filterReadableReviewRows).
-    const { rows, readableDocumentIds } = await filterReadableReviewRows(
-        db,
-        allRows,
-        allDocIds,
-        userId,
-        userEmail,
-    );
+    let rows: ReviewRow[];
+    let readableDocumentIds: Set<string>;
+    try {
+        ({ rows, readableDocumentIds } = await filterReadableReviewRows(
+            db,
+            allRows,
+            allDocIds,
+            userId,
+            userEmail,
+        ));
+    } catch (lookupError) {
+        return internalFailure(lookupError);
+    }
     const visibleRowIds = new Set(rows.map((row) => row.id));
     const docIds = allDocIds.filter((id) => readableDocumentIds.has(id));
-    const docsResult =
-        docIds.length > 0
-            ? await db.from("documents").select("*").in("id", docIds)
-            : { data: [] as Record<string, unknown>[] };
-    const docs = (docsResult.data ?? []) as unknown as {
+    const docs: {
         id: string;
         current_version_id?: string | null;
-    }[];
-    await attachActiveVersionPaths(db, docs);
+    }[] = [];
+    for (const batch of chunkArray([...new Set(docIds)], 50)) {
+        const { data, error: documentError } = await db
+            .from("documents")
+            .select("*")
+            .in("id", batch);
+        if (documentError) return internalFailure(documentError);
+        const batchDocs = data ?? [];
+        await attachActiveVersionPaths(db, batchDocs);
+        docs.push(...batchDocs);
+    }
     const clientReview = { ...review };
     delete clientReview.active_generation_id;
     delete clientReview.generation_lease_expires_at;
@@ -906,7 +925,10 @@ export async function grantTabularReviewAccess(
             "validation",
             "Deny is only available for organization members",
         );
-    const { userById } = await loadProfileUsersByEmail(db);
+    const { userById } = await loadProfileUsersByEmail(db, {
+        userIds: gate.review.user_id ? [gate.review.user_id] : [],
+        emails: [],
+    });
     const result = await upsertContentGrant(db, {
         kind: "tabular_review",
         resourceId: args.reviewId,
@@ -954,6 +976,11 @@ export async function revokeTabularReviewAccess(
     return { ok: true, data: null };
 }
 
+/**
+ * Apply authorized review settings while preserving sources hidden from editors.
+ * Rebuild rows only for effective document-set or grouping changes, retaining
+ * saved results for project moves and legacy duplicate-ID normalization.
+ */
 export async function updateTabularReview(
     db: Db,
     args: {
@@ -1052,12 +1079,27 @@ export async function updateTabularReview(
         updates.document_grouping = body.document_grouping;
     }
     if (Array.isArray(body.document_ids)) {
-        updates.document_ids = await filterAccessibleDocumentIds(
-            body.document_ids as string[],
-            userId,
-            userEmail,
-            db,
-        );
+        const requestedIds = body.document_ids;
+        if (requestedIds.some((id) => typeof id !== "string"))
+            return failure("validation", "document_ids must contain only strings");
+        const existingIds = (existingReview.document_ids ?? []) as string[];
+        let readableIds: Set<string>;
+        try {
+            readableIds = new Set(await filterAccessibleDocumentIds(
+                [...new Set([...existingIds, ...requestedIds as string[]])],
+                userId,
+                userEmail,
+                db,
+            ));
+        } catch (error) {
+            return internalFailure(error);
+        }
+        // Preserve sources hidden from a collaborating editor, even when the
+        // picker only submits the documents that editor can see.
+        updates.document_ids = [...new Set([
+            ...existingIds.filter((id) => !readableIds.has(id) || requestedIds.includes(id)),
+            ...requestedIds.filter((id) => !existingIds.includes(id as string) && readableIds.has(id as string)),
+        ])];
     }
     if (projectIdUpdateProvided) {
         if (!creatorScopedAllowed(access, existingReview.user_id)) {
@@ -1179,10 +1221,18 @@ export async function updateTabularReview(
             updateError ?? new Error("Review update returned no data"),
         );
 
+    // Legacy selections can contain duplicates. Normalizing their representation
+    // must not rebuild rows, whose deletion cascades to the saved cell results.
+    const previousDocumentIds = new Set((existingReview.document_ids ?? []) as string[]);
+    const nextDocumentIds = new Set(
+        (updates.document_ids ?? existingReview.document_ids ?? []) as string[],
+    );
+    const documentSetChanged = previousDocumentIds.size !== nextDocumentIds.size ||
+        [...nextDocumentIds].some(id => !previousDocumentIds.has(id));
     const rowShapeChanged =
-        Array.isArray(body.document_ids) ||
-        body.document_grouping != null ||
-        projectIdUpdateProvided;
+        documentSetChanged ||
+        (body.document_grouping != null &&
+            body.document_grouping !== existingReview.document_grouping);
     try {
         const activeColumns = (updatedReview.columns_config ?? []) as Column[];
         if (rowShapeChanged) {

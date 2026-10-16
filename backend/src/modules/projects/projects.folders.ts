@@ -15,16 +15,18 @@ export type CreateFolderResult =
   | { ok: true; folder: unknown }
   | { ok: false; kind: "forbidden" }
   | RoleForbidden
+  | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "parent_not_found" }
   | { ok: false; kind: "db_error"; error: unknown };
 
+/** Create a named project folder after checking organize rights and its parent. */
 export async function createProjectFolder(
   db: Db,
   args: {
     projectId: string;
     userId: string;
     userEmail?: string;
-    name: string;
+    name: unknown;
     parent_folder_id?: string | null;
   },
 ): Promise<CreateFolderResult> {
@@ -34,6 +36,9 @@ export async function createProjectFolder(
   if (!access.ok) return { ok: false, kind: "forbidden" };
   if (!can(access.projectRole, "docs.organize"))
     return { ok: false, kind: "role_forbidden", detail: DOCS_ORGANIZE_FORBIDDEN };
+
+  if (typeof name !== "string" || !name.trim())
+    return { ok: false, kind: "validation", detail: "name must be a non-empty string" };
 
   // Verify parent folder belongs to this project
   if (parent_folder_id) {
@@ -55,10 +60,12 @@ export type UpdateFolderResult =
   | { ok: true; folder: unknown }
   | { ok: false; kind: "forbidden" }
   | RoleForbidden
+  | { ok: false; kind: "validation"; detail: string }
   | { ok: false; kind: "parent_not_found" }
   | { ok: false; kind: "cycle" }
   | { ok: false; kind: "not_found" };
 
+/** Rename or reparent a project folder while enforcing access and preventing cycles. */
 export async function updateProjectFolder(
   db: Db,
   args: {
@@ -66,7 +73,7 @@ export async function updateProjectFolder(
     folderId: string;
     userId: string;
     userEmail?: string;
-    body: { name?: string; parent_folder_id?: string | null };
+    body: { name?: unknown; parent_folder_id?: string | null };
   },
 ): Promise<UpdateFolderResult> {
   const { projectId, folderId, userId, userEmail, body } = args;
@@ -79,7 +86,11 @@ export async function updateProjectFolder(
     return { ok: false, kind: "role_forbidden", detail: DOCS_ORGANIZE_FORBIDDEN };
 
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (body.name != null) updates.name = body.name.trim();
+  if ("name" in body) {
+    if (typeof body.name !== "string" || !body.name.trim())
+      return { ok: false, kind: "validation", detail: "name must be a non-empty string" };
+    updates.name = body.name.trim();
+  }
   if ("parent_folder_id" in body) {
     // Cycle check: walk up the tree from the proposed parent to ensure folderId is not an ancestor
     if (body.parent_folder_id) {

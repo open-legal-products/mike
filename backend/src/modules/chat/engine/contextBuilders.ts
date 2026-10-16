@@ -765,19 +765,28 @@ export async function loadUserMessageSentTimes(
   const userCount = messages.filter((m) => m.role === "user").length;
   const times: (string | null)[] = new Array(userCount).fill(null);
   if (!chatId || userCount === 0) return times;
-  const { data, error } = await db
-    .from(messageTable)
-    .select("created_at")
-    .eq("chat_id", chatId)
-    .eq("role", "user")
-    .order("created_at", { ascending: true });
-  if (error || !Array.isArray(data)) return times;
-  const stored = (data as { created_at?: unknown }[]).map((row) =>
-    typeof row.created_at === "string" ? row.created_at : null,
-  );
   const savedCount = latestUnsaved ? userCount - 1 : userCount;
+  const stored: (string | null)[] = [];
+  // Read only the context window, newest first, in pages below PostgREST's
+  // row cap. An oldest-first capped query mislabels long conversations.
+  for (let offset = 0; offset < savedCount; offset += 500) {
+    const count = Math.min(500, savedCount - offset);
+    const { data, error } = await db
+      .from(messageTable)
+      .select("created_at")
+      .eq("chat_id", chatId)
+      .eq("role", "user")
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(offset, offset + count - 1);
+    if (error || !Array.isArray(data)) return times;
+    stored.push(...data.map((row: { created_at?: unknown }) =>
+      typeof row.created_at === "string" ? row.created_at : null,
+    ));
+    if (data.length < count) break;
+  }
   for (let k = 1; k <= Math.min(savedCount, stored.length); k++) {
-    times[savedCount - k] = stored[stored.length - k];
+    times[savedCount - k] = stored[k - 1];
   }
   return times;
 }
@@ -1373,11 +1382,13 @@ export async function buildDocContext(
   return { docIndex, docStore };
 }
 
+/** Build project context and resolve message attachments with the caller's identity. */
 export async function buildProjectDocContext(
   projectId: string,
   userId: string,
   db: Db,
   messages: ChatMessage[] = [],
+  userEmail?: string | null,
 ): Promise<{
   docIndex: DocIndex;
   docStore: DocStore;
@@ -1468,7 +1479,7 @@ export async function buildProjectDocContext(
     ),
   }));
   if (attachmentMessages.some((message) => message.files?.length)) {
-    const attachments = await buildDocContext(attachmentMessages, userId, db);
+    const attachments = await buildDocContext(attachmentMessages, userId, db, undefined, "chat_messages", userEmail);
     for (const [label, document] of Object.entries(attachments.docIndex)) {
       const attachmentLabel = `attachment-${label}`;
       docIndex[attachmentLabel] = document;

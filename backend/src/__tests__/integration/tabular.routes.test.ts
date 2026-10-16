@@ -2116,6 +2116,22 @@ describe("tabular.routes", () => {
             resetStreamRunsForTests();
         });
 
+        it("returns a safe internal error and releases the claimed lease when document access lookup fails", async () => {
+            filterAccessibleDocumentIds.mockRejectedValueOnce(new Error("Document access lookup failed: private database detail"));
+
+            const res = await startGeneration();
+
+            expect(res.status).toBe(500);
+            expect(res.body).toMatchObject({
+                code: "internal_error", detail: "Something went wrong. Please try again.",
+            });
+            expect(res.text).not.toContain("private database detail");
+            expect(rpcNames()).toEqual([
+                "begin_tabular_review_generation", "finish_tabular_review_generation",
+            ]);
+            expect(extractRowColumns).not.toHaveBeenCalled();
+        });
+
         it("keeps extracting after the requesting socket closes, and a reload attaches from where it left off", async () => {
             const held = heldExtraction();
             const first = startGeneration();
