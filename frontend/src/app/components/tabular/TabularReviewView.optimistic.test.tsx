@@ -267,6 +267,50 @@ describe("TRView optimistic reverts", () => {
         );
     });
 
+    it("keeps a newer column edit when an older save's response lands", async () => {
+        const first = deferred<unknown>();
+        const second = deferred<unknown>();
+        vi.mocked(updateTabularReview)
+            .mockReturnValueOnce(
+                first.promise as ReturnType<typeof updateTabularReview>,
+            )
+            .mockReturnValueOnce(
+                second.promise as ReturnType<typeof updateTabularReview>,
+            )
+            .mockImplementation(
+                async (_id, patch) =>
+                    patch as unknown as Awaited<
+                        ReturnType<typeof updateTabularReview>
+                    >,
+            );
+
+        await renderView();
+        act(() => {
+            tableProps.current!.onUpdateColumn({ ...columnA, name: "Sellers" });
+        });
+        act(() => {
+            tableProps.current!.onUpdateColumn({ ...columnB, name: "Length" });
+        });
+
+        // The first save answers with the config it sent, which predates
+        // the second edit.
+        await act(async () => {
+            first.resolve({ columns_config: savedColumns(0) });
+            await Promise.resolve();
+        });
+        expect(screen.getByTestId("col-1")).toHaveTextContent("Length");
+
+        // A third edit starts from the config on screen, not that response,
+        // so it does not resend column B without its edit.
+        act(() => {
+            tableProps.current!.onUpdateColumn({ ...columnA, name: "Buyers" });
+        });
+        expect(savedColumns(2)).toEqual([
+            { ...columnA, name: "Buyers" },
+            { ...columnB, name: "Length" },
+        ]);
+    });
+
     it("retries a failed column edit against the current config", async () => {
         const first = deferred<unknown>();
         vi.mocked(updateTabularReview).mockReturnValueOnce(

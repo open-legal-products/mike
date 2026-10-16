@@ -530,7 +530,15 @@ export function TRView({ reviewId, projectId }: Props) {
             // roleFrom to its fail-closed fallback and shut every client gate
             // for an admin. Merge so the detail fields survive.
             setReview((prev) => (prev ? { ...prev, ...updated } : updated));
-            setColumns(updated.columns_config || nextColumns);
+            // Take the server's copy only while this save is still the
+            // newest edit. A later edit already sits in the ref (and is on
+            // its way to the server); this older response would wipe it off
+            // screen and out of the config the next edit starts from.
+            applyColumns((current) =>
+                current === nextColumns
+                    ? updated.columns_config || nextColumns
+                    : current,
+            );
         } finally {
             setSavingColumnsConfig(false);
         }
@@ -1580,10 +1588,10 @@ export function TRView({ reviewId, projectId }: Props) {
             ...column,
             index,
         }));
-        const previousColumns = columns;
+        const previousColumns = columnsRef.current;
         const previousCells = cells;
         setApplyingWorkflow(true);
-        setColumns(nextColumns);
+        applyColumns(() => nextColumns);
         setCells([]);
         try {
             await saveColumnsConfig(nextColumns);
@@ -1622,7 +1630,7 @@ export function TRView({ reviewId, projectId }: Props) {
             };
             await refreshAppliedWorkflow();
         } catch (err) {
-            setColumns(previousColumns);
+            applyColumns(() => previousColumns);
             setCells(previousCells);
             notifyError(err, {
                 action: "apply the workflow",
