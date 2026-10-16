@@ -45,6 +45,7 @@ import {
   upsertDocumentReadEvent,
 } from "../lib/wordChatEvents";
 import { readCurrentDocumentName } from "../lib/wordDocumentIdentity";
+import { describeError, notifyError } from "../lib/notify";
 
 /**
  * What one run of the turn pipeline was asked to do. Sending and resuming
@@ -306,10 +307,12 @@ export function useWordAssistantChat({
           try {
             documentContext = await readDocumentMarkdown();
           } catch (error) {
+            // Office.js failure text ("GeneralException") means nothing to
+            // a user; the composer alert says what actually could not happen.
             console.error("Failed to read the current Word document", error);
             if (requestIsCurrent()) {
               setRequestError(
-                "Mike couldn't read the current Word document. Please try again.",
+                "Mike couldn't read this Word document. Try again.",
               );
             }
             return;
@@ -509,8 +512,12 @@ export function useWordAssistantChat({
                   await new Promise((resolve) => setTimeout(resolve, 1500));
                   continue;
                 }
-                // A cancel mid-delivery aborts the fetch: that is the user
-                // stopping the turn, not a failure to report.
+                // Nothing more to try. The backend times the tool call out
+                // and ends the turn with its own error frame, which the
+                // catch below turns into a message the user sees — a toast
+                // here would only duplicate it. A cancel mid-delivery aborts
+                // the fetch: that is the user stopping the turn, not a
+                // failure to report.
                 const cancelled =
                   controller.signal.aborted ||
                   (error instanceof Error && error.name === "AbortError");
@@ -648,6 +655,8 @@ export function useWordAssistantChat({
             }
             await respond({ error: `Unknown client tool: ${call.name}` });
           } catch (error) {
+            // This text goes back to the model as a tool result, not to the
+            // screen, so the raw message is the useful thing to send.
             await respond({
               error:
                 error instanceof Error
@@ -942,10 +951,19 @@ export function useWordAssistantChat({
           await awaitClientToolCalls();
           await editController.waitForMessageEdits(assistantMessageId);
           if (!requestIsCurrent()) return;
-          const errorMessage =
-            error instanceof Error
-              ? `Error: ${error.message}`
-              : "An error occurred.";
+          // The bubble shows the classified sentence, never the thrown text:
+          // a stream failure carries provider and stack wording. The toast
+          // carries what the bubble cannot: the actions on the failure.
+          const failureCopy = {
+            action: "get a response",
+            fallback: "Mike couldn't finish that answer. Try again.",
+          };
+          const errorMessage = describeError(error, failureCopy).message;
+          notifyError(error, {
+            ...failureCopy,
+            dedupeKey: "assistant-turn",
+            page: "Assistant",
+          });
           assistantEvents = setAssistantError(assistantEvents, errorMessage);
           if (wordChatStorage === "local" && requestChatId) {
             await saveLocalWordMessage({

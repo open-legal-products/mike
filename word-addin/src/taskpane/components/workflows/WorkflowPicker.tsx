@@ -8,6 +8,7 @@ import {
 import { WorkflowList } from "./WorkflowList";
 import { PageTitle } from "../primitives/PageTitle";
 import { WorkflowAssets } from "./WorkflowAssets";
+import { notifyError, userMessage } from "../../lib/notify";
 
 const WorkflowPromptEditor = lazy(() =>
   import("./WorkflowPromptEditor").then((module) => ({
@@ -36,6 +37,9 @@ export function WorkflowPicker({
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [fetchLoading, setFetchLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // Bumped by the "Retry" on the failure toast; the list has no button of
+  // its own to hang a retry on.
+  const [fetchAttempt, setFetchAttempt] = useState(0);
   const [search, setSearch] = useState("");
   const [promptMd, setPromptMd] = useState("");
   const [saveStatus, setSaveStatus] = useState<
@@ -71,7 +75,9 @@ export function WorkflowPicker({
     void updateWorkflow(pending.workflowId, {
       skill_md: pending.skillMd,
     }).catch(() => {
-      // Swallowed: the editor for this workflow is no longer visible.
+      // Deliberately silent: this is the flush of an unmounted editor's last
+      // autosave. There is no longer a surface to report on, and the next
+      // edit to this workflow saves the full text again.
     });
   };
 
@@ -89,8 +95,20 @@ export function WorkflowPicker({
       .catch((reason: unknown) => {
         if (cancelled) return;
         setFetchError(
-          reason instanceof Error ? reason.message : "Failed to load workflows"
+          userMessage(reason, {
+            fallback: "Mike couldn't load your workflows. Try again.",
+          })
         );
+        notifyError(reason, {
+          action: "load your workflows",
+          dedupeKey: "workflow-list",
+          page: "Workflows",
+          onRetry: () => {
+            setFetchLoading(true);
+            setFetchError(null);
+            setFetchAttempt((count) => count + 1);
+          },
+        });
       })
       .finally(() => {
         if (!cancelled) setFetchLoading(false);
@@ -98,7 +116,7 @@ export function WorkflowPicker({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fetchAttempt]);
 
   useEffect(() => {
     if (!selectedWorkflow) return;
@@ -186,9 +204,10 @@ export function WorkflowPicker({
           if (selectedIdRef.current !== workflowAtChange.id) return;
           setSaveStatus("idle");
           setSaveError(
-            reason instanceof Error
-              ? reason.message
-              : "Failed to save workflow instructions"
+            userMessage(reason, {
+              fallback:
+                "Mike couldn't save these instructions. Try again.",
+            })
           );
         });
     }, 800);

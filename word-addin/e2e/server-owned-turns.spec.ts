@@ -418,9 +418,14 @@ test("a local turn remains resumable after transport retries are exhausted", asy
   await page.getByPlaceholder("How can I help?").fill("Resume this answer");
   await page.getByRole("button", { name: "Send" }).click();
   await expect.poll(() => resumeCount).toBe(2);
+  // The bubble shows the classified sentence, never the thrown transport
+  // text ("Chat stream ended before the completion marker.").
   await expect(
-    page.getByText("Error: Chat stream ended before the completion marker."),
+    page.getByText("Mike couldn't finish that answer. Try again.").first(),
   ).toBeVisible();
+  await expect(
+    page.getByText(/Chat stream ended before the completion marker/),
+  ).toHaveCount(0);
   expect(localChatId).not.toBeNull();
 
   await page.getByRole("button", { name: "New chat" }).click();

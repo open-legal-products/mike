@@ -51,7 +51,11 @@ import {
     type DescribeErrorOptions,
     type UserFacingError,
 } from "@/shared/lib/userError";
-import { showToast, type ToastAction } from "@/shared/lib/toastStore";
+import {
+    retryToastAction,
+    showToast,
+    type ToastAction,
+} from "@/shared/lib/toastStore";
 import { isReported, reportError } from "@/app/lib/errorReporting";
 
 export {
@@ -185,16 +189,11 @@ export function notifyError(
 
     const actions: ToastAction[] = [...(options.actions ?? [])];
     if (options.onRetry && described.retryable) {
-        actions.push({
-            label: "Retry",
-            onClick: async () => {
-                try {
-                    await options.onRetry?.();
-                } catch (retryError) {
-                    notifyError(retryError, options);
-                }
-            },
-        });
+        actions.push(
+            retryToastAction(options.onRetry, (retryError) =>
+                notifyError(retryError, options),
+            ),
+        );
     }
     // "Your session has expired" with nothing to click leaves the user to
     // find the way back to the login screen themselves.

@@ -147,7 +147,9 @@ test("a rejected 4xx is shown to the user and NOT reported", async ({
   await page.getByRole("textbox", { name: "Email" }).fill("lawyer@firm.com");
   await page.getByRole("textbox", { name: "Password" }).fill("wrong");
   await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page.getByRole("alert")).toContainText("Invalid login credentials");
+  await expect(page.getByRole("alert")).toContainText(
+    "That email and password don't match an account.",
+  );
 
   // Give a would-be envelope time to leave; none should.
   await page.waitForTimeout(500);

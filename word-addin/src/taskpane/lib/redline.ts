@@ -76,6 +76,7 @@ function parseJsonStreamingEdit(
   try {
     candidate = JSON.parse(value);
   } catch {
+    // A half-streamed object, not a fault: the next chunk completes it.
     return null;
   }
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {

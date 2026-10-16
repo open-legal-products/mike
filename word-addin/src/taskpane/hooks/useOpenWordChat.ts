@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCloudWordChat } from "../api/mikeApi";
 import { getLocalWordChat } from "../lib/localWordChats";
+import { userMessage } from "../lib/notify";
 import type { WordChatStorageMode } from "../lib/wordChatSettings";
 import type { WordChatOpenHandler } from "../lib/wordChatTypes";
 
@@ -94,7 +95,9 @@ export function useOpenWordChat(
     } catch (reason) {
       if (!requestIsCurrent()) return;
       setOpenError(
-        reason instanceof Error ? reason.message : "Failed to open this chat.",
+        userMessage(reason, {
+          fallback: "Failed to open this chat.",
+        }),
       );
     } finally {
       if (requestIsCurrent()) setLoadingChatId(null);

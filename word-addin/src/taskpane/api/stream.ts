@@ -14,6 +14,11 @@
  * included.
  */
 import { streamWordChat, streamWordChatTurn, readSSE } from "./mikeApi";
+import { MikeApiError, parseApiErrorBody } from "./client";
+import {
+  WordChatTerminalError,
+  terminalErrorFromFrame,
+} from "../lib/wordChatTerminalError";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
 
 export interface WordChatDocumentReadEvent {
@@ -47,13 +52,9 @@ export class WordChatStreamInterrupted extends Error {
   }
 }
 
-/** The server ended the turn with an error frame and a terminal `[DONE]`. */
-export class WordChatTerminalError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WordChatTerminalError";
-  }
-}
+// Defined in an Office-free module so its classification is unit-testable;
+// re-exported so existing imports keep working.
+export { WordChatTerminalError };
 
 /** Everything a turn's frames are routed to, whichever response carries them. */
 export interface WordTurnHandlers {
@@ -102,10 +103,23 @@ async function consumeTurnStream(
   onText: (text: string) => void,
 ): Promise<void> {
   if (!res.ok) {
+    // The chat endpoint answers with the same error envelope as the rest of
+    // the API, so it is parsed the same way: status/code/request id for
+    // classification, and never the raw body on screen.
     const body = await res.text().catch(() => "");
-    throw new Error(`Chat request failed (${res.status}): ${body}`);
+    const parsed = parseApiErrorBody({
+      status: res.status,
+      body,
+      requestId: res.headers.get("x-request-id"),
+    });
+    throw new MikeApiError({
+      status: res.status,
+      code: parsed.code,
+      requestId: parsed.requestId,
+      message: parsed.message,
+    });
   }
-  let streamError: string | null = null;
+  let streamError: WordChatTerminalError | null = null;
   const result = await readSSE(
     res,
     (data) => {
@@ -160,8 +174,7 @@ async function consumeTurnStream(
       } else if (d.type === "citations" && Array.isArray(d.citations)) {
         params.onCitations?.(d.citations);
       } else if (d.type === "error") {
-        streamError =
-          typeof d.message === "string" ? d.message : "Stream error";
+        streamError = terminalErrorFromFrame(d);
       }
     },
     {
@@ -176,7 +189,7 @@ async function consumeTurnStream(
     if (!params.signal?.aborted) throw new WordChatStreamInterrupted();
     return;
   }
-  if (streamError) throw new WordChatTerminalError(streamError);
+  if (streamError) throw streamError;
 }
 
 /**

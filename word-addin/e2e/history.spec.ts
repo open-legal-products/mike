@@ -162,8 +162,9 @@ test("history reports a failed request and retries it", async ({
   await page.getByRole("button", { name: "Chat history" }).click();
 
   const dropdown = page.getByRole("menu");
+  // The 503 body is not echoed; the classified outage sentence is shown.
   await expect(dropdown.getByRole("alert")).toContainText(
-    "History temporarily unavailable",
+    "Mike is temporarily unavailable",
   );
   await dropdown.getByRole("button", { name: "Retry" }).click();
   await expect(dropdown.getByRole("menuitem", { name: /Chat 1/ })).toBeVisible();
@@ -342,8 +343,11 @@ test("persisted cloud failures and cancellations both refresh history", async ({
   const composer = page.getByPlaceholder("How can I help?");
   await composer.fill("Fail after persistence");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("alert")).toHaveText(
-    "Error: Persisted stream failure",
+  // The backend's terminal error frame is written for the user, so it shows
+  // verbatim — without the old "Error: " prefix. `.first()` because the toast
+  // that carries the Retry is an alert too.
+  await expect(page.getByRole("alert").first()).toHaveText(
+    "Persisted stream failure",
   );
   await expect
     .poll(() =>

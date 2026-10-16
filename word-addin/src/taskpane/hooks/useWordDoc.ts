@@ -17,6 +17,13 @@ import {
   persistWordEditAnchor,
   removeWordEditAnchor,
 } from "../lib/wordEditAnchors";
+import { userMessage } from "../lib/notify";
+import {
+  ANCHOR_CLEANUP_FAILURE,
+  BOOKMARK_CLEANUP_FAILURE,
+  PROXY_CLEANUP_FAILURE,
+  cleanupSentence,
+} from "../lib/trackedEditCleanup";
 
 interface PersistedRedlineEdit extends RedlineEdit {
   /** Stable `${assistantMessageId}:edit-${blockIndex}` identity. */
@@ -219,16 +226,26 @@ function rememberTerminalState(
  * Office reports most host failures as a bare code — "GeneralException" and
  * friends. Those say nothing to a user, so they never reach the UI.
  */
-function isOpaqueWordError(message: string): boolean {
-  return /^[A-Za-z]+(Exception|Error)$/.test(message.trim());
-}
-
+/**
+ * What to show a user when Office.js fails.
+ *
+ * Word's own text is written for add-in developers — "GeneralException",
+ * "The argument is invalid or missing or has an incorrect format" — and
+ * saying it out loud tells the reader nothing about their document. The
+ * guidance sentence is what they can act on, so it is what they get;
+ * `describeError` still lets a real API failure underneath (a rejected
+ * save, say) speak for itself. The raw text stays in the console.
+ */
 function describeWordFailure(error: unknown, guidance: string): string {
-  const message = getErrorMessage(error);
-  return isOpaqueWordError(message) ? guidance : `${message} ${guidance}`;
+  return userMessage(error, { fallback: guidance });
 }
 
-function getErrorMessage(error: unknown): string {
+/**
+ * The host's own wording, FOR THE CONSOLE ONLY. Office.js text is written
+ * for add-in developers and must never reach a screen; every user-facing
+ * path uses `describeWordFailure` or a fixed sentence instead.
+ */
+function logErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (
     typeof error === "object" &&
@@ -521,11 +538,15 @@ function untrackEntry(entry: PendingTrackedEdit): void {
   for (const range of entry.ranges) range.untrack();
 }
 
-/** Delete document-persistent anchor data without changing the edit outcome. */
+/**
+ * Delete document-persistent anchor data without changing the edit outcome.
+ * Returns the fixed sentences naming what was left behind — never the host's
+ * own text, which goes to the console instead.
+ */
 async function removePersistentAnchorForEntry(
   entry: PendingTrackedEdit,
-): Promise<string | undefined> {
-  const errors: string[] = [];
+): Promise<string[]> {
+  const failures: string[] = [];
   if (entry.bookmarkName) {
     try {
       await Word.run(async (context) => {
@@ -534,7 +555,8 @@ async function removePersistentAnchorForEntry(
       });
     } catch (error) {
       reportWordFailure(error, { stage: "anchor-cleanup", level: "warning" });
-      errors.push(getErrorMessage(error));
+      console.warn("[tracked-edit/cleanup] bookmark removal failed", error);
+      failures.push(BOOKMARK_CLEANUP_FAILURE);
     }
   }
   if (entry.stableEditId) {
@@ -542,10 +564,11 @@ async function removePersistentAnchorForEntry(
       await removeWordEditAnchor(entry.stableEditId);
     } catch (error) {
       reportWordFailure(error, { stage: "anchor-cleanup", level: "warning" });
-      errors.push(getErrorMessage(error));
+      console.warn("[tracked-edit/cleanup] anchor removal failed", error);
+      failures.push(ANCHOR_CLEANUP_FAILURE);
     }
   }
-  return errors.length > 0 ? errors.join(" ") : undefined;
+  return failures;
 }
 
 /** Signals that Word reports no revisions left inside the edited passage. */
@@ -1162,6 +1185,9 @@ async function resolveTrackedEditNow(
             break;
           }
         } catch (error) {
+          // One anchor's scan failing does not end the pass: the remaining
+          // anchors still get their turn, and `anchorFailure` is reported if
+          // none of them resolve the edit.
           anchorFailure = error;
           console.debug("[tracked-edit/resolve] anchor scan failed", error);
         }
@@ -1262,27 +1288,28 @@ async function resolveTrackedEditNow(
     // Resolution is already durable at this point. Bookmark/settings and
     // proxy cleanup are best effort and must never turn a successful document
     // decision into an error.
-    const cleanupErrors: string[] = [];
-    const persistentCleanupError = await removePersistentAnchorForEntry(entry);
-    if (persistentCleanupError) cleanupErrors.push(persistentCleanupError);
+    // Logged raw, reported as fixed sentences: the reader needs to know what
+    // was left behind, not what Office called the failure.
+    const cleanupFailures = await removePersistentAnchorForEntry(entry);
     try {
       await Word.run(trackedObjectsFor(entry), async (context) => {
         untrackEntry(entry);
         await context.sync();
       });
     } catch (error) {
+      // Reported to Sentry first, then logged raw; the user gets one plain
+      // sentence: they need to know the marker was left behind, not what
+      // Office called the failure.
       reportWordFailure(error, { stage: "resolve-cleanup", level: "warning" });
-      cleanupErrors.push(getErrorMessage(error));
+      console.warn("[tracked-edit/resolve] anchor cleanup failed", error);
+      cleanupFailures.push(PROXY_CLEANUP_FAILURE);
     }
+    const cleanupError = cleanupSentence(cleanupFailures);
     return {
       handle,
       status: decision === "accept" ? "accepted" : "rejected",
       resolvedAs: decision,
-      ...(cleanupErrors.length > 0
-        ? {
-            error: `The edit was resolved, but anchor cleanup failed: ${cleanupErrors.join(" ")}`,
-          }
-        : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
     };
   } catch (error) {
     reportWordFailure(error, { stage: "resolve" });
@@ -1502,6 +1529,9 @@ async function restoreTrackedEditNow(
       return { stableEditId, status: restored.status };
     }
     if (!anchorWasRegistered) {
+      // The registry is a lookup cache rebuilt on every load; the bookmark
+      // in the document is the durable anchor. A failed repair costs a slower
+      // scan next time, not the edit, so the user is not interrupted.
       await persistWordEditAnchor(stableEditId, bookmarkName).catch((error) => {
         console.error(
           "[tracked-edit/restore] Failed to repair the document anchor registry.",
@@ -1770,6 +1800,8 @@ async function restoreTrackedEditsNow(
           continue;
         }
         if (!candidate.anchorWasRegistered) {
+          // Same as the single-edit path above: the registry is a cache, so
+          // a failed repair is not worth a notification.
           await persistWordEditAnchor(
             candidate.stableEditId,
             candidate.bookmarkName,
@@ -2116,7 +2148,7 @@ export function selectDocumentText(
       reportWordFailure(error, { stage: "citation-select", level: "warning" });
       console.debug(
         "[citation] Word couldn’t select the cited text.",
-        getErrorMessage(error),
+        logErrorMessage(error),
       );
       return "error" as const;
     }
@@ -2185,12 +2217,13 @@ export function releaseTrackedEdits(
         // tracked-edit controller. Evict it so a reload reconstructs fresh
         // proxies from the document bookmark instead of shadowing that valid
         // anchor.
+        console.warn("[tracked-edit/release] untrack failed", error);
         pendingTrackedEdits.delete(handle);
         rememberTerminalState(handle, "released");
         results.push({
           handle,
           status: "error",
-          error: getErrorMessage(error),
+          error: PROXY_CLEANUP_FAILURE,
         });
       }
     }
@@ -2226,7 +2259,7 @@ export function useWordDoc() {
             reportWordFailure(error, { stage: "document-read", level: "warning" });
             console.warn(
               "Structured document read failed; sending flat text",
-              getErrorMessage(error),
+              logErrorMessage(error),
             );
             body.load("text");
             await context.sync();

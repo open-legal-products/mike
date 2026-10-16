@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { createSecureUuid } from "./secureUuid";
 import { clearWordEditAnchorRegistry } from "./wordEditAnchors";
+import { userMessage } from "./notify";
 
 const WORD_DOCUMENT_ID_SETTING = "mike.word.documentId.v1";
 const WORD_DOCUMENT_URL_SETTING = "mike.word.documentUrl.v1";
@@ -111,9 +112,9 @@ export function useWordDocumentIdentity(): {
       .catch((reason: unknown) => {
         if (!cancelled) {
           setError(
-            reason instanceof Error
-              ? reason.message
-              : "Could not identify this Word document."
+            userMessage(reason, {
+              fallback: "Could not identify this Word document.",
+            })
           );
         }
       })

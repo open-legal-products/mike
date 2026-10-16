@@ -10,6 +10,28 @@ export interface ToastAction {
     keepOpen?: boolean;
 }
 
+/**
+ * The "Retry" on an error toast. A retry that fails again is handed to
+ * `onFailure` (the caller's own notifier) so the user sees the new failure
+ * instead of the click silently becoming an unhandled rejection. Shared by
+ * the web app and the Word add-in so both retry the same way.
+ */
+export function retryToastAction(
+    onRetry: () => void | Promise<void>,
+    onFailure: (error: unknown) => void,
+): ToastAction {
+    return {
+        label: "Retry",
+        onClick: async () => {
+            try {
+                await onRetry();
+            } catch (error) {
+                onFailure(error);
+            }
+        },
+    };
+}
+
 export interface ToastInput {
     tone?: ToastTone;
     title?: string;

@@ -17,6 +17,7 @@ import {
   WORKFLOW_LANGUAGE_OPTIONS,
   WORKFLOW_PRACTICE_OPTIONS,
 } from "../../lib/workflowMetadata";
+import { userMessage } from "../../lib/notify";
 
 const US_STATE_OPTIONS = [
   "Alabama",
@@ -175,7 +176,9 @@ export function NewWorkflowModal({
       onClose();
     } catch (reason) {
       setError(
-        reason instanceof Error ? reason.message : "Failed to create workflow"
+        userMessage(reason, {
+          fallback: "Mike couldn't create that workflow. Try again.",
+        })
       );
     } finally {
       setCreating(false);
