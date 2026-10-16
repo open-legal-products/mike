@@ -1508,7 +1508,7 @@ export default function ConnectorsPage() {
         actions={
           selectedGoogle?.provider === "google-drive" &&
           selectedGoogle.status?.connected &&
-          selectedGoogle.status.pickerConfigured ? (
+          selectedGoogle.status.pickerAvailable ? (
             <div className="flex flex-col items-start gap-1.5">
               <PillButtonUI
                 tone="white"

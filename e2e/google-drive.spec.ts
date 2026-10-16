@@ -70,7 +70,7 @@ test("Google Drive add, cancel and delete work like Slack", async ({
                     enabled: true,
                     writeEnabled: connected,
                     requireWriteApproval: false,
-                    pickerConfigured: false,
+                    pickerAvailable: false,
                     tools: [
                         {
                             name: "google_drive_search",

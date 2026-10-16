@@ -297,6 +297,14 @@ describe("Google Drive picker session", () => {
     expect((await pickerSession()).status).toBe(409);
   });
 
+  it("answers 409 for a connection made with whole-Drive access, without a token", async () => {
+    connected({ scope: "openid email https://www.googleapis.com/auth/drive" });
+    const res = await pickerSession();
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("google_drive_picker_reconnect");
+    expect(JSON.stringify(res.body)).not.toContain("access-token-1");
+  });
+
   it("returns a short-lived token for the Picker and never the refresh token", async () => {
     connected();
     const res = await pickerSession();

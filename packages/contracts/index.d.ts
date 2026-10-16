@@ -466,8 +466,12 @@ export interface GoogleDriveStatus {
     grantId?: string;
     /** Absent for connections made before the account was recorded. */
     accountEmail?: string;
-    /** The server has the browser key and app id the Google Picker needs. */
-    pickerConfigured: boolean;
+    /**
+     * Add files from Google Drive can be offered: the server has the Picker's
+     * browser key and app id, and the connection (if any) holds the per-file
+     * drive.file scope rather than a legacy whole-Drive one.
+     */
+    pickerAvailable: boolean;
     tools: NativeConnectorTool[];
     redirectUri?: string | null;
 }
@@ -478,7 +482,7 @@ export interface GoogleDrivePickerSession {
     expiresAt: string;
     /** Google Cloud project number; picked files are granted to this app. */
     appId: string;
-    /** Browser API key restricted to the Google Picker API. */
+    /** Browser API key restricted to the Google Picker and Google Drive APIs. */
     developerKey: string;
 }
 export interface GoogleWorkspaceStatus {

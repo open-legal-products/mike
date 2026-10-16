@@ -76,17 +76,26 @@ export const GOOGLE_DRIVE_FULL_SCOPE = "https://www.googleapis.com/auth/drive";
 export const GOOGLE_DRIVE_READONLY_SCOPE =
     "https://www.googleapis.com/auth/drive.readonly";
 
-/** The one place that says what each Drive scope Mike has requested allows. */
-const DRIVE_SCOPE_ACCESS = new Map<string, { read: boolean; write: boolean }>([
-    [GOOGLE_DRIVE_SCOPE, { read: true, write: true }],
-    [GOOGLE_DRIVE_FULL_SCOPE, { read: true, write: true }],
-    [GOOGLE_DRIVE_READONLY_SCOPE, { read: true, write: false }],
+/**
+ * The one place that says what each Drive scope Mike has requested allows.
+ * `picker`: the scope is per-file, so an access token carrying it may be
+ * handed to the browser for the Google Picker. The whole-Drive scopes of
+ * earlier connections keep working for server-side tools but never leave
+ * the server.
+ */
+const DRIVE_SCOPE_ACCESS = new Map<
+    string,
+    { read: boolean; write: boolean; picker: boolean }
+>([
+    [GOOGLE_DRIVE_SCOPE, { read: true, write: true, picker: true }],
+    [GOOGLE_DRIVE_FULL_SCOPE, { read: true, write: true, picker: false }],
+    [GOOGLE_DRIVE_READONLY_SCOPE, { read: true, write: false, picker: false }],
 ]);
 
 /** Whether a space-separated OAuth scope string grants Drive `access`. */
 export function driveScopeGrants(
     scope: unknown,
-    access: "read" | "write",
+    access: "read" | "write" | "picker",
 ): boolean {
     if (typeof scope !== "string") return false;
     return scope
@@ -441,7 +450,7 @@ export async function getGoogleDriveStatus(
                 writeEnabled: false,
                 requireWriteApproval: false,
                 readOnly: false,
-                pickerConfigured: googleDrivePickerConfigured(),
+                pickerAvailable: googleDrivePickerAvailable(null),
                 tools: googleDriveToolList(null),
             };
         }
@@ -456,7 +465,7 @@ export async function getGoogleDriveStatus(
         writeEnabled: hasDriveWriteAccess(row),
         requireWriteApproval: row?.require_write_approval === true,
         readOnly: row?.read_only === true,
-        pickerConfigured: googleDrivePickerConfigured(),
+        pickerAvailable: googleDrivePickerAvailable(row),
         ...(row?.grant_id ? { grantId: row.grant_id } : {}),
         ...(row?.account_email ? { accountEmail: row.account_email } : {}),
         tools: googleDriveToolList(row),
@@ -660,10 +669,22 @@ export class GoogleDrivePickerUnavailableError extends GoogleDriveUserError {
     }
 }
 
+/** The connection predates drive.file; its token must stay on the server. */
+export class GoogleDrivePickerReconnectError extends GoogleDriveUserError {
+    code = "google_drive_picker_reconnect";
+    constructor() {
+        super(
+            "This Google Drive connection already covers your whole Drive. " +
+                "Reconnect Google Drive to switch to per-file access and add files one at a time.",
+        );
+    }
+}
+
 /**
  * The Picker runs in the browser, so it needs a browser API key (restricted
- * to the Picker API) and the Cloud project number that owns the OAuth client;
- * files picked under that project number become reachable through drive.file.
+ * to the Picker and Drive APIs) and the Cloud project number that owns the
+ * OAuth client; files picked under that project number become reachable
+ * through drive.file.
  */
 function googleDrivePickerEnv(): { developerKey?: string; appId?: string } {
     return {
@@ -675,6 +696,19 @@ function googleDrivePickerEnv(): { developerKey?: string; appId?: string } {
 function googleDrivePickerConfigured(): boolean {
     const env = googleDrivePickerEnv();
     return !!(env.developerKey && env.appId);
+}
+
+/**
+ * Whether the UI may offer Add files from Google Drive: the server is set up
+ * for the Picker, and the connection (if there is one) holds the per-file
+ * scope. A connection made with a whole-Drive scope already sees every file,
+ * and its token is never handed to the browser.
+ */
+function googleDrivePickerAvailable(row: TokenRow | null): boolean {
+    return (
+        googleDrivePickerConfigured() &&
+        (!row?.encrypted_access_token || driveScopeGrants(row.scope, "picker"))
+    );
 }
 
 export type GoogleDrivePickerSession =
@@ -697,6 +731,10 @@ export async function createGoogleDrivePickerSession(
         throw new GoogleDriveUserError(
             "Google Drive is turned off in Settings → Connectors.",
         );
+    // A whole-Drive grant refreshes to a whole-Drive access token. Refuse
+    // before refreshing so the browser can only ever receive a per-file one.
+    if (!driveScopeGrants(row.scope, "picker"))
+        throw new GoogleDrivePickerReconnectError();
     const { accessToken, expiresAt } = await getFreshAccessToken(
         userId,
         db,

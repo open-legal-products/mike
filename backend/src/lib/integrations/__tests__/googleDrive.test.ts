@@ -118,13 +118,14 @@ describe("startGoogleDriveOAuth", () => {
 
 describe("driveScopeGrants", () => {
     it.each([
-        [GOOGLE_DRIVE_SCOPE, true, true],
-        [GOOGLE_DRIVE_FULL_SCOPE, true, true],
-        [GOOGLE_DRIVE_READONLY_SCOPE, true, false],
-        ["openid email https://www.googleapis.com/auth/gmail.modify", false, false],
-    ])("%s grants read=%s write=%s", (scope, read, write) => {
+        [GOOGLE_DRIVE_SCOPE, true, true, true],
+        [GOOGLE_DRIVE_FULL_SCOPE, true, true, false],
+        [GOOGLE_DRIVE_READONLY_SCOPE, true, false, false],
+        ["openid email https://www.googleapis.com/auth/gmail.modify", false, false, false],
+    ])("%s grants read=%s write=%s picker=%s", (scope, read, write, picker) => {
         expect(driveScopeGrants(`openid email ${scope}`, "read")).toBe(read);
         expect(driveScopeGrants(`openid email ${scope}`, "write")).toBe(write);
+        expect(driveScopeGrants(`openid email ${scope}`, "picker")).toBe(picker);
     });
 });
 
@@ -164,18 +165,52 @@ describe("createGoogleDrivePickerSession", () => {
             Date.now() + 3000_000,
         );
     });
+
+    it("refuses a whole-Drive connection so the browser never gets a full-Drive token", async () => {
+        vi.stubEnv("GOOGLE_DRIVE_PICKER_API_KEY", "picker-key");
+        vi.stubEnv("GOOGLE_DRIVE_PICKER_APP_ID", "123456789");
+        const fetchSpy = vi.fn();
+        vi.stubGlobal("fetch", fetchSpy);
+        for (const scope of [GOOGLE_DRIVE_FULL_SCOPE, GOOGLE_DRIVE_READONLY_SCOPE]) {
+            const db = makeDb({
+                tokenRow: encryptedTokenRow({
+                    grant_id: "grant-1",
+                    scope: `openid email ${scope}`,
+                    // Near expiry: the refusal must come before any refresh.
+                    expires_at: new Date(Date.now() + 10_000).toISOString(),
+                }),
+            });
+            await expect(
+                createGoogleDrivePickerSession("user-1", db),
+            ).rejects.toMatchObject({ code: "google_drive_picker_reconnect" });
+        }
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
 });
 
 describe("getGoogleDriveStatus", () => {
-    it("reports whether the Google Picker is configured", async () => {
+    it("reports whether the Google Picker is available", async () => {
         expect(
-            (await getGoogleDriveStatus("user-1", makeDb({}))).pickerConfigured,
+            (await getGoogleDriveStatus("user-1", makeDb({}))).pickerAvailable,
         ).toBe(false);
         vi.stubEnv("GOOGLE_DRIVE_PICKER_API_KEY", "picker-key");
         vi.stubEnv("GOOGLE_DRIVE_PICKER_APP_ID", "123456789");
         expect(
-            (await getGoogleDriveStatus("user-1", makeDb({}))).pickerConfigured,
+            (await getGoogleDriveStatus("user-1", makeDb({}))).pickerAvailable,
         ).toBe(true);
+    });
+
+    it("offers the Picker to a drive.file connection but not to a legacy whole-Drive one", async () => {
+        vi.stubEnv("GOOGLE_DRIVE_PICKER_API_KEY", "picker-key");
+        vi.stubEnv("GOOGLE_DRIVE_PICKER_APP_ID", "123456789");
+        const statusFor = (scope: string) =>
+            getGoogleDriveStatus(
+                "user-1",
+                makeDb({ tokenRow: encryptedTokenRow({ scope: `openid email ${scope}` }) }),
+            );
+        expect((await statusFor(GOOGLE_DRIVE_SCOPE)).pickerAvailable).toBe(true);
+        expect((await statusFor(GOOGLE_DRIVE_FULL_SCOPE)).pickerAvailable).toBe(false);
+        expect((await statusFor(GOOGLE_DRIVE_READONLY_SCOPE)).pickerAvailable).toBe(false);
     });
 
     it("reports the schema as ready and the client as configured", async () => {
