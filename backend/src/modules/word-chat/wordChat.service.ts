@@ -1,4 +1,3 @@
-import { wordChatHasWorkspaceAttachments } from "../../lib/wordWorkspace";
 // Business logic + data-access for the word-chat module.
 //
 // Service layer behind wordChat.routes.ts. Every function takes an explicit
@@ -45,6 +44,11 @@ import {
   resolveEffectiveReasoningLevel,
 } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import {
+  CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL,
+  DOCUMENT_WORKSPACE_MISMATCH_CODE,
+  findNewAttachmentsOutsideWorkspace,
+} from "../../lib/documentWorkspace";
 import type { WordEditApplyMode } from "../chat/chat.service";
 
 type LookupResult<T> =
@@ -616,9 +620,12 @@ export async function prepareWordChatStream(
   // Validate before model selection, persistence or memory scheduling. Existing
   // history is checked too: Word has no organization-scoped destination.
   try {
-    if (await wordChatHasWorkspaceAttachments(db, messages)) {
-      return { ok: false, status: 400, code: "document_workspace_mismatch",
-        detail: "Word chats support Personal workspace attachments only. Start a new chat with Personal documents and workflows." };
+    const outside = await findNewAttachmentsOutsideWorkspace(db, {
+      messages, chatId: null, orgId: null, storedHistory: "checked",
+    });
+    if (outside.length) {
+      return { ok: false, status: 400, code: DOCUMENT_WORKSPACE_MISMATCH_CODE,
+        detail: CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL };
     }
   } catch (error) {
     return { ok: false, status: 500, detail: "Could not validate Word chat attachments", error };
@@ -655,9 +662,13 @@ export async function prepareWordChatStream(
       return { ok: false, status: 404, detail: "Chat not found" };
     }
     try {
-      if (await wordChatHasWorkspaceAttachments(db, [], chatId)) {
-        return { ok: false, status: 400, code: "document_workspace_mismatch",
-          detail: "This Word chat contains attachments from another workspace. Start a new chat with Personal attachments." };
+      const outside = await findNewAttachmentsOutsideWorkspace(db, {
+        messages: [], chatId, orgId: null,
+        messagesTable: "word_chat_messages", storedHistory: "checked",
+      });
+      if (outside.length) {
+        return { ok: false, status: 400, code: DOCUMENT_WORKSPACE_MISMATCH_CODE,
+          detail: CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL };
       }
     } catch (error) {
       return { ok: false, status: 500, detail: "Could not validate Word chat attachments", error };

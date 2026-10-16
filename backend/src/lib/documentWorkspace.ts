@@ -10,16 +10,24 @@
 // ensureDocAccess. The same person can read documents in several workspaces,
 // which is exactly why access alone does not keep them apart.
 //
-// A workflow's own files are left out: they are reached through the
-// workflow, and where a workflow may be used is the workflow's rule.
+// A workflow's own files are normally left out: they are reached through the
+// workflow, and where a workflow may be used is the workflow's rule. A chat
+// attachment is the exception (findNewAttachmentsOutsideWorkspace): a file
+// attached by id is placed by the workflow it belongs to, and so is a saved
+// workflow attached to a message.
 
 import { teamOrgIdsAmong } from "./personalOrgs";
 import type { Db } from "./supabase";
+import { catalogKeyFromWorkflowId } from "./workflowCatalog";
 
 export const DOCUMENT_WORKSPACE_MISMATCH_CODE = "document_workspace_mismatch";
 
 export const DOCUMENT_WORKSPACE_MISMATCH_DETAIL =
     "One or more of those documents belong to a different workspace. Choose documents from this workspace, or upload them here.";
+
+/** The same refusal for a chat turn, whose attachments include workflows. */
+export const CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL =
+    "This chat includes documents or workflows from a different workspace. Choose ones from this workspace, or start a new chat here.";
 
 type DocumentPlacement = {
     id: string;
@@ -76,79 +84,161 @@ export async function findDocumentsOutsideWorkspace(
             projectOrg.set(project.id, project.org_id ?? null);
         }
     }
-    const workflowOrg = new Map<string, string | null>();
-    const workflowIds = [...new Set(documents.flatMap(document => document.workflow_id ? [document.workflow_id] : []))];
-    if (workflowIds.length) {
-        const { data, error } = await db.from("workflows").select("id, org_id").in("id", workflowIds);
-        if (error) throw new Error("Failed to read the documents' workflows");
-        for (const row of data ?? []) workflowOrg.set(row.id, row.org_id ?? null);
-    }
+    const workflowOrg = await readWorkflowOrgs(
+        db,
+        documents.flatMap((document) =>
+            document.workflow_id ? [document.workflow_id] : [],
+        ),
+    );
     const storedOrg = (document: DocumentPlacement) =>
-        document.workflow_id ? workflowOrg.get(document.workflow_id) ?? document.org_id ?? null :
-        document.project_id
-            ? (projectOrg.get(document.project_id) ?? null)
-            : (document.org_id ?? null);
+        document.workflow_id
+            ? (workflowOrg.get(document.workflow_id) ?? document.org_id ?? null)
+            : document.project_id
+              ? (projectOrg.get(document.project_id) ?? null)
+              : (document.org_id ?? null);
 
+    return idsOutsideWorkspace(
+        db,
+        orgId,
+        documents.map((document) => ({
+            id: document.id,
+            orgId: storedOrg(document),
+        })),
+    );
+}
+
+/** The organization each named workflow is filed under. */
+async function readWorkflowOrgs(
+    db: Db,
+    workflowIds: string[],
+): Promise<Map<string, string | null>> {
+    const workflowOrg = new Map<string, string | null>();
+    const ids = [...new Set(workflowIds)];
+    if (ids.length === 0) return workflowOrg;
+    const { data, error } = await db
+        .from("workflows")
+        .select("id, org_id")
+        .in("id", ids);
+    if (error) throw new Error("Failed to read the workflows' workspaces");
+    for (const row of (data ?? []) as { id: string; org_id?: string | null }[])
+        workflowOrg.set(row.id, row.org_id ?? null);
+    return workflowOrg;
+}
+
+/**
+ * Of `placed`, the ids filed in a different workspace from `orgId`'s. A
+ * person's own organization and no organization are both Personal.
+ */
+async function idsOutsideWorkspace(
+    db: Db,
+    orgId: string | null | undefined,
+    placed: { id: string; orgId: string | null }[],
+): Promise<string[]> {
+    if (placed.length === 0) return [];
     const teamOrgIds = await teamOrgIdsAmong(db, [
         orgId,
-        ...documents.map(storedOrg),
+        ...placed.map((item) => item.orgId),
     ]);
     const workspaceOf = (stored: string | null | undefined) =>
         stored && teamOrgIds.has(stored) ? stored : null;
     const workspace = workspaceOf(orgId);
-    return documents
-        .filter((document) => workspaceOf(storedOrg(document)) !== workspace)
-        .map((document) => document.id);
+    return placed
+        .filter((item) => workspaceOf(item.orgId) !== workspace)
+        .map((item) => item.id);
 }
 
-type MessageWithFiles = {
+type MessageAttachments = {
     files?: { document_id?: string | null }[] | null;
+    workflow?: { id?: string | null } | null;
 };
 
-function attachedDocumentIds(messages: MessageWithFiles[]): Set<string> {
-    const ids = new Set<string>();
+type AttachmentIds = { documents: Set<string>; workflows: Set<string> };
+
+/** Documents and saved workflows attached to `messages`. Catalog workflows
+ *  belong to no workspace and are left out. */
+function attachmentIds(messages: MessageAttachments[]): AttachmentIds {
+    const ids: AttachmentIds = { documents: new Set(), workflows: new Set() };
     for (const message of messages) {
         for (const file of message.files ?? []) {
             if (typeof file?.document_id === "string" && file.document_id)
-                ids.add(file.document_id);
+                ids.documents.add(file.document_id);
         }
+        const workflowId = message.workflow?.id;
+        if (
+            typeof workflowId === "string" &&
+            workflowId &&
+            catalogKeyFromWorkflowId(workflowId) === null
+        )
+            ids.workflows.add(workflowId);
     }
     return ids;
 }
 
+/** Where a chat's turns are stored. */
+export type StoredChatMessagesTable = "chat_messages" | "word_chat_messages";
+
 /**
- * The documents a chat turn would newly bring in from another workspace.
+ * The attachments — documents and saved workflows — a chat turn would bring
+ * in from another workspace. Web, project and Word chats all ask here.
  *
  * `messages` is what the client sent — the whole conversation, every turn —
  * so every attachment in it is looked at, not just the last message's.
- * Documents already attached to the stored conversation are let through:
- * a chat that drew on another workspace before this rule keeps working.
+ *
+ * `storedHistory` decides what happens to what the stored conversation
+ * already has attached:
+ *
+ *   "exempt"   let through, so a chat that drew on another workspace before
+ *              this rule keeps working (web and project chats);
+ *   "checked"  refused like a new attachment. A Word chat is checked: its
+ *              memory and settings follow the chat's workspace, and Word
+ *              chats from before they had one may hold another workspace's
+ *              files, which the client does not always resend.
+ *
+ * Returns the offending ids; a read failure throws.
  */
 export async function findNewAttachmentsOutsideWorkspace(
     db: Db,
     params: {
-        messages: MessageWithFiles[];
+        messages: MessageAttachments[];
         /** The stored chat, when the turn continues one. */
         chatId: string | null;
         /** The organization the chat belongs to, or null. */
         orgId: string | null | undefined;
+        messagesTable?: StoredChatMessagesTable;
+        storedHistory?: "exempt" | "checked";
     },
 ): Promise<string[]> {
-    const requested = attachedDocumentIds(params.messages);
-    if (requested.size === 0) return [];
-    if (params.chatId) {
+    const requested = attachmentIds(params.messages);
+    const checkHistory = params.storedHistory === "checked";
+    const isEmpty = () =>
+        requested.documents.size === 0 && requested.workflows.size === 0;
+    if (params.chatId && (checkHistory || !isEmpty())) {
         const { data, error } = await db
-            .from("chat_messages")
-            .select("files")
+            .from(params.messagesTable ?? "chat_messages")
+            .select("files, workflow")
             .eq("chat_id", params.chatId)
             .eq("role", "user");
         if (error) throw new Error("Failed to read the chat's attachments");
-        for (const id of attachedDocumentIds(
-            (data ?? []) as MessageWithFiles[],
-        )) {
-            requested.delete(id);
+        const stored = attachmentIds((data ?? []) as MessageAttachments[]);
+        for (const kind of ["documents", "workflows"] as const) {
+            for (const id of stored[kind]) {
+                if (checkHistory) requested[kind].add(id);
+                else requested[kind].delete(id);
+            }
         }
-        if (requested.size === 0) return [];
     }
-    return findDocumentsOutsideWorkspace(db, [...requested], params.orgId);
+    if (isEmpty()) return [];
+    const documents = await findDocumentsOutsideWorkspace(
+        db,
+        [...requested.documents],
+        params.orgId,
+        { includeWorkflowAssets: true },
+    );
+    const workflowOrg = await readWorkflowOrgs(db, [...requested.workflows]);
+    const workflows = await idsOutsideWorkspace(
+        db,
+        params.orgId,
+        [...workflowOrg].map(([id, orgId]) => ({ id, orgId })),
+    );
+    return [...documents, ...workflows];
 }
