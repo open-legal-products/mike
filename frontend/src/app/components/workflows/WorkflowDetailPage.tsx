@@ -90,7 +90,7 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { DocumentWorkspaceScope } from "@/app/contexts/WorkspaceContext";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
-import { notifyError } from "@/app/lib/userFacingError";
+import { describeError, notifyError } from "@/app/lib/userFacingError";
 import { downloadWorkflowZip } from "./workflowZipExport";
 import { WorkflowAssets, type WorkflowAssetsHandle } from "./WorkflowAssets";
 // dynamic import keeps Tiptap (browser-only) out of the SSR bundle
@@ -278,16 +278,19 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
       .catch((error) => {
         // A transient failure would otherwise render as "Workflow not found",
         // which tells the user the wrong thing about their own data.
+        // A 404 is answered by the "Workflow not found." screen itself; a
+        // notice on top would say the same thing twice.
+        if (describeError(error).kind === "not_found") {
+          setNotFound(true);
+          return;
+        }
         const described = notifyError(error, {
           action: "load this workflow",
           dedupeKey: `workflow-load:${id}`,
           onRetry: retryLoad,
         });
-        if (described && described.kind !== "not_found") {
-          setLoadFailed(true);
-          return;
-        }
-        setNotFound(true);
+        if (described) setLoadFailed(true);
+        else setNotFound(true);
       })
       .finally(() => setLoading(false));
   }, [id, workflowType, reloadToken, retryLoad]);

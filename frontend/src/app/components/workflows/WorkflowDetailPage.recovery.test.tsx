@@ -260,4 +260,18 @@ describe("WorkflowDetailPage failures", () => {
         ).toBeVisible();
         expect(screen.queryByText("Workflow not found.")).toBeNull();
     });
+    it("shows a missing workflow once, without a load-failure notice", async () => {
+        vi.mocked(getWorkflow).mockRejectedValue(
+            Object.assign(new Error("Not found"), { status: 404 }),
+        );
+        render(
+            <>
+                <WorkflowDetailPage id="wf-1" workflowType="assistant" />
+                <ToastViewportUI />
+            </>,
+        );
+
+        expect(await screen.findByText("Workflow not found.")).toBeVisible();
+        expect(screen.queryByRole("alert")).toBeNull();
+    });
 });
