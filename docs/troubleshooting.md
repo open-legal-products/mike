@@ -42,8 +42,8 @@ verify that the latest database migration has been applied
 
 Another local Postgres or Supabase stack is using Mike's default host port.
 `npm run stack:status` lists the stacks this repository has left behind,
-including ones that came back by themselves after a Docker restart. Stop the
-one holding the port (`npm run stack:down -- -p <project>` or
+including active stacks in other checkouts. Stop the one holding the port
+(`npm run stack:down -- -p <project>` or
 `supabase stop --project-id <id>`), or choose another mapping:
 
 ```bash

@@ -53,8 +53,8 @@ and local email capture without requiring managed infrastructure.
 5. Open [http://localhost:3000](http://localhost:3000) and create an account.
 
 To stop, run `npm run stack:down` rather than `docker compose stop`: stopped
-containers are never removed on their own and come back after every Docker
-restart. See "Stop and clean up" in `docs/local-development.md`.
+containers are never removed on their own and keep images and volumes in use.
+See "Stop and clean up" in `docs/local-development.md`.
 
 The bundled credentials and infrastructure are intended for local development
 only. See [Local development](docs/local-development.md) for service endpoints,

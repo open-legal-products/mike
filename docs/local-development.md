@@ -43,12 +43,11 @@ behind by earlier checkouts, worktrees, and reviews (see "Stop and clean up").
 
 ## Stop and clean up
 
-Ctrl-C, `docker compose stop`, and `docker stop` only pause a stack: its
-containers stay behind in `Exited` state, pin their images and volumes, and
-come back by themselves after the next Docker restart because the services
-use `restart: unless-stopped`. Every checkout directory (or `-p` project name)
-creates its own set, so forgotten stacks accumulate until the machine is slow
-and the disk is full. Use the lifecycle script instead:
+Ctrl-C, `docker compose stop`, and `docker stop` leave containers in `Exited`
+state, pinning their images and volumes. Manually stopped containers using
+`restart: unless-stopped` stay stopped across Docker restarts, but their disk
+resources remain allocated. Every checkout directory (or `-p` project name)
+creates its own set. Use the lifecycle script to remove containers when done:
 
 ```bash
 npm run stack:down              # remove containers + network, keep data volumes
@@ -58,16 +57,39 @@ npm run stack:gc                # sweep leftovers (runs automatically before
                                 # stack:up and the e2e setup script)
 ```
 
-The sweep only touches resources it can attribute to this repository: fully
-stopped Compose projects built from this `docker-compose.yml` (containers and
-networks go immediately; data volumes only after the stack has been idle for
-`MIKE_GC_VOLUME_AGE_DAYS`, default 7), Supabase CLI stacks for this
-checkout's `project_id` (plus any ids listed in `MIKE_GC_SUPABASE_PROJECTS`),
-anonymous dangling volumes, dangling images, and build cache older than the
-same threshold. Running stacks and other projects are listed, never touched.
-`npm run stack:gc -- --dry-run` shows the plan; `-- --deep` also removes all
-unused images and build cache (the next start re-pulls them). Set `MIKE_GC=0`
-to skip the automatic sweep.
+The sweep removes containers and networks from fully stopped Compose projects
+identified by this repository's Compose marker (or a missing checkout with a
+`mike` project prefix), and Supabase CLI stacks for this checkout's `project_id`
+plus ids in `MIKE_GC_SUPABASE_PROJECTS`. Only `created`, `exited`, and `dead`
+containers qualify. Running, paused, restarting, and other active states are
+protected; removal is never forced if a container starts during the sweep.
+
+Data volumes require verified ownership and at least `MIKE_GC_VOLUME_AGE_DAYS`
+(default 7) of recorded idle time. A shared cleanup record preserves ownership
+and observed activity after containers are removed, so repeated sweeps keep
+recently used data. Volume creation age is never treated as last use. Known
+foreign projects and volumes still referenced by other containers are kept.
+Unknown named volumes are kept even if their project name starts with `mike`;
+remove these explicitly after inspecting them. Allowed Supabase and anonymous
+orphans without history start a fresh grace period when first observed.
+
+Records live under `${XDG_STATE_HOME:-$HOME/.local/state}/mike/stack-gc`, shared
+across checkouts but isolated by Docker daemon and volume creation timestamp.
+`MIKE_GC_STATE_DIR` overrides that directory. Keep the same directory across
+runs. Missing history causes conservative retention; malformed records or a
+write failure stop cleanup before containers are removed. A lock prevents
+concurrent sweeps; after an interrupted process, remove its reported `.lock`
+directory only once no sweep is running. Activity is observed during sweeps;
+reuse followed by removal entirely between sweeps cannot be detected. Use
+`MIKE_GC=0` to disable automatic cleanup when managing volumes outside this
+workflow.
+
+`npm run stack:gc -- --dry-run` previews the same container and volume plan as
+execution, including volumes that become unreferenced after teardown, without
+changing cleanup records. Docker still refuses removal if a new container
+references a volume after planning. Dangling images and old build cache are
+also pruned; `-- --deep` removes all unused images and build cache. Set
+`MIKE_GC=0` to skip the automatic sweep in `stack:up` and the e2e setup script.
 
 For the Supabase CLI stack used by `npm run test:e2e:local` and
 `npm run test:stack`, `supabase stop` removes the containers and keeps the
