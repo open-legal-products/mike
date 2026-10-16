@@ -28,7 +28,7 @@ import { isPanelDocument } from "@/app/components/shared/types";
 import { authenticatedFetch } from "@/app/lib/authEvents";
 import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
 import type { RouterProfileLists } from "@mike/client";
-import { reportedUpstreamMessage } from "@mike/client";
+import { reportedUpstreamMessage, workspaceOrgId } from "@mike/client";
 import {
     reportApiFailure,
     reportGatewayLimit,
@@ -2408,11 +2408,6 @@ function libraryKindOf(scope: LibraryScope): LibraryKind {
 
 function libraryWorkspaceOf(scope: LibraryScope): string | undefined {
     return typeof scope === "string" ? undefined : scope.workspace;
-}
-
-/** `org_id` for an upload made in `workspace`: none in Personal. */
-function workspaceOrgId(workspace: string | undefined): string | undefined {
-    return workspace && workspace !== "personal" ? workspace : undefined;
 }
 
 /** A library route, with the scope's workspace on the query string. */

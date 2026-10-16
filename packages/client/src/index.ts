@@ -24,6 +24,9 @@ export * from "./secureUuid";
 // Response excerpts (quote-and-annotate wire format)
 export * from "./messageExcerpts";
 
+// Active workspace: remembering, falling back and switching
+export * from "./workspaceSelection";
+
 // Sentry event hygiene
 export * from "./sentryEvent";
 export * from "./sentryPrivacy";
