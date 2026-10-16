@@ -78,7 +78,7 @@ export const DropdownContent = React.forwardRef<
     React.ElementRef<typeof DropdownPrimitive.Content>,
     React.ComponentPropsWithoutRef<typeof DropdownPrimitive.Content>
 >(function DropdownContent(
-    { className, sideOffset = 4, onPointerDownOutside, ...props },
+    { className, sideOffset = 4, onPointerDownOutside, onCloseAutoFocus, ...props },
     ref,
 ) {
     const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -92,6 +92,15 @@ export const DropdownContent = React.forwardRef<
                 }}
                 data-slot="dropdown-content"
                 sideOffset={sideOffset}
+                onCloseAutoFocus={(event) => {
+                    onCloseAutoFocus?.(event);
+                    // Radix restores focus on a timer after the old content
+                    // unmounts. If this menu has reopened already, focusing
+                    // its trigger would dismiss the new non-modal menu.
+                    if (contentRef.current?.dataset.state === "open") {
+                        event.preventDefault();
+                    }
+                }}
                 onPointerDownOutside={(event) => {
                     onPointerDownOutside?.(event);
                     // A press on the menu's own trigger is the trigger's to
