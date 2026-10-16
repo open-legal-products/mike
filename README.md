@@ -19,7 +19,7 @@ Website: [mikeoss.com](https://mikeoss.com)
 - Run reusable assistant and tabular-review workflows
 - Organize projects, folders, and a document library
 - Verify citations and research US case law with CourtListener
-- Work from Microsoft Word with the beta task-pane add-in
+- Work from Microsoft Word with the task-pane add-in
 - Run supported language models locally through Ollama
 
 ## Quick start
@@ -70,7 +70,7 @@ variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 | --- | --- |
 | `frontend/` | Next.js web application |
 | `backend/` | Express API, document processing, and database access |
-| `word-addin/` | Microsoft Word task-pane add-in (beta) |
+| `word-addin/` | Microsoft Word task-pane add-in |
 | `backend/schema.sql` | Complete schema for fresh databases |
 | `backend/migrations/` | Dated migrations for existing deployments |
 | `docker-compose.yml` | Local application and infrastructure stack |
