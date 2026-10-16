@@ -12,6 +12,7 @@ import {
     useRef,
     useState,
 } from "react";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useRouter } from "next/navigation";
 import { BookOpen, ChevronLeft, Plus } from "lucide-react";
 import { DocTable } from "@/app/components/documents/DocTable";
@@ -511,9 +512,9 @@ export function LibraryWorkspaceLayout({ children }: { children: ReactNode }) {
     // Keyed by workspace: switching starts the library again from nothing,
     // so one workspace's folders and documents are never shown, or filed
     // into, under another's name.
-    const workspace = useWorkspaceParam();
+    const identity = useWorkspaceIdentity();
     return (
-        <LibraryWorkspaceProvider key={workspace ?? "unscoped"}>
+        <LibraryWorkspaceProvider key={identity}>
             {children}
         </LibraryWorkspaceProvider>
     );
@@ -527,6 +528,7 @@ export function LibraryCollectionPage({
     folderId?: string | null;
 }) {
     const router = useRouter();
+    const identity = useWorkspaceIdentity();
     const scoped = useScopedLibrary();
     const {
         collections,
@@ -1029,7 +1031,8 @@ export function LibraryCollectionPage({
                 />
                 <DocTable
                     onSelectionActionsChange={setSelectionActions}
-                    scopeKey={kind}
+                    key={`${identity}:${kind}`}
+                    scopeKey={`${identity}:${kind}`}
                     documents={collection?.documents ?? []}
                     setDocuments={setDocuments}
                     folders={collection?.folders ?? []}

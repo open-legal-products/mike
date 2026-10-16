@@ -32,6 +32,8 @@ export const PERSONAL_WORKSPACE_LABEL = "Personal";
 const STORAGE_PREFIX = "mike.activeWorkspace.";
 
 interface WorkspaceContextValue {
+    /** Account that owns ephemeral state in this workspace. */
+    accountId?: string;
     /**
      * "personal", an organization id, or `null` outside a WorkspaceProvider.
      * `null` means "do not narrow": surfaces that render without the app
@@ -231,6 +233,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
     const value = useMemo(
         () => ({
+            accountId: userId,
             workspaceId,
             organizations,
             activeOrganization,
@@ -240,6 +243,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             refreshOrgApiKeys,
         }),
         [
+            userId,
             workspaceId,
             organizations,
             activeOrganization,

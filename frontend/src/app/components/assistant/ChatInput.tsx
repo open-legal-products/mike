@@ -66,6 +66,7 @@ import {
     uploadStandaloneDocuments,
     type UploadProgress,
 } from "@/app/lib/mikeApi";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
 import {
     SUPPORTED_DOCUMENT_ACCEPT,
@@ -344,7 +345,7 @@ function ChatInputForChatImpl(
         if (!slashCommandsLoading) return;
 
         let cancelled = false;
-        listWorkflows("assistant")
+        listWorkflows("assistant", workspace ?? "personal")
             .then((workflows) => {
                 if (!cancelled) setSlashWorkflows(workflows);
             })
@@ -355,7 +356,7 @@ function ChatInputForChatImpl(
         return () => {
             cancelled = true;
         };
-    }, [slashCommandsLoading]);
+    }, [slashCommandsLoading, workspace]);
 
     const handleAddDocsFromSelector = useCallback(
         (selectedDocs: Document[]) => {
@@ -1059,9 +1060,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     props,
     ref,
 ) {
+    const identity = useWorkspaceIdentity();
     return (
         <ChatInputForChat
-            key={props.chatKey ?? "new-chat"}
+            key={`${identity}:${props.chatKey ?? "new-chat"}`}
             {...props}
             ref={ref}
         />

@@ -5,6 +5,19 @@ servers from **Settings > Connectors**. Installed connectors appear under
 **Installed**. Hosted providers appear under **Discover**, and an arbitrary
 remote server can be added with **+ Custom**.
 
+## Workspace availability
+
+MCP, Drive, Gmail and Calendar connections belong to the user's Personal
+workspace. Creating a connection from account settings while an organization
+is selected still creates a Personal connection. These connections are not
+advertised or executable in organization chats, project chats or tabular chats;
+pending connector write approvals cannot resume there either. Personal chats
+and the Personal-only Word add-in can continue using them.
+
+Organization-owned credentials or explicit per-workspace connection grants are
+not supported yet. This boundary requires no credential migration and does not
+move existing credentials into an organization.
+
 ## Authentication pathways
 
 ### Dynamic client registration

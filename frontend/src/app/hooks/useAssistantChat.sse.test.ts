@@ -37,7 +37,8 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     }),
 }));
 const workspaceOrg = vi.hoisted(() => ({ id: undefined as string | undefined }));
-vi.mock("@/app/contexts/WorkspaceContext", () => ({
+vi.mock("@/app/contexts/WorkspaceContext", async importOriginal => ({
+  ...await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>(),
     useWorkspaceOrgId: () => workspaceOrg.id,
 }));
 

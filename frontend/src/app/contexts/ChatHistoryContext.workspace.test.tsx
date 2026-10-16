@@ -16,7 +16,7 @@ const workspace = vi.hoisted(() => ({
     current: "personal" as string | undefined,
 }));
 const STABLE_USER = vi.hoisted(() => ({ id: "u1", email: "u1@example.com" }));
-const auth = vi.hoisted(() => ({ signedIn: true }));
+const auth = vi.hoisted(() => ({ user: STABLE_USER as typeof STABLE_USER | null }));
 
 vi.mock("@/app/lib/mikeApi", () => ({
     createChat: (...args: unknown[]) => createChat(...args),
@@ -26,7 +26,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     leaveChat: (...args: unknown[]) => leaveChat(...args),
 }));
 vi.mock("@/app/contexts/AuthContext", () => ({
-    useAuth: () => ({ user: auth.signedIn ? STABLE_USER : null }),
+    useAuth: () => ({ user: auth.user }),
 }));
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
     useWorkspaceParam: () => workspace.current,
@@ -52,11 +52,13 @@ const chat = (id: string, title: string) => ({
 
 let saveChat: ReturnType<typeof useChatHistoryContext>["saveChat"];
 let latest: ReturnType<typeof useChatHistoryContext>;
+let loadMoreChats: ReturnType<typeof useChatHistoryContext>["loadMoreChats"];
 function Probe() {
     const context = useChatHistoryContext();
     useEffect(() => {
         saveChat = context.saveChat;
         latest = context;
+        loadMoreChats = context.loadMoreChats;
     });
     const { chats } = context;
     return (
@@ -77,7 +79,7 @@ const tree = () => (
 beforeEach(() => {
     vi.clearAllMocks();
     workspace.current = "personal";
-    auth.signedIn = true;
+    auth.user = STABLE_USER;
 });
 
 // A chat started on its own belongs to the workspace it is started in.
@@ -149,6 +151,27 @@ describe("ChatHistoryProvider and the active workspace", () => {
         expect(latest.chats?.map(row => row.id)).toEqual(["org-1"]);
     });
 
+    it("discards a pending creation after switching away and back to the same workspace", async () => {
+        listChats.mockImplementation(async ({ workspace: scope }) => [chat(scope, scope)]);
+        let finish!: (value: { id: string }) => void;
+        createChat.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+        const { rerender } = render(tree());
+        await screen.findByText("personal");
+        const pending = saveChat();
+        workspace.current = "org-1";
+        rerender(tree());
+        await screen.findByText("org-1");
+        workspace.current = "personal";
+        rerender(tree());
+        await screen.findByText("personal");
+
+        await act(async () => {
+            finish({ id: "stale-creation" });
+            expect(await pending).toBeNull();
+        });
+        expect(latest.chats?.map(row => row.id)).toEqual(["personal"]);
+    });
+
     it.each(["renameChat", "deleteChat"] as const)("does not reload the old workspace when a pending %s fails", async (operation) => {
         listChats.mockImplementation(async ({ workspace: scope }) => [chat(scope, scope)]);
         let reject!: (reason: Error) => void;
@@ -198,11 +221,42 @@ describe("ChatHistoryProvider and the active workspace", () => {
         listChats.mockReturnValueOnce(new Promise(done => { resolve = done; }));
         const { rerender } = render(tree());
         await screen.findByText("loading");
-        auth.signedIn = false;
+        auth.user = null;
         rerender(tree());
         await screen.findByText("empty");
         await act(async () => resolve([chat("old-account", "Old account")]));
         expect(latest.chats).toEqual([]);
+    });
+
+    it("discards a pending history page when the user signs out", async () => {
+        let resolvePage!: (rows: ReturnType<typeof chat>[]) => void;
+        listChats
+            .mockResolvedValueOnce(Array.from({ length: 21 }, (_, index) =>
+                chat(`c${index}`, `Personal note ${index}`),
+            ))
+            .mockImplementationOnce(() => new Promise((resolve) => {
+                resolvePage = resolve;
+            }));
+        const { rerender } = render(tree());
+        await screen.findByText(/Personal note 0/);
+
+        let pending!: Promise<void>;
+        act(() => { pending = loadMoreChats(); });
+        expect(listChats).toHaveBeenLastCalledWith(expect.objectContaining({
+            workspace: "personal",
+            beforeId: "c19",
+        }));
+
+        auth.user = null;
+        rerender(tree());
+        await screen.findByText("empty");
+
+        await act(async () => {
+            resolvePage([chat("private", "Private history page")]);
+            await pending;
+        });
+        expect(screen.getByText("empty")).toBeInTheDocument();
+        expect(screen.queryByText("Private history page")).not.toBeInTheDocument();
     });
 
     it("asks for the active workspace's chats", async () => {
@@ -315,4 +369,30 @@ describe("leaving shared chats", () => {
         await act(async () => { finish(); await leaving; });
         expect(screen.getByText("Org chat")).toBeVisible();
     });
+});
+
+it("never hands pending workflow messages or stale creation callbacks to the next workspace", async () => {
+    let context!: ReturnType<typeof useChatHistoryContext>;
+    function PendingProbe() {
+        const value = useChatHistoryContext();
+        useEffect(() => { context = value; });
+        return <span>{value.newChatMessages?.[0]?.content ?? "no draft"}</span>;
+    }
+    listChats.mockResolvedValue([]);
+    workspace.current = "firm-a";
+    const view = render(<ChatHistoryProvider><PendingProbe /></ChatHistoryProvider>);
+    const oldSetter = context.setNewChatMessages;
+    act(() => oldSetter([{ role: "user", content: "confidential draft" }]));
+    expect(screen.getByText("confidential draft")).toBeInTheDocument();
+    let finish!: (value: { id: string }) => void;
+    createChat.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    let pending!: Promise<string | null>;
+    act(() => { pending = context.saveChat(); });
+    workspace.current = "firm-b";
+    view.rerender(<ChatHistoryProvider><PendingProbe /></ChatHistoryProvider>);
+    expect(screen.getByText("no draft")).toBeInTheDocument();
+    act(() => oldSetter([{ role: "user", content: "late secret" }]));
+    expect(screen.getByText("no draft")).toBeInTheDocument();
+    await act(async () => { finish({ id: "old-chat" }); expect(await pending).toBeNull(); });
+    expect(context.chats).not.toContainEqual(expect.objectContaining({ id: "old-chat" }));
 });

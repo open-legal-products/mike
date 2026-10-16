@@ -43,6 +43,13 @@ vi.mock("../popups/ApiKeyMissingPopup", () => ({
 }));
 vi.mock("./ModelToggle", () => ({ ModelToggle: () => null }));
 
+const scope = vi.hoisted(() => ({ accountId: "u1", workspace: "personal" }));
+vi.mock("@/app/contexts/WorkspaceContext", async importOriginal => ({
+    ...await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>(),
+    useWorkspace: () => ({ accountId: scope.accountId }),
+    useDocumentWorkspace: () => scope.workspace,
+}));
+
 const workflow = {
     id: "workflow-1",
     metadata: {
@@ -58,6 +65,7 @@ class ResizeObserverMock {
 
 describe("ChatInput workflow slash commands", () => {
     beforeEach(() => {
+        scope.accountId = "u1"; scope.workspace = "personal";
         vi.mocked(listWorkflows).mockResolvedValue([workflow]);
         vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     });
@@ -296,5 +304,52 @@ describe("ChatInput workflow slash commands", () => {
                 }),
             ),
         );
+    });
+});
+
+
+describe("composer workspace identity", () => {
+    it.each(["workspace", "account"])("clears draft, excerpt, attachments and workflow on a %s switch", async boundary => {
+        scope.accountId = "u1"; scope.workspace = "firm-a";
+        vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+        const user = userEvent.setup();
+        const ref = createRef<ChatInputHandle>();
+        const props = { onSubmit: vi.fn(), onCancel: vi.fn(), isLoading: false };
+        const view = render(<ChatInput ref={ref} {...props} />);
+        act(() => {
+            ref.current?.startWorkflow({ id: "wf-a", title: "Private workflow" }, "Confidential draft");
+            ref.current?.addExcerpt({ text: "Private excerpt" });
+            ref.current?.addDoc({ id: "doc-a", filename: "private.pdf", file_type: "pdf" } as Document);
+        });
+        expect(screen.getByRole("combobox")).toHaveValue("Confidential draft");
+        expect(screen.getByText("Private workflow")).toBeInTheDocument();
+        if (boundary === "workspace") scope.workspace = "firm-b";
+        else scope.accountId = "u2";
+        view.rerender(<ChatInput ref={ref} {...props} />);
+        expect(screen.getByRole("combobox")).toHaveValue("");
+        expect(screen.queryByText("Private workflow")).toBeNull();
+        expect(screen.queryByText("Excerpt")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open private.pdf" })).toBeNull();
+        await user.type(screen.getByRole("combobox"), "New question{Enter}");
+        expect(JSON.stringify(props.onSubmit.mock.calls)).not.toContain("Private");
+        expect(JSON.stringify(props.onSubmit.mock.calls)).not.toContain("doc-a");
+    });
+
+    it("ignores a slash-menu response from the previous workspace", async () => {
+        scope.accountId = "u1"; scope.workspace = "firm-a";
+        vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+        let resolveA!: (value: Workflow[]) => void;
+        vi.mocked(listWorkflows).mockImplementation((_type, workspace) => workspace === "firm-a" ? new Promise(resolve => { resolveA = resolve; }) : Promise.resolve([]));
+        const user = userEvent.setup();
+        const props = { onSubmit: vi.fn(), onCancel: vi.fn(), isLoading: false };
+        const view = render(<ChatInput {...props} />);
+        await user.type(screen.getByRole("combobox"), "/cont");
+        await waitFor(() => expect(listWorkflows).toHaveBeenCalledWith("assistant", "firm-a"));
+        scope.workspace = "firm-b";
+        view.rerender(<ChatInput {...props} />);
+        await act(async () => resolveA([workflow]));
+        await user.type(screen.getByRole("combobox"), "/cont");
+        await waitFor(() => expect(listWorkflows).toHaveBeenCalledWith("assistant", "firm-b"));
+        expect(screen.queryByText("Contract Intake")).toBeNull();
     });
 });

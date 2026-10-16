@@ -3530,20 +3530,16 @@ export async function clearTabularCells(
 
 type WorkflowType = Workflow["metadata"]["type"];
 
-export async function listWorkflows(type?: WorkflowType): Promise<Workflow[]> {
-    return apiRequest<Workflow[]>(
-        type ? `/workflows?type=${type}` : "/workflows",
-    );
+export async function listWorkflows(type?: WorkflowType, workspace?: string): Promise<Workflow[]> {
+    const params = new URLSearchParams();
+    if (type) params.set("type", type);
+    if (workspace) params.set("workspace", workspace);
+    const query = params.toString();
+    return apiRequest<Workflow[]>(`/workflows${query ? `?${query}` : ""}`);
 }
 
-// Paginated sibling of listWorkflows() used only by WorkflowList.tsx.
-// Deliberately a separate function, not an overload — the backend route
-// decides whether to paginate based on whether any of these query params
-// are present at all, so listWorkflows() must keep sending none of them
-// (every other caller — the workflow picker modal, the chat slash-menu
-// picker, UseWorkflowModal's own independent fetch — needs the exact legacy
-// response shape, system workflows included). Returns DB-backed rows only
-// (always is_system: false) — system workflows come from listSystemWorkflows.
+// The table uses reduced, paginated records. Pickers use listWorkflows(), whose
+// workspace-only filter keeps instructions and tabular columns in the response.
 export async function listWorkflowsPage(pagination?: {
     limit?: number;
     offset?: number;
@@ -3766,8 +3762,11 @@ export async function deleteWorkflowShare(
 
 export async function listQuickActions(
     surface: QuickAction["surface"] = "app",
+    workspace?: string,
 ): Promise<QuickAction[]> {
-    return apiRequest<QuickAction[]>(`/quick-actions?surface=${surface}`);
+    const params = new URLSearchParams({ surface });
+    if (workspace) params.set("workspace", workspace);
+    return apiRequest<QuickAction[]>(`/quick-actions?${params}`);
 }
 
 export async function createQuickAction(payload: {

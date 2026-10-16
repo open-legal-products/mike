@@ -176,7 +176,7 @@ describe("WorkspaceProvider", () => {
         act(() => latest.setWorkspace(GAMMA.id));
 
         await screen.findByText(`${GAMMA.id}|${GAMMA.id}|loaded|Gamma & Co`);
-        expect(window.localStorage.getItem(STORAGE_KEY)).toBe(GAMMA.id);
+        await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toBe(GAMMA.id));
     });
 
     it("switches even before the organizations have first loaded", async () => {
