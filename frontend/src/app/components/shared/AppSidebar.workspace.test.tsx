@@ -1,8 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listProjectsPage } from "@/app/lib/mikeApi";
+import { listProjectsPage, listTabularReviews } from "@/app/lib/mikeApi";
+import type { Chat, TabularReview } from "@/app/components/shared/types";
 import { AppSidebar } from "./AppSidebar";
+import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
 
 type Org = { id: string; name: string; role: "owner" | "admin" | "member" };
 
@@ -16,6 +18,7 @@ const state = vi.hoisted(() => ({
   push: vi.fn(),
   pathname: "/assistant",
   showToast: vi.fn(),
+  chats: [] as Chat[],
 }));
 
 vi.mock("@/shared/lib/toastStore", async (importOriginal) => ({
@@ -38,6 +41,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
   listProjectsPage: vi.fn(),
   listProjectChats: vi.fn(async () => []),
   listTabularReviews: vi.fn(async () => []),
+  getTabularReviewHistoryStatuses: vi.fn(async () => []),
 }));
 
 vi.mock("@/app/contexts/AuthContext", () => ({
@@ -53,7 +57,8 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
 
 vi.mock("@/app/contexts/ChatHistoryContext", () => ({
   useChatHistoryContext: () => ({
-    chats: [],
+    chats: state.chats,
+    hasMoreChats: false,
     loadingMoreChats: false,
     loadMoreChats: vi.fn(),
     setCurrentChatId: vi.fn(),
@@ -64,6 +69,7 @@ vi.mock("@/app/contexts/WorkspaceContext", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/app/contexts/WorkspaceContext")
   >()),
+  useWorkspaceParam: () => state.workspaceId ?? undefined,
   useWorkspace: () => ({
     workspaceId: state.workspaceId,
     organizations: state.organizations,
@@ -100,10 +106,57 @@ beforeEach(() => {
   state.workspaceId = "personal";
   state.organizations = [];
   state.pathname = "/assistant";
+  state.chats = [];
+  vi.mocked(listTabularReviews).mockResolvedValue([]);
   vi.mocked(listProjectsPage).mockResolvedValue([]);
 });
 
 describe("AppSidebar workspace switcher", () => {
+  it("updates a review's running/completed icon without remounting any History rows", async () => {
+    state.chats = [{ id: "chat", title: "Keep this chat", updated_at: "2026-10-14T00:00:00Z" } as Chat];
+    const review = { id: "review", title: "Running review", updated_at: "2026-10-15T00:00:00Z", is_running: true } as TabularReview;
+    vi.mocked(listTabularReviews).mockResolvedValueOnce([review]);
+    render(<AppSidebar isOpen onToggle={vi.fn()} />);
+    const history = within(screen.getByRole("region", { name: "History" }));
+    const row = await history.findByRole("link", { name: "Tabular review: Running review (Running)" });
+    const chat = history.getByRole("button", { name: "Keep this chat" });
+    let resolve!: (rows: TabularReview[]) => void;
+    vi.mocked(listTabularReviews).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    act(() => notifyTabularReviewsChanged());
+    expect(history.getByRole("button", { name: "Keep this chat" })).toBe(chat);
+    expect(history.getByRole("link", { name: "Tabular review: Running review (Running)" })).toBe(row);
+    await act(async () => resolve([{ ...review, is_running: false, is_complete: true }]));
+    expect(history.getByRole("link", { name: "Tabular review: Running review (Complete)" })).toBe(row);
+    expect(history.getByRole("button", { name: "Keep this chat" })).toBe(chat);
+    expect(history.queryByRole("status", { name: "Running review review running" })).toBeNull();
+  });
+
+  it("combines chats and project and standalone reviews in History by last update", async () => {
+    state.chats = [{
+      id: "chat", title: "Discussion", user_id: "u1", project_id: null, is_owner: true,
+      created_at: "2026-09-01T00:00:00Z", updated_at: "2026-10-14T00:00:00Z",
+    }];
+    vi.mocked(listTabularReviews).mockResolvedValue([
+      { id: "project-review", project_id: "matter", project_name: "Matter Alpha", title: "Older review edited today", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" },
+      { id: "standalone", project_id: null, title: "Standalone review", created_at: "2026-10-13T00:00:00Z", updated_at: "2026-10-13T00:00:00Z" },
+    ] as TabularReview[]);
+    state.pathname = "/projects/matter/tabular-reviews/project-review";
+    render(<AppSidebar isOpen onToggle={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "History" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("Assistant History")).toBeNull();
+    const history = within(screen.getByRole("region", { name: "History" }));
+    const projectReview = await history.findByRole("link", { name: "Tabular review: Matter Alpha: Older review edited today" });
+    expect(projectReview).toHaveAttribute("title", "Matter Alpha: Older review edited today");
+    expect(projectReview).toHaveTextContent("Matter Alpha: Older review edited today");
+    const chat = history.getByRole("button", { name: "Discussion" });
+    const standalone = history.getByRole("link", { name: "Tabular review: Standalone review" });
+    expect(projectReview).toHaveAttribute("href", "/projects/matter/tabular-reviews/project-review");
+    expect(projectReview).toHaveAttribute("aria-current", "page");
+    expect(standalone).toHaveAttribute("href", "/tabular-reviews/standalone");
+    expect(projectReview.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chat.compareDocumentPosition(standalone) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("offers nothing to switch between for somebody in no organization", async () => {
     const user = userEvent.setup();
     render(<AppSidebar isOpen onToggle={vi.fn()} />);
@@ -462,6 +515,29 @@ describe("AppSidebar workspace switcher", () => {
     const callCount = vi.mocked(listProjectsPage).mock.calls.length;
     fireEvent.scroll(scrollArea);
     expect(listProjectsPage).toHaveBeenCalledTimes(callCount);
+  });
+
+  it("ignores a recent-project page from before a workspace round trip", async () => {
+    state.organizations = [ACME];
+    const firstPage = Array.from({ length: 11 }, (_, i) => project(`fresh-${i}`, `Fresh ${i}`));
+    let resolveOld!: (rows: ReturnType<typeof project>[]) => void;
+    vi.mocked(listProjectsPage).mockImplementation((options) => {
+      if (options?.offset) return new Promise(done => { resolveOld = done; });
+      return Promise.resolve(options?.workspace === "personal" ? firstPage : [project("org", "Org matter")]);
+    });
+    const { rerender } = render(<AppSidebar isOpen onToggle={vi.fn()} />);
+    const first = await screen.findByText("Fresh 0");
+    fireEvent.scroll(first.closest(".overflow-y-auto") as HTMLElement);
+    await waitFor(() => expect(resolveOld).toBeTypeOf("function"));
+    state.workspaceId = ACME.id;
+    rerender(<AppSidebar isOpen onToggle={vi.fn()} />);
+    await screen.findByText("Org matter");
+    state.workspaceId = "personal";
+    rerender(<AppSidebar isOpen onToggle={vi.fn()} />);
+    await screen.findByText("Fresh 0");
+    await act(async () => resolveOld([project("stale", "Stale page")]));
+    expect(screen.queryByText("Stale page")).not.toBeInTheDocument();
+    expect(screen.queryByText("Org matter")).not.toBeInTheDocument();
   });
 
   it("lines the empty projects placeholder up with the Recent Projects button", async () => {

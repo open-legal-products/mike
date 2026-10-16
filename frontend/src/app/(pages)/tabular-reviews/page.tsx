@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
+import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -23,10 +24,9 @@ import {
 } from "@/app/components/popups/PermissionDeniedPopup";
 import { can, roleFrom } from "@/app/lib/permissions";
 import { userFacingApiError } from "@/app/lib/userFacingError";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
-import { useWorkspaceOrgId } from "@/app/contexts/WorkspaceContext";
+import { useWorkspaceOrgId, useWorkspaceParam } from "@/app/contexts/WorkspaceContext";
 import { PageHeader } from "@/app/components/shared/PageHeader";
 import { PAGE_HEADER_TITLE_CLASS } from "@/app/components/shared/pageHeaderStyles";
 import type { TableSortDirection } from "@/app/components/shared/TablePrimitive";
@@ -35,7 +35,10 @@ import {
     type TabularReviewSortKey,
     usePaginatedTabularReviews,
 } from "@/app/hooks/usePaginatedTabularReviews";
-import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import {
+    deleteTabularReviewsWithConcurrency,
+    notifyBulkReviewDeleteOutcome,
+} from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 
 type ReviewScope = TabularReviewScope;
@@ -48,6 +51,13 @@ const REVIEW_SCOPES: { id: ReviewScope; label: string }[] = [
 const REVIEW_SCOPE_IDS = REVIEW_SCOPES.map((scope) => scope.id);
 
 export default function TabularReviewsPage() {
+    const workspace = useWorkspaceParam();
+    // Filters, selections and open dialogs belong to the workspace that
+    // supplied their projects and reviews.
+    return <TabularReviewsWorkspacePage key={workspace} workspace={workspace} />;
+}
+
+function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [projects, setProjects] = useState<Project[]>([]);
@@ -88,6 +98,7 @@ export default function TabularReviewsPage() {
         getReviewOwnerId,
     } = usePaginatedTabularReviews({
         projectId: projectFilter ?? undefined,
+        scopeToWorkspace: true,
         search: debouncedSearch,
         selectionKey: search,
         scope: activeScope,
@@ -113,9 +124,6 @@ export default function TabularReviewsPage() {
     const [selectionCameFromSelectAll, setSelectionCameFromSelectAll] =
         useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
-    const [bulkDeleteNotice, setBulkDeleteNotice] = useState<string | null>(
-        null,
-    );
     const [deletingReviewIds, setDeletingReviewIds] = useState<Set<string>>(
         () => new Set(),
     );
@@ -130,7 +138,7 @@ export default function TabularReviewsPage() {
 
     useEffect(() => {
         let cancelled = false;
-        void listProjects()
+        void listProjects({ workspace })
             .then((loadedProjects) => {
                 if (!cancelled) setProjects(loadedProjects);
             })
@@ -140,7 +148,7 @@ export default function TabularReviewsPage() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [workspace]);
 
 
     const allSelected =
@@ -311,11 +319,15 @@ export default function TabularReviewsPage() {
         void handleDeleteSelected();
     }
 
-    async function handleDeleteSelected() {
-        const ids = [...selectedIds];
+    const retryDeleteSelectedRef = useLatestRef(
+        (ids: string[]) => void handleDeleteSelected(ids),
+    );
+
+    // `ids` is passed only by Retry, so it re-sends exactly the batch that
+    // failed, whatever is selected by then, without re-asking to confirm.
+    async function handleDeleteSelected(ids: string[] = [...selectedIds]) {
         setConfirmDeleteAllOpen(false);
         setSelectionCameFromSelectAll(false);
-        setBulkDeleteNotice(null);
         // Prefer the loaded row's role; select-all-matching can hand back
         // ids that were never paged in, and for those the creator id is the
         // only signal available.
@@ -350,15 +362,13 @@ export default function TabularReviewsPage() {
                 restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
             );
         }
-        const notices = [
-            blocked > 0
-                ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only a review owner can delete them.`
-                : null,
-            failedIds.length > 0
-                ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
-                : null,
-        ].filter((notice): notice is string => notice !== null);
-        if (notices.length > 0) setBulkDeleteNotice(notices.join(" "));
+        notifyBulkReviewDeleteOutcome({
+            blocked,
+            failedCount: failedIds.length,
+            // Through the ref for the newest handler, with only the ids
+            // that failed.
+            retry: () => retryDeleteSelectedRef.current(failedIds),
+        });
     }
 
     async function handleDeleteReviewRow(review: TabularReview) {
@@ -507,12 +517,6 @@ export default function TabularReviewsPage() {
                         : null
                 }
                 onClose={() => setOwnerOnlyAction(null)}
-            />
-            <WarningPopup
-                open={!!bulkDeleteNotice}
-                title="Some reviews were not deleted"
-                message={bulkDeleteNotice}
-                onClose={() => setBulkDeleteNotice(null)}
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}

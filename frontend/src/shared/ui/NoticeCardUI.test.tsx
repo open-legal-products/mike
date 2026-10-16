@@ -20,13 +20,10 @@ describe("NoticeCardUI", () => {
         expect(card).toHaveClass("liquid-glass-float");
         expect(card).toHaveAttribute("data-tone", "error");
         // The tone colours the title; the message overrides it to black.
-        expect(screen.getByText("Couldn't save").parentElement).toHaveClass(
+        expect(screen.getByText("Couldn't save").parentElement?.parentElement).toHaveClass(
             "text-red-600",
         );
-        // Lines up under the title text, past the 12px icon and 6px gap.
-        expect(
-            screen.getByText("Check your connection.").parentElement,
-        ).toHaveClass("pl-[18px]", "text-black");
+        expect(screen.getByText("Check your connection.")).toHaveClass("text-black");
 
         fireEvent.click(screen.getByRole("button", { name: "Dismiss warning" }));
         expect(onDismiss).toHaveBeenCalledOnce();
@@ -36,7 +33,7 @@ describe("NoticeCardUI", () => {
         const { container } = render(
             <NoticeCardUI tone="success" message="Saved" onDismiss={() => {}} />,
         );
-        const row = screen.getByText("Saved").parentElement;
+        const row = screen.getByText("Saved").parentElement?.parentElement;
         expect(row).toHaveClass("flex");
         expect(row?.querySelector("svg")).toHaveClass("text-emerald-700");
         expect(container.firstElementChild).toHaveAttribute(
@@ -45,16 +42,15 @@ describe("NoticeCardUI", () => {
         );
     });
 
-    it("renders extra content as given, after the message", () => {
+    it("keeps the title, message and supplementary content in the same text column", () => {
         render(
             <NoticeCardUI title="T" message="M" onDismiss={() => {}}>
                 <p>extra</p>
             </NoticeCardUI>,
         );
-        // Callers own their content's indent, exactly as WarningPopup did.
-        expect(screen.getByText("extra").parentElement).toBe(
-            screen.getByText("M").parentElement?.parentElement,
-        );
+        const textColumn = screen.getByText("T").parentElement;
+        expect(screen.getByText("M").parentElement).toBe(textColumn);
+        expect(screen.getByText("extra").parentElement).toBe(textColumn);
     });
 
     it("uses a caller's icon in place of the tone icon", () => {

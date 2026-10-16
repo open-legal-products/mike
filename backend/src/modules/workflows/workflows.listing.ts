@@ -1,4 +1,5 @@
 // workflows listing — implementation behind the module facade.
+import { listWorkspaceWorkflows } from "../../lib/workflowWorkspace";
 import { type Db } from "../../lib/supabase";
 import { type PaginationParams } from "../../lib/pagination";
 import { type WorkflowSort } from "../../lib/sort";
@@ -16,10 +17,13 @@ export async function listWorkflows(
     userId: string;
     userEmail: string | undefined;
     type: string | null;
+    workspace?: WorkspaceFilter;
   },
 ): Promise<{ ok: true; data: unknown } | ServiceFailure> {
   const { userId, userEmail, type: workflowType } = params;
-  const { data, error } = await db.rpc("get_workflows_overview", {
+  const { data, error } = params.workspace
+    ? { data: await listWorkspaceWorkflows<WorkflowRecord>(db, { ...params, workspace: params.workspace }), error: null }
+    : await db.rpc("get_workflows_overview", {
     p_user_id: userId,
     p_user_email: userEmail ?? null,
     p_type: workflowType,

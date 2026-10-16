@@ -322,6 +322,7 @@ export function ProjectDocumentsView({ projectId, folderId = null }: Props) {
                 actions={toolbarActions}
             />
             <DocTable
+                showCreator
                 scopeKey={projectId}
                 documents={documents}
                 setDocuments={setDocuments}

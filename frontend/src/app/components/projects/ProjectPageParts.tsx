@@ -98,6 +98,7 @@ export function DocVersionHistory({
     onOpenVersion,
     onRenameVersion,
     onExtensionChangeBlocked,
+    showCreator = false,
 }: {
     docId: string;
     filename: string;
@@ -117,6 +118,8 @@ export function DocVersionHistory({
         filename: string | null,
     ) => Promise<void> | void;
     onExtensionChangeBlocked?: (filename: string) => void;
+    /** Keeps the rows aligned with a table that shows a Creator column. */
+    showCreator?: boolean;
 }) {
     const [editingVersionId, setEditingVersionId] = useState<string | null>(
         null,
@@ -174,6 +177,11 @@ export function DocVersionHistory({
                         <div className="w-20 shrink-0 pl-1">
                             <div className="h-3 w-5 rounded bg-gray-200 animate-pulse" />
                         </div>
+                        {showCreator && (
+                            <div className="w-32 shrink-0">
+                                <div className="h-3 w-16 rounded bg-gray-200 animate-pulse" />
+                            </div>
+                        )}
                         <div className="w-32 shrink-0">
                             <div className="h-3 w-16 rounded bg-gray-200 animate-pulse" />
                         </div>
@@ -325,6 +333,11 @@ export function DocVersionHistory({
                         >
                             {numberLabel}
                         </div>
+                        {showCreator && (
+                            <div className="w-32 shrink-0 truncate text-xs text-gray-400">
+                                —
+                            </div>
+                        )}
                         <div
                             className={`w-32 shrink-0 truncate text-xs ${
                                 isDeleted ? "text-gray-300" : "text-gray-500"

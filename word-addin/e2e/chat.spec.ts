@@ -404,9 +404,9 @@ test("shows a scroll-to-bottom control while the transcript is scrolled up", asy
     .toBeLessThan(2);
   await messagesContainer.hover();
   await page.mouse.wheel(0, -10_000);
-  await expect
-    .poll(() => messagesContainer.evaluate((container) => container.scrollTop))
-    .toBeLessThan(2);
+  // WebKit can retain a small scroll offset while the transcript finishes
+  // layout. The user must see the oldest message, not hit an exact pixel.
+  await expect(page.getByText("Review section 1", { exact: true })).toBeInViewport();
 
   const scrollButton = page.getByRole("button", { name: "Scroll to bottom" });
   await expect(scrollButton).toBeVisible();

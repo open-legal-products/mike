@@ -80,9 +80,8 @@ type ProjectItemsData = {
 // list immediately while it refreshes.
 const projectItemsCache = new Map<string, ProjectItemsData>();
 
-// The project chat endpoint returns every chat; reviews come in pages. The
-// review overview can sort by creation, not by last update, so the merge
-// orders whatever has loaded by activity.
+// The project chat endpoint returns every chat; reviews come in pages
+// ordered by their last update, matching the combined history.
 async function fetchReviewPage(
     projectId: string,
     offset: number,
@@ -92,7 +91,7 @@ async function fetchReviewPage(
     const page = await listTabularReviews(projectId, {
         offset,
         limit: limit + 1,
-        sortKey: "created",
+        sortKey: "updated",
         sortDirection: "desc",
         signal,
     });
@@ -364,7 +363,7 @@ export function SidebarProjectItem({
                                             {subRowArrow}
                                             <span className="flex min-w-0 flex-1 items-center gap-2">
                                                 {/* Same icon and size as the
-                                                    Assistant History rows. */}
+                                                    History rows. */}
                                                 <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                                                     <Icon className="h-3.5 w-3.5" />
                                                 </span>

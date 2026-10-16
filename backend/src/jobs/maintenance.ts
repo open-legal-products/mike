@@ -1,6 +1,7 @@
 import { createServerSupabase, type Db } from "../lib/supabase";
+import { safeError } from "../lib/safeError";
 import { logError } from "../lib/log";
-import { sweepStaleProcessingDocuments } from "../modules/documents/documents.service";
+import { backfillDocumentText, sweepStaleProcessingDocuments } from "../modules/documents/documents.service";
 import { sweepStaleGeneratingCells } from "../modules/tabular/tabular.service";
 import { expireDepartureArchives, purgeExpiredOrganizations } from "../modules/orgs/orgs.service";
 
@@ -8,6 +9,9 @@ import { expireDepartureArchives, purgeExpiredOrganizations } from "../modules/o
 export async function runStaleWorkSweep(
     db: Db = createServerSupabase(),
 ): Promise<{ documents: number; cells: number }> {
+    await backfillDocumentText(db).catch((err) => {
+        logError("stale-sweep", safeError(err), { sweep: "document-text" });
+    });
     const documents = await sweepStaleProcessingDocuments(db).catch((err) => {
         logError("stale-sweep", err, { sweep: "documents" });
         return 0;

@@ -50,11 +50,8 @@ function PersonalisationForm({
   const [savedField, setSavedField] = useState<PersonalisationField | null>(
     null,
   );
-  const [error, setError] = useState<string | null>(null);
-  const [retryVersion, setRetryVersion] = useState(0);
   const form = usePersonalisationFields(initial, (field) => {
     setPendingField(field);
-    setError(null);
   });
   const initialSnapshot = JSON.stringify({
     jurisdiction: initial.jurisdiction || null,
@@ -104,15 +101,13 @@ function PersonalisationForm({
       saveChainRef.current = saveChainRef.current.then(async () => {
         setSavingField(field);
         setSavedField(null);
-        setError(null);
         const success = await updatePersonalisation(details);
         if (success) persistedSnapshotRef.current = snapshot;
         setSavingField((current) => (current === field ? null : current));
         if (latestSnapshotRef.current !== snapshot) return;
-        if (!success) {
-          setError("Unable to save your personalisation settings");
-          return;
-        }
+        // A failure is reported once, by the profile context's notice
+        // (message, Retry, support); the form shows no second status for it.
+        if (!success) return;
         setSavedField(field);
         if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
         savedTimerRef.current = setTimeout(() => {
@@ -128,7 +123,6 @@ function PersonalisationForm({
     form.details,
     form.invalidGroups,
     pendingField,
-    retryVersion,
     updatePersonalisation,
   ]);
 
@@ -157,7 +151,7 @@ function PersonalisationForm({
             statusFor={(field) => fieldStatus(field, savingField, savedField)}
           />
 
-          {form.validationError && !error && (
+          {form.validationError && (
             <SettingsRow layout="stacked">
               <div
                 className="flex items-center justify-end text-xs"
@@ -166,26 +160,6 @@ function PersonalisationForm({
                 <span className="text-red-600" role="alert">
                   {form.validationError}
                 </span>
-              </div>
-            </SettingsRow>
-          )}
-
-          {error && (
-            <SettingsRow layout="stacked">
-              <div
-                className="flex items-center justify-end gap-2 text-xs"
-                aria-live="polite"
-              >
-                <span className="text-red-600" role="alert">
-                  {error}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setRetryVersion((current) => current + 1)}
-                  className="font-medium text-gray-700 hover:text-gray-950"
-                >
-                  Retry
-                </button>
               </div>
             </SettingsRow>
           )}

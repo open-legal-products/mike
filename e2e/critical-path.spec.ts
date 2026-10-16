@@ -29,7 +29,9 @@ test("project document: read uploaded PDF and reload the saved answer", async ({
     await page.goto(`${page.url().split("?")[0]}/assistant`);
     await page.getByRole("button", { name: "Create", exact: true }).click();
     // Opening the composer must not persist an empty chat; first send creates it.
-    await expect(page).toHaveURL(/\/projects\/[^/]+\/assistant\/chat$/);
+    // This dynamic composer route is compiled on first use in the development
+    // stress job; navigation must settle before we interact with its controls.
+    await expect(page).toHaveURL(/\/projects\/[^/]+\/assistant\/chat$/, { timeout: 30_000 });
     await selectClaudeModel(page);
     const input = page.getByPlaceholder("How can I help?");
     await input.fill("Read test.pdf and quote its first line.");

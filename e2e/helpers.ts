@@ -22,7 +22,11 @@ export const CLAUDE_MODEL_LABEL = "Claude Sonnet 5.5";
  */
 export async function selectClaudeModel(page: Page) {
     const trigger = page.getByRole("button", { name: "Choose model", exact: true });
-    await expect(trigger).toBeVisible({ timeout: 10_000 });
+    // Cold hydration under the 4x CPU stress profile can outlast 10 seconds
+    // before the authenticated composer mounts, even after route warmup.
+    await expect(trigger).toBeVisible({
+        timeout: process.env.REACT_STRESS === "1" ? 30_000 : 10_000,
+    });
     await trigger.click();
     await page.getByRole("menuitem", { name: CLAUDE_MODEL_LABEL }).click();
     await expect(trigger).toHaveAttribute("title", `Choose model — ${CLAUDE_MODEL_LABEL}`, {

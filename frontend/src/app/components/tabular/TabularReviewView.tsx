@@ -78,6 +78,7 @@ import {
     providerLabel,
     type ModelProvider,
 } from "@/app/lib/modelAvailability";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { TRSidePanel } from "./TRSidePanel";
 import { TRTable } from "./TRTable";
 import type { TRTableHandle } from "./TRTable";
@@ -85,6 +86,11 @@ import { TRChatPanel } from "./TRChatPanel";
 import { TabularReviewDetailsModal } from "./TabularReviewDetailsModal";
 import { exportTabularReviewToExcel } from "./exportToExcel";
 import { readSseFrames } from "@/app/lib/sse";
+import {
+    UserVisibleError,
+    notifyError,
+} from "@/app/lib/userFacingError";
+import { useAssignLatest, useLatestRef } from "@/app/hooks/useLatestRef";
 import { useSidebar } from "@/app/contexts/SidebarContext";
 import {
     DocumentWorkspaceScope,
@@ -93,6 +99,7 @@ import {
 import { PageHeader } from "../shared/PageHeader";
 import { TableToolbar } from "../shared/TableToolbar";
 import { TabPillButtonUI } from "@/shared/ui/TabPillButtonUI";
+import { LIQUID_GLASS_SUBTLE_CLASS } from "@/app/components/ui/liquid-surface";
 import { ModelToggle } from "../assistant/ModelToggle";
 import {
     type NoModelsReason,
@@ -100,6 +107,7 @@ import {
 import { SUPPORTED_DOCUMENT_ACCEPT } from "@/app/lib/documentUploadValidation";
 import { useConfiguredModels } from "@/app/hooks/useConfiguredModels";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";
+import { notifyTabularReviewsChanged } from "@/app/lib/tabularReviewChanges";
 
 interface Props {
     reviewId: string;
@@ -114,6 +122,11 @@ export function TRView({ reviewId, projectId }: Props) {
     );
     const { setSidebarOpen } = useSidebar();
     const [review, setReview] = useState<TabularReview | null>(null);
+    // Generation and row/column edits can update the review outside PATCH.
+    // Refresh History when the authoritative detail reports new activity.
+    useEffect(() => {
+        if (review?.updated_at) notifyTabularReviewsChanged();
+    }, [review?.id, review?.updated_at]);
     // Opening a review opens its workspace. One in a project follows its
     // project, which says so itself.
     useItemWorkspace(
@@ -180,10 +193,6 @@ export function TRView({ reviewId, projectId }: Props) {
         string[]
     >([]);
     const [generationError, setGenerationError] = useState<string | null>(null);
-    const [dropUploadWarning, setDropUploadWarning] = useState<string | null>(
-        null,
-    );
-    const [projectLoadWarning, setProjectLoadWarning] = useState(false);
     const searchParams = useSearchParams();
     const initialChatParamRef = useRef<string | null>(searchParams.get("chat"));
     const [chatOpen, setChatOpen] = useState(!!initialChatParamRef.current);
@@ -215,6 +224,51 @@ export function TRView({ reviewId, projectId }: Props) {
     // Only one resume stream may be open at a time — mount, a 202 regenerate
     // and a dropped generate stream can all ask for one.
     const resumeStreamOpenRef = useRef(false);
+    // A notice outlives the render that raised it: its "Retry" closure and
+    // everything that closure captured are frozen at the moment of the
+    // failure, while the review moves on — another column is edited, a run
+    // fills cells in. These refs let a revert touch only the item that
+    // failed and let a retry re-enter the CURRENT handler against the
+    // CURRENT config instead of resurrecting a stale snapshot.
+    const columnsRef = useRef(columns);
+    const generatingRef = useRef(false);
+
+    useEffect(() => {
+        columnsRef.current = columns;
+    }, [columns]);
+
+    const retryRef = useRef<{
+        resume: () => Promise<void>;
+        reloadReview: () => Promise<void>;
+        generate: () => void;
+        updateColumn: (column: ColumnConfig) => void;
+        deleteColumn: (columnIndex: number) => void;
+    } | null>(null);
+    // These handlers are re-created every render, and a retry must always
+    // land on the newest one.
+    useAssignLatest(retryRef, {
+        resume: () => resumeGenerationStream(),
+        reloadReview: () => loadLatestReview(),
+        generate: () => void handleGenerate(),
+        updateColumn: (column: ColumnConfig) => void handleUpdateColumn(column),
+        deleteColumn: (columnIndex: number) =>
+            void handleDeleteColumn(columnIndex),
+    });
+
+    /**
+     * Apply a column change to the latest config, not to the array this
+     * render captured, and return the result to save. The ref is written
+     * eagerly because two edits can start in the same tick, before React
+     * has re-rendered with the first one.
+     */
+    function applyColumns(
+        update: (current: ColumnConfig[]) => ColumnConfig[],
+    ): ColumnConfig[] {
+        const next = update(columnsRef.current);
+        columnsRef.current = next;
+        setColumns(next);
+        return next;
+    }
 
     useEffect(
         () => () => {
@@ -231,6 +285,7 @@ export function TRView({ reviewId, projectId }: Props) {
     const tabularModel = review?.model ?? "";
     const cellMutationsBlocked =
         generating || stoppingGeneration || review?.is_running === true;
+    const cellMutationsBlockedRef = useLatestRef(cellMutationsBlocked);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -281,11 +336,29 @@ export function TRView({ reviewId, projectId }: Props) {
                         cells.some((c) => c.status === "generating")
                     ) {
                         resumeGenerationStream().catch((err) =>
-                            console.error("Generation resume failed", err),
+                            notifyError(err, {
+                                action: "reconnect to the running review",
+                                fallback:
+                                    "Mike lost contact with the run in progress. Results already saved are still here.",
+                                dedupeKey: `tr-resume:${reviewId}`,
+                                // Returned, so a failed retry is reported
+                                // again by notifyError's Retry wrapper.
+                                onRetry: () => retryRef.current?.resume(),
+                            }),
                         );
                     }
                 },
-            ),
+            )
+                // Without this the rejection was unhandled: the spinner
+                // cleared and the review read as empty rather than unloaded.
+                .catch((error) => {
+                    if (cancelled) return;
+                    notifyError(error, {
+                        action: "load this review",
+                        dedupeKey: `tr-review:${reviewId}`,
+                        onRetry: () => retryRef.current?.reloadReview(),
+                    });
+                }),
         ];
         if (projectId) {
             fetches.push(
@@ -293,20 +366,15 @@ export function TRView({ reviewId, projectId }: Props) {
                     .then((loaded) => {
                         if (!cancelled) setProject(loaded);
                     })
-                    .catch(() => {
-                        if (!cancelled) setProjectLoadWarning(true);
-                    }),
-            );
-        } else {
-            fetches.push(
-                listProjects()
-                    .then((loaded) => {
-                        if (!cancelled) setAvailableProjects(loaded);
-                    })
-                    .catch(() => {
-                        if (!cancelled) {
-                            setAvailableProjects([]);
-                        }
+                    .catch((error) => {
+                        if (cancelled) return;
+                        // The project supplies the breadcrumb and the admin
+                        // contacts shown on permission refusals, so silence
+                        // here reads as "this review has no project".
+                        notifyError(error, {
+                            action: "load this review's project",
+                            dedupeKey: `tr-project:${projectId}`,
+                        });
                     }),
             );
         }
@@ -318,9 +386,38 @@ export function TRView({ reviewId, projectId }: Props) {
         };
     }, [reviewId, projectId]);
 
+    // A review opened by link may change the active workspace. Its move
+    // destinations follow the review itself, including while that switch loads.
+    const reviewWorkspace = review?.id === reviewId
+        ? (review.org_id ?? PERSONAL_WORKSPACE)
+        : undefined;
+    useEffect(() => {
+        let cancelled = false;
+        setAvailableProjects([]);
+        if (projectId || reviewWorkspace === undefined) return;
+        void listProjects({ workspace: reviewWorkspace })
+            .then((loaded) => {
+                if (!cancelled) setAvailableProjects(loaded);
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                setAvailableProjects([]);
+                // An empty picker is indistinguishable from "you have no
+                // projects", which is the wrong thing to conclude.
+                notifyError(error, {
+                    action: "load your projects",
+                    dedupeKey: "tr-project-list",
+                });
+            });
+        return () => { cancelled = true; };
+    }, [projectId, reviewWorkspace]);
+
     function getNextColumnIndex() {
         return (
-            columns.reduce((max, column) => Math.max(max, column.index), -1) + 1
+            columnsRef.current.reduce(
+                (max, column) => Math.max(max, column.index),
+                -1,
+            ) + 1
         );
     }
 
@@ -345,8 +442,16 @@ export function TRView({ reviewId, projectId }: Props) {
             setGrants(access.grants);
             setAccessOrgId(access.org_id ?? null);
         } catch (error) {
-            console.error("[tabular review] failed to load access", error);
             setGrants([]);
+            // An empty grant list looks like "shared with nobody", which
+            // would invite re-sharing a review that is already shared.
+            notifyError(error, {
+                action: "load who this review is shared with",
+                dedupeKey: `tr-access:${reviewId}`,
+                onRetry: () => {
+                    void refreshGrants();
+                },
+            });
         }
     }, [reviewId]);
 
@@ -403,6 +508,10 @@ export function TRView({ reviewId, projectId }: Props) {
                 setReviewContacts(people.owner ? [people.owner] : []);
             })
             .catch(() => {
+                // Deliberately silent: this only decorates a refusal popup
+                // that is already on screen with a name to ask. Stacking a
+                // second failure on top of a refusal the user is reading
+                // would bury the refusal itself.
                 if (!cancelled) setReviewContacts([]);
             });
         return () => {
@@ -421,7 +530,15 @@ export function TRView({ reviewId, projectId }: Props) {
             // roleFrom to its fail-closed fallback and shut every client gate
             // for an admin. Merge so the detail fields survive.
             setReview((prev) => (prev ? { ...prev, ...updated } : updated));
-            setColumns(updated.columns_config || nextColumns);
+            // Take the server's copy only while this save is still the
+            // newest edit. A later edit already sits in the ref (and is on
+            // its way to the server); this older response would wipe it off
+            // screen and out of the config the next edit starts from.
+            applyColumns((current) =>
+                current === nextColumns
+                    ? updated.columns_config || nextColumns
+                    : current,
+            );
         } finally {
             setSavingColumnsConfig(false);
         }
@@ -465,6 +582,7 @@ export function TRView({ reviewId, projectId }: Props) {
         setUploadingDroppedFilenames(files.map((file) => file.name));
         const uploaded: Document[] = [];
         let failedNames: string[] = [];
+        let dropUploadError: unknown = null;
         try {
             const documentIds = documents.map((document) => document.id);
             for (const file of files) {
@@ -480,8 +598,8 @@ export function TRView({ reviewId, projectId }: Props) {
                 documentIds.push(document.id);
             }
         } catch (err) {
-            console.error("Tabular review document drop upload failed", err);
             failedNames = files.slice(uploaded.length).map((f) => f.name);
+            dropUploadError = err;
         }
         try {
             // Each successful upload already attached itself server-side, so
@@ -489,15 +607,38 @@ export function TRView({ reviewId, projectId }: Props) {
             // files stay invisible until a manual reload.
             if (uploaded.length > 0) await handleAddDocuments(uploaded);
         } catch (err) {
-            console.error("Refreshing review documents failed", err);
+            notifyError(err, {
+                action: "add the uploaded files to this review",
+                fallback:
+                    "The files uploaded, but the review could not be refreshed. Reload to see them.",
+                // Re-read, never re-PATCH: each upload already attached
+                // itself, and handleAddDocuments from this closure would
+                // resend the document set and column config as they were
+                // at drop time, undoing any edit made since.
+                onRetry: () => {
+                    void loadLatestReview();
+                },
+            });
         } finally {
             setUploadingDroppedFilenames([]);
         }
         if (failedNames.length > 0) {
-            setDropUploadWarning(
-                failedNames.length === 1
-                    ? `"${failedNames[0]}" could not be uploaded. Please try again.`
-                    : `${failedNames.length} files could not be uploaded. Please try again.`,
+            const failedFiles = files.slice(files.length - failedNames.length);
+            notifyError(
+                new UserVisibleError(
+                    failedNames.length === 1
+                        ? `“${failedNames[0]}” could not be uploaded.`
+                        : `${failedNames.length} files could not be uploaded: ${failedNames.join(", ")}.`,
+                    { kind: "unknown", retryable: true, cause: dropUploadError },
+                ),
+                {
+                    action: `upload ${failedNames.length === 1 ? "that file" : "those files"}`,
+                    // Retry only the files that never landed, so the ones
+                    // already attached are not uploaded twice.
+                    onRetry: () => {
+                        void handleDropReviewFiles(failedFiles);
+                    },
+                },
             );
         }
     }
@@ -546,7 +687,12 @@ export function TRView({ reviewId, projectId }: Props) {
                 // cell "generating" and pick up the terminal state from the
                 // resumable stream.
                 resumeGenerationStream().catch((err) =>
-                    console.error("Generation resume failed", err),
+                    notifyError(err, {
+                        action: "follow this cell's regeneration",
+                        fallback:
+                            "The cell is still being generated, but Mike lost contact with the run. Reload to see the result.",
+                        dedupeKey: `tr-resume:${reviewId}`,
+                    }),
                 );
                 return;
             }
@@ -562,6 +708,9 @@ export function TRView({ reviewId, projectId }: Props) {
                     ? { ...prev, status: "done" as const, content: result }
                     : null,
             );
+            await refreshAfterGeneration().catch((err) =>
+                console.error("Failed to refresh the regenerated review", err),
+            );
         } catch (err) {
             if (
                 err instanceof MikeApiError &&
@@ -570,7 +719,12 @@ export function TRView({ reviewId, projectId }: Props) {
                 await loadLatestReview();
                 return;
             }
-            console.error("Regeneration failed", err);
+            notifyError(err, {
+                action: "regenerate this cell",
+                onRetry: () => {
+                    void handleRegenerateCell(rowId, colIndex);
+                },
+            });
             setCells((prev) =>
                 prev.map((c) =>
                     c.row_id === rowId && c.column_index === colIndex
@@ -584,7 +738,7 @@ export function TRView({ reviewId, projectId }: Props) {
         }
     }
 
-    async function refreshAfterStoppedGeneration() {
+    async function refreshAfterGeneration() {
         for (let attempt = 0; attempt < 40; attempt += 1) {
             const detail = await getTabularReview(reviewId);
             if (!detail.review.is_running) {
@@ -644,11 +798,14 @@ export function TRView({ reviewId, projectId }: Props) {
                     }
                 }
             } catch (err) {
-                console.warn(
-                    "[TabularReviewView] failed to apply cell_update:",
-                    frame,
-                    err,
-                );
+                // One notice per review: a cell update we could not apply
+                // leaves that cell showing stale text while the run goes on.
+                notifyError(err, {
+                    action: "show a generated cell",
+                    fallback:
+                        "A result arrived that Mike couldn't display. Reload to see it.",
+                    dedupeKey: `tr-cell-update:${reviewId}`,
+                });
             }
         }
     }
@@ -692,17 +849,20 @@ export function TRView({ reviewId, projectId }: Props) {
             if (!response.ok) {
                 throw new Error(`Resume failed: ${response.status}`);
             }
+            notifyTabularReviewsChanged();
             await consumeGenerationStream(response);
+            if (ownedAbort && !ownedAbort.signal.aborted) await refreshAfterGeneration();
         } catch (err) {
             if (!ownedAbort?.signal.aborted) throw err;
         } finally {
             resumeStreamOpenRef.current = false;
+            notifyTabularReviewsChanged();
             if (ownedAbort && generationAbortRef.current === ownedAbort)
                 generationAbortRef.current = null;
             if (ownsToolbar) {
                 if (stopRequestedRef.current) {
                     try {
-                        await refreshAfterStoppedGeneration();
+                        await refreshAfterGeneration();
                     } catch (err) {
                         console.error(
                             "Failed to refresh the stopped tabular review",
@@ -718,7 +878,10 @@ export function TRView({ reviewId, projectId }: Props) {
     }
 
     async function handleGenerate() {
-        if (!review || generating) return;
+        // The ref, not the `generating` state: a "Retry" pressed after the
+        // run failed runs a closure created while the run was still in
+        // flight, and the captured `true` made that retry a silent no-op.
+        if (!review || generatingRef.current) return;
         if (!requireContent("run generation")) return;
 
         if (review.is_running) {
@@ -753,8 +916,10 @@ export function TRView({ reviewId, projectId }: Props) {
         lastFrameIdRef.current = 0;
         stopRequestedRef.current = false;
         setStoppingGeneration(false);
+        generatingRef.current = true;
         setGenerating(true);
 
+        let generationStarted = false;
         try {
             const response = await streamTabularGeneration(
                 reviewId,
@@ -789,6 +954,8 @@ export function TRView({ reviewId, projectId }: Props) {
                 );
             }
             if (!response.body) throw new Error("No body");
+            generationStarted = true;
+            notifyTabularReviewsChanged();
 
             // Optimistically set empty/pending/error cells to generating (skip done cells)
             setCells((prev) =>
@@ -831,7 +998,10 @@ export function TRView({ reviewId, projectId }: Props) {
                 // Otherwise the stream dropped on its own while the run keeps
                 // executing server-side: reconnect once before giving up. The
                 // resume borrows this run's controller, so a stop still stops.
-                console.error(
+                // Not reported: the run is still executing server-side and
+                // the reconnect below picks it up. If the reconnect also
+                // fails it throws on to the outer catch, which does report.
+                console.warn(
                     "Generation stream interrupted, reconnecting",
                     streamErr,
                 );
@@ -839,22 +1009,35 @@ export function TRView({ reviewId, projectId }: Props) {
             }
         } catch (err) {
             if (!generationAbort.signal.aborted) {
-                console.error("Generation failed", err);
+                // Cells left "generating" used to be the only sign of this,
+                // and they look identical to a run still in progress.
+                notifyError(err, {
+                    action: "run this review",
+                    dedupeKey: `tr-generate:${reviewId}`,
+                    onRetry: () => retryRef.current?.generate(),
+                });
             }
         } finally {
+            notifyTabularReviewsChanged();
             if (generationAbortRef.current === generationAbort) {
-                if (stopRequestedRef.current) {
+                if (stopRequestedRef.current || (generationStarted && !generationAbort.signal.aborted)) {
                     try {
-                        await refreshAfterStoppedGeneration();
+                        await refreshAfterGeneration();
                     } catch (err) {
-                        console.error(
-                            "Failed to refresh the stopped tabular review",
-                            err,
-                        );
+                        notifyError(err, {
+                            action: "refresh the review",
+                            fallback:
+                                "The table may be out of date. Reload to see the latest results.",
+                            dedupeKey: `tr-refresh:${reviewId}`,
+                            onRetry: () => {
+                                void loadLatestReview();
+                            },
+                        });
                     }
                 }
                 generationAbortRef.current = null;
                 stopRequestedRef.current = false;
+                generatingRef.current = false;
                 setGenerating(false);
                 setStoppingGeneration(false);
             }
@@ -869,10 +1052,25 @@ export function TRView({ reviewId, projectId }: Props) {
         // ownership model: it refused org admins and members a change the
         // server accepts, and mislabelled the refusal admin-tier.
         if (!requireContent("change the tabular review model")) return;
-        const updated = await updateTabularReview(reviewId, { model });
-        setReview((current) =>
-            current ? { ...current, model: updated.model } : current,
-        );
+        const previousModel = review.model;
+        try {
+            const updated = await updateTabularReview(reviewId, { model });
+            setReview((current) =>
+                current ? { ...current, ...updated } : current,
+            );
+        } catch (err) {
+            // Without this the rejection was unhandled and the picker kept
+            // showing a model the review was never switched to.
+            setReview((current) =>
+                current ? { ...current, model: previousModel } : current,
+            );
+            notifyError(err, {
+                action: "change the model",
+                onRetry: () => {
+                    void handleReviewModelChange(model);
+                },
+            });
+        }
     }
 
     async function loadLatestReview() {
@@ -886,7 +1084,15 @@ export function TRView({ reviewId, projectId }: Props) {
             setColumns(detail.review.columns_config || []);
             setGenerationGuard(detail.review.is_running ? "running" : null);
         } catch (err) {
-            console.error("Failed to load the latest tabular review", err);
+            // Both callers are "Check again"/"Load latest" buttons in a
+            // blocking popup that otherwise just stops responding.
+            notifyError(err, {
+                action: "load the latest version of this review",
+                dedupeKey: `tr-latest:${reviewId}`,
+                onRetry: () => {
+                    void loadLatestReview();
+                },
+            });
         } finally {
             setReloadingLatestReview(false);
         }
@@ -940,9 +1146,11 @@ export function TRView({ reviewId, projectId }: Props) {
             ...column,
             index: startIndex + index,
         }));
-        const newCols = [...columns, ...normalizedColumns];
         setSavingColumn(true);
-        setColumns(newCols);
+        const newCols = applyColumns((current) => [
+            ...current,
+            ...normalizedColumns,
+        ]);
         setCells((prev) => [
             ...prev,
             ...rows
@@ -981,7 +1189,16 @@ export function TRView({ reviewId, projectId }: Props) {
         try {
             await saveColumnsConfig(newCols);
         } catch (err) {
-            setColumns(columns);
+            // Take back only the columns this call added; an edit to a
+            // different column may have landed while the save was in flight.
+            applyColumns((current) =>
+                current.filter(
+                    (column) =>
+                        !normalizedColumns.some(
+                            (added) => added.index === column.index,
+                        ),
+                ),
+            );
             setCells((prev) =>
                 prev.filter(
                     (cell) =>
@@ -990,7 +1207,10 @@ export function TRView({ reviewId, projectId }: Props) {
                         ),
                 ),
             );
-            console.error("Failed to save column", err);
+            notifyError(err, {
+                action: "add the column",
+                fallback: "This column could not be saved. Try again.",
+            });
         } finally {
             setSavingColumn(false);
         }
@@ -998,31 +1218,67 @@ export function TRView({ reviewId, projectId }: Props) {
 
     async function handleUpdateColumn(nextColumn: ColumnConfig) {
         if (!requireStructure("edit columns")) return;
-        const nextColumns = columns.map((column) =>
-            column.index === nextColumn.index ? nextColumn : column,
+        // The server takes the whole config, so this edit is merged onto the
+        // config as it is now. Restoring the whole array on failure — or
+        // resending the array a frozen Retry captured — would undo every
+        // other column change made in the meantime, on screen and on the
+        // server.
+        const previousColumn = columnsRef.current.find(
+            (column) => column.index === nextColumn.index,
         );
-        const previousColumns = columns;
-        setColumns(nextColumns);
+        const nextColumns = applyColumns((current) =>
+            current.map((column) =>
+                column.index === nextColumn.index ? nextColumn : column,
+            ),
+        );
         try {
             await saveColumnsConfig(nextColumns);
         } catch (err) {
-            setColumns(previousColumns);
-            console.error("Failed to update column", err);
+            if (previousColumn) {
+                applyColumns((current) =>
+                    current.map((column) =>
+                        column.index === nextColumn.index
+                            ? previousColumn
+                            : column,
+                    ),
+                );
+            }
+            notifyError(err, {
+                action: "save the column",
+                fallback: "This column could not be saved. Try again.",
+                onRetry: () => retryRef.current?.updateColumn(nextColumn),
+            });
         }
     }
 
     async function handleDeleteColumn(columnIndex: number) {
         if (!requireStructure("delete columns")) return;
-        const previousColumns = columns;
-        const nextColumns = columns.filter(
-            (column) => column.index !== columnIndex,
+        const removedAt = columnsRef.current.findIndex(
+            (column) => column.index === columnIndex,
         );
-        setColumns(nextColumns);
+        if (removedAt === -1) return;
+        const removed = columnsRef.current[removedAt];
+        const nextColumns = applyColumns((current) =>
+            current.filter((column) => column.index !== columnIndex),
+        );
         try {
             await saveColumnsConfig(nextColumns);
         } catch (err) {
-            setColumns(previousColumns);
-            console.error("Failed to delete column", err);
+            // Put back just this column, where it was, on top of whatever
+            // the config looks like now.
+            applyColumns((current) =>
+                current.some((column) => column.index === columnIndex)
+                    ? current
+                    : [
+                          ...current.slice(0, removedAt),
+                          removed,
+                          ...current.slice(removedAt),
+                      ],
+            );
+            notifyError(err, {
+                action: "delete the column",
+                onRetry: () => retryRef.current?.deleteColumn(columnIndex),
+            });
         }
     }
 
@@ -1089,11 +1345,43 @@ export function TRView({ reviewId, projectId }: Props) {
             setRows(detail.rows);
             setCells(detail.cells);
         } catch (err) {
-            setDocuments(previousDocuments);
-            setRows(previousRows);
-            setCells(previousCells);
-            setSelectedRowIds(rowIdsToDelete);
-            console.error("Failed to delete tabular review documents", err);
+            // Put back only what this removal took out, merged onto what is
+            // on screen now. A run may be filling cells in as this fails
+            // (`cellMutationsBlocked`), and another removal may have
+            // succeeded: restoring the whole snapshot wiped both.
+            const failedCellIds = previousCells
+                .filter((cell) => rowIdsToDelete.includes(cell.row_id))
+                .map((cell) => cell.id);
+            setDocuments((current) =>
+                restoreOptimisticallyDeletedRows(current, previousDocuments, [
+                    ...documentIdsToDelete,
+                ]),
+            );
+            setRows((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current,
+                    previousRows,
+                    rowIdsToDelete,
+                ),
+            );
+            setCells((current) =>
+                restoreOptimisticallyDeletedRows(
+                    current,
+                    previousCells,
+                    failedCellIds,
+                ),
+            );
+            setSelectedRowIds((current) => [
+                ...new Set([...current, ...rowIdsToDelete]),
+            ]);
+            notifyError(err, {
+                action:
+                    rowIdsToDelete.length === 1
+                        ? "remove the document"
+                        : "remove those documents",
+                fallback:
+                    "The documents were not removed and are still selected.",
+            });
         }
     }
 
@@ -1116,6 +1404,9 @@ export function TRView({ reviewId, projectId }: Props) {
         setActionsOpen(false);
         try {
             await clearTabularCells(reviewId, rowIds);
+            await refreshAfterGeneration().catch((err) =>
+                console.error("Failed to refresh the cleared review", err),
+            );
         } catch (err) {
             if (
                 err instanceof MikeApiError &&
@@ -1124,9 +1415,30 @@ export function TRView({ reviewId, projectId }: Props) {
                 await loadLatestReview();
                 return;
             }
-            setCells(previousCells);
-            setSelectedRowIds(previousSelectedRowIds);
-            console.error("Failed to clear tabular review results", err);
+            // Only the rows this call cleared go back, and only while no run
+            // owns the cells: if one started while the clear was in flight,
+            // its stream is the authority and a restore would overwrite the
+            // results it has already produced.
+            if (!cellMutationsBlockedRef.current) {
+                setCells((current) =>
+                    current.map((cell) =>
+                        rowIds.includes(cell.row_id)
+                            ? (previousCells.find(
+                                  (previous) => previous.id === cell.id,
+                              ) ?? cell)
+                            : cell,
+                    ),
+                );
+            }
+            setSelectedRowIds((current) => [
+                ...new Set([...current, ...previousSelectedRowIds]),
+            ]);
+            notifyError(err, {
+                action: "clear the results",
+                onRetry: () => {
+                    void clearResultsForRows(rowIds);
+                },
+            });
         }
     }
 
@@ -1258,7 +1570,10 @@ export function TRView({ reviewId, projectId }: Props) {
             }, 250);
         } catch (err) {
             setDeleteReviewStatus("idle");
-            console.error("Failed to delete tabular review", err);
+            // The confirm dialog stays open, so its button is the retry.
+            notifyError(err, {
+                action: "delete this review",
+            });
         }
     }
 
@@ -1273,10 +1588,10 @@ export function TRView({ reviewId, projectId }: Props) {
             ...column,
             index,
         }));
-        const previousColumns = columns;
+        const previousColumns = columnsRef.current;
         const previousCells = cells;
         setApplyingWorkflow(true);
-        setColumns(nextColumns);
+        applyColumns(() => nextColumns);
         setCells([]);
         try {
             await saveColumnsConfig(nextColumns);
@@ -1287,18 +1602,43 @@ export function TRView({ reviewId, projectId }: Props) {
                         rows.map((row) => row.id),
                     );
                 } catch (err) {
-                    console.error("Failed to clear old tabular cells", err);
+                    // The new columns are saved either way; say so rather
+                    // than leaving stale answers under new questions.
+                    notifyError(err, {
+                        action: "clear the previous results",
+                        fallback:
+                            "The workflow's columns were applied, but the old results could not be cleared. Clear them from the Actions menu.",
+                    });
                 }
             }
-            const detail = await getTabularReview(reviewId);
-            setReview(detail.review);
-            setRows(detail.rows);
-            setCells(detail.cells);
+            // The writes succeeded. A failed read must not roll them back
+            // locally or offer to repeat them (and clear newly generated cells).
             setWorkflowModalOpen(false);
+            const refreshAppliedWorkflow = async () => {
+                try {
+                    const detail = await getTabularReview(reviewId);
+                    setReview(detail.review);
+                    setRows(detail.rows);
+                    setCells(detail.cells);
+                } catch (err) {
+                    notifyError(err, {
+                        action: "refresh the applied workflow",
+                        fallback: "The workflow was applied, but the latest results could not be loaded.",
+                        onRetry: refreshAppliedWorkflow,
+                    });
+                }
+            };
+            await refreshAppliedWorkflow();
         } catch (err) {
-            setColumns(previousColumns);
+            applyColumns(() => previousColumns);
             setCells(previousCells);
-            console.error("Failed to apply workflow", err);
+            notifyError(err, {
+                action: "apply the workflow",
+                supportNote: `Workflow ${workflow.metadata.title}`,
+                onRetry: () => {
+                    void handleApplyWorkflow(workflow);
+                },
+            });
         } finally {
             setApplyingWorkflow(false);
         }
@@ -1403,20 +1743,19 @@ export function TRView({ reviewId, projectId }: Props) {
                                 onChange: setSearch,
                                 placeholder: "Search rows…",
                             },
-                            !projectId
-                                ? {
-                                      onClick: () => setAccessModalOpen(true),
-                                      disabled: loading,
-                                      iconOnly: true,
-                                      title: "Access",
-                                      icon: <Users className="h-4 w-4" />,
-                                  }
-                                : null,
                             {
                                 type: "custom",
                                 render: (
                                     <HeaderActionsMenu
                                         items={[
+                                            ...(!projectId
+                                                ? [{
+                                                      label: "Access",
+                                                      icon: Users,
+                                                      onSelect: () => setAccessModalOpen(true),
+                                                      disabled: loading,
+                                                  }]
+                                                : []),
                                             {
                                                 label: "Edit details",
                                                 icon: Pencil,
@@ -1469,9 +1808,107 @@ export function TRView({ reviewId, projectId }: Props) {
                         {
                             actions: [
                                 {
-                                    type: "custom",
-                                    render: (
+                                    onClick: () => {
+                                        if (!chatOpen) setSidebarOpen(false);
+                                        if (chatOpen) setSelectedChatId(null);
+                                        setChatOpen((v) => !v);
+                                    },
+                                    disabled:
+                                        loading ||
+                                        columns.length === 0 ||
+                                        rows.length === 0,
+                                    title: chatOpen
+                                        ? "Close chat"
+                                        : "Open chat",
+                                    icon: chatOpen ? (
+                                        <MessageSquareX className="h-4 w-4" />
+                                    ) : (
+                                        <MessageSquare className="h-4 w-4" />
+                                    ),
+                                    label: (
+                                        <span className="hidden sm:inline">
+                                            Chat
+                                        </span>
+                                    ),
+                                },
+                            ],
+                        },
+                    ]}
+                />
+
+                {/* Toolbar + table column, chat panel beside it */}
+                <div className="flex flex-1 overflow-hidden">
+                    {/* On mobile the chat panel replaces the table entirely */}
+                    <div
+                        className={`flex flex-1 flex-col overflow-hidden ${
+                            chatOpen ? "max-md:hidden" : ""
+                        }`}
+                    >
+                        <TableToolbar
+                            className="h-auto min-h-10 shrink-0"
+                            leading={
+                                <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                                    <fieldset
+                                        disabled={loading}
+                                        aria-label="Review generation"
+                                        // The group owns the glass surface; its buttons only add hover states.
+                                        className={[
+                                            `flex h-7 min-w-0 max-w-full items-center rounded-full p-0 ${LIQUID_GLASS_SUBTLE_CLASS}`,
+                                            "[&_[data-slot=tab-pill-button]]:[--liquid-glass-shadow-subtle:none]",
+                                            "[&_[data-slot=tab-pill-button]]:[--liquid-glass-background-subtle:transparent]",
+                                            "[&_[data-slot=tab-pill-button]]:[--liquid-glass-border-subtle:transparent]",
+                                        ].join(" ")}
+                                    >
+                                        <ModelToggle
+                                            toolbar
+                                            tone="default"
+                                            triggerClassName="rounded-r-none"
+                                            value={tabularModel}
+                                            onChange={(model) =>
+                                                void handleReviewModelChange(
+                                                    model,
+                                                )
+                                            }
+                                            apiKeys={apiKeys}
+                                            apiKeysLoading={
+                                                profileLoading && !profile
+                                            }
+                                            routerSelections={
+                                                modelRouterSelections
+                                            }
+                                            onNoModelsClick={setNoModelsWarning}
+                                        />
+                                        <TabPillButtonUI
+                                            onClick={generating ? handleStopGeneration : handleGenerate}
+                                            disabled={
+                                                loading ||
+                                                stoppingGeneration ||
+                                                columns.length === 0 ||
+                                                rows.length === 0 ||
+                                                savingColumnsConfig
+                                            }
+                                            title={
+                                                stoppingGeneration
+                                                    ? "Stopping generation"
+                                                    : generating
+                                                      ? "Stop generation"
+                                                      : "Run review"
+                                            }
+                                            className="shrink-0 whitespace-nowrap rounded-l-none"
+                                        >
+                                            {stoppingGeneration ? (
+                                                <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                                            ) : generating ? (
+                                                <Square aria-hidden="true" className="h-3.5 w-3.5" />
+                                            ) : (
+                                                <Play aria-hidden="true" className="h-3.5 w-3.5" />
+                                            )}
+                                            {stoppingGeneration ? "Stopping…" : generating ? "Stop" : "Run"}
+                                        </TabPillButtonUI>
+                                    </fieldset>
+                                    <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                                         <DocumentUploadMenu
+                                            toolbar
                                             onSavedFiles={() => {
                                                 // Same pre-modal gate as
                                                 // openNewReview: stop viewers
@@ -1511,134 +1948,26 @@ export function TRView({ reviewId, projectId }: Props) {
                                                     0
                                             }
                                         />
-                                    ),
-                                },
-                            ],
-                        },
-                        {
-                            actions: [
-                                {
-                                    type: "custom",
-                                    render: (
-                                        <ModelToggle
-                                            tone="default"
-                                            value={tabularModel}
-                                            onChange={(model) =>
-                                                void handleReviewModelChange(
-                                                    model,
-                                                )
-                                            }
-                                            apiKeys={apiKeys}
-                                            apiKeysLoading={
-                                                profileLoading && !profile
-                                            }
-                                            routerSelections={
-                                                modelRouterSelections
-                                            }
-                                            onNoModelsClick={setNoModelsWarning}
-                                        />
-                                    ),
-                                },
-                                {
-                                    onClick: generating
-                                        ? handleStopGeneration
-                                        : handleGenerate,
-                                    disabled:
-                                        stoppingGeneration ||
-                                        columns.length === 0 ||
-                                        rows.length === 0 ||
-                                        savingColumnsConfig,
-                                    title: stoppingGeneration
-                                        ? "Stopping generation"
-                                        : generating
-                                          ? "Stop generation"
-                                          : "Run review",
-                                    icon: stoppingGeneration ? (
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : generating ? (
-                                        <Square className="h-3.5 w-3.5" />
-                                    ) : (
-                                        <Play className="h-4 w-4" />
-                                    ),
-                                    label: (
-                                        <span className="hidden sm:inline">
-                                            {stoppingGeneration
-                                                ? "Stopping…"
-                                                : generating
-                                                  ? "Stop"
-                                                  : "Run"}
-                                        </span>
-                                    ),
-                                },
-                            ],
-                        },
-                        {
-                            actions: [
-                                {
-                                    onClick: () => {
-                                        if (!chatOpen) setSidebarOpen(false);
-                                        if (chatOpen) setSelectedChatId(null);
-                                        setChatOpen((v) => !v);
-                                    },
-                                    disabled:
-                                        loading ||
-                                        columns.length === 0 ||
-                                        rows.length === 0,
-                                    title: chatOpen
-                                        ? "Close chat"
-                                        : "Open chat",
-                                    icon: chatOpen ? (
-                                        <MessageSquareX className="h-4 w-4" />
-                                    ) : (
-                                        <MessageSquare className="h-4 w-4" />
-                                    ),
-                                    label: (
-                                        <span className="hidden sm:inline">
-                                            Chat
-                                        </span>
-                                    ),
-                                },
-                            ],
-                        },
-                    ]}
-                />
-
-                {/* Toolbar + table column, chat panel beside it */}
-                <div className="flex flex-1 overflow-hidden">
-                    {/* On mobile the chat panel replaces the table entirely */}
-                    <div
-                        className={`flex flex-1 flex-col overflow-hidden ${
-                            chatOpen ? "max-md:hidden" : ""
-                        }`}
-                    >
-                        <TableToolbar
-                            items={[]}
-                            active="table"
-                            onChange={() => undefined}
-                            actions={
-                                <div className="flex items-center gap-1.5">
-                                    {loading ? (
-                                        <div className="h-3 w-24 rounded bg-gray-100 animate-pulse" />
-                                    ) : null}
-                                    {!loading && selectedRowIds.length > 0 && (
-                                        <SelectionActionsMenu
-                                            open={actionsOpen}
-                                            onOpenChange={setActionsOpen}
-                                            renderItems={(close) => renderReviewRowActions(selectedRowIds, close)}
-                                        />
-                                    )}
-                                    {!loading && (
-                                        <TabPillButtonUI
-                                            onClick={openAddColumns}
-                                            disabled={
-                                                savingColumn ||
-                                                savingColumnsConfig
-                                            }
-                                        >
-                                            <Plus className="h-3.5 w-3.5" />
-                                            Add Columns
-                                        </TabPillButtonUI>
-                                    )}
+                                        {loading ? (
+                                            <div className="h-7 w-28 animate-pulse rounded-full bg-gray-100" />
+                                        ) : (
+                                            <TabPillButtonUI
+                                                onClick={openAddColumns}
+                                                disabled={savingColumn || savingColumnsConfig}
+                                                className="pl-2"
+                                            >
+                                                <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                                                Add Columns
+                                            </TabPillButtonUI>
+                                        )}
+                                        {!loading && selectedRowIds.length > 0 && (
+                                            <SelectionActionsMenu
+                                                open={actionsOpen}
+                                                onOpenChange={setActionsOpen}
+                                                renderItems={(close) => renderReviewRowActions(selectedRowIds, close)}
+                                            />
+                                        )}
+                                    </div>
                                 </div>
                             }
                         />
@@ -1971,19 +2300,6 @@ export function TRView({ reviewId, projectId }: Props) {
                 title="Review stopped"
                 message={generationError}
             />
-            <WarningPopup
-                open={dropUploadWarning !== null}
-                onClose={() => setDropUploadWarning(null)}
-                message={dropUploadWarning}
-            />
-
-            <WarningPopup
-                open={projectLoadWarning}
-                title="Project unavailable"
-                message="The project for this tabular review could not be loaded. Please try again."
-                onClose={() => setProjectLoadWarning(false)}
-            />
-
             <ApiKeyMissingPopup
                 open={apiKeyWarning !== null}
                 title={

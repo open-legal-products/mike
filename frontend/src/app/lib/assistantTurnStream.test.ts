@@ -1674,3 +1674,46 @@ describe("readAssistantTurn connection handling", () => {
     turn.finish();
   });
 });
+
+
+describe("scoped document search activity", () => {
+  const search = { search_id: "search-1", scope: "project", query: "change of control", offset: 0 };
+  it("replaces the generic placeholder, completes by call ID, and preserves paginated calls", async () => {
+    const coverage = { total_versions: 12, indexed_versions: 10, pending_versions: 1, failed_versions: 1, versions_needing_ocr: 2 };
+    const events = await eventsOf([
+      { type: "tool_call_start", name: "find_documents" },
+      { type: "doc_search_start", ...search },
+      { type: "doc_search", ...search, match_count: 10, next_offset: 10, coverage },
+      { type: "doc_search_start", ...search, search_id: "search-2", offset: 10 },
+      { type: "doc_search", ...search, search_id: "search-2", offset: 10, match_count: 1, next_offset: null, coverage },
+    ]);
+    expect(events!.filter(e => e.type === "doc_search")).toMatchObject([
+      { ...search, match_count: 10, next_offset: 10, coverage, isStreaming: false },
+      { ...search, search_id: "search-2", offset: 10, match_count: 1, next_offset: null, isStreaming: false },
+    ]);
+    expect(events!.some(e => e.type === "tool_call_start")).toBe(false);
+  });
+  it("retains a completion without a start on reconnect, including failure", async () => {
+    const failure = { error_code: "schema_out_of_date", error: "Document search is unavailable because the server's database needs an update. Please contact your administrator." };
+    const events = await eventsOf([{ type: "doc_search", ...search, ...failure }]);
+    expect(events![0]).toMatchObject({ type: "doc_search", ...search, isStreaming: false, ...failure });
+    expect(events![0]).not.toHaveProperty("match_count", 0);
+  });
+  it("completes a live search with the failure reason", async () => {
+    const failure = { error_code: "search_timeout", error: "Document search took too long. Try a more specific phrase or a smaller search scope." };
+    const events = await eventsOf([{ type: "doc_search_start", ...search }, { type: "doc_search", ...search, ...failure }]);
+    expect(events!.filter(e => e.type === "doc_search")).toEqual([
+      expect.objectContaining({ type: "doc_search", ...search, ...failure, isStreaming: false }),
+    ]);
+  });
+  it("updates a replayed start instead of duplicating it", async () => {
+    const events = await eventsOf([{ type: "doc_search_start", ...search }, { type: "doc_search_start", ...search }]);
+    expect(events!.filter(e => e.type === "doc_search")).toHaveLength(1);
+  });
+});
+
+it.each(["search_id", "scope", "query", "offset"])("ignores malformed search frames missing %s", async (key) => {
+  const event: Record<string, unknown> = { type: "doc_search", search_id: "id", scope: "project", query: "clause", offset: 0, match_count: 2 };
+  delete event[key];
+  expect(await eventsOf([event])).toEqual([]);
+});

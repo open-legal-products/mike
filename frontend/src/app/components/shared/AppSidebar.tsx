@@ -47,16 +47,20 @@ import {
     FolderSkeuoIcon,
     LibrarySkeuoIcon,
     TabularReviewSkeuoIcon,
+    TabularReviewCompleteIcon,
     WorkflowSkeuoIcon,
     OrganizationSkeuoIcon,
     SettingsSkeuoIcon,
     SignOutSkeuoIcon,
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { listProjectsPage } from "@/app/lib/mikeApi";
+import { notifyError } from "@/app/lib/userFacingError";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import type { Project } from "@/app/components/shared/types";
 import { cn } from "@/app/lib/utils";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { useAssistantHistoryStatuses } from "@/app/hooks/useAssistantHistoryStatuses";
+import { useSidebarHistory } from "@/app/hooks/useSidebarHistory";
+import { useTabularHistoryStatuses } from "@/app/hooks/useTabularHistoryStatuses";
 import { notifyWorkspaceSwitched } from "@/app/hooks/useItemWorkspace";
 import {
     LIQUID_GLASS_FLOAT_CLASS,
@@ -106,16 +110,16 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const { profile } = useUserProfile();
     const {
         chats,
-        loadingMoreChats,
-        loadMoreChats,
         setCurrentChatId,
         sideChatId,
         requestSideChat,
     } =
         useChatHistoryContext();
-    const [signOutWarningOpen, setSignOutWarningOpen] = useState(false);
+    const history = useSidebarHistory();
     const router = useRouter();
     const pathname = usePathname();
+    const activeReviewId = pathname.match(/\/tabular-reviews\/([^/]+)/)?.[1] ?? null;
+    const reviewStatuses = useTabularHistoryStatuses(history.reviews, activeReviewId);
     const routeChatId = useMemo(() => {
         if (pathname.startsWith("/assistant/chat/")) {
             return pathname.split("/").pop() ?? null;
@@ -236,7 +240,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     // Recent projects are remembered per account AND per workspace, so a
     // switch never paints the previous workspace's matters from cache.
     const projectsCacheKey = userId ? `${userId}:${workspaceId ?? ""}` : null;
-    const activeProjectsKeyRef = useRef<string | null>(null);
+    const projectsRequestRef = useRef(0);
     // The switcher only exists for somebody who has more than one place to
     // be. With no organizations there is nothing to choose between, and the
     // menu stays exactly as it was.
@@ -268,6 +272,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const [loadingMoreRecentProjects, setLoadingMoreRecentProjects] =
         useState(false);
     const loadingMoreRecentProjectsRef = useRef(false);
+    const [recentProjectsAttempt, setRecentProjectsAttempt] = useState(0);
     const displayedRecentProjects =
         recentProjects ??
         (projectsCacheKey
@@ -276,6 +281,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         null;
 
     useEffect(() => {
+        const request = ++projectsRequestRef.current;
         if (!userId) {
             setRecentProjects([]);
             setHasMoreRecentProjects(false);
@@ -286,7 +292,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
 
         const cacheKey = projectsCacheKey;
         if (!cacheKey) return;
-        activeProjectsKeyRef.current = cacheKey;
         const cached = recentProjectsCache.get(cacheKey);
         if (cached) {
             setRecentProjects(cached.projects);
@@ -315,15 +320,27 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 setRecentProjects(next);
                 setHasMoreRecentProjects(hasMore);
             })
-            .catch(() => {
+            .catch((error) => {
                 if (controller.signal.aborted) return;
                 setRecentProjects([]);
                 setHasMoreRecentProjects(false);
+                // An empty Projects section reads as "you have no projects",
+                // which is the one thing this failure does not mean.
+                notifyError(error, {
+                    action: "load your recent projects",
+                    dedupeKey: "sidebar-recent-projects",
+                    onRetry: () =>
+                        setRecentProjectsAttempt((attempt) => attempt + 1),
+                });
             });
 
-        return () => controller.abort();
-    }, [userId, projectsCacheKey, workspaceParam]);
+        return () => {
+            controller.abort();
+            projectsRequestRef.current = request + 1;
+        };
+    }, [recentProjectsAttempt, userId, projectsCacheKey, workspaceParam]);
 
+    const retryLoadMoreRecentProjectsRef = useRef<(() => void) | null>(null);
     const loadMoreRecentProjects = useCallback(async () => {
         if (
             !userId ||
@@ -338,6 +355,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         if (!cacheKey) return;
         loadingMoreRecentProjectsRef.current = true;
         setLoadingMoreRecentProjects(true);
+        const request = projectsRequestRef.current;
         try {
             const projects = await listProjectsPage({
                 limit: RECENT_PROJECT_PAGE_SIZE + 1,
@@ -349,7 +367,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             });
             // The workspace changed while this page was in flight: it
             // belongs to a list that is no longer on screen.
-            if (activeProjectsKeyRef.current !== cacheKey) return;
+            if (request !== projectsRequestRef.current) return;
             const page = projects.slice(0, RECENT_PROJECT_PAGE_SIZE);
             setRecentProjects((current) => {
                 const existing = new Set(
@@ -368,11 +386,19 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             setHasMoreRecentProjects(
                 projects.length > RECENT_PROJECT_PAGE_SIZE,
             );
-        } catch {
-            // Keep the current page and allow the next scroll to retry.
+        } catch (error) {
+            // The current page survives; the user is told the next one did
+            // not arrive instead of scrolling at a list that stopped growing.
+            notifyError(error, {
+                action: "load more projects",
+                dedupeKey: "sidebar-recent-projects-more",
+                onRetry: () => retryLoadMoreRecentProjectsRef.current?.(),
+            });
         } finally {
-            loadingMoreRecentProjectsRef.current = false;
-            setLoadingMoreRecentProjects(false);
+            if (request === projectsRequestRef.current) {
+                loadingMoreRecentProjectsRef.current = false;
+                setLoadingMoreRecentProjects(false);
+            }
         }
     }, [
         hasMoreRecentProjects,
@@ -381,6 +407,10 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         userId,
         workspaceParam,
     ]);
+
+    // "Retry" re-enters the latest paging callback; a callback cannot
+    // reference itself.
+    useAssignLatest(retryLoadMoreRecentProjectsRef, () => void loadMoreRecentProjects());
 
     const handleRecentProjectsScroll = useCallback(
         (event: UIEvent<HTMLDivElement>) => {
@@ -391,18 +421,28 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         [loadMoreRecentProjects],
     );
 
-    const handleChatHistoryScroll = useCallback(
-        (event: UIEvent<HTMLDivElement>) => {
-            if (isNearScrollEnd(event.currentTarget)) {
-                void loadMoreChats();
-            }
-        },
-        [loadMoreChats],
-    );
+    const handleHistoryScroll = (event: UIEvent<HTMLDivElement>) => {
+        if (isNearScrollEnd(event.currentTarget)) void history.loadMore();
+    };
 
     const handleToggle = () => {
         onToggle();
     };
+
+    // A failed sign-out leaves the session live, which the user must know
+    // about — on a shared machine especially. Signing out again is safe, so
+    // the notice carries a real Retry.
+    function handleSignOut() {
+        void signOut()
+            .then(() => router.push("/"))
+            .catch((error) => {
+                notifyError(error, {
+                    action: "sign out",
+                    dedupeKey: "sign-out",
+                    onRetry: handleSignOut,
+                });
+            });
+    }
 
     useEffect(() => {
         setCurrentChatId(routeChatId);
@@ -662,7 +702,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                             )}
                         </div>
 
-                        {/* Assistant History */}
+                        {/* History */}
                         <div
                             className={cn(
                                 "flex min-h-0 flex-col",
@@ -670,12 +710,15 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                             )}
                         >
                             <button
+                                type="button"
+                                aria-expanded={!historyCollapsed}
+                                aria-controls="sidebar-history"
                                 onClick={() => setHistoryCollapsed((v) => !v)}
                                 className={`mb-2 flex w-full items-center justify-between rounded-md px-3.5 text-xs font-semibold text-gray-500 transition-colors hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40 ${
                                     shouldAnimate ? "sidebar-fade-in" : ""
                                 }`}
                             >
-                                <span>Assistant History</span>
+                                <span>History</span>
                                 <ChevronDown
                                     className={`h-3.5 w-3.5 transition-transform ${
                                         historyCollapsed ? "-rotate-90" : ""
@@ -683,13 +726,16 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                 />
                             </button>
                             <div
+                                id="sidebar-history"
+                                role="region"
+                                aria-label="History"
                                 className={cn(
                                     "min-h-0 flex-1 overflow-y-auto",
                                     historyCollapsed && "hidden",
                                 )}
-                                onScroll={handleChatHistoryScroll}
+                                onScroll={handleHistoryScroll}
                             >
-                                {!chats ? (
+                                {history.loading ? (
                                     <div className="space-y-1.5 px-1.5">
                                         {[40, 60, 50, 70, 45].map((w, i) => (
                                             <div
@@ -706,7 +752,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                             </div>
                                         ))}
                                     </div>
-                                ) : chats.length === 0 ? (
+                                ) : history.items.length === 0 ? (
                                     <div
                                         className={`text-xs text-gray-500 py-2 px-3.5 ${
                                             shouldAnimate
@@ -714,7 +760,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                 : ""
                                         }`}
                                     >
-                                        No chats yet
+                                        {!history.error && "No history yet"}
                                     </div>
                                 ) : (
                                     <>
@@ -725,9 +771,52 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                     : ""
                                             }`}
                                         >
-                                            {chats.map((chat) => (
+                                            {history.items.map((entry) => {
+                                                if (entry.kind === "review") {
+                                                    const review = entry.item;
+                                                    const title = review.title?.trim() || "Untitled review";
+                                                    const projectName = review.project_name?.trim();
+                                                    const fullTitle = projectName ? `${projectName}: ${title}` : title;
+                                                    const href = review.project_id
+                                                        ? `/projects/${review.project_id}/tabular-reviews/${review.id}`
+                                                        : `/tabular-reviews/${review.id}`;
+                                                    const active = pathname === href || pathname.startsWith(`${href}/`);
+                                                    const status = reviewStatuses.statuses[review.id];
+                                                    return (
+                                                        <Link
+                                                            key={`review:${review.id}`}
+                                                            href={href}
+                                                            title={fullTitle}
+                                                            aria-label={`Tabular review: ${fullTitle}${status === "loading" ? " (Running)" : status === "complete" ? " (Complete)" : ""}`}
+                                                            onClick={() => reviewStatuses.clearStatus(review.id)}
+                                                            aria-current={active ? "page" : undefined}
+                                                            className={cn(
+                                                                "flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40",
+                                                                active
+                                                                    ? `${LIQUID_GLASS_SELECTED_CLASS} text-gray-900`
+                                                                    : `${LIQUID_GLASS_HOVER_CLASS} text-gray-700`,
+                                                            )}
+                                                        >
+                                                            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                                                                {status === "loading" ? (
+                                                                    <Loader2 role="status" aria-label={`${title} review running`} className="h-3.5 w-3.5 animate-spin text-blue-600 motion-reduce:animate-none" />
+                                                                ) : status === "complete" ? (
+                                                                    <TabularReviewCompleteIcon className="h-3.5 w-3.5" />
+                                                                ) : (
+                                                                    <TabularReviewSkeuoIcon className="h-3.5 w-3.5" />
+                                                                )}
+                                                            </span>
+                                                            <span className="min-w-0 flex-1 truncate">
+                                                                {projectName && <span className="text-gray-400 font-normal">{projectName}: </span>}
+                                                                {title}
+                                                            </span>
+                                                        </Link>
+                                                    );
+                                                }
+                                                const chat = entry.item;
+                                                return (
                                                 <SidebarChatItem
-                                                    key={chat.id}
+                                                    key={`chat:${chat.id}`}
                                                     chat={chat}
                                                     isActive={
                                                         routeChatId === chat.id
@@ -769,14 +858,24 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                                         );
                                                     }}
                                                 />
-                                            ))}
+                                                );
+                                            })}
                                         </div>
-                                        {loadingMoreChats && (
+                                        {history.loadingMore && (
                                             <div className="flex h-8 items-center justify-center">
                                                 <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
                                             </div>
                                         )}
                                     </>
+                                )}
+                                {!history.loading && history.error && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void history.retry()}
+                                        className="mx-3.5 my-2 rounded text-left text-xs text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+                                    >
+                                        Reviews could not be loaded. Try again
+                                    </button>
                                 )}
                             </div>
                         </div>
@@ -897,11 +996,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                               ) : null}
                               <DropdownItem
                                   onSelect={() => {
-                                      void signOut()
-                                          .then(() => router.push("/"))
-                                          .catch(() =>
-                                              setSignOutWarningOpen(true),
-                                          );
+                                      void handleSignOut();
                                   }}
                                   className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                               >
@@ -913,12 +1008,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     )}
                 </div>
             </div>
-            <WarningPopup
-                open={signOutWarningOpen}
-                title="Sign out failed"
-                message="Unable to sign out. Please try again."
-                onClose={() => setSignOutWarningOpen(false)}
-            />
         </>
     );
 }

@@ -104,9 +104,14 @@ Preserve the accessibility baseline:
   them out of `next build`; `frontend/src/__tests__/architecture.test.ts`
   enforces both rules.
 
-Do not expose raw backend, database, provider, or stack errors in the UI. Map
-known 4xx responses to intentional messages and use the generic fallback
-helpers in `frontend/src/app/lib/userFacingError.ts` for unexpected failures.
+Do not expose raw backend, database, provider, or stack errors in the UI.
+Classify a thrown value once with `describeError` and show it with
+`notifyError` (both from `frontend/src/app/lib/userFacingError.ts`), which
+draws a `WarningPopup` that offers "Retry" only when a retry is honest and
+"Contact support" only for failures the user cannot fix. Auth sentences come
+from the single table in `frontend/src/app/lib/authMessages.ts`. See
+"Reporting failures" in `docs/design-system.md` for where each kind of
+failure is shown.
 
 ## Backend Structure
 
@@ -159,7 +164,9 @@ and ownership/project-sharing boundaries on every new query or mutation. Never
 send internal exception messages to clients: use the helpers in
 `backend/src/lib/httpError.ts`; logging must use the redaction helpers in
 `backend/src/lib/safeError.ts`. Intentional validation and permission failures
-should remain explicit 4xx responses.
+should remain explicit 4xx responses, and a `code` a client is expected to act
+on must be listed in `CODE_KINDS` in `frontend/src/shared/lib/userError.ts` (a
+drift test keeps that table to codes some server really emits).
 
 ## Database Migrations
 

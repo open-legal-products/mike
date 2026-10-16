@@ -56,3 +56,6 @@ export { captureInlineDocumentCleanup, completeInlineDocumentCleanup } from "./d
 export { createDocumentVersions, activateDocumentVersion, updateDocumentVersion } from "./documents.lifecycle";
 
 export { runConversionJob, setDocumentTerminalStatus } from "./documents.conversion";
+
+export { handleDocumentExtractText, markDocumentTextFailed, backfillDocumentText } from "./documents.indexing";
+export { findDocumentText, readStoredDocumentText } from "./documents.textSearch";

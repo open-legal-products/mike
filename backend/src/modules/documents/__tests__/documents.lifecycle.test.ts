@@ -139,6 +139,7 @@ it("cleans replaced bytes and cache inline with workers disabled while retaining
     { table: "document_versions", op: "update", data: { id: "v" } },
     { rpc: "document_cache_writer_active", data: false },
     { rpc: "document_cleanup_referenced_keys", data: [{ key: "shared" }] },
+    { table: "db_jobs", data: [] },
   ]);
   await updateDocumentVersion(fake.db, "doc", "v", {
     storage_path: "new",

@@ -12,6 +12,10 @@ vi.mock("../../../word-addin/src/taskpane/lib/errorReporting", () => ({
 import {
     configureMikeApiClient,
     listProjects,
+    getLibrary,
+    getLibraryFolderChildren,
+    listWorkflows,
+    listQuickActions,
     streamWordChat,
 } from "../../../word-addin/src/taskpane/api/client";
 import { describeError } from "@/shared/lib/userError";
@@ -89,7 +93,7 @@ describe("Word API transport cancellation", () => {
 
         expect(reportNetworkFailure).toHaveBeenCalledExactlyOnceWith(error, {
             method: "GET",
-            url: "https://api.example.test/projects?view=summary",
+            url: "https://api.example.test/projects?view=summary&workspace=personal",
         });
     });
 });
@@ -110,5 +114,22 @@ describe("Word API error bodies", () => {
 
         expect(described.kind).toBe("payload_too_large");
         expect(described.message).not.toMatch(/nginx|<html>/);
+    });
+});
+
+
+describe("Word picker workspace", () => {
+    it("requests Personal projects, library roots, folders, workflows and quick actions", async () => {
+        fetchMock.mockImplementation(async () => new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
+        await listProjects();
+        await getLibrary("files");
+        await getLibrary("templates");
+        await getLibraryFolderChildren("files", "folder");
+        await listWorkflows("assistant");
+        await listQuickActions();
+        expect(fetchMock).toHaveBeenCalledTimes(6);
+        for (const [input] of fetchMock.mock.calls) {
+            expect(new URL(String(input)).searchParams.get("workspace")).toBe("personal");
+        }
     });
 });

@@ -1,3 +1,4 @@
+import { teamOrgIdOf } from "../../../../lib/personalOrgs";
 // Connector write approvals inside the assistant turn.
 //
 // A connector whose "Ask for permission for write actions" setting is on does
@@ -73,8 +74,10 @@ export async function runApprovedConnectorActions(args: {
   messageId: string;
   askEventId: string;
   userId: string;
+  orgId?: string | null;
 }): Promise<McpToolEvent[]> {
   const { db, chatId, messageId, askEventId, userId } = args;
+  if ((await teamOrgIdOf(db, args.orgId)) !== null) return [];
   const row = await loadAssistantMessage(db, chatId, messageId);
   const content = Array.isArray(row?.content)
     ? (row.content as Record<string, unknown>[])

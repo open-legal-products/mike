@@ -1,5 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { DocumentSearchEvent } from "@mike/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getAccessibleChat, getChatMessages, leaveChat, listChats } from "../../modules/chat/chat.service";
 
 // Gated: runs only against a real (local) Supabase stack.
 //   supabase start, then export:
@@ -330,4 +332,66 @@ maybeDescribe("get_chats_overview — role-aware grants", () => {
         expect(page.error).toBeNull();
         expect((page.data as unknown[]).length).toBe(1);
     });
+
+    it("retrieves persisted document-search events through the chat history service", async () => {
+        const search: DocumentSearchEvent = {
+            type: "doc_search", search_id: "persisted-search", scope: "library",
+            query: "change of control", offset: 0, match_count: 3, next_offset: null,
+        };
+        const messageId = crypto.randomUUID();
+        const saved = await admin.from("chat_messages").insert({
+            id: messageId,
+            chat_id: chats.mine,
+            role: "assistant",
+            content: [search, { type: "content", text: "Found three matching documents." }],
+        });
+        expect(saved.error).toBeNull();
+
+        const access = await getAccessibleChat(admin, { chatId: chats.mine, userId: callerId, userEmail: callerEmail });
+        expect(access.ok).toBe(true);
+        const messages = await getChatMessages(admin, chats.mine);
+        expect(messages.find((message) => message.id === messageId)?.content).toEqual([
+            search,
+            { type: "content", text: "Found three matching documents." },
+        ]);
+    });
+
+    it("leaves a directly shared chat without deleting it, its messages or other access", async () => {
+        const message = await admin.from("chat_messages").insert({
+            chat_id: chats.sharedDirectly, role: "user", content: "Synthetic shared message", author_user_id: strangerId,
+        });
+        expect(message.error).toBeNull();
+        const args = { chatId: chats.sharedDirectly, userId: callerId, userEmail: callerEmail };
+        const before = await listChats(admin, { ...args, limit: null, offset: 0, beforeUpdatedAt: null, beforeId: null });
+        expect(before.ok && before.data).toContainEqual(expect.objectContaining({ id: chats.sharedDirectly, can_leave: true }));
+        let restoreError: unknown;
+        try {
+            expect(await leaveChat(admin, args)).toEqual({ ok: true, data: undefined });
+            expect(await getAccessibleChat(admin, args)).toEqual({ ok: false });
+            const after = await listChats(admin, { ...args, limit: null, offset: 0, beforeUpdatedAt: null, beforeId: null });
+            expect(after.ok && after.data).not.toContainEqual(expect.objectContaining({ id: chats.sharedDirectly }));
+            const retained = await admin.from("chats").select("id").eq("id", chats.sharedDirectly).single();
+            expect(retained.error).toBeNull();
+            const messages = await admin.from("chat_messages").select("id").eq("chat_id", chats.sharedDirectly);
+            expect(messages.error).toBeNull();
+            expect(messages.data).toHaveLength(1);
+            const owner = await getAccessibleChat(admin, { chatId: chats.sharedDirectly, userId: strangerId, userEmail: null });
+            expect(owner.ok && owner.projectRole).toBe("owner");
+            const otherGrant = await admin.from("project_access_grants").select("role").eq("project_id", grantedProjectId).eq("email", callerEmail.toLowerCase()).single();
+            expect(otherGrant.error).toBeNull();
+            expect(otherGrant.data?.role).toBe("editor");
+        } finally {
+            try {
+                const restored = await admin.from("chat_access_grants").upsert({
+                    chat_id: chats.sharedDirectly, email: callerEmail.toLowerCase(), role: "editor", created_by: strangerId,
+                }, { onConflict: "chat_id,email" });
+                restoreError = restored.error;
+            } catch (error) {
+                restoreError = error;
+            }
+        }
+        // Reached only when the assertions succeeded; preserve any original failure.
+        if (restoreError) throw restoreError;
+    });
+
 });

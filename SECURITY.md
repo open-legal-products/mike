@@ -2,15 +2,10 @@
 
 ## Supported versions
 
-| Version | Supported |
-| --- | --- |
-| tip of `main` | ✅ |
-| tagged releases (`v0.1.0`–`v0.4.0`) | ❌ |
-
-Security fixes land only on `main`; the existing tags are historical
-snapshots and do not receive backported fixes. If you are self-hosting,
-please update to the latest `main` before reporting — the issue may already
-be fixed.
+Mike ships continuously from `main`, and `main` is the line that receives
+security fixes. Tagged releases (`v0.1.0`–`v0.4.0`) are milestone snapshots
+and are not patched separately. If you are self-hosting, track `main` and
+update to the latest commit before reporting; the issue may already be fixed.
 
 ## Reporting a vulnerability
 
@@ -21,8 +16,8 @@ Please report vulnerabilities privately through GitHub:
 
 Please do not open a public issue for anything security-sensitive.
 
-This project has a solo maintainer. You can expect an acknowledgment within
-7 days; fixes are prioritized by severity after that.
+The maintainers acknowledge reports within 7 days and prioritize fixes by
+severity after that.
 
 ## Scope
 

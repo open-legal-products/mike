@@ -89,7 +89,7 @@ export interface NoticeCardUIProps
     tone?: NoticeTone;
     title?: ReactNode;
     message?: ReactNode;
-    /** Extra content under the message (lists, links, setup steps). */
+    /** Extra content aligned with the message (lists, links, setup steps). */
     children?: ReactNode;
     /** Replaces the tone's default icon. */
     icon?: ReactNode;
@@ -134,38 +134,34 @@ export function NoticeCardUI({
                 className,
             )}
         >
-            <div className={clsx("min-w-0 flex-1", toneTitleClass[tone])}>
-                {title ? (
-                    <div className={clsx(
-                        "flex items-center gap-1.5 text-sm font-medium",
-                        (message || children) && "mb-1",
-                    )}>
+            <div className={clsx("flex min-w-0 flex-1 items-start gap-1.5", toneTitleClass[tone])}>
+                {title || message ? (
+                    <div className={clsx("flex shrink-0 items-center", title && "h-5")}>
                         {toneIconNode}
-                        {title}
                     </div>
                 ) : null}
-                {message ? (
-                    <div
-                        className={clsx(
-                            "text-black",
-                            // 18px = the 12px icon plus the 6px gap, so the
-                            // message lines up under the title text.
-                            title ? "pl-[18px]" : "flex items-start gap-1.5",
-                        )}
-                    >
-                        {!title && toneIconNode}
-                        {/* Setup steps carry long redirect URIs; wrap them. */}
-                        <span className="min-w-0 [overflow-wrap:anywhere]">
+                {/* One text column keeps every line aligned for any icon width. */}
+                <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                    {title ? (
+                        <div className={clsx(
+                            "text-sm font-medium",
+                            (message || children) && "mb-1",
+                        )}>
+                            {title}
+                        </div>
+                    ) : null}
+                    {message ? (
+                        <div className="text-black">
                             {message}
-                        </span>
-                    </div>
-                ) : null}
-                {children}
-                {actions ? (
-                    <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
-                        {actions}
-                    </div>
-                ) : null}
+                        </div>
+                    ) : null}
+                    {children}
+                    {actions ? (
+                        <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+                            {actions}
+                        </div>
+                    ) : null}
+                </div>
             </div>
             <CloseButton
                 onClick={onDismiss}

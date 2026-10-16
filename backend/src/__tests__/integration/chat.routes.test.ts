@@ -2555,10 +2555,8 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
 // Chat sharing, deletion and the people roster.
 //
 // Same fixture as above, now exercising the routes chats gained with the
-// role-aware permission schema. The ladder under test: title edits are
-// content.edit (member+), grants are access.manage (admin only), and
-// deleting the chat is container.delete (admin only) — so a member who may
-// rename the chat must not be able to re-share or erase it.
+// role-aware permission schema. Titles and grants require access.manage,
+// deletion requires container.delete, and direct recipients can leave.
 // ---------------------------------------------------------------------------
 describe("chat grants, deletion and roster", () => {
     const mockedCreate = vi.mocked(createServerSupabase);
@@ -2576,8 +2574,83 @@ describe("chat grants, deletion and roster", () => {
     const chatWrites = (op: "update" | "delete") =>
         rbacWrites.filter((w) => w.table === "chats" && w.op === op);
 
-    it("lets an org admin rename a colleague's chat", async () => {
-        mockedCreate.mockImplementation(() => makeRbacDb("admin") as never);
+    it.each(["viewer", "editor"] as const)("refuses standalone %s rename, including combined model updates", async (role) => {
+        mockedCreate.mockImplementation(() => makeRbacDb(null, "colleague-1", {
+            chat: { project_id: null, org_id: null }, chatGrantRole: role,
+        }) as never);
+        for (const body of [{ title: "Changed" }, { title: "Changed", model: "gpt-6-luna" }]) {
+            const res = await request(app).patch("/chat/chat-1").set("Authorization", "Bearer test").send(body);
+            expect(res.status).toBe(403);
+        }
+        expect(chatWrites("update")).toEqual([]);
+    });
+
+    it("refuses a project editor rename even when they created the chat", async () => {
+        mockedCreate.mockImplementation(() => makeRbacDb("member", "u1") as never);
+        const res = await request(app).patch("/chat/chat-1").set("Authorization", "Bearer test").send({ title: "Changed" });
+        expect(res.status).toBe(403);
+        expect(chatWrites("update")).toEqual([]);
+    });
+
+    it.each(["viewer", "editor"] as const)("lets a directly shared %s leave only their own grant", async (role) => {
+        mockedCreate.mockImplementation(() => makeRbacDb(null, "colleague-1", {
+            chat: { project_id: null, org_id: null }, chatGrantRole: role,
+        }) as never);
+        const res = await request(app).post("/chat/chat-1/leave").set("Authorization", "Bearer test")
+            .send({ email: "victim@example.com", userId: "someone-else" });
+        expect(res.status).toBe(204);
+        expect(rbacWrites).toEqual([expect.objectContaining({
+            table: "chat_access_grants", op: "delete", filters: [
+                { column: "chat_id", value: "chat-1" }, { column: "email", value: "u1@test.local" },
+            ],
+        })]);
+    });
+
+    it("serves direct-recipient Leave availability in both list and detail responses", async () => {
+        const db = makeRbacDb(null, "colleague-1", {
+            chat: { project_id: null, org_id: null }, chatGrantRole: "viewer",
+        });
+        db.rpc.mockResolvedValue({ data: [
+            { id: "chat-1", project_id: null, access_role: "viewer" },
+            { id: "project-chat", project_id: "p1", access_role: "editor" },
+        ], error: null } as never);
+        mockedCreate.mockImplementation(() => db as never);
+        const list = await request(app).get("/chat").set("Authorization", "Bearer test");
+        expect(list.status).toBe(200);
+        expect(list.body).toMatchObject([
+            { id: "chat-1", can_leave: true }, { id: "project-chat", can_leave: false },
+        ]);
+        const detail = await request(app).get("/chat/chat-1").set("Authorization", "Bearer test");
+        expect(detail.status).toBe(200);
+        expect(detail.body.chat.can_leave).toBe(true);
+    });
+
+    it("refuses leaving a project chat without removing membership or grants", async () => {
+        mockedCreate.mockImplementation(() => makeRbacDb("member") as never);
+        const res = await request(app).post("/chat/chat-1/leave").set("Authorization", "Bearer test");
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe("access_inherited");
+        expect(rbacWrites).toEqual([]);
+    });
+
+    it.each([true, false])("refuses an owner leaving (creator=%s)", async (isCreator) => {
+        mockedCreate.mockImplementation(() => makeRbacDb(null, isCreator ? "u1" : "colleague-1", {
+            chat: { project_id: null, org_id: null }, chatGrantRole: "owner",
+        }) as never);
+        const res = await request(app).post("/chat/chat-1/leave").set("Authorization", "Bearer test");
+        expect(res.status).toBe(403);
+        expect(rbacWrites).toEqual([]);
+    });
+
+    it("does not disclose an inaccessible chat when leaving", async () => {
+        mockedCreate.mockImplementation(() => makeRbacDb(null, "colleague-1", { chat: { project_id: null, org_id: null } }) as never);
+        const res = await request(app).post("/chat/chat-1/leave").set("Authorization", "Bearer test");
+        expect(res.status).toBe(404);
+        expect(rbacWrites).toEqual([]);
+    });
+
+    it("lets a project owner rename a colleague's chat", async () => {
+        mockedCreate.mockImplementation(() => makeRbacDb("owner") as never);
 
         const res = await request(app)
             .patch("/chat/chat-1")
@@ -2601,7 +2674,7 @@ describe("chat grants, deletion and roster", () => {
         // have it drop the chat from the sidebar over a transient outage.
         mockedCreate.mockImplementation(
             () =>
-                makeRbacDb("admin", "colleague-1", {
+                makeRbacDb("owner", "colleague-1", {
                     chatWriteError: "connection terminated unexpectedly",
                 }) as never,
         );

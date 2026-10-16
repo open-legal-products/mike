@@ -184,3 +184,85 @@ for (const scope of ["assistant", "project", "tabular"] as const) {
         });
     }
 }
+
+// Use the actual chat renderer and stream adapter, with synthetic search results.
+// The screenshots also provide review evidence for the new pre-response activity.
+test("scoped document search activity streams, renders mocked history after reload, and fits narrow screens", async ({ page }, testInfo) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.addInitScript(() => {
+        const originalFetch = window.fetch.bind(window);
+        const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), {
+            headers: { "Content-Type": "application/json" },
+        }));
+        const chat = { id: "search-activity", title: "Change of control review", user_id: "search-user",
+            model: "claude-sonnet-5-5", created_at: "2026-10-15T00:00:00Z", is_owner: true, access_role: "owner" };
+        const search = { type: "doc_search", search_id: "search-1", scope: "library", query: "change of control",
+            offset: 0, match_count: 3, next_offset: null,
+            coverage: { total_versions: 24, indexed_versions: 20, pending_versions: 3, failed_versions: 1, versions_needing_ocr: 2 } };
+        const answer = "I found three matching documents. Search coverage is incomplete, so other documents may also contain this clause.";
+        const prompt = "Find documents containing a change of control clause in my document library.";
+        window.fetch = (input, init) => {
+            const path = new URL(input instanceof Request ? input.url : String(input), location.href).pathname;
+            if (!path.startsWith("/api/")) return originalFetch(input, init);
+            if (path === "/api/auth/session") return json({ user: { id: "search-user", email: "preview@example.test" } });
+            if (path === "/api/user/profile") return json({ onboardingComplete: true, displayName: "Alex", lastSelectedChatModel: "claude-sonnet-5-5", apiKeyStatus: { claude: true }, creditsRemaining: 100 });
+            if (path === "/api/models/configured") return json({ models: [] });
+            if (path === "/api/chat/search-activity") return json({ chat, is_owner: true, access_role: "owner",
+                messages: sessionStorage.getItem("search-complete") ? [
+                    { id: "question-1", role: "user", content: prompt },
+                    { id: "answer-1", role: "assistant", content: [search, { type: "content", text: answer }] },
+                ] : [] });
+            if (path === "/api/chat" && init?.method === "POST") {
+                const encoder = new TextEncoder();
+                return Promise.resolve(new Response(new ReadableStream({ async start(controller) {
+                    const send = (event: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+                    send({ type: "chat_id", chatId: chat.id, assistantMessageId: "answer-1" });
+                    send({ type: "tool_call_start", name: "find_documents" });
+                    send({ type: "doc_search_start", search_id: search.search_id, scope: search.scope, query: search.query, offset: 0 });
+                    await new Promise<void>(resolve => {
+                        (window as Window & { completeDocumentSearch?: () => void }).completeDocumentSearch = resolve;
+                    });
+                    send(search);
+                    send({ type: "content_delta", text: answer });
+                    sessionStorage.setItem("search-complete", "true");
+                    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                    controller.close();
+                } }), { headers: { "Content-Type": "text/event-stream" } }));
+            }
+            if (path === "/api/chat") return json([chat]);
+            return json([]);
+        };
+    });
+    await page.goto("/assistant/chat/search-activity");
+    const input = page.getByPlaceholder("How can I help?");
+    await expect(page.getByRole("button", { name: "Choose model", exact: true })).toHaveAttribute("title", "Choose model — Claude Sonnet 5.5");
+    await input.fill("Find documents containing a change of control clause in my document library.");
+    await input.press("Enter");
+    await expect(page.getByRole("button", { name: /^Searching the document library for “change of control”\s*\.\.\.$/ })).toBeVisible();
+    const progress = testInfo.outputPath("document-search-progress.png");
+    await page.screenshot({ path: progress });
+    await testInfo.attach("Document search in progress", { path: progress, contentType: "image/png" });
+    await page.evaluate(() => (window as Window & { completeDocumentSearch?: () => void }).completeDocumentSearch?.());
+    await expect(page.getByRole("button", { name: "Stop response", exact: true })).toBeHidden();
+    await page.getByRole("button", { name: "Completed in 1 step", exact: true }).click();
+    await page.getByRole("button", { name: /Searched the document library/ }).click();
+    await expect(page.getByText("3 matches", { exact: true })).toBeVisible();
+    await expect(page.getByText(/20 of 24 document versions searchable/)).toHaveCount(0);
+    const completed = testInfo.outputPath("document-search-completed.png");
+    await page.screenshot({ path: completed });
+    await testInfo.attach("Document search dropdown and match count", { path: completed, contentType: "image/png" });
+    await page.reload();
+    await page.getByRole("button", { name: "Completed in 1 step", exact: true }).click();
+    await page.getByRole("button", { name: /Searched the document library/ }).click();
+    await expect(page.getByText("3 matches", { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByText(/20 of 24 document versions searchable/)).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const mobile = testInfo.outputPath("document-search-mobile.png");
+    await page.screenshot({ path: mobile });
+    await testInfo.attach("Document search narrow layout", { path: mobile, contentType: "image/png" });
+    expect(errors).toEqual([]);
+});

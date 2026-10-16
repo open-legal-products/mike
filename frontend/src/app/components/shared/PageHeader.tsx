@@ -122,7 +122,7 @@ export function PageHeader({
         <div
             className={cn(
                 "flex items-center justify-between",
-                "mx-4 md:mx-8",
+                "mx-3 md:mx-6.5",
                 PAGE_HEADER_ROW_CLASS,
                 shrink && "shrink-0",
             )}

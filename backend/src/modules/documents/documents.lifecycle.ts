@@ -1,3 +1,6 @@
+import { processDocumentTextInline } from "./documents.indexing";
+import { safeError } from "../../lib/safeError";
+import { logError } from "../../lib/log";
 import {
   captureInlineVersionUpdateCleanup,
   completeInlineDocumentCleanup,
@@ -44,6 +47,7 @@ export async function createDocumentVersion(
     p_version: metadata,
     p_activate: options.activate !== false,
   });
+  if (!error && data?.id) await processDocumentTextInline(db, [data.id]).catch((err) => logError("document-text", safeError(err)));
   return { data: data as DocumentVersionRecord | null, error };
 }
 
@@ -55,6 +59,7 @@ export async function createDocumentVersions(
   const { data, error } = await db.rpc("create_document_versions", {
     p_versions: versions,
   });
+  if (!error && data?.length) await processDocumentTextInline(db, data.map((row: DocumentVersionRecord) => row.id)).catch((err) => logError("document-text", safeError(err)));
   return { data: data as DocumentVersionRecord[] | null, error };
 }
 
@@ -111,5 +116,6 @@ export async function updateDocumentVersion(
     .maybeSingle();
   if (!result.error && result.data)
     await completeInlineDocumentCleanup(db, keys);
+  if (!result.error && result.data && ("storage_path" in patch || "content_sha256" in patch || "file_type" in patch)) await processDocumentTextInline(db, [versionId]).catch((err) => logError("document-text", safeError(err)));
   return result;
 }

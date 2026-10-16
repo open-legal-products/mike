@@ -1,4 +1,4 @@
-export type TabularReviewSortKey = "name" | "columns" | "documents" | "created";
+export type TabularReviewSortKey = "name" | "columns" | "documents" | "created" | "updated";
 export type TabularReviewSortDirection = "asc" | "desc";
 
 export interface TabularReviewSort {
@@ -11,6 +11,7 @@ const SUPPORTED_KEYS: TabularReviewSortKey[] = [
   "columns",
   "documents",
   "created",
+  "updated",
 ];
 
 export function parseTabularReviewSort(

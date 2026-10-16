@@ -37,7 +37,8 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
     }),
 }));
 const workspaceOrg = vi.hoisted(() => ({ id: undefined as string | undefined }));
-vi.mock("@/app/contexts/WorkspaceContext", () => ({
+vi.mock("@/app/contexts/WorkspaceContext", async importOriginal => ({
+  ...await importOriginal<typeof import("@/app/contexts/WorkspaceContext")>(),
     useWorkspaceOrgId: () => workspaceOrg.id,
 }));
 
@@ -135,6 +136,35 @@ describe("useAssistantChat SSE parsing", () => {
             displayed_doc: { filename: "Comparison.docx", document_id: "project-doc-1" },
             messages: [expect.anything(), expect.objectContaining({ role: "user", files })],
         });
+    });
+
+    it("reports acceptance while the answer is still streaming, and never for a refused send", async () => {
+        const encoder = new TextEncoder();
+        let close!: () => void;
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                close = () => {
+                    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                    controller.close();
+                };
+            },
+        });
+        fetchMock.mockResolvedValueOnce(new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+        const onAccepted = vi.fn();
+        const { result } = renderHook(() => useAssistantChat({ chatId: "chat-1" }));
+        let finished = false;
+        let pending!: Promise<unknown>;
+        act(() => {
+            pending = result.current.handleChat(userMessage(), { onAccepted }).then(() => { finished = true; });
+        });
+        await waitFor(() => expect(onAccepted).toHaveBeenCalledOnce());
+        expect(finished).toBe(false);
+        await act(async () => { close(); await pending; });
+
+        const refused = vi.fn();
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Forbidden" }), { status: 403 }));
+        await act(async () => { await result.current.handleChat(userMessage("again"), { onAccepted: refused }); });
+        expect(refused).not.toHaveBeenCalled();
     });
 
     it("creates a project chat only when the first message is submitted", async () => {

@@ -22,6 +22,8 @@ interface Props {
     documentPanel: AssistantDocumentPanel;
     /** Offers opening a second chat beside this one. */
     onOpenSideChat?: () => void;
+    /** Offers closing the second chat from the primary chat. */
+    onCloseSideChat?: () => void;
     /**
      * Makes this the chat beside the primary one. It is not the chat the
      * sidebar highlights, takes no workflow hand-off, and falls back to a new
@@ -47,6 +49,7 @@ export function AssistantChatPane({
     claimCreated,
     documentPanel,
     onOpenSideChat,
+    onCloseSideChat,
     sideChat,
     otherChatId,
     widthShare,
@@ -252,7 +255,7 @@ export function AssistantChatPane({
             paneId={isSideChat ? "side" : "primary"}
             onOpenSideChat={onOpenSideChat}
             onChatDeleted={isSideChat ? handleNewChat : undefined}
-            onCloseSideChat={sideChat?.onClose}
+            onCloseSideChat={sideChat?.onClose ?? onCloseSideChat}
             hiddenChatId={otherChatId}
             widthShare={widthShare}
             onAskInSideChat={onAskInSideChat}

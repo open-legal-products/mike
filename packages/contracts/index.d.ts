@@ -1,5 +1,11 @@
 // Authored wire contracts. No server, browser, UI or storage dependencies.
 
+export type TabularReviewHistoryStatus = {
+  id: string;
+  is_running: boolean;
+  is_complete: boolean;
+};
+
 export type SourceDocumentType =
   | "docx"
   | "pdf"
@@ -294,7 +300,36 @@ export type McpToolEvent = {
   result?: string;
 };
 
+export type DocumentSearchErrorCode =
+  | "schema_out_of_date"
+  | "invalid_search"
+  | "search_timeout"
+  | "search_unavailable"
+  | "internal_error";
+
+/** One scoped text search; counts describe this page, not every matching document. */
+export type DocumentSearchEvent = {
+  type: "doc_search";
+  search_id: string;
+  scope: string;
+  query: string;
+  offset: number;
+  match_count?: number;
+  next_offset?: number | null;
+  coverage?: {
+    total_versions: number;
+    indexed_versions: number;
+    pending_versions: number;
+    failed_versions: number;
+    versions_needing_ocr: number;
+  };
+  /** Safe, user-facing failure message. No result count is supplied on failure. */
+  error?: string;
+  error_code?: DocumentSearchErrorCode;
+};
+
 export type AssistantEvent =
+  | DocumentSearchEvent
   | { type: "reasoning"; text: string }
   | AskInputsEvent
   | {

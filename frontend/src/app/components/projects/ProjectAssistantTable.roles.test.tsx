@@ -3,12 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { Chat } from "@/app/components/shared/types";
 import { ProjectAssistantTable } from "./ProjectAssistantTable";
 
-// Renaming a chat is `content.edit` — member and above — on the role the
-// SERVER served for that chat. The gate here used to be
-// `chat.user_id !== currentUserId`, which refused a project admin their
-// colleague's chat and offered the rename to a viewer who happened to have
-// started the thread... which is right, but only by accident: the creator
-// branch derives admin, and that is where the right comes from.
+// Managing chat titles and deletion is owner-only, regardless of authorship.
 
 const onOwnerOnlyAction = vi.fn();
 const setRenamingChatId = vi.fn();
@@ -82,27 +77,13 @@ describe("ProjectAssistantTable rename gating", () => {
         expect(onOwnerOnlyAction).not.toHaveBeenCalled();
     });
 
-    it("lets a member rename it too — content collaboration is member-tier", () => {
-        renderTable(chat({ access_role: "editor", is_owner: false }));
-
-        clickRename();
-
-        expect(setRenamingChatId).toHaveBeenCalledWith("c1");
-    });
-
-    it("refuses a viewer, naming the role the action needs", () => {
-        renderTable(chat({ access_role: "viewer", is_owner: false }));
-
-        clickRename();
-
+    it.each(["editor", "viewer"] as const)("hides Rename for a %s", (role) => {
+        renderTable(chat({ access_role: role, is_owner: false }));
+        fireEvent.pointerDown(screen.getByText("···"), new MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+        expect(screen.queryByText("Rename")).toBeNull();
         expect(setRenamingChatId).not.toHaveBeenCalled();
-        // "editor", not "owner": the popup tells the viewer which tier they
-        // would have to be, and renaming does not need an admin.
-        expect(onOwnerOnlyAction).toHaveBeenCalledWith({
-            action: "rename this chat",
-            requiredRole: "editor",
-        });
     });
+
 });
 
 describe("ProjectAssistantTable delete confirmation", () => {
@@ -133,15 +114,10 @@ describe("ProjectAssistantTable delete confirmation", () => {
         expect(onDeleteChat).not.toHaveBeenCalled();
     });
 
-    it("refuses a member without asking them to confirm anything", () => {
-        // The role gate runs first: a confirmation for a delete the server
-        // will refuse is two dialogs for one refusal.
+    it("hides Delete for an editor", () => {
         renderTable(chat({ access_role: "editor", is_owner: false }));
-
-        clickDelete();
-
-        expect(screen.queryByText("Delete chat?")).not.toBeInTheDocument();
-        expect(onOwnerOnlyAction).toHaveBeenCalledWith("delete this chat");
+        fireEvent.pointerDown(screen.getByText("···"), new MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+        expect(screen.queryByText("Delete")).toBeNull();
         expect(onDeleteChat).not.toHaveBeenCalled();
     });
 });

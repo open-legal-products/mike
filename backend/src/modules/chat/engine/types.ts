@@ -20,6 +20,8 @@ export type DocStore = Map<
      * the model when it chooses to read them.
      */
     inline_text?: string;
+    /** Search handles pin the source revision and reauthorize every subsequent read. */
+    search_source?: { revision: string; userId: string; userEmail?: string | null };
   }
 >;
 

@@ -125,8 +125,11 @@ projectsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
     return void res.json(result.data);
   }
 
+  const participatingOnly = req.query.participating === "true";
+  // The IDE picker has no pagination UI. Workspace alone must not truncate
+  // its list before the participation filter is applied.
   const hasPaginationParams = PROJECT_PAGINATION_QUERY_KEYS.some(
-    (key) => req.query[key] !== undefined,
+    (key) => req.query[key] !== undefined && !(participatingOnly && key === "workspace"),
   );
   const workspace = await resolveWorkspaceFilter(
     db,
@@ -139,6 +142,10 @@ projectsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
     userId,
     userEmail,
     includeDocuments,
+    // The IDE picker lists participation; organization administration and
+    // audited private access do not make someone a project participant.
+    participatingOnly,
+    workspace: workspace.workspace,
     filters: hasPaginationParams
       ? {
           scope: parseProjectScope(req.query.scope),

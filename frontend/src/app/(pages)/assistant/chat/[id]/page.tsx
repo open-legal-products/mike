@@ -1,5 +1,6 @@
 "use client";
 
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
@@ -17,7 +18,7 @@ import { useAssistantDocumentPanel } from "@/app/components/assistant/useAssista
 // A second chat can sit beside the first (`?side=`); both open their
 // documents in the one side panel.
 
-export default function AssistantChatPage() {
+function AssistantChatPageForWorkspace() {
     const {
         chatId,
         openChat,
@@ -99,6 +100,7 @@ export default function AssistantChatPage() {
                 onOpenSideChat={
                     sideChatId === null ? () => openSideChat("") : undefined
                 }
+                onCloseSideChat={hasSideChat ? closeSideChat : undefined}
             />
             {hasSideChat && <AssistantChatDivider onResize={resizeChats} />}
             {sideChatId !== null && (
@@ -118,4 +120,9 @@ export default function AssistantChatPage() {
             <AssistantDocumentPanelHost panel={documentPanel} />
         </div>
     );
+}
+
+export default function AssistantChatPage() {
+    const identity = useWorkspaceIdentity();
+    return <AssistantChatPageForWorkspace key={identity} />;
 }

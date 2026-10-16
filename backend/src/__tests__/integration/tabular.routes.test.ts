@@ -286,8 +286,58 @@ describe("tabular.routes", () => {
         });
     });
 
+    // ── GET /tabular-review/creators ──────────────────────────────────────
+    describe("GET /tabular-review/creators", () => {
+        it("lists each person who created a review in the project once", async () => {
+            supabaseState.tables.tabular_reviews = {
+                data: [{ user_id: "u2" }, { user_id: "u2" }, { user_id: "u1" }],
+                error: null,
+            };
+            supabaseState.tables.user_profiles = {
+                data: [{ user_id: "u2", display_name: "Ada", email: "ada@test.local", profile_photo: "data:image/png;base64,AAAA" }],
+                error: null,
+            };
+            const res = await request(app)
+                .get("/tabular-review/creators?project_id=p1")
+                .set(...AUTH);
+            expect(res.status).toBe(200);
+            // Names and photos only: the review list does not expose emails.
+            expect(res.body).toEqual([
+                { user_id: "u2", display_name: "Ada", email: null, profile_photo: "data:image/png;base64,AAAA" },
+                { user_id: "u1", display_name: null, email: null, profile_photo: null },
+            ]);
+        });
+
+        it("refuses a project the caller cannot open", async () => {
+            checkProjectAccess.mockResolvedValue({ ok: false });
+            const res = await request(app)
+                .get("/tabular-review/creators?project_id=p1")
+                .set(...AUTH);
+            expect(res.status).toBe(404);
+            expect(supabaseState.operations).not.toContain("from:tabular_reviews");
+        });
+
+        it("requires a project", async () => {
+            const res = await request(app).get("/tabular-review/creators").set(...AUTH);
+            expect(res.status).toBe(400);
+        });
+    });
+
     // ── GET /tabular-review (overview) ────────────────────────────────────
     describe("GET /tabular-review", () => {
+        it("requests all workspace reviews by update time for History", async () => {
+            const res = await request(app)
+                .get("/tabular-review?workspace=personal&sort_key=updated&sort_direction=desc&limit=31")
+                .set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(supabaseState.rpcCalls).toContainEqual({
+                fn: "get_tabular_reviews_overview",
+                args: expect.objectContaining({
+                    p_workspace: "personal", p_project_id: null, p_scope: "all",
+                    p_sort_key: "updated", p_sort_direction: "desc", p_limit: 31,
+                }),
+            });
+        });
         it("returns the overview rows from the RPC", async () => {
             supabaseState.rpc = {
                 data: [{ id: "r1", title: "Alpha" }],
@@ -302,6 +352,56 @@ describe("tabular.routes", () => {
             expect(res.body).toEqual([{ id: "r1", title: "Alpha" }]);
         });
 
+        it("labels a project's reviews with each creator's name and photo", async () => {
+            supabaseState.rpc = {
+                data: [{ id: "r1", user_id: "u2" }, { id: "r2", user_id: null }],
+                error: null,
+            };
+            supabaseState.tables.user_profiles = {
+                data: [{ user_id: "u2", display_name: " Ada ", profile_photo: "data:image/png;base64,AAAA" }],
+                error: null,
+            };
+            const res = await request(app)
+                .get("/tabular-review?project_id=p1")
+                .set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual([
+                { id: "r1", user_id: "u2", owner_display_name: "Ada", owner_profile_photo: "data:image/png;base64,AAAA" },
+                { id: "r2", user_id: null },
+            ]);
+        });
+
+        it("filters the list and select-all ids by creator", async () => {
+            await request(app)
+                .get("/tabular-review?project_id=p1&owner_user_id=u2")
+                .set(...AUTH);
+            await request(app)
+                .get("/tabular-review/ids?project_id=p1&owner_user_id=u2")
+                .set(...AUTH);
+            expect(supabaseState.rpcCalls).toContainEqual({
+                fn: "get_tabular_reviews_overview",
+                args: expect.objectContaining({ p_project_id: "p1", p_owner_user_id: "u2" }),
+            });
+            expect(supabaseState.rpcCalls).toContainEqual({
+                fn: "get_tabular_review_ids_overview",
+                args: expect.objectContaining({ p_project_id: "p1", p_owner_user_id: "u2" }),
+            });
+        });
+
+        it("omits the creator argument when unfiltered", async () => {
+            await request(app).get("/tabular-review?project_id=p1").set(...AUTH);
+            expect(supabaseState.rpcCalls[0].args).not.toHaveProperty("p_owner_user_id");
+        });
+
+        it("skips the creator lookup for the cross-project list", async () => {
+            supabaseState.rpc = { data: [{ id: "r1", user_id: "u2" }], error: null };
+            const res = await request(app)
+                .get("/tabular-review")
+                .set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(supabaseState.operations).not.toContain("from:user_profiles");
+        });
+
         it("returns 500 with detail when the RPC errors", async () => {
             supabaseState.rpc = { data: null, error: { message: "boom" } };
 
@@ -311,6 +411,25 @@ describe("tabular.routes", () => {
 
             expect(res.status).toBe(500);
             expect(res.body.detail).toBe("Something went wrong. Please try again.");
+        });
+    });
+
+    describe("GET /tabular-review/history-status", () => {
+        const id = "11111111-1111-4111-8111-111111111111";
+        it("uses the authenticated identity and only returns authorized status snapshots", async () => {
+            supabaseState.rpc = { data: [{ id, is_running: true, is_complete: false }], error: null };
+            const res = await request(app).get(`/tabular-review/history-status?ids=${id}`).set(...AUTH);
+            expect(res.status).toBe(200);
+            expect(res.body).toEqual([{ id, is_running: true, is_complete: false }]);
+            expect(supabaseState.rpcCalls).toContainEqual({
+                fn: "get_tabular_review_history_status",
+                args: { p_user_id: "u1", p_user_email: "u1@test.local", p_review_ids: [id] },
+            });
+        });
+        it.each(["", "invalid", Array(101).fill(id).join(",")])("rejects invalid or oversized id lists", async (ids) => {
+            const res = await request(app).get(`/tabular-review/history-status?ids=${ids}`).set(...AUTH);
+            expect(res.status).toBe(400);
+            expect(supabaseState.rpcCalls).toEqual([]);
         });
     });
 

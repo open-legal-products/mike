@@ -1,3 +1,4 @@
+import { wordChatHasWorkspaceAttachments } from "../../lib/wordWorkspace";
 import { randomUUID } from "node:crypto";
 import { checkProjectAccess, ensureChatAccess, ensureReviewAccess, projectHasSharedAudience } from "../../lib/access";
 import { hasDirectContentGrants } from "../../lib/contentAccess";
@@ -532,6 +533,7 @@ async function loadConversation(
       .maybeSingle();
     if (error) throw new Error("Memory curator could not load the Word chat");
     if (!data || data.user_id !== state.actor_user_id) return null;
+    if (await wordChatHasWorkspaceAttachments(db, [], state.conversation_id)) return null;
     model = (data.model as string | null) ?? null;
     messages = await loadEligibleMemoryMessages(
       db,

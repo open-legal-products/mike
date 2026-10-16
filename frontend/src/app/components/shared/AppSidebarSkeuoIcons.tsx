@@ -7,6 +7,7 @@ import ide from "../../../../public/icons/features/ide.svg";
 import project from "../../../../public/icons/file-system/project-closed.svg";
 import library from "../../../../public/icons/features/library.svg";
 import tabularReview from "../../../../public/icons/features/tabular-review.svg";
+import tabularReviewComplete from "../../../../public/icons/features/tabular-review-complete.svg";
 import workflow from "../../../../public/icons/features/workflow.svg";
 import connector from "../../../../public/icons/features/connector.svg";
 import organization from "../../../../public/icons/features/organization.svg";
@@ -22,6 +23,7 @@ const icons = {
   "file-system/project-closed": project,
   "features/library": library,
   "features/tabular-review": tabularReview,
+  "features/tabular-review-complete": tabularReviewComplete,
   "features/workflow": workflow,
   "features/connector": connector,
   "features/organization": organization,
@@ -32,7 +34,7 @@ const icons = {
 /** Warm navigation and account-menu icons before authentication finishes. */
 export function preloadSidebarIcons() {
   for (const src of [
-    chat, ide, project, library, tabularReview, workflow,
+    chat, chatComplete, ide, project, library, tabularReview, tabularReviewComplete, workflow,
     settings, organization, signOut,
   ]) {
     const { props } = getImageProps({
@@ -74,6 +76,10 @@ export function LibrarySkeuoIcon(props: IconProps) {
 
 export function TabularReviewSkeuoIcon(props: IconProps) {
   return <AppSidebarIcon name="features/tabular-review" {...props} />;
+}
+
+export function TabularReviewCompleteIcon(props: IconProps) {
+  return <AppSidebarIcon name="features/tabular-review-complete" {...props} />;
 }
 
 export function WorkflowSkeuoIcon(props: IconProps) {

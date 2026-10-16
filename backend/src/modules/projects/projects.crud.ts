@@ -19,6 +19,8 @@ import {
   resolveOrgContentRole,
 } from "../../lib/access";
 import { can } from "../../lib/permissions";
+import { reportableServiceError } from "../../lib/serviceResult";
+import { filterParticipatingProjects, type ProjectParticipationRow } from "./projects.participation";
 import {
   workspaceMatches,
   workspaceRpcArg,
@@ -33,7 +35,7 @@ import {
   listOrgAccessPeople,
 } from "../../lib/orgAccessOverrides";
 import { deleteProjectsByIds } from "../user/user.service";
-import { loadProfileUsersByEmail } from "../../lib/userLookup";
+import { loadCreatorProfiles, loadProfileUsersByEmail } from "../../lib/userLookup";
 import { ensureResourceAccessSummaries } from "../../lib/resourceAccessSummary";
 import {
   buildProjectIdsOverviewRpcArgs,
@@ -42,6 +44,7 @@ import {
 } from "./projects.overview";
 import {
   type Db,
+  attachDirectoryCreatorLabels,
   attachDocumentOwnerLabels,
   attachProjectMemoryEnabled,
   normalizeOptionalString,
@@ -80,6 +83,8 @@ export async function getProjectsOverview(
     userId: string;
     userEmail?: string;
     includeDocuments: boolean;
+    participatingOnly?: boolean;
+    workspace?: WorkspaceFilter;
     filters?: ProjectListFilters;
   },
 ): Promise<{ ok: true; data: unknown } | ProjectsDbFailure> {
@@ -103,15 +108,38 @@ export async function getProjectsOverview(
   const { data, error } = await db.rpc("get_projects_overview", rpcArgs);
   if (error) return { ok: false, error };
 
+  // The unpaginated RPC has no workspace argument. Narrow its authorized
+  // rows here, before membership checks and document/metadata enrichment.
+  let visibleProjects = ((data ?? []) as ProjectParticipationRow[]).filter(
+    project => workspaceMatches(args.workspace ?? filters?.workspace, project.org_id),
+  );
+  if (args.participatingOnly) {
+    const participating = await filterParticipatingProjects(db, visibleProjects, userId, normalizedUserEmail);
+    if (!participating.ok) return { ok: false, error: reportableServiceError(participating) };
+    visibleProjects = participating.data;
+  }
   const accessSummary = await ensureResourceAccessSummaries(
     db,
     "project",
-    (data ?? []) as { id: string }[],
+    visibleProjects,
   );
   if (accessSummary.error) return { ok: false, error: accessSummary.error };
   const withMemory = await attachProjectMemoryEnabled(db, accessSummary.rows);
   if (withMemory.error) return { ok: false, error: withMemory.error };
   const projects = withMemory.rows;
+  // Only the paginated overview table renders creator avatars; the sidebar
+  // and pickers keep the smaller payload.
+  if (filters) {
+    const profileByUserId = await loadCreatorProfiles(db, projects);
+    for (const project of projects as {
+      user_id?: string | null;
+      owner_profile_photo?: string | null;
+    }[]) {
+      project.owner_profile_photo = project.user_id
+        ? profileByUserId.get(project.user_id)?.profile_photo ?? null
+        : null;
+    }
+  }
   if (!includeDocuments || projects.length === 0) {
     return { ok: true, data: projects };
   }
@@ -430,7 +458,13 @@ export async function getProjectFilterOptions(
       ok: true;
       body: {
         practices: string[];
-        owners: { value: string; label: string }[];
+        owners: {
+          value: string;
+          label: string;
+          display_name: string | null;
+          email: string | null;
+          profile_photo: string | null;
+        }[];
       };
     }
   | ProjectsDbFailure
@@ -453,7 +487,7 @@ export async function getProjectFilterOptions(
         (value): value is string => typeof value === "string",
       )
     : [];
-  const owners = Array.isArray(row.owners)
+  const options = Array.isArray(row.owners)
     ? row.owners.flatMap((value) => {
         if (!value || typeof value !== "object") return [];
         const option = value as { value?: unknown; label?: unknown };
@@ -463,6 +497,21 @@ export async function getProjectFilterOptions(
           : [];
       })
     : [];
+  // The Creator filter shows each person as the overview rows do: name,
+  // email (the overview already returns owner_email) and photo.
+  const profileByUserId = await loadCreatorProfiles(
+    db,
+    options.map((option) => ({ user_id: option.value })),
+  );
+  const owners = options.map((option) => {
+    const profile = profileByUserId.get(option.value);
+    return {
+      ...option,
+      display_name: profile?.display_name ?? null,
+      email: profile?.email ?? null,
+      profile_photo: profile?.profile_photo ?? null,
+    };
+  });
   return { ok: true, body: { practices, owners } };
 }
 
@@ -651,7 +700,7 @@ export async function getProjectDetail(
   }[];
   await attachLatestVersionNumbers(db, docsTyped);
   await attachActiveVersionPaths(db, docsTyped);
-  await attachDocumentOwnerLabels(db, docsTyped);
+  await attachDirectoryCreatorLabels(db, docsTyped, folderData ?? []);
   // Contact details for the "you can't do that" popups. Without them the UI
   // can tell a viewer they were refused but never who to ask.
   const adminContacts = await listProjectAdminContacts(db, access.project);
@@ -850,7 +899,7 @@ export async function updateProject(
     current_version_id?: string | null;
   }[];
   await attachActiveVersionPaths(db, docsTyped);
-  await attachDocumentOwnerLabels(db, docsTyped);
+  await attachDirectoryCreatorLabels(db, docsTyped, folderData ?? []);
   const withMemory = await attachProjectMemoryEnabled(db, [
     data as { id: string; memory_enabled?: boolean },
   ]);

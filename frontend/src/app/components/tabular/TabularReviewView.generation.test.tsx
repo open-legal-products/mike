@@ -176,6 +176,26 @@ describe("TabularReviewView server-owned generation", () => {
         }));
     });
 
+    it("uses the new review timestamp when running again after completion", async () => {
+        mockDetail({});
+        const stream = openStream();
+        vi.mocked(streamTabularGeneration).mockResolvedValueOnce(stream.response);
+        render(<TRView reviewId="r1" />);
+        fireEvent.click(await screen.findByTitle("Run review"));
+        await screen.findByTitle("Stop generation");
+        mockDetail({ review: { updated_at: "2026-10-16T01:00:00Z" } });
+        stream.done();
+        await screen.findByTitle("Run review");
+        const rerun = openStream();
+        vi.mocked(streamTabularGeneration).mockResolvedValueOnce(rerun.response);
+        fireEvent.click(screen.getByTitle("Run review"));
+        await waitFor(() => expect(streamTabularGeneration).toHaveBeenLastCalledWith(
+            "r1", "2026-10-16T01:00:00Z", expect.any(AbortSignal),
+        ));
+        rerun.done();
+        await screen.findByTitle("Run review");
+    });
+
     it("shows a server deadline error to the user", async () => {
         mockDetail({});
         const stream = openStream();
@@ -289,6 +309,7 @@ describe("TabularReviewView server-owned generation", () => {
         );
         expect(await screen.findByTitle("Stop generation")).toBeInTheDocument();
 
+        mockDetail({ review: { updated_at: "2026-10-16T01:00:00Z", is_running: false } });
         stream.done();
         await waitFor(() =>
             expect(screen.getByTitle("Run review")).toBeInTheDocument(),

@@ -32,6 +32,7 @@ import {
 import { assistantHistoryContent } from "@/app/lib/assistantHistoryContent";
 import { reportError } from "@/app/lib/errorReporting";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useWorkspaceOrgId } from "@/app/contexts/WorkspaceContext";
 import {
   UserVisibleError,
@@ -83,6 +84,11 @@ export function useAssistantChat({
     if (tracksCurrentChat) setHistoryCurrentChatId(id);
   };
   const workspaceOrgId = useWorkspaceOrgId();
+  const workspaceIdentity = useWorkspaceIdentity();
+  const workspaceIdentityRef = useRef(workspaceIdentity);
+  useLayoutEffect(() => {
+    workspaceIdentityRef.current = workspaceIdentity;
+  }, [workspaceIdentity]);
 
   const [messages, setRawMessages] = useState<Message[]>(initialMessages);
   // Mirrors `messages` for the async send path: a turn started from a toast
@@ -191,7 +197,7 @@ export function useAssistantChat({
   // ignores a superseded request the turn stalled on its empty placeholder with
   // no error. A layout effect still runs inside the switching commit, so no
   // async continuation from the old request can land in the new thread first.
-  const threadKey = `${projectId ?? ""}:${initialChatId ?? ""}`;
+  const threadKey = `${workspaceIdentity}:${projectId ?? ""}:${initialChatId ?? ""}`;
   const threadKeyRef = useRef(threadKey);
   const adoptedThreadKeyRef = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -246,6 +252,12 @@ export function useAssistantChat({
       AssistantEvent,
       { type: "ask_inputs_response" }
     >;
+    /**
+     * Called once the server has accepted the turn, before its answer
+     * streams. From then on a dropped connection resumes the server's copy
+     * rather than re-sending, so the caller can let go of what it sent.
+     */
+    onAccepted?: () => void;
   };
 
   /**
@@ -284,7 +296,7 @@ export function useAssistantChat({
   };
 
   const threadKeyFor = (id: string | undefined) =>
-    `${projectId ?? ""}:${id ?? "new"}`;
+    `${workspaceIdentity}:${projectId ?? ""}:${id ?? "new"}`;
 
   const lastUserMessage = (transcript: Message[]): Message | undefined => {
     for (let i = transcript.length - 1; i >= 0; i--) {
@@ -395,7 +407,7 @@ export function useAssistantChat({
     message: Message,
     opts?: ChatTurnOptions,
   ): Promise<string | null> => {
-    if (!message.content.trim() || hasAssistantTurn(chatIdRef.current)) return null;
+    if (!mountedRef.current || workspaceIdentityRef.current !== workspaceIdentity || !message.content.trim() || hasAssistantTurn(chatIdRef.current)) return null;
 
     setIsResponseLoading(true);
 
@@ -466,7 +478,8 @@ export function useAssistantChat({
       threadKey: threadKeyFor(chatIdRef.current),
       chatId: chatIdRef.current,
       message,
-      opts,
+      // A retry is a new send; the original caller has already moved on.
+      opts: opts && { ...opts, onAccepted: undefined },
       transcriptLength: optimisticResponseEvent
         ? displayMessages.length
         : apiMessagesForTurn.length,
@@ -479,7 +492,7 @@ export function useAssistantChat({
     const controller = new AbortController();
     abortControllerRef.current = controller;
     const isCurrentRequest = () =>
-      mountedRef.current && requestGenerationRef.current === generation;
+      mountedRef.current && workspaceIdentityRef.current === workspaceIdentity && requestGenerationRef.current === generation;
     // The live id, never the render-time state this closure captured: a turn
     // re-sent from a toast must land in the chat the first attempt created,
     // not open a second one.
@@ -541,40 +554,45 @@ export function useAssistantChat({
         document_id: f.document_id as string,
       }));
 
+      const openTurn = () =>
+        projectId
+          ? streamProjectChat({
+              projectId,
+              messages: apiMessages,
+              chat_id: sendChatId,
+              model,
+              reasoning,
+              displayed_doc: displayedDoc
+                ? {
+                    filename: displayedDoc.filename,
+                    document_id: displayedDoc.documentId,
+                  }
+                : undefined,
+              attached_documents:
+                attachedDocs.length > 0 ? attachedDocs : undefined,
+              ask_inputs_response: opts?.askInputsResponse,
+              signal: controller.signal,
+            })
+          : streamChat({
+              messages: apiMessages,
+              chat_id: sendChatId,
+              // Where a new chat is filed: the workspace it is started in.
+              org_id: workspaceOrgId,
+              model,
+              reasoning,
+              ask_inputs_response: opts?.askInputsResponse,
+              signal: controller.signal,
+            });
       // The frames go to the turn record (lib/assistantTurnStream), which
       // every hook viewing the thread mirrors. Only this hook's own state
       // and navigation are gated on the request still being its own; a
       // dropped connection is resumed from the server's copy of the turn.
       await readAssistantTurn({
-        open: () =>
-          projectId
-            ? streamProjectChat({
-                projectId,
-                messages: apiMessages,
-                chat_id: sendChatId,
-                model,
-                reasoning,
-                displayed_doc: displayedDoc
-                  ? {
-                      filename: displayedDoc.filename,
-                      document_id: displayedDoc.documentId,
-                    }
-                  : undefined,
-                attached_documents:
-                  attachedDocs.length > 0 ? attachedDocs : undefined,
-                ask_inputs_response: opts?.askInputsResponse,
-                signal: controller.signal,
-              })
-            : streamChat({
-                messages: apiMessages,
-                chat_id: sendChatId,
-                // Where a new chat is filed: the workspace it is started in.
-                org_id: workspaceOrgId,
-                model,
-                reasoning,
-                ask_inputs_response: opts?.askInputsResponse,
-                signal: controller.signal,
-              }),
+        open: async () => {
+          const response = await openTurn();
+          if (response.ok) opts?.onAccepted?.();
+          return response;
+        },
         turn,
         sink,
         cursor,
@@ -593,7 +611,7 @@ export function useAssistantChat({
             setChatId(streamed);
             setCurrentChatId(streamed);
             if (isNewChatId && onChatCreated) {
-              adoptedThreadKeyRef.current = `${projectId ?? ""}:${streamed}`;
+              adoptedThreadKeyRef.current = `${workspaceIdentity}:${projectId ?? ""}:${streamed}`;
               onChatCreated(streamed);
             }
           },

@@ -12,6 +12,7 @@ import {
     useRef,
     useState,
 } from "react";
+import { useWorkspaceIdentity } from "@/app/hooks/useWorkspaceIdentity";
 import { useRouter } from "next/navigation";
 import { BookOpen, ChevronLeft, Plus } from "lucide-react";
 import { DocTable } from "@/app/components/documents/DocTable";
@@ -52,6 +53,8 @@ import {
 import { useWorkspaceParam } from "@/app/contexts/WorkspaceContext";
 import type { Document } from "@/app/components/shared/types";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
+import { notifyError } from "@/app/lib/userFacingError";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 
 type LibraryViewCollection = {
     documents: Document[];
@@ -186,6 +189,11 @@ export function LibraryWorkspaceProvider({
         new Map(),
     );
 
+    const retryRef = useRef<{
+        loadLibrary: (kind: LibraryKind) => void;
+        loadFolderChildren: (kind: LibraryKind, folderId: string) => void;
+        loadMoreDocuments: (kind: LibraryKind, parentId: string | null) => void;
+    } | null>(null);
     // Refetches root-level content plus every folder level already lazy-loaded
     // for this kind (each level re-requested at its current page size), so a
     // refresh (e.g. after uploading a new document version) doesn't drop the
@@ -265,7 +273,14 @@ export function LibraryWorkspaceProvider({
           },
         }));
             } catch (error) {
-                console.error("[library] failed to load", error);
+                // Everything below resets this kind to an empty shelf. That
+                // is indistinguishable from "you have no files", so the user
+                // has to be told which one it is.
+                notifyError(error, {
+                    action: `load your ${kind}`,
+                    dedupeKey: `library:${kind}`,
+                    onRetry: () => retryRef.current?.loadLibrary(kind),
+                });
                 setCollections((prev) => ({
                     ...prev,
                     [kind]: EMPTY_COLLECTION,
@@ -337,7 +352,15 @@ export function LibraryWorkspaceProvider({
                         },
                     }));
                 } catch (error) {
-          console.error("[library] failed to load folder children", error);
+                    notifyError(error, {
+                        action: "open the folder",
+                        dedupeKey: `library-folder:${kind}:${folderId}`,
+                        onRetry: () =>
+                            retryRef.current?.loadFolderChildren(
+                                kind,
+                                folderId,
+                            ),
+                    });
                 } finally {
                     folderChildrenRequestsRef.current.delete(key);
                 }
@@ -414,7 +437,12 @@ export function LibraryWorkspaceProvider({
                         },
                     }));
                 } catch (error) {
-          console.error("[library] failed to load more documents", error);
+                    notifyError(error, {
+                        action: `load more ${kind}`,
+                        dedupeKey: `library-more:${kind}:${levelKey}`,
+                        onRetry: () =>
+                            retryRef.current?.loadMoreDocuments(kind, parentId),
+                    });
                 } finally {
                     setLoadingMoreDocumentsByKind((prev) => ({
                         ...prev,
@@ -428,6 +456,15 @@ export function LibraryWorkspaceProvider({
         },
         [documentLimitByKind, scoped],
     );
+
+    // "Retry" on a failed load re-enters the latest loader (see useLatestRef).
+    useAssignLatest(retryRef, {
+        loadLibrary: (kind: LibraryKind) => void loadLibrary(kind),
+        loadFolderChildren: (kind: LibraryKind, folderId: string) =>
+            void loadFolderChildren(kind, folderId),
+        loadMoreDocuments: (kind: LibraryKind, parentId: string | null) =>
+            void loadMoreDocuments(kind, parentId),
+    });
 
     const setSearchForKind = useCallback((kind: LibraryKind, value: string) => {
         setSearchByKind((prev) => ({ ...prev, [kind]: value }));
@@ -511,9 +548,9 @@ export function LibraryWorkspaceLayout({ children }: { children: ReactNode }) {
     // Keyed by workspace: switching starts the library again from nothing,
     // so one workspace's folders and documents are never shown, or filed
     // into, under another's name.
-    const workspace = useWorkspaceParam();
+    const identity = useWorkspaceIdentity();
     return (
-        <LibraryWorkspaceProvider key={workspace ?? "unscoped"}>
+        <LibraryWorkspaceProvider key={identity}>
             {children}
         </LibraryWorkspaceProvider>
     );
@@ -527,6 +564,7 @@ export function LibraryCollectionPage({
     folderId?: string | null;
 }) {
     const router = useRouter();
+    const identity = useWorkspaceIdentity();
     const scoped = useScopedLibrary();
     const {
         collections,
@@ -561,6 +599,7 @@ export function LibraryCollectionPage({
   const [serverQueryLoadingMore, setServerQueryLoadingMore] = useState(false);
   const [serverQueryHasMore, setServerQueryHasMore] = useState(false);
   const [serverQueryRefreshVersion, setServerQueryRefreshVersion] = useState(0);
+  const [filterOptionsAttempt, setFilterOptionsAttempt] = useState(0);
   const serverQueryRequestRef = useRef(0);
     const loadedFolderRouteRef = useRef<string | null>(null);
     const loadFolderChildrenRef = useRef(loadFolderChildren);
@@ -620,11 +659,21 @@ export function LibraryCollectionPage({
                 return loadFolderChildrenRef.current(kind, folderId);
             })
             .catch((error) => {
-                console.error("[library] failed to load folder route", error);
                 loadedFolderRouteRef.current = null;
                 if (!cancelled) {
                     router.replace(collectionRootPath, { scroll: false });
                 }
+                // The user asked for a folder and landed at the root
+                // instead; say why, and let Retry navigate back into it.
+                notifyError(error, {
+                    action: "open the folder",
+                    dedupeKey: `library-route:${kind}:${folderId}`,
+                    onRetry: () =>
+                        router.push(
+                            `${collectionRootPath}/folders/${encodeURIComponent(folderId)}`,
+                            { scroll: false },
+                        ),
+                });
             });
 
         return () => {
@@ -763,13 +812,21 @@ export function LibraryCollectionPage({
       .then((options) => {
         if (!cancelled) setDocumentTypeOptions(options.fileTypes);
       })
-      .catch(() => {
-        if (!cancelled) setDocumentTypeOptions([]);
+      .catch((error) => {
+        if (cancelled) return;
+        // An empty type filter reads as "this library has one file type",
+        // so the user is told the list is missing rather than wrong.
+        setDocumentTypeOptions([]);
+        notifyError(error, {
+          action: "load the file type filter",
+          dedupeKey: `library-filter-options:${kind}`,
+          onRetry: () => setFilterOptionsAttempt((attempt) => attempt + 1),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [kind, scoped]);
+  }, [filterOptionsAttempt, kind, scoped]);
 
   const serverQueryActive =
     debouncedSearch.trim().length > 0 ||
@@ -808,9 +865,15 @@ export function LibraryCollectionPage({
           !controller.signal.aborted &&
           requestVersion === serverQueryRequestRef.current
         ) {
-          console.error("[library] failed to search", error);
           setServerDocuments([]);
           setServerQueryHasMore(false);
+          // No results and a failed search look identical in the table.
+          notifyError(error, {
+            action: "search this library",
+            dedupeKey: `library-search:${kind}`,
+            onRetry: () =>
+              setServerQueryRefreshVersion((version) => version + 1),
+          });
         }
       })
       .finally(() => {
@@ -832,6 +895,8 @@ export function LibraryCollectionPage({
     tableQuery.sort,
   ]);
 
+  // "Retry" re-enters the latest loader; a callback cannot reference itself.
+  const loadMoreServerDocumentsRef = useRef<(() => void) | null>(null);
   const handleLoadMoreServerDocuments = useCallback(async () => {
     if (
       !serverQueryActive ||
@@ -865,7 +930,11 @@ export function LibraryCollectionPage({
       setServerQueryHasMore(result.documentsHasMore);
     } catch (error) {
       if (requestVersion === serverQueryRequestRef.current) {
-        console.error("[library] failed to load more search results", error);
+        notifyError(error, {
+          action: "load more search results",
+          dedupeKey: `library-search-more:${kind}`,
+          onRetry: () => loadMoreServerDocumentsRef.current?.(),
+        });
       }
     } finally {
       if (requestVersion === serverQueryRequestRef.current) {
@@ -884,6 +953,9 @@ export function LibraryCollectionPage({
     tableQuery.fileType,
     tableQuery.sort,
   ]);
+
+  // "Retry" re-enters the latest loader; a callback cannot reference itself.
+  useAssignLatest(loadMoreServerDocumentsRef, () => void handleLoadMoreServerDocuments());
 
     const operations = useMemo(
         () => ({
@@ -1029,7 +1101,8 @@ export function LibraryCollectionPage({
                 />
                 <DocTable
                     onSelectionActionsChange={setSelectionActions}
-                    scopeKey={kind}
+                    key={`${identity}:${kind}`}
+                    scopeKey={`${identity}:${kind}`}
                     documents={collection?.documents ?? []}
                     setDocuments={setDocuments}
                     folders={collection?.folders ?? []}

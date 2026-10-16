@@ -20,7 +20,6 @@ import {
     TableBody,
     TableCell,
     TableEmptyState,
-    TableFilters,
     TableSortFilter,
     TableHeaderCell,
     TableHeaderRow,
@@ -34,6 +33,15 @@ import {
     TableStickyCell,
 } from "@/app/components/shared/TablePrimitive";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
+import {
+    CreatorLabel,
+    CreatorLabelSkeleton,
+} from "@/app/components/shared/CreatorLabel";
+import {
+    PersonFilter,
+    distinctPeople,
+    localPeople,
+} from "@/app/components/shared/PersonFilter";
 import { EmptyState } from "@/app/components/ui/empty-state";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { ChatSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
@@ -119,8 +127,8 @@ export function ProjectAssistantTable({
     }
 
     function requestRenameChat(chat: Chat) {
-        if (!can(roleFrom(chat), "content.edit")) {
-            onOwnerOnlyAction({ action: "rename this chat", requiredRole: "editor" });
+        if (!can(roleFrom(chat), "access.manage")) {
+            onOwnerOnlyAction({ action: "rename this chat", requiredRole: "owner" });
             return;
         }
         setRenameChatValue(chat.title ?? "Untitled Chat");
@@ -132,15 +140,20 @@ export function ProjectAssistantTable({
             ? rowActionSelectionIds(chat.id, selectedChatIds)
             : selectedChatIds;
         const appliesToSelection = actionIds.length > 1;
+        const canDeleteSelection = actionIds.length > 0 && actionIds.every((id) => {
+            const selected = chats.find((item) => item.id === id);
+            return selected && can(roleFrom(selected), "container.delete");
+        });
         return (
             <RowActionMenuItems
                 onClose={onClose}
                 onView={!appliesToSelection && chat ? () => onOpenChat(chat.id) : undefined}
-                onRename={!appliesToSelection && chat ? () => requestRenameChat(chat) : undefined}
-                onDelete={() =>
+                onRename={!appliesToSelection && chat && can(roleFrom(chat), "access.manage") ? () => requestRenameChat(chat) : undefined}
+                onDelete={canDeleteSelection ? () =>
                     appliesToSelection || !chat
                         ? onDeleteSelectedChats()
                         : requestDeleteChat(chat)
+                    : undefined
                 }
                 deleteLabel={appliesToSelection ? `Delete ${actionIds.length} chats` : undefined}
             />
@@ -160,21 +173,24 @@ export function ProjectAssistantTable({
         clearSelection();
     }
 
-    const creatorOptions = useMemo(
+    const creatorPeople = useMemo(
         () =>
-            Array.from(
-                new Set(chats.map((chat) => creatorLabel(chat, currentUserId))),
-            )
-                .sort((a, b) => a.localeCompare(b))
-                .map((creator) => ({ value: creator, label: creator })),
+            distinctPeople(
+                chats.map((chat) => ({
+                    user_id: chat.user_id,
+                    display_name:
+                        chat.creator_display_name ||
+                        (chat.user_id === currentUserId ? "Me" : null),
+                    profile_photo: chat.creator_profile_photo,
+                })),
+            ),
         [chats, currentUserId],
     );
 
     const visibleChats = useMemo(() => {
         const rows = filteredChats.filter(
             (chat) =>
-                !creatorFilter ||
-                creatorLabel(chat, currentUserId) === creatorFilter,
+                !creatorFilter || chat.user_id === creatorFilter,
         );
         if (!sort) return rows;
 
@@ -194,7 +210,7 @@ export function ProjectAssistantTable({
                 ) * multiplier
             );
         });
-    }, [creatorFilter, currentUserId, filteredChats, sort]);
+    }, [creatorFilter, filteredChats, sort]);
 
     const allVisibleChatsSelected =
         visibleChats.length > 0 &&
@@ -214,13 +230,18 @@ export function ProjectAssistantTable({
         />
     );
     const creatorFilterButton = (
-        <TableFilters
+        <PersonFilter
             label="Filter by creator"
-            value={creatorFilter}
-            allLabel="All Creators"
-            widthClassName="w-44"
-            options={creatorOptions}
-            onChange={handleCreatorFilterChange}
+            selectedTitle={(name) => `Created by ${name}`}
+            value={
+                creatorPeople.find(
+                    (person) => person.user_id === creatorFilter,
+                ) ?? null
+            }
+            onChange={(person) =>
+                handleCreatorFilterChange(person?.user_id ?? null)
+            }
+            loadPeople={localPeople(creatorPeople)}
         />
     );
     const createdFilterButton = (
@@ -367,7 +388,11 @@ export function ProjectAssistantTable({
                                 onEditCancel={() => setRenamingChatId(null)}
                             />
                             <TableCell className="ml-auto w-32">
-                                {creatorLabel(chat, currentUserId)}
+                                <CreatorLabel
+                                    label={creatorLabel(chat, currentUserId)}
+                                    photo={chat.creator_profile_photo}
+                                    name={chat.creator_display_name}
+                                />
                             </TableCell>
                             <TableCell className="w-32">
                                 {formatDate(chat.created_at)}
@@ -378,8 +403,8 @@ export function ProjectAssistantTable({
                             >
                                 <RowActions
                                     onView={() => onOpenChat(chat.id)}
-                                    onRename={() => requestRenameChat(chat)}
-                                    onDelete={() => requestDeleteChat(chat)}
+                                    onRename={can(roleFrom(chat), "access.manage") ? () => requestRenameChat(chat) : undefined}
+                                    onDelete={can(roleFrom(chat), "container.delete") ? () => requestDeleteChat(chat) : undefined}
                                 />
                             </div>
                         </TableRow>
@@ -425,7 +450,7 @@ function ProjectAssistantLoadingRows() {
                         </div>
                     </TableStickyCell>
                     <TableCell className="ml-auto w-32">
-                        <SkeletonLine className="w-16" />
+                        <CreatorLabelSkeleton className="w-16" />
                     </TableCell>
                     <TableCell className="w-32">
                         <SkeletonLine className="w-16" />

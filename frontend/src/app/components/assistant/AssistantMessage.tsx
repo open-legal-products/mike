@@ -13,6 +13,7 @@ import { notifyError } from "@/app/lib/userFacingError";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
+import { DocSearchBlock } from "./message/DocSearchBlock";
 import {
     connectorToolLabel,
     eventErrorMessage,
@@ -485,6 +486,10 @@ export function AssistantMessage({
                     showConnector={showConnector}
                 />
             );
+        }
+        if (event.type === "doc_search") {
+            return <DocSearchBlock key={globalIdx} event={event}
+                isStreaming={event.isStreaming} showConnector={showConnector} />;
         }
         if (event.type === "doc_find") {
             return (

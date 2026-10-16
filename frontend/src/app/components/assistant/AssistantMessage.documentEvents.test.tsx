@@ -204,3 +204,26 @@ describe("AssistantMessage document events", () => {
         );
     });
 });
+
+it("renders a saved document search in the pre-response timeline", () => {
+    render(<AssistantMessage events={[
+        { type: "doc_search", search_id: "search-1", scope: "templates", query: "assignment", offset: 0, match_count: 3, next_offset: null },
+        { type: "content", text: "I found three relevant templates." },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Completed in 1 step" }));
+    expect(screen.getByText(/the template library for/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Searched the template library/ }));
+    expect(screen.getByText("3 matches")).toBeVisible();
+});
+
+it("shows the specific failure reason from saved search history", () => {
+    const error = "Document search is unavailable because the server's database needs an update. Please contact your administrator.";
+    render(<AssistantMessage events={[
+        { type: "doc_search", search_id: "search-1", scope: "library", query: "assignment", offset: 0, error_code: "schema_out_of_date", error },
+        { type: "content", text: "I could not search your documents." },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Completed in 1 step" }));
+    fireEvent.click(screen.getByRole("button", { name: /Search failed in/ }));
+    expect(screen.getByText(error)).toBeVisible();
+    expect(screen.queryByText("0 matches")).not.toBeInTheDocument();
+});

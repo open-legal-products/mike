@@ -1,8 +1,18 @@
 "use client";
 
-import { use, useCallback, useMemo, useState } from "react";
+import { use, useCallback, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { deleteTabularReview, updateTabularReview } from "@/app/lib/mikeApi";
+import {
+    deleteTabularReview,
+    listProjectReviewCreators,
+    updateTabularReview,
+} from "@/app/lib/mikeApi";
+import {
+    distinctPeople,
+    localPeople,
+    type LoadPeople,
+    type PersonOption,
+} from "@/app/components/shared/PersonFilter";
 import { ReviewsListTable } from "@/app/components/tabular/ReviewsListTable";
 import { TabularReviewDetailsModal } from "@/app/components/tabular/TabularReviewDetailsModal";
 import {
@@ -12,14 +22,17 @@ import {
 import type { TabularReview } from "@/app/components/shared/types";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import {
     type TabularReviewSortKey,
     type TabularReviewSortDirection,
     usePaginatedTabularReviews,
 } from "@/app/hooks/usePaginatedTabularReviews";
-import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import {
+    deleteTabularReviewsWithConcurrency,
+    notifyBulkReviewDeleteOutcome,
+} from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 
 interface Props {
@@ -37,9 +50,6 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
     const [detailsReview, setDetailsReview] = useState<TabularReview | null>(
         null,
     );
-    const [bulkDeleteNotice, setBulkDeleteNotice] = useState<string | null>(
-        null,
-    );
     const [deletingReviewIds, setDeletingReviewIds] = useState<Set<string>>(
         () => new Set(),
     );
@@ -48,6 +58,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         direction: TabularReviewSortDirection;
     } | null>(null);
     const debouncedSearch = useDebouncedValue(search, 250);
+    const [creator, setCreator] = useState<PersonOption | null>(null);
     const {
         reviews,
         setReviews,
@@ -68,7 +79,18 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         search: debouncedSearch,
         selectionKey: search,
         sort,
+        ownerUserId: creator?.user_id,
     });
+    // Every creator in the project, not just those on the loaded page.
+    const loadCreators = useCallback<LoadPeople>(
+        async (query, signal) =>
+            localPeople(
+                distinctPeople(
+                    await listProjectReviewCreators(projectId, signal),
+                ),
+            )(query, signal),
+        [projectId],
+    );
     const docs = project?.documents ?? [];
     const visibleReviews = useMemo(
         () => (previewEmptyStates ? [] : reviews),
@@ -152,9 +174,14 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         }
     }
 
-    const handleDeleteSelectedReviews = useCallback(async () => {
-        const ids = [...selectedReviewIds];
-        setBulkDeleteNotice(null);
+    const retryDeleteSelectedRef = useRef<((ids: string[]) => void) | null>(
+        null,
+    );
+    // `ids` is passed only by Retry, so it re-sends exactly the batch that
+    // failed, whatever is selected by then.
+    const handleDeleteSelectedReviews = useCallback(async (
+        ids: string[] = [...selectedReviewIds],
+    ) => {
         const roleById = new Map(
             reviews.map((review) => [review.id, roleFrom(review)] as const),
         );
@@ -181,15 +208,13 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
             );
         }
-        const notices = [
-            blocked > 0
-                ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only a review owner can delete them.`
-                : null,
-            failedIds.length > 0
-                ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
-                : null,
-        ].filter((notice): notice is string => notice !== null);
-        if (notices.length > 0) setBulkDeleteNotice(notices.join(" "));
+        notifyBulkReviewDeleteOutcome({
+            blocked,
+            failedCount: failedIds.length,
+            // Through the ref for the newest handler, with only the ids
+            // that failed.
+            retry: () => retryDeleteSelectedRef.current?.(failedIds),
+        });
     }, [
         getReviewOwnerId,
         reviews,
@@ -199,11 +224,21 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         user?.id,
     ]);
 
+    // "Retry" must re-enter the newest handler, not the one that was
+    // created when the delete failed.
+    useAssignLatest(retryDeleteSelectedRef, (ids: string[]) => void handleDeleteSelectedReviews(ids));
+
     return (
         <>
             <ReviewsListTable
                 renderToolbar={(actions) => <ProjectSectionToolbar actions={actions} />}
                 rowClassName="pr-8 md:pr-8"
+                showCreator
+                creatorFilter={{
+                    value: creator,
+                    onChange: setCreator,
+                    loadPeople: loadCreators,
+                }}
                 reviews={visibleReviews}
                 selectedReviewIds={selectedReviewIds}
                 createDisabled={workspace.creatingReview || docs.length === 0}
@@ -216,7 +251,9 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 onToggleAll={handleToggleAllReviews}
                 selectingAll={selectingAll}
                 deletingReviewIds={deletingReviewIds}
-                hasActiveFilters={debouncedSearch.trim().length > 0}
+                hasActiveFilters={
+                    debouncedSearch.trim().length > 0 || creator !== null
+                }
                 sort={sort}
                 onSortChange={(key, direction) => {
                     setSelectedReviewIds([]);
@@ -232,7 +269,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 }
                 onOpenDetails={handleOpenDetails}
                 onDeleteReview={handleDeleteReviewRow}
-                onDeleteSelectedReviews={handleDeleteSelectedReviews}
+                onDeleteSelectedReviews={() => handleDeleteSelectedReviews()}
                 onOwnerOnlyAction={setOwnerOnlyAction}
                 setSelectedReviewIds={setSelectedReviewIds}
             />
@@ -247,12 +284,6 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 lockProject
                 onClose={() => setDetailsReview(null)}
                 onSave={handleDetailsSave}
-            />
-            <WarningPopup
-                open={!!bulkDeleteNotice}
-                title="Some reviews were not deleted"
-                message={bulkDeleteNotice}
-                onClose={() => setBulkDeleteNotice(null)}
             />
         </>
     );

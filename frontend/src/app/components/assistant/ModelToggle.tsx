@@ -57,6 +57,7 @@ interface Props {
   tone?: "muted" | "default";
   /** Render as a full-width liquid-glass control inside a modal form. */
   modalInput?: boolean;
+  toolbar?: boolean;
   /** Extra classes for the compact trigger button, for a host row's sizing. */
   triggerClassName?: string;
   onNoModelsClick?: (reason: NoModelsReason) => void;
@@ -73,6 +74,7 @@ export function ModelToggle({
   compact = false,
   tone,
   modalInput = false,
+  toolbar = false,
   triggerClassName,
   onNoModelsClick,
   reasoningLevel,
@@ -134,6 +136,7 @@ export function ModelToggle({
       compact={compact}
       tone={tone}
       modalInput={modalInput}
+      toolbar={toolbar}
       triggerClassName={triggerClassName}
       emptyLabel="No Models"
       onEmptyClick={

@@ -147,8 +147,7 @@ describe("AccessModal — per-recipient roles", () => {
         );
         expect(screen.queryByText("People with Access")).not.toBeInTheDocument();
 
-        const creatorRow = screen
-            .getByText("Creator")
+        const creatorRow = (await screen.findByText("Creator"))
             .closest<HTMLElement>('[role="listitem"]');
         expect(creatorRow).not.toBeNull();
         expect(creatorRow?.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { TabularReview } from "@/app/components/shared/types";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import TabularReviewsPage from "./page";
 
 const { data, push, deleteReview } = vi.hoisted(() => ({
@@ -73,7 +74,10 @@ beforeEach(() => {
     data.selectedIds = ["r1"];
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+    clearToasts();
+    vi.unstubAllGlobals();
+});
 
 describe("review overview selection actions", () => {
     it.each([1, 2])("matches toolbar and right-click menus for %i selected reviews", async (count) => {
@@ -112,5 +116,28 @@ describe("review overview selection actions", () => {
         await user.click(screen.getByRole("menuitem", { name: "Delete 3 reviews" }));
         await waitFor(() => expect(deleteReview).toHaveBeenCalledTimes(3));
         for (const id of data.selectedIds) expect(deleteReview).toHaveBeenCalledWith(id);
+    });
+
+    it("retries only the reviews whose delete failed, whatever is selected now", async () => {
+        const user = userEvent.setup();
+        deleteReview.mockImplementation(async (id: string) => {
+            if (id === "r2") throw new Error("boom");
+        });
+        data.selectedIds = ["r1", "r2"];
+        render(
+            <>
+                <TabularReviewsPage />
+                <ToastViewportUI />
+            </>,
+        );
+        await user.click(screen.getByRole("button", { name: "Actions" }));
+        await user.click(screen.getByRole("menuitem", { name: "Delete 2 reviews" }));
+        expect(await screen.findByRole("alert")).toHaveTextContent("1 review was not deleted");
+
+        // The selection the page reads now is no longer the failed batch.
+        deleteReview.mockClear();
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(deleteReview).toHaveBeenCalledTimes(1));
+        expect(deleteReview).toHaveBeenCalledWith("r2");
     });
 });

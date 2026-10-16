@@ -41,7 +41,9 @@ vi.mock("../tools/toolDispatcher", () => ({
     runToolCalls(calls),
 }));
 
-import { runLLMStream } from "../streaming";
+import { scriptedDb } from "../../../../__tests__/helpers/scriptedDb";
+import { buildUserMcpTools } from "../../../../lib/mcpConnectors";
+import { runLLMStream, sanitizeAssistantSseChunk } from "../streaming";
 import { PROJECT_EXTRA_TOOLS } from "../tools/toolSchemas";
 
 type RunToolsFn = (
@@ -220,4 +222,53 @@ describe("runLLMStream document-mutation gating", () => {
     );
     expect(dispatched).toEqual(["edit_document"]);
   });
+});
+
+it.each([
+  { match_count: 2, next_offset: null },
+  { error_code: "internal_error", error: "Document search could not be completed. Try again." },
+  { error_code: "schema_out_of_date", error: "Document search is unavailable because the server's database needs an update. Please contact your administrator." },
+])("retains scoped search events and sanitizes raw errors in the saved assistant response: %j", async (details) => {
+  const search = { type: "doc_search" as const, search_id: "search", scope: "library", query: "assignment", offset: 0, ...details };
+  runToolCalls.mockResolvedValueOnce({
+    toolResults: [], docsRead: [], docsFound: [], docsCreated: [], docsReplicated: [],
+    workflowsApplied: [], docsEdited: [], askInputsEvents: [], courtlistenerEvents: [],
+    caseCitationEvents: [], mcpEvents: [],
+    documentSearchEvents: [details.error ? { ...search, error: "private database details" } : search],
+  } as never);
+  streamChatWithTools.mockImplementationOnce(async (params) => {
+    await params.runTools?.([{ id: "search", name: "find_documents", input: { scope: "library", query: "assignment" } }]);
+    return { fullText: "Found two agreements." };
+  });
+  const result = await runLLMStream(baseParams());
+  expect(result.events).toContainEqual(search);
+});
+
+it("maps raw search errors to the safe search message on the wire", () => {
+  const chunk = sanitizeAssistantSseChunk(`data: ${JSON.stringify({ type: "doc_search", error: "private database details" })}\n\n`);
+  expect(chunk).toContain("Document search could not be completed. Try again.");
+  expect(chunk).not.toContain("private database details");
+});
+
+it.each([
+  ["schema_out_of_date", "database needs an update"],
+  ["invalid_search", "needs a valid scope"],
+  ["search_timeout", "took too long"],
+  ["search_unavailable", "temporarily unavailable"],
+  ["unknown-private-code", "could not be completed"],
+  ["__proto__", "could not be completed"],
+])("rebuilds a safe search error from code %s on the wire", (error_code, message) => {
+  const chunk = sanitizeAssistantSseChunk(`data: ${JSON.stringify({ type: "doc_search", error_code, error: "private database details" })}\n\n`);
+  const event = JSON.parse(chunk.slice(6));
+  expect(event.error).toContain(message);
+  expect(event.error_code).toBe(["unknown-private-code", "__proto__"].includes(error_code) ? "internal_error" : error_code);
+  expect(chunk).not.toContain("private");
+});
+
+it("does not assemble account connectors for an organization conversation", async () => {
+  const fake = scriptedDb([{ table: "organizations", data: { kind: "team" } }]);
+  await runLLMStream({ ...baseParams(), db: fake.db, orgId: "firm" });
+  expect(buildUserMcpTools).not.toHaveBeenCalled();
+  expect(advertisedToolNames().some(name => /^(mcp_|google_drive_|gmail_|google_calendar_)/.test(name))).toBe(false);
+  fake.done();
 });

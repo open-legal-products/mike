@@ -258,6 +258,44 @@ neighbours, never by clipping content:
   primary chat renders, at full width, and the action that opens the side
   chat is not offered. The IDE is a desktop workspace and has no such gate.
 
+The IDE's Open project picker and project switcher list projects in the active
+workspace that the user created or was directly added to, whether public or
+private. Public visibility alone does not make someone a participant. Switching
+workspace clears the picker cache and selection. Inherited organization permissions and
+audited private-content access do not put projects in this picker. The backend
+applies this participation filter to its already-authorized project list.
+The picker and FileDirectory share the compact native `SelectionCheckbox` in
+`components/ui/selection-checkbox.tsx`, including its mixed and disabled states.
+
+The app sidebar's History combines assistant chats and tabular reviews from
+the active workspace, including reviews inside projects. Both sources are
+fetched by last update and merged newest first. Older rows stay buffered until
+both paginated sources reach them, so fetching another page does not reveal
+newer items below older ones. Review rows use the tabular-review SVG icon and
+open the review's project or standalone route. Project reviews prefix their
+title with the project name. Project prefixes and chat Shared labels use the
+same muted `text-gray-400` treatment. Edits and generation starts/completions
+advance review activity and promote it in History; lease heartbeats do not.
+Running reviews show a spinner, including after navigating away. A review
+that finishes successfully while elsewhere shows a tick using the Excel SVG's
+green gradient until
+opened, matching unread chat completion. Failed, stopped, and incomplete
+reviews do not get the completion icon. Status polling reads small authorized
+snapshots only for running reviews; it never downloads their documents.
+Activity refreshes keep the loaded History rows and pagination visible; only
+the affected review's icon changes. A workspace change still clears the old list.
+Review overview project filters, create choices and move destinations also stay
+within their workspace; selecting a project filter must not disable workspace
+scoping. A workspace switch resets those filters and dialogs. Detail pages opened
+by link follow the item's own workspace, with project children inheriting theirs.
+Late list pages and chat creations must not populate a newly selected workspace.
+Chat Share, Rename and Delete actions are visible only to owners. Directly shared
+standalone chats offer Leave to viewers and editors; project chats never offer
+Leave because their access comes from project membership. Audited organization
+access is not a direct sharing grant and does not offer Leave.
+When opening a chat, missing workspace metadata means the detail is still loading;
+only an explicit null organization means Personal. Prefer the matching chat detail
+over a lightweight History row for workspace and attachment scope.
 
 ## Elevation and the glass surface
 
@@ -370,7 +408,7 @@ keep their own spacing and should not receive this attribute.
 | --- | --- | --- |
 | `PillButtonUI` | `shared/ui` | Primary action button (`tone`: black/white/blue/danger). |
 | `TextButtonUI` | `shared/ui` | Background-free actions, with optional icons and loading state. Use `textButtonUIClassName` from `TextButtonUI.styles` for links. No background, border, or shadow; hover changes text color. |
-| `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. |
+| `TabPillButtonUI` | `shared/ui` | Segmented filter/tab pills. Pass `active` to get `aria-pressed`. Resting text matches PageHeader actions (`text-gray-500`), with `text-gray-900` on hover or selection. |
 | `GlassIconButtonUI` | `shared/ui` | Circular glass icon button — modal close, panel dismiss. Requires `aria-label`. |
 | `CloseButton` | `shared/ui` | The small white ✕ that dismisses a modal, side panel, confirmation, toast, or `WarningPopup`. `size`: `sm` for side panels, confirmations, and notices; `md` for modals. |
 | `GlassCardUI` | `shared/ui` | Canonical liquid-glass card surface. |
@@ -389,6 +427,66 @@ keep their own spacing and should not receive this attribute.
 
 For a real standalone checkbox use `<input type="checkbox">` with
 `TABLE_CHECKBOX_CLASS` (see `TablePrimitive.tsx`), not `check-square`.
+
+## Reporting failures
+
+Every failure that stops something the user asked for must be shown to them,
+with a concise and accurate message and honest next steps. "Notices: toast or
+WarningPopup" below says what the notice looks like; this section says what
+goes in it and when.
+
+1. **Classify once.** `describeError` from `frontend/src/app/lib/userFacingError.ts`
+   (the shared classifier in `frontend/src/shared/lib/userError.ts` plus the
+   web app's fixed sentences for server-reported codes such as
+   `schema_out_of_date`) turns any thrown value into
+   `{ kind, title, message, retryable, supportable, requestId }`. Pass
+   `action` in the imperative ("save the document") so the title reads
+   "Couldn't save the document". 4xx `detail` from the backend is written for
+   users and is shown; 5xx bodies and stack text never are.
+2. **Show it in the right place.**
+   - A form field the user is editing: inline text next to the field, using
+     the description's `message`.
+   - Anything else (saves, deletes, loads, exports, background refreshes):
+     `notifyError(error, { action, onRetry, dedupeKey })`. `AppToasts` draws
+     it as a `WarningPopup` with "Retry" (only when the failure is retryable
+     and a closure is given) and "Contact support" (only for a failure the
+     user cannot fix: a pre-filled email to `SUPPORT_EMAIL` carrying the
+     request id, code, page and time). A component may call it for a failure
+     on its own screen when it needs those actions; render a `WarningPopup`
+     directly only for a warning with its own content or action.
+   - A batch that failed for some items (a bulk delete, a multi-file move or
+     upload): `notifyPartialFailure(message, { action, onRetry })`, one notice
+     naming what did not happen, with a Retry that re-runs only those items.
+   - A whole screen that cannot render: `EmptyState tone="error"` (wrapped
+     in `TableEmptyState` inside a table) with a "Try again" action. An empty table must never stand in
+     for "this did not load".
+   - A route that threw: `app/error.tsx` and `app/global-error.tsx` offer
+     "Try again" and "Contact support" with the error digest, never the
+     message.
+3. **Revert optimistic state** before notifying, so the screen never shows a
+   change that did not happen, and revert only the item that failed. Use a
+   functional updater (and `restoreOptimisticallyDeletedRows` in
+   `app/lib/optimisticRows.ts` for a removed row) rather than restoring a
+   snapshot of the whole list.
+4. **Retry re-runs the current code.** By the time "Retry" is pressed the
+   handler that failed has usually been re-created. Read it through a ref
+   kept current with `useLatestRef` / `useAssignLatest`
+   (`app/hooks/useLatestRef.ts`), and re-send only what did not land.
+5. **Destructive actions are retried through their own entry point.** Retry
+   after a failed single delete that asked for confirmation re-opens that
+   confirmation; it never deletes from the notice. A delete that never asked
+   (a row action on a single-version document, a review or a project) re-runs
+   the same entry point. A bulk delete's Retry re-runs only the items that
+   failed, which the user has already confirmed.
+6. **Cancellation is not an error.** `notifyError` returns `null` for an
+   `AbortError` and shows nothing.
+7. **Repeats collapse.** Polling and autosave loops pass a `dedupeKey` so a
+   failing loop shows one notice, not one per tick.
+8. **Silence needs a reason.** A catch that intentionally shows nothing
+   (cleanup, a local-storage JSON fallback, a body drain) carries a one-line
+   comment saying why.
+
+Never call `window.alert`.
 
 ## Choosing: existing primitive, shadcn registry, or a one-off
 
@@ -461,6 +559,10 @@ wrappers; `WarningPopup.test.tsx` fails if a popup and an error toast stop
 rendering the same card. The card's dismiss control is the shared
 `CloseButton`.
 
+The title, message and supplementary content share one text column beside
+the icon. Callers should not add their own left padding to supplementary
+content.
+
 Both appear in one column at the top centre of the page. `ToastViewportUI`
 owns that column, and a `WarningPopup` renders into it, so a popup and a
 toast stack instead of covering each other.
@@ -474,11 +576,12 @@ toast stack instead of covering each other.
 | Word add-in | Yes | No (web only) |
 
 In the web app a warning is always a **`WarningPopup`**. A component that
-reports a failure on its own screen (a rejected upload, a failed save from a
-form, a permission refusal) renders one directly. Code with no component of
-its own (the API client, a stream callback, the offline listener) calls
-`notifyError`; `AppToasts` draws what it raises with `WarningPopup`,
-including any Retry and Contact support actions.
+reports a failure on its own screen with custom content or its own action (a
+rejected upload, a permission refusal) renders one directly. Everything else,
+including a component failure that needs Retry or Contact support and any
+code with no component of its own (the API client, a stream callback, the
+offline listener), calls `notifyError`; `AppToasts` draws what it raises with
+`WarningPopup`, including those actions. See "Reporting failures" above.
 
 No two actions on one notice share a look. The last action in the row is the
 primary one and is a black pill (`WarningPopup`'s `primaryAction` always

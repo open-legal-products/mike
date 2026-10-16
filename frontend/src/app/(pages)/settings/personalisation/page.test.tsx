@@ -125,6 +125,22 @@ describe("PersonalisationPage", () => {
     );
   });
 
+  it("reports a failed save only through the notice", async () => {
+    // updatePersonalisation raises the notice (with Retry) itself; the form
+    // must not add a second, inline report of the same failure.
+    updatePersonalisation.mockResolvedValue(false);
+    const user = userEvent.setup();
+    render(<PersonalisationPage />);
+
+    await user.click(screen.getByRole("button", { name: "Title" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Partner" }));
+    await waitFor(() => expect(updatePersonalisation).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
   it("does not drop an earlier pending edit when an Other box turns invalid", async () => {
     const user = userEvent.setup();
     const { unmount } = render(<PersonalisationPage />);

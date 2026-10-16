@@ -118,3 +118,38 @@ describe("ReviewsListTable details gate", () => {
         );
     });
 });
+
+describe("ReviewsListTable creator column", () => {
+    it("shows each creator's avatar only when a project list asks for it", () => {
+        const handlers = { onOpenDetails: vi.fn(), onOwnerOnlyAction: vi.fn() };
+        const row = { ...review("viewer"), owner_display_name: "Ada Lovelace" };
+        const { unmount } = renderTable(row, handlers, { showCreator: true });
+        expect(screen.getByText("Creator")).toBeVisible();
+        expect(screen.getByRole("img", { name: "Ada Lovelace" })).toHaveTextContent("AL");
+        unmount();
+        renderTable(row, handlers);
+        expect(screen.queryByText("Creator")).toBeNull();
+        expect(screen.queryByRole("img", { name: "Ada Lovelace" })).toBeNull();
+    });
+});
+
+describe("ReviewsListTable creator filter", () => {
+    it("hands the chosen creator to the host", async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        renderTable(review("viewer"), { onOpenDetails: vi.fn(), onOwnerOnlyAction: vi.fn() }, {
+            showCreator: true,
+            creatorFilter: {
+                value: null,
+                onChange,
+                loadPeople: async () => ({
+                    users: [{ user_id: "u2", display_name: "Ada Lovelace", email: null, profile_photo: null }],
+                    nextOffset: null,
+                }),
+            },
+        });
+        await user.click(screen.getByRole("button", { name: "Filter by creator" }));
+        await user.click(await screen.findByRole("button", { name: /Ada Lovelace/ }));
+        expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ user_id: "u2" }));
+    });
+});

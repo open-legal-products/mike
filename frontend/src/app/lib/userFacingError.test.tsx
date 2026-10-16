@@ -22,6 +22,7 @@ import {
     knownErrorCodeMessage,
     notifyError,
     notifyInfo,
+    notifyPartialFailure,
     notifySuccess,
     supportMailtoFor,
     userFacingApiError,
@@ -489,5 +490,52 @@ describe("failed toast retries", () => {
         await act(async () => { screen.getByRole("button", { name: "Retry" }).click(); });
         expect(onRetry).toHaveBeenCalledTimes(2);
         expect(screen.queryByRole("alert")).toBeNull();
+    });
+});
+
+describe("notifyPartialFailure", () => {
+    beforeEach(() => {
+        clearToasts();
+        reported.reportError.mockClear();
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(() => {
+        clearToasts();
+        vi.restoreAllMocks();
+    });
+
+    it("names what did not happen and retries only through the given closure", () => {
+        render(<ToastViewportUI />);
+        const onRetry = vi.fn();
+        let described: ReturnType<typeof notifyPartialFailure> = null;
+        act(() => {
+            described = notifyPartialFailure(
+                "2 documents could not be moved: a.pdf, b.pdf.",
+                { action: "move those documents", onRetry },
+            );
+        });
+
+        const alert = screen.getByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't move those documents");
+        expect(alert).toHaveTextContent("2 documents could not be moved: a.pdf, b.pdf.");
+        act(() => {
+            screen.getByRole("button", { name: "Retry" }).click();
+        });
+        expect(onRetry).toHaveBeenCalledOnce();
+        // The items' own requests were already reported by the API client.
+        expect(described).toMatchObject({ kind: "conflict", retryable: true, supportable: false });
+        expect(reported.reportError).not.toHaveBeenCalled();
+        expect(screen.queryByRole("link", { name: "Contact support" })).toBeNull();
+    });
+
+    it("offers no Retry when there is nothing to re-run", () => {
+        render(<ToastViewportUI />);
+        let described: ReturnType<typeof notifyPartialFailure> = null;
+        act(() => {
+            described = notifyPartialFailure("1 folder could not be deleted.");
+        });
+        expect(described).toMatchObject({ retryable: false });
+        expect(screen.getByRole("alert")).toHaveTextContent("1 folder could not be deleted.");
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     });
 });

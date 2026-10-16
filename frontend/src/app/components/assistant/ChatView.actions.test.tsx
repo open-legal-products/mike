@@ -21,11 +21,12 @@ import {
 } from "@/app/lib/mikeApi";
 import { PageChromeContext } from "@/app/contexts/PageChromeContext";
 
-const { push, renameChat, deleteChat, setCurrentChatId, setNewChatMessages } =
+const { push, renameChat, deleteChat, leaveChat, setCurrentChatId, setNewChatMessages } =
     vi.hoisted(() => ({
         push: vi.fn(),
         renameChat: vi.fn(),
         deleteChat: vi.fn(),
+        leaveChat: vi.fn(),
         setCurrentChatId: vi.fn(),
         setNewChatMessages: vi.fn(),
     }));
@@ -63,6 +64,7 @@ vi.mock("@/app/contexts/ChatHistoryContext", () => ({
         ],
         renameChat,
         deleteChat,
+        leaveChat,
         setCurrentChatId,
         setNewChatMessages,
     }),
@@ -387,6 +389,10 @@ describe("ChatView streaming scroll controls", () => {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    activeChat.access_role = "owner";
+    activeChat.project_id = null;
+    activeChat.can_leave = false;
+    leaveChat.mockResolvedValue(undefined);
     vi.mocked(getDocument).mockResolvedValue(spreadsheet);
     spreadsheet.id = "excel-1";
     spreadsheet.filename = "Budget.xlsx";
@@ -445,6 +451,29 @@ describe("ChatView responses waiting on the user", () => {
 });
 
 describe("ChatView header actions", () => {
+    it.each(["viewer", "editor"] as const)("uses the detail role and lets a directly shared %s leave", async (role) => {
+        // The history fixture still says owner; refreshed detail is authoritative.
+        activeChat.access_role = role;
+        activeChat.can_leave = true;
+        renderView();
+        openActions();
+        for (const name of ["Share", "Rename", "Delete"]) expect(screen.queryByRole("menuitem", { name })).toBeNull();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Leave" }));
+        fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+        await waitFor(() => expect(leaveChat).toHaveBeenCalledWith("chat-1"));
+        await waitFor(() => expect(push).toHaveBeenCalledWith("/assistant"));
+        expect(deleteChat).not.toHaveBeenCalled();
+    });
+
+    it("offers no management or Leave for a project editor", () => {
+        activeChat.access_role = "editor";
+        activeChat.project_id = "project-1";
+        activeChat.can_leave = true;
+        renderView();
+        openActions();
+        for (const name of ["Share", "Rename", "Delete", "Leave"]) expect(screen.queryByRole("menuitem", { name })).toBeNull();
+    });
+
     it("overlays PageHeader pills and starts a new chat", () => {
         const cancel = vi.fn();
         const onNewChat = vi.fn();

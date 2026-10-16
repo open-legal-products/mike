@@ -1,8 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MikeApiError } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { ApiKeyField } from "./ApiKeyField";
+
+afterEach(clearToasts);
 
 vi.mock("@/app/components/popups/MfaVerificationPopup", () => ({
   MfaVerificationPopup: () => null,
@@ -19,12 +22,15 @@ function renderField({
   onRemove?: () => Promise<boolean>;
 } = {}) {
   render(
+    <>
+    <ToastViewportUI />
     <ApiKeyField
       label="Anthropic (Claude) API Key"
       hasSavedKey={hasSavedKey}
       onSave={onSave}
       onRemove={onRemove}
-    />,
+    />
+    </>,
   );
   const input = screen.getByLabelText(
     "Anthropic (Claude) API Key",
@@ -75,7 +81,7 @@ describe("ApiKeyField", () => {
     expect(input.readOnly).toBe(true);
   });
 
-  it("shows the warning popup when saving returns false", async () => {
+  it("shows a recovery toast when saving returns false", async () => {
     const user = userEvent.setup();
     renderField({ onSave: vi.fn().mockResolvedValue(false) });
 
@@ -85,10 +91,10 @@ describe("ApiKeyField", () => {
     );
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText("API key update failed")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Failed to save Anthropic (Claude) API Key. Please try again.",
+        "Couldn't save your Anthropic (Claude) API Key",
       ),
     ).toBeInTheDocument();
   });
@@ -113,7 +119,7 @@ describe("ApiKeyField", () => {
     expect(screen.queryByText(/Please try again/)).toBeNull();
   });
 
-  it("shows the warning popup when removing rejects", async () => {
+  it("shows a recovery toast when removing rejects", async () => {
     const user = userEvent.setup();
     renderField({
       hasSavedKey: true,
@@ -122,10 +128,10 @@ describe("ApiKeyField", () => {
 
     await user.click(screen.getByRole("button", { name: "Remove" }));
 
-    expect(await screen.findByText("API key update failed")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Failed to remove Anthropic (Claude) API Key. Please try again.",
+        "Couldn't remove your Anthropic (Claude) API Key",
       ),
     ).toBeInTheDocument();
   });

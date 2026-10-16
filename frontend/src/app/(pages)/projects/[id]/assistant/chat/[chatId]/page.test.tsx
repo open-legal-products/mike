@@ -16,6 +16,7 @@ import type {
 } from "@/app/components/shared/types";
 import ProjectAssistantChatPage from "./page";
 import { getProject } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import type { DocxCloseGuard } from "@/app/components/shared/views/DocxRenderer.types";
 
 const state = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ const state = vi.hoisted(() => ({
     deleteDocument: vi.fn(),
     discardDraft: vi.fn(),
     uploadProjectDocuments: vi.fn(),
+    moveDocumentToFolder: vi.fn(),
     loadChats: vi.fn().mockResolvedValue(undefined),
     setCurrentChatId: vi.fn(),
     setNewChatMessages: vi.fn(),
@@ -67,6 +69,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     getDocument: state.getDocument,
     deleteDocument: state.deleteDocument,
     uploadProjectDocuments: state.uploadProjectDocuments,
+    moveDocumentToFolder: state.moveDocumentToFolder,
     listProjectChats: vi
         .fn()
         .mockImplementation(async () => state.projectChats),
@@ -108,7 +111,14 @@ vi.mock("@/app/components/projects/ProjectExplorer", () => ({
     }: {
         documents: Document[];
         onDocClick: (doc: Document) => void;
-    }) => <button onClick={() => onDocClick(documents[0])}>Open draft</button>,
+    }) => (
+        <button
+            data-folder={documents[0]?.folder_id ?? "root"}
+            onClick={() => onDocClick(documents[0])}
+        >
+            Open draft
+        </button>
+    ),
 }));
 vi.mock("@/app/components/assistant/ChatInput", () => ({
     ChatInput: ({
@@ -255,6 +265,38 @@ async function renderWorkspace(canSend = true, strict = false) {
         else expect(button).toBeDisabled();
     });
 }
+
+describe("project side chat menu", () => {
+    it("closes the side chat from the main chat and offers opening it again", async () => {
+        await renderWorkspace();
+        const primary = screen
+            .getByRole("button", { name: "Send question" })
+            .closest<HTMLElement>('[data-chat-pane="primary"]')!;
+        const openActions = () => {
+            const trigger = within(primary).getByRole("button", { name: "Actions" });
+            fireEvent.pointerDown(
+                trigger,
+                new MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+            );
+            fireEvent.click(trigger);
+        };
+
+        openActions();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Open side chat" }));
+        expect(await screen.findAllByRole("button", { name: "Send question" })).toHaveLength(2);
+        expect(window.location.search).toBe("?side=new");
+
+        openActions();
+        expect(screen.queryByRole("menuitem", { name: "Open side chat" })).toBeNull();
+        fireEvent.click(await screen.findByRole("menuitem", { name: "Close side chat" }));
+        expect(screen.getAllByRole("button", { name: "Send question" })).toHaveLength(1);
+        expect(window.location.search).toBe("");
+        expect(window.location.pathname).toBe("/projects/p1/assistant/chat");
+
+        openActions();
+        expect(await screen.findByRole("menuitem", { name: "Open side chat" })).toBeInTheDocument();
+    });
+});
 
 describe("project document deletion", () => {
     async function openMenu() {
@@ -1313,5 +1355,50 @@ describe("leaving a project chat mid-stream", () => {
         expect(body.state.cancelled).toBe(false);
         expect(screen.queryByText(/First answer/)).not.toBeInTheDocument();
         expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();
+    });
+});
+
+describe("project explorer root drop", () => {
+    // Dropping a document on the panel outside the tree moved it to the root
+    // optimistically; a failed request left it shown at the root with no
+    // word to the user.
+    it("puts a document back and says so when the move to the root fails", async () => {
+        clearToasts();
+        vi.mocked(getProject).mockResolvedValueOnce({
+            id: "p1",
+            name: "Matter",
+            access_role: "owner",
+            documents: [{ id: "doc1", filename: "Draft.docx", folder_id: "f1" }],
+            folders: [{ id: "f1", name: "Drafts", parent_folder_id: null }],
+        } as unknown as Awaited<ReturnType<typeof getProject>>);
+        state.moveDocumentToFolder.mockRejectedValue(
+            new TypeError("Failed to fetch"),
+        );
+        await renderWorkspace();
+        render(<ToastViewportUI />);
+        const explorer = screen.getByRole("button", { name: "Open draft" });
+        expect(explorer).toHaveAttribute("data-folder", "f1");
+
+        await act(async () => {
+            fireEvent.drop(explorer.parentElement!, {
+                dataTransfer: {
+                    getData: (type: string) =>
+                        type === "application/mike-doc" ? "doc1" : "",
+                    files: [],
+                    types: ["application/mike-doc"],
+                },
+            });
+        });
+
+        expect(state.moveDocumentToFolder).toHaveBeenCalledWith(
+            "p1",
+            "doc1",
+            null,
+        );
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't move this document",
+        );
+        expect(explorer).toHaveAttribute("data-folder", "f1");
+        clearToasts();
     });
 });

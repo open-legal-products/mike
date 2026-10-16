@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:stack": "bash scripts/test-stack.sh",
     "test:coverage": "vitest run --coverage",
-    "test:mutation": "stryker run"
+    "test:mutation": "stryker run",
+    "backfill:document-text": "node dist/jobs/backfillDocumentText.js"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^5.0.113",

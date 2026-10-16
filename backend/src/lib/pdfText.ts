@@ -292,6 +292,17 @@ async function readPdfPages(buf: ArrayBuffer): Promise<PdfPageText[] | null> {
   }
 }
 
+/** Strict extraction for persisted search: unreadable is not a successful blank. */
+export async function extractPdfTextForIndex(buf: ArrayBuffer): Promise<{ text: string; textlessPageCount: number }> {
+  const pages = await readPdfPages(buf);
+  if (!pages) throw new Error("document_text_pdf_unreadable");
+  const textlessPageCount = pages.filter((page) => page.empty).length;
+  return {
+    text: textlessPageCount === pages.length ? "" : pages.map((page) => page.text).join("\n\n"),
+    textlessPageCount,
+  };
+}
+
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   const pages = await readPdfPages(buf);
   return pages ? pages.map((page) => page.text).join("\n\n") : "";

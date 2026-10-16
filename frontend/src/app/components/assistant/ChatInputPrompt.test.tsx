@@ -86,6 +86,7 @@ describe("chat input prompts", () => {
             },
             expect.stringContaining("Acme"),
             [],
+            expect.any(Function),
         );
         expect(screen.getByText("Regular composer")).toBeVisible();
     });
@@ -200,6 +201,18 @@ it.each(["null", "reject"])("retains entered inputs after a %s submission failur
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(screen.getByText("Regular composer")).toBeVisible());
     expect(onSubmit).toHaveBeenCalledTimes(2);
+});
+
+it("closes once the answer is accepted, without waiting for it to finish streaming", async () => {
+    const onSubmit = vi.fn((_response, _content, _files, onAccepted: () => void) => {
+        onAccepted();
+        return new Promise<string | null>(() => {});
+    });
+    render(input({ onSubmit }));
+    fireEvent.change(screen.getByRole("textbox", { name: "What is the client name?" }), { target: { value: "Acme" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByText("Regular composer")).toBeVisible());
+    expect(screen.queryByText("Sending inputs…")).toBeNull();
 });
 
 it("does not restore a failed prompt into a different chat", async () => {

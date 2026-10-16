@@ -7,6 +7,7 @@
 // log and hands the response to app.ts's boundary, which answers the same
 // opaque internal_error body every other router answers with.
 
+import { resolveWorkspaceFilter, sendWorkspaceFailure } from "../../lib/workspace";
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
@@ -25,10 +26,14 @@ quickActionsRouter.get(
   "/",
   requireAuth,
   asyncRoute(async (req, res) => {
-    const result = await listQuickActions(createServerSupabase(), {
+    const db = createServerSupabase();
+    const workspace = await resolveWorkspaceFilter(db, res.locals.userId as string, req.query.workspace);
+    if (!workspace.ok) return void sendWorkspaceFailure(res, workspace);
+    const result = await listQuickActions(db, {
       userId: res.locals.userId as string,
       userEmail: res.locals.userEmail as string | undefined,
       surface: req.query.surface,
+      workspace: workspace.workspace,
     });
     if (!result.ok) return void sendServiceFailure(res, result);
     res.json(result.data);

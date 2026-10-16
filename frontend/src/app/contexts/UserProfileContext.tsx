@@ -6,6 +6,7 @@ import {
     useEffect,
     useLayoutEffect,
     useMemo,
+    useRef,
     useState,
     ReactNode,
     useCallback,
@@ -39,6 +40,8 @@ import {
 import { apiKeyStateFromStatus } from "@/app/lib/apiKeyState";
 import type { Message } from "@/app/components/shared/types";
 import { applyDarkMode } from "@/app/lib/theme";
+import { notifyError } from "@/app/lib/userFacingError";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import {
     ROUTER_PROFILE_FIELDS,
     routerProfileLists,
@@ -194,6 +197,33 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     const [apiKeysDegraded, setApiKeysDegraded] = useState(false);
     const userId = user?.id ?? null;
 
+    // Every mutator below keeps its `boolean` contract so callers need no
+    // churn, but a failure is never silent any more: the context classifies
+    // the error once and raises the notice that carries the sentence, an
+    // honest "Retry" and the support link. That notice is the only report:
+    // callers show no inline status for the same failure.
+    //
+    // The `if (!user) return false` guards stay silent on purpose: there is
+    // no failed request to report, only a call made before there is a session.
+    //
+    // "Retry" re-enters the mutator through this ref rather than through the
+    // closure that raised the notice, so it always re-runs the latest one
+    // (the mutators are re-created whenever `user` changes).
+    const retryRef = useRef<UserProfileContextType | null>(null);
+
+    const reportFailure = useCallback(
+        (error: unknown, action: string, retry: () => void) => {
+            notifyError(error, {
+                action,
+                // One notice per setting, however many times an autosave loop
+                // retries it.
+                dedupeKey: `profile:${action}`,
+                onRetry: retry,
+            });
+        },
+        [],
+    );
+
     const loadProfile = useCallback(async () => {
         try {
             let profileData: ApiUserProfile;
@@ -213,6 +243,16 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 error,
             );
             setApiKeysDegraded(true);
+            // The fallback profile below looks like a real, empty account, so
+            // the load has to say that it failed rather than let the user read
+            // placeholders as answers.
+            notifyError(error, {
+                action: "load your profile",
+                dedupeKey: "profile-load",
+                onRetry: () => {
+                    void retryRef.current?.reloadProfile();
+                },
+            });
             // Calculate a default future reset date for fallback
             const futureResetDate = new Date();
             futureResetDate.setDate(futureResetDate.getDate() + 30);
@@ -300,11 +340,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     prev ? { ...prev, ...toProfile(updated) } : null,
                 );
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(error, "save your name", () => {
+                    void retryRef.current?.updateDisplayName(displayName);
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const updateOrganisation = useCallback(
@@ -317,11 +360,16 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 );
                 return true;
             } catch (error) {
+                // An MFA challenge is a step in the flow, not a failure: the
+                // caller opens the verification popup and re-runs the save.
                 if (isMfaRequiredError(error)) throw error;
+                reportFailure(error, "save your organisation", () => {
+                    void retryRef.current?.updateOrganisation(organisation);
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const completeOnboarding = useCallback(
@@ -331,11 +379,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 const updated = await completeUserOnboarding(details);
                 setProfile(toProfile(updated));
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(error, "save your practice details", () => {
+                    void retryRef.current?.completeOnboarding(details);
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const updatePersonalisation = useCallback(
@@ -345,11 +396,18 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 const updated = await updateUserProfile(details);
                 setProfile(toProfile(updated));
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(
+                    error,
+                    "save your personalisation settings",
+                    () => {
+                        void retryRef.current?.updatePersonalisation(details);
+                    },
+                );
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const syncPasswordSet = useCallback(async (): Promise<boolean> => {
@@ -358,10 +416,13 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             const updated = await syncUserPasswordSet();
             setProfile(toProfile(updated));
             return true;
-        } catch {
+        } catch (error) {
+            reportFailure(error, "refresh your password status", () => {
+                void retryRef.current?.syncPasswordSet();
+            });
             return false;
         }
-    }, [user]);
+    }, [reportFailure, user]);
 
     const updateModelPreference = useCallback(
         async (
@@ -377,11 +438,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     prev ? { ...prev, ...toProfile(updated) } : null,
                 );
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(error, "save your model preference", () => {
+                    void retryRef.current?.updateModelPreference(field, value);
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const persistChatModelSelection = useCallback(
@@ -415,11 +479,17 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                         : current,
                 );
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(error, "save your model selection", () => {
+                    void retryRef.current?.persistChatModelSelection(
+                        model,
+                        chatId,
+                    );
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const persistChatReasoningSelection = useCallback(
@@ -459,11 +529,17 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                         : current,
                 );
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(error, "save your reasoning level", () => {
+                    void retryRef.current?.persistChatReasoningSelection(
+                        reasoningLevel,
+                        chatId,
+                    );
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const updateMfaOnLogin = useCallback(
@@ -476,11 +552,19 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 );
                 return true;
             } catch (error) {
+                // An MFA challenge is a step in the flow, not a failure.
                 if (isMfaRequiredError(error)) throw error;
+                reportFailure(
+                    error,
+                    "update your login verification setting",
+                    () => {
+                        void retryRef.current?.updateMfaOnLogin(enabled);
+                    },
+                );
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const updateLegalResearchUs = useCallback(
@@ -494,11 +578,18 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     prev ? { ...prev, ...toProfile(updated) } : null,
                 );
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(
+                    error,
+                    "update your case law research setting",
+                    () => {
+                        void retryRef.current?.updateLegalResearchUs(enabled);
+                    },
+                );
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const updateQuickActionsVisible = useCallback(
@@ -512,11 +603,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     prev ? { ...prev, ...toProfile(updated) } : null,
                 );
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(error, "update your quick actions setting", () => {
+                    void retryRef.current?.updateQuickActionsVisible(visible);
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const updateRouterModels = useCallback(
@@ -530,11 +624,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                     prev ? { ...prev, ...toProfile(updated) } : null,
                 );
                 return true;
-            } catch {
+            } catch (error) {
+                reportFailure(error, `save your ${router} models`, () => {
+                    void retryRef.current?.updateRouterModels(router, models);
+                });
                 return false;
             }
         },
-        [user],
+        [reportFailure, user],
     );
 
     const updateDarkMode = useCallback(
@@ -604,6 +701,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 void refreshConfiguredModels();
                 return true;
             } catch (error) {
+                // An MFA challenge is a step in the flow, not a failure.
                 if (isMfaRequiredError(error)) throw error;
                 // A 400 is the server rejecting the value (an unusable base
                 // URL, a malformed key file); the caller shows its reason
@@ -611,6 +709,10 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
                 if (error instanceof MikeApiError && error.status === 400) {
                     throw error;
                 }
+                // Not reported here: every caller is an ApiKeyField, which
+                // raises the notice itself so its Retry can check that the
+                // field still holds the key that failed. A Retry from here
+                // would resend a key the user may already have corrected.
                 return false;
             }
         },
@@ -714,6 +816,9 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             incrementMessageCredits,
         ],
     );
+
+    // Keep the "Retry" entry point pointing at the current mutators.
+    useAssignLatest(retryRef, value);
 
     return (
         <UserProfileContext.Provider value={value}>

@@ -48,6 +48,16 @@ import {
 import { SubfolderSvgIcon } from "@/app/components/shared/FolderSvgIcon";
 import { DropdownAtPoint } from "@/shared/ui/dropdown";
 import { useAuth } from "@/app/contexts/AuthContext";
+import { useOptionalUserProfile } from "@/app/contexts/UserProfileContext";
+import {
+    CreatorLabel,
+    CreatorLabelSkeleton,
+} from "@/app/components/shared/CreatorLabel";
+import {
+    PersonFilter,
+    distinctPeople,
+    localPeople,
+} from "@/app/components/shared/PersonFilter";
 import {
     creatorScopedAllowed,
     type Capability,
@@ -56,7 +66,12 @@ import type { OwnerGate } from "@/app/components/projects/ProjectWorkspace";
 import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { UploadOverlay } from "@/app/components/assistant/UploadOverlay";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import {
+    UserVisibleError,
+    notifyError,
+    notifyPartialFailure,
+} from "@/app/lib/userFacingError";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
 import { useRemountPersistentState } from "@/app/hooks/useRemountPersistentState";
 import {
@@ -264,6 +279,8 @@ interface DocTableProps {
      * from the catalog's own URLs, and the only action is adding copies.
      */
     catalog?: DocTableCatalog;
+    /** Adds a Creator column; the project directory shows who added each row. */
+    showCreator?: boolean;
 }
 
 export interface DocTableCatalog {
@@ -300,7 +317,7 @@ function documentVersionNumber(doc: Document): number | null {
     return doc.active_version_number ?? doc.latest_version_number ?? null;
 }
 
-function ProjectTableLoadingHeader() {
+function ProjectTableLoadingHeader({ showCreator }: { showCreator: boolean }) {
     return (
         <TableHeaderRow className="pr-3">
             <TableStickyCell
@@ -319,6 +336,11 @@ function ProjectTableLoadingHeader() {
             <TableHeaderCell className="flex w-20 items-center gap-1">
                 <span>Version</span>
             </TableHeaderCell>
+            {showCreator && (
+                <TableHeaderCell className="flex w-32 items-center gap-1">
+                    <span>Creator</span>
+                </TableHeaderCell>
+            )}
             <TableHeaderCell className="flex w-32 items-center gap-1">
                 <span>Created</span>
             </TableHeaderCell>
@@ -330,7 +352,7 @@ function ProjectTableLoadingHeader() {
     );
 }
 
-function ProjectTableLoading() {
+function ProjectTableLoading({ showCreator }: { showCreator: boolean }) {
     return (
         <div className="flex-1 flex flex-col min-h-0">
             {[1, 2, 3, 4, 5].map((i) => (
@@ -354,6 +376,11 @@ function ProjectTableLoading() {
                     <div className="w-20 shrink-0">
                         <div className="h-3 w-5 rounded bg-gray-100 animate-pulse" />
                     </div>
+                    {showCreator && (
+                        <div className="w-32 shrink-0">
+                            <CreatorLabelSkeleton className="w-16" />
+                        </div>
+                    )}
                     <div className="w-32 shrink-0">
                         <div className="h-3 w-16 rounded bg-gray-100 animate-pulse" />
                     </div>
@@ -420,9 +447,11 @@ export function DocTable({
     autoLoadOnScroll = false,
     defaultSort = null,
     catalog,
+    showCreator = false,
 }: DocTableProps) {
     const [addDocsOpen, setAddDocsOpen] = useState(false);
     const { user } = useAuth();
+    const ownProfile = useOptionalUserProfile()?.profile;
     const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
     const [viewingDocVersion, setViewingDocVersion] = useState<{
         id: string;
@@ -436,6 +465,7 @@ export function DocTable({
     const [selectingAllDocuments, setSelectingAllDocuments] = useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
     const [typeFilter, setTypeFilter] = useState<string | null>(null);
+    const [creatorFilter, setCreatorFilter] = useState<string | null>(null);
     const [sort, setSort] = useState<DocumentSort | null>(null);
     const serverQueryActive = serverDocuments !== null;
     const documentUploadInputRef = useRef<HTMLInputElement>(null);
@@ -447,6 +477,25 @@ export function DocTable({
     const renderAddDocumentsModalRef = useRef(renderAddDocumentsModal);
     const setOwnerOnlyAction = useMemo(() => onOwnerOnlyAction ?? (() => {}), [onOwnerOnlyAction]);
     const allowed = canDo;
+
+    /** The Creator cell; the caller's own rows read "Me" with their current photo. */
+    function renderCreatorCell(row: {
+        user_id?: string | null;
+        owner_display_name?: string | null;
+        owner_profile_photo?: string | null;
+    }) {
+        if (!showCreator) return null;
+        const mine = !!user?.id && row.user_id === user.id;
+        return (
+            <div className="w-32 shrink-0 text-xs text-gray-500">
+                <CreatorLabel
+                    label={mine ? "Me" : row.owner_display_name?.trim() || "Shared"}
+                    photo={mine ? ownProfile?.profilePhoto ?? row.owner_profile_photo : row.owner_profile_photo}
+                    name={mine ? ownProfile?.displayName ?? row.owner_display_name : row.owner_display_name}
+                />
+            </div>
+        );
+    }
     /** Guard: false + popup when the caller's role lacks the capability. */
     const requireCapability = useCallback(
         (
@@ -532,7 +581,12 @@ export function DocTable({
                 return next;
             });
         } catch (e) {
-            console.error("listDocumentVersions failed", e);
+            notifyError(e, {
+                action: "load the version history",
+                onRetry: () => {
+                    void loadDocumentVersions(docId, { force: true });
+                },
+            });
         } finally {
             setLoadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -567,7 +621,13 @@ export function DocTable({
             a.download = resolved.filename || filename;
             a.click();
         } catch (e) {
-            console.error("downloadDocVersion failed", e);
+            notifyError(e, {
+                action: "download this version",
+                supportNote: `Document ${docId}, version ${versionId}`,
+                onRetry: () => {
+                    void downloadDocVersion(docId, versionId, filename);
+                },
+            });
         }
     }
 
@@ -647,10 +707,34 @@ export function DocTable({
             return;
         try {
             await uploadDocumentVersion(doc.id, file, filename);
-            await refreshDocumentVersionState(doc.id);
         } catch (e) {
-            console.error("uploadDocumentVersion failed", e);
-            setDocumentUploadWarning("Version upload failed. Please try again.");
+            notifyError(e, {
+                action: "upload the new version",
+                supportNote: `Document ${doc.filename}`,
+                onRetry: () => {
+                    void submitNewVersion(doc, file, filename);
+                },
+            });
+            return;
+        }
+        await refreshVersionsAfterChange(doc.id);
+    }
+
+    /**
+     * Re-read the table and the version list after a version has landed.
+     * Kept apart from the upload on purpose: when only this re-read fails,
+     * its Retry must re-read, not re-upload. A Retry that re-ran the whole
+     * upload stored the same file as a second version.
+     */
+    async function refreshVersionsAfterChange(docId: string): Promise<void> {
+        try {
+            await refreshDocumentVersionState(docId);
+        } catch (e) {
+            notifyError(e, {
+                action: "refresh the version history",
+                dedupeKey: `doc-versions-refresh:${docId}`,
+                onRetry: () => refreshVersionsAfterChange(docId),
+            });
         }
     }
 
@@ -716,7 +800,12 @@ export function DocTable({
                 return next;
             });
         } catch (e) {
-            console.error("renameDocumentVersion failed", e);
+            notifyError(e, {
+                action: "rename the version",
+                onRetry: () => {
+                    void handleRenameVersion(docId, versionId, filename);
+                },
+            });
         }
     }
 
@@ -740,8 +829,12 @@ export function DocTable({
                     : null,
             );
         } catch (e) {
-            console.error("deleteDocumentVersion failed", e);
-            setDocumentRenameWarning("Could not delete this version.");
+            notifyError(e, {
+                action: "delete this version",
+                onRetry: () => {
+                    void handleDeleteVersion(docId, versionId);
+                },
+            });
         }
     }
 
@@ -791,7 +884,6 @@ export function DocTable({
     const [deletingDocIds, setDeletingDocIds] = useState<Set<string>>(() => new Set());
     const [documentUploadWarning, setDocumentUploadWarning] = useState<string | null>(null);
     const [documentRenameWarning, setDocumentRenameWarning] = useState<string | null>(null);
-    const [collectionActionWarning, setCollectionActionWarning] = useState<string | null>(null);
     const [pendingVersionDrop, setPendingVersionDrop] = useState<{
         targetDoc: Document;
         sourceDoc: Document;
@@ -835,6 +927,7 @@ export function DocTable({
         setContextMenu(null);
         selectionAnchorKeyRef.current = null;
         setTypeFilter(null);
+        setCreatorFilter(null);
         setSort(null);
     }, [scopeKey]);
 
@@ -973,7 +1066,11 @@ export function DocTable({
                         );
                     })
                     .catch(() => {
-                        // Transient fetch failure — keep polling
+                        // Deliberately silent: this 3s status poll retries by
+                        // itself on the next tick and the user asked for
+                        // nothing here, so a notice would report a failure that
+                        // has already healed. A conversion that really fails
+                        // arrives as an "error" status on the row.
                     });
             }
         }, 3000);
@@ -1001,7 +1098,12 @@ export function DocTable({
         try {
             await onExpandFolder(folderId);
         } catch (e) {
-            console.error("expand folder failed", e);
+            notifyError(e, {
+                action: "open this folder",
+                onRetry: () => {
+                    void expandFolderChildren(folderId);
+                },
+            });
         } finally {
             setLoadingChildFolderIds((prev) => {
                 const next = new Set(prev);
@@ -1205,7 +1307,13 @@ export function DocTable({
                 ),
             );
             setPendingDeleteFolderStatus("idle");
-            setCollectionActionWarning("Folder could not be deleted. Please try again.");
+            // The confirm dialog stays open on failure, so the button itself
+            // is the retry; a Retry action here would race it.
+            notifyError(err, {
+                action: "delete the folder",
+                fallback: "This folder could not be deleted. Please try again.",
+                supportNote: `Folder ${pending.folder.name}`,
+            });
         }
     }
 
@@ -1313,11 +1421,15 @@ export function DocTable({
                         : document,
                 ),
             );
-        } catch {
-            setCollectionActionWarning(
-                "The document could not be removed from its folder. Please try again.",
-            );
+        } catch (error) {
+            // The row already jumped out of its folder optimistically, so a
+            // silent failure leaves it looking moved. Re-read the collection
+            // so the tree matches the server, then say what happened.
             await operations.refreshCollection().catch(() => undefined);
+            notifyError(error, {
+                action: "remove the document from its folder",
+                onRetry: () => void handleRemoveDocFromFolder(docId),
+            });
         }
     }
 
@@ -1360,18 +1472,25 @@ export function DocTable({
             const updated = await operations.renameDocument(docId, trimmed);
             setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, ...updated } : d)));
         } catch (e) {
-            console.error("renameDocument failed", e);
             setDocuments((prev) => (previous ? prev.map((d) => (d.id === docId ? previous : d)) : prev));
             // The backend refuses to rename a document that has no file yet
             // (nothing to carry the name); say so instead of snapping back
             // silently. Anything else gets the generic fallback.
-            setCollectionActionWarning(
+            notifyError(
                 e instanceof MikeApiError && e.status === 404
-                    ? "This document has no file yet, so it can't be renamed."
-                    : userFacingApiError(
-                          e,
-                          "This document could not be renamed. Please try again.",
-                      ),
+                    ? new UserVisibleError(
+                          "This document has no file yet, so it can't be renamed.",
+                          { kind: "not_found", cause: e },
+                      )
+                    : e,
+                // No Retry: the row has snapped back to its old name and the
+                // rename input is closed, so re-running this would resubmit a
+                // value the user can no longer see.
+                {
+                    action: "rename the document",
+                    fallback:
+                        "This document could not be renamed. Please try again.",
+                },
             );
         }
     }
@@ -1417,13 +1536,16 @@ export function DocTable({
             // instead of letting the rethrow become an unhandled rejection and
             // the row reappear with no explanation.
             void handleRemoveDoc(doc.id).catch((error) => {
-                console.error("delete document failed", error);
-                setCollectionActionWarning(
-                    userFacingApiError(
-                        error,
+                notifyError(error, {
+                    action: "delete the document",
+                    fallback:
                         "This file could not be deleted. Please try again.",
-                    ),
-                );
+                    supportNote: `Document ${doc.filename}`,
+                    // Through the same entry point, so a failed retry is
+                    // reported again and a document that has gained versions
+                    // since goes through its confirmation.
+                    onRetry: () => requestRemoveDoc(doc),
+                });
             });
             return;
         }
@@ -1443,8 +1565,13 @@ export function DocTable({
                 setPendingDeleteStatus("idle");
             }, 650);
         } catch (err) {
-            console.error("delete document failed", err);
             setPendingDeleteStatus("idle");
+            // The confirm dialog stays open, so its own button is the retry.
+            notifyError(err, {
+                action: "delete the document",
+                fallback: "This file could not be deleted. Please try again.",
+                supportNote: `Document ${pending.filename}`,
+            });
         }
     }
 
@@ -1567,8 +1694,12 @@ export function DocTable({
         if (
             supportedEntries.length > MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD
         ) {
-            setCollectionActionWarning(
-                `You can upload up to ${MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD} supported documents at a time. Nothing was uploaded.`,
+            notifyError(
+                new UserVisibleError(
+                    `You can upload up to ${MAX_DOCUMENTS_PER_DIRECTORY_UPLOAD} supported documents at a time. Nothing was uploaded.`,
+                    { kind: "validation" },
+                ),
+                { action: "upload these files" },
             );
             return;
         }
@@ -1577,6 +1708,18 @@ export function DocTable({
             entry,
             status: "pending" as UploadProgressStatus,
         }));
+        // What a Retry re-sends: only the entries whose upload did not
+        // complete, so the files already stored are not uploaded twice.
+        const entriesThatDidNotLand = (outcomes: UploadOutcome<unknown>[]) => {
+            const failedClientIds = new Set(
+                outcomes
+                    .filter((outcome) => outcome.status !== "completed")
+                    .map((outcome) => outcome.clientId),
+            );
+            return progressFiles
+                .filter((progress) => failedClientIds.has(progress.clientId))
+                .map((progress) => progress.entry);
+        };
         const uploadId = crypto.randomUUID();
         const clientIdByFile = new Map(
             progressFiles.map((progress) => [
@@ -1766,22 +1909,60 @@ export function DocTable({
             handleDocsSelected(uploaded);
             const failedCount = supportedEntries.length - uploaded.length;
             if (failedCount > 0) {
-                setCollectionActionWarning(
-                    failedUploadMessage([
-                        ...folderFailureOutcomes,
-                        ...(batchOutcomes ?? []),
-                    ]),
+                const outcomes = [
+                    ...folderFailureOutcomes,
+                    ...(batchOutcomes ?? []),
+                ];
+                const failedEntries = entriesThatDidNotLand(outcomes);
+                notifyPartialFailure(
+                    failedUploadMessage(outcomes),
+                    {
+                        action: "upload every file",
+                        // Retry re-uploads only the files that failed, so the
+                        // ones already stored are not duplicated.
+                        onRetry:
+                            failedEntries.length > 0
+                                ? () => {
+                                      void handleCollectionUploadEntries(
+                                          failedEntries,
+                                          baseFolderId,
+                                      );
+                                  }
+                                : undefined,
+                    },
                 );
             }
         } catch (err) {
-            console.error("Document drop upload failed", err);
-            setCollectionActionWarning(
+            // Retry only what did not land. An UploadBatchError carries the
+            // per-file outcomes, so the files already stored are left alone;
+            // a throw from the folder-resolution phase means nothing was
+            // uploaded, so the whole batch is safe to run again.
+            const retryEntries =
                 err instanceof UploadBatchError
-                    ? failedUploadMessage(err.outcomes)
-                    : userFacingApiError(
-                          err,
-                          "This folder could not be uploaded. Please try again.",
-                      ),
+                    ? entriesThatDidNotLand(err.outcomes)
+                    : supportedEntries;
+            notifyError(
+                err instanceof UploadBatchError
+                    ? new UserVisibleError(failedUploadMessage(err.outcomes), {
+                          kind: "unknown",
+                          retryable: retryEntries.length > 0,
+                          cause: err,
+                      })
+                    : err,
+                {
+                    action: "upload these files",
+                    fallback:
+                        "This folder could not be uploaded. Please try again.",
+                    onRetry:
+                        retryEntries.length > 0
+                            ? () => {
+                                  void handleCollectionUploadEntries(
+                                      retryEntries,
+                                      baseFolderId,
+                                  );
+                              }
+                            : undefined,
+                },
             );
         } finally {
             setCollectionUploadProgress((current) =>
@@ -1809,9 +1990,12 @@ export function DocTable({
                 await collectDroppedDocumentUploadEntries(dataTransfer);
             await handleCollectionUploadEntries(entries, baseFolderId);
         } catch (error) {
-            console.error("Folder drop traversal failed", error);
-            setCollectionActionWarning(
-                "This folder could not be read. Please try selecting it with Upload folder.",
+            notifyError(
+                new UserVisibleError(
+                    "This folder could not be read. Try selecting it with Upload folder instead.",
+                    { kind: "unknown", cause: error },
+                ),
+                { action: "read the dropped folder" },
             );
         }
     }
@@ -1879,13 +2063,27 @@ export function DocTable({
 
         setUploadingVersionDocIds((prev) => new Set([...prev, doc.id]));
         try {
-            for (const file of supported) {
-                await uploadDocumentVersion(doc.id, file, file.name);
+            // Counted so a Retry re-sends only the files that did not land:
+            // each upload is its own new version, so re-sending one that
+            // succeeded would store it twice.
+            let landed = 0;
+            try {
+                for (const file of supported) {
+                    await uploadDocumentVersion(doc.id, file, file.name);
+                    landed += 1;
+                }
+            } catch (err) {
+                const remaining = supported.slice(landed);
+                notifyError(err, {
+                    action: "upload the new version",
+                    fallback: "This version could not be uploaded. Try again.",
+                    supportNote: `Document ${doc.filename}`,
+                    onRetry: () => {
+                        void handleDropDocumentVersions(doc, remaining);
+                    },
+                });
             }
-            await refreshDocumentVersionState(doc.id);
-        } catch (err) {
-            console.error("Document version drop upload failed", err);
-            setDocumentUploadWarning("Version upload failed. Please try again.");
+            if (landed > 0) await refreshVersionsAfterChange(doc.id);
         } finally {
             setUploadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -1912,17 +2110,26 @@ export function DocTable({
         setUploadingVersionDocIds((prev) => new Set([...prev, targetDoc.id]));
         removeDocumentFromLocalState(sourceDoc.id);
         try {
-            await copyDocumentVersionFromDocument(targetDoc.id, sourceDoc.id, sourceDoc.filename);
-            await refreshDocumentVersionState(targetDoc.id);
-        } catch (err) {
-            console.error("Existing document version drop failed", err);
-            restoreDocumentToLocalState(sourceDoc, sourceSnapshot);
-            setCollectionActionWarning(
-                userFacingApiError(
-                    err,
-                    "Could not save this document as a new version.",
-                ),
-            );
+            try {
+                await copyDocumentVersionFromDocument(targetDoc.id, sourceDoc.id, sourceDoc.filename);
+            } catch (err) {
+                restoreDocumentToLocalState(sourceDoc, sourceSnapshot);
+                notifyError(err, {
+                    action: "save this document as a new version",
+                    fallback:
+                        "This document could not be saved as a new version.",
+                    supportNote: `${sourceDoc.filename} onto ${targetDoc.filename}`,
+                    onRetry: () => {
+                        void saveExistingDocumentAsNewVersion(targetDoc, sourceDoc);
+                    },
+                });
+                return;
+            }
+            // The copy landed and the server deleted the source document, so
+            // its row stays gone. If only the re-read fails, Retry re-reads;
+            // re-running the copy would point at a source that no longer
+            // exists.
+            await refreshVersionsAfterChange(targetDoc.id);
         } finally {
             setUploadingVersionDocIds((prev) => {
                 const next = new Set(prev);
@@ -1995,44 +2202,7 @@ export function DocTable({
                 !requireCapability("docs.organize", "move documents", "editor")
             )
                 return;
-            const updatedAt = new Date().toISOString();
-            setDocuments((prev) =>
-                prev.map((document) =>
-                    movingIds.includes(document.id)
-                        ? {
-                              ...document,
-                              folder_id: targetFolderId,
-                              updated_at: updatedAt,
-                          }
-                        : document,
-                ),
-            );
-            const results = await Promise.allSettled(
-                movingIds.map((documentId) =>
-                    operations.moveDocument(documentId, targetFolderId),
-                ),
-            );
-            const updatedById = new Map(
-                results.flatMap((result) =>
-                    result.status === "fulfilled"
-                        ? [[result.value.id, result.value] as const]
-                        : [],
-                ),
-            );
-            setDocuments((prev) =>
-                prev.map((document) =>
-                    updatedById.has(document.id)
-                        ? { ...document, ...updatedById.get(document.id)! }
-                        : document,
-                ),
-            );
-            const failedCount = results.length - updatedById.size;
-            if (failedCount > 0) {
-                await operations.refreshCollection();
-                setCollectionActionWarning(
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be moved. Please try again.`,
-                );
-            }
+            await moveDocsToFolder(movingIds, targetFolderId);
         } else if (subFolderId && subFolderId !== targetFolderId) {
             if (
                 !requireCapability("docs.organize", "move folders", "editor")
@@ -2112,6 +2282,7 @@ export function DocTable({
                 <div className="ml-auto w-20 shrink-0" />
                 <div className="w-24 shrink-0" />
                 <div className="w-20 shrink-0" />
+                {showCreator && <div className="w-32 shrink-0" />}
                 <div className="w-32 shrink-0" />
                 <div className="w-32 shrink-0" />
                 <div className="w-8 shrink-0" />
@@ -2176,6 +2347,7 @@ export function DocTable({
                 </div>
                 <div className="w-24 shrink-0 text-xs text-gray-300">{statusLabel}</div>
                 <div className="w-20 shrink-0 text-xs text-gray-300">—</div>
+                {renderCreatorCell({ user_id: user?.id })}
                 <div className="w-32 shrink-0 text-xs text-gray-300">—</div>
                 <div className="w-32 shrink-0 text-xs text-gray-300">—</div>
                 <div className="w-8 shrink-0" />
@@ -2774,6 +2946,7 @@ export function DocTable({
                                                     <span className="text-gray-300 pl-1">—</span>
                                                 )}
                                             </div>
+                                            {renderCreatorCell(doc)}
                                             <div className="w-32 shrink-0 text-xs text-gray-500 truncate">
                                                 {doc.created_at ? (
                                                     formatDate(doc.created_at)
@@ -2828,6 +3001,7 @@ export function DocTable({
                             {isVersionsOpen && (
                                 <DocVersionHistory
                                     docId={doc.id}
+                                    showCreator={showCreator}
                                     filename={docName}
                                     activeVersionNumber={versionNumber}
                                     loading={loadingVersionDocIds.has(doc.id)}
@@ -3091,6 +3265,7 @@ export function DocTable({
                                 <div className="ml-auto w-20 shrink-0 text-xs text-gray-300">—</div>
                                 <div className="w-24 shrink-0 text-xs text-gray-300">—</div>
                                 <div className="w-20 shrink-0 text-xs text-gray-300">—</div>
+                                {renderCreatorCell(folder)}
                                 <div className="w-32 shrink-0 truncate text-xs text-gray-500">
                                     {formatDate(folder.created_at)}
                                 </div>
@@ -3210,65 +3385,117 @@ export function DocTable({
             a.click();
             URL.revokeObjectURL(a.href);
         } catch (error) {
-            setCollectionActionWarning(
-                userFacingApiError(
-                    error,
+            notifyError(error, {
+                action: "download the selected files",
+                fallback:
                     "The selected files and folders could not be downloaded.",
-                ),
-            );
+                onRetry: () => {
+                    void handleDownloadSelectedDocs();
+                },
+            });
         }
     }, [downloadDoc, selectedFolderRootIds, selectedStandaloneDocIds]);
 
-    const handleRemoveSelectedFromFolder = useCallback(async () => {
-        if (
-            !requireCapability("docs.organize", "move documents", "editor")
-        )
-            return;
-        const ids = selectedStandaloneDocIds.filter(
-            (id) => docs.find((d) => d.id === id)?.folder_id != null,
-        );
+    // Takes the ids explicitly so a "Retry" can re-run exactly the rows that
+    // failed. Reading the selection again would resend the whole original
+    // batch: the notice's closure is frozen, and `setSelectedDocIds` below
+    // cannot reach it. Drag-moves and "Remove from subfolder" (a move to the
+    // root) both land here, so a retry is reported the same way as the
+    // first attempt.
+    const moveDocsToFolder = useCallback(async (
+        ids: string[],
+        targetFolderId: string | null,
+    ) => {
         if (ids.length === 0) return;
-        setSelectedFolderIds(new Set());
+        const snapshot = docs;
+        const updatedAt = new Date().toISOString();
         setDocuments((prev) =>
             prev.map((document) =>
                 ids.includes(document.id)
-                    ? { ...document, folder_id: null }
+                    ? {
+                          ...document,
+                          folder_id: targetFolderId,
+                          updated_at: updatedAt,
+                      }
                     : document,
             ),
         );
         const results = await Promise.allSettled(
-            ids.map((id) => operations.moveDocument(id, null)),
+            ids.map((id) => operations.moveDocument(id, targetFolderId)),
         );
+        // Rows the server did move carry its version of the record. A move
+        // that resolves without one (a 204, say) still counts as moved, so
+        // read the id defensively rather than failing the whole batch on it.
         const updatedById = new Map(
             results.flatMap((result) =>
-                result.status === "fulfilled"
+                result.status === "fulfilled" && result.value?.id
                     ? [[result.value.id, result.value] as const]
                     : [],
             ),
         );
+        const failedIds = ids.filter(
+            (_, index) => results[index].status === "rejected",
+        );
+        // Put the rows that did not move back where they were instead of
+        // leaving them where they never arrived.
         setDocuments((prev) =>
-            prev.map((document) =>
-                updatedById.has(document.id)
-                    ? { ...document, ...updatedById.get(document.id)! }
-                    : document,
+            prev.map((document) => {
+                if (updatedById.has(document.id)) {
+                    return { ...document, ...updatedById.get(document.id)! };
+                }
+                if (!failedIds.includes(document.id)) return document;
+                const before = snapshot.find((doc) => doc.id === document.id);
+                return before
+                    ? {
+                          ...document,
+                          folder_id: before.folder_id,
+                          updated_at: before.updated_at,
+                      }
+                    : document;
+            }),
+        );
+        if (failedIds.length === 0) return;
+        await operations.refreshCollection().catch(() => undefined);
+        const failedNames = snapshot
+            .filter((doc) => failedIds.includes(doc.id))
+            .map((doc) => doc.filename);
+        const one = failedIds.length === 1;
+        const where =
+            targetFolderId === null
+                ? ` out of ${one ? "its folder" : "their folders"}`
+                : "";
+        notifyPartialFailure(
+            `${failedIds.length} ${one ? "document" : "documents"} could not be moved${where}${
+                    failedNames.length > 0 ? `: ${failedNames.join(", ")}` : ""
+                }.`,
+            {
+                action: `move ${one ? "the document" : "those documents"}${where}`,
+                onRetry: () => {
+                    setSelectedDocIds(failedIds);
+                    void moveDocsToFolder(failedIds, targetFolderId);
+                },
+            },
+        );
+    }, [docs, operations, setDocuments, setSelectedDocIds]);
+
+    const removeDocsFromFolder = useCallback(
+        async (ids: string[]) => {
+            if (ids.length === 0) return;
+            setSelectedFolderIds(new Set());
+            await moveDocsToFolder(ids, null);
+        },
+        [moveDocsToFolder, setSelectedFolderIds],
+    );
+
+    const handleRemoveSelectedFromFolder = useCallback(async () => {
+        if (!requireCapability("docs.organize", "move documents", "editor"))
+            return;
+        await removeDocsFromFolder(
+            selectedStandaloneDocIds.filter(
+                (id) => docs.find((d) => d.id === id)?.folder_id != null,
             ),
         );
-        const failedCount = results.length - updatedById.size;
-        if (failedCount > 0) {
-            setCollectionActionWarning(
-                failedCount === 1
-                    ? "A document could not be removed from its folder. Please try again."
-                    : `${failedCount} documents could not be removed from their folders. Please try again.`,
-            );
-            await operations.refreshCollection().catch(() => undefined);
-        }
-    }, [
-        docs,
-        operations,
-        requireCapability,
-        selectedStandaloneDocIds,
-        setDocuments,
-    ]);
+    }, [docs, removeDocsFromFolder, requireCapability, selectedStandaloneDocIds]);
 
     const deleteDocumentIds = useCallback(async (ids: string[]) => {
         const owned = ids.filter((id) => {
@@ -3295,6 +3522,8 @@ export function DocTable({
                 const result = await operations.bulkDeleteDocuments(owned);
                 deletedIds = result.deletedIds;
             } catch {
+                // Report the aggregate failure below, where the rows are
+                // restored and the names are known.
                 deletedIds = [];
             }
         } else {
@@ -3338,13 +3567,24 @@ export function DocTable({
             });
         }
         if (failedCount > 0) {
-            setCollectionActionWarning((current) =>
-                [
-                    current,
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted. Please try again.`,
-                ]
-                    .filter(Boolean)
-                    .join(" "),
+            const failedNames = snapshot
+                .filter((doc) => failedIds.includes(doc.id))
+                .map((doc) => doc.filename);
+            notifyPartialFailure(
+                `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be deleted${
+                        failedNames.length > 0
+                            ? `: ${failedNames.join(", ")}`
+                            : ""
+                    }. They are still in the list.`,
+                {
+                    action: `delete ${failedCount === 1 ? "the document" : "those documents"}`,
+                    // Only the rows that survived, so a retry cannot delete
+                    // anything twice.
+                    dedupeKey: "bulk-delete-documents",
+                    onRetry: () => {
+                        void deleteDocumentIds(failedIds);
+                    },
+                },
             );
         }
         if (blocked > 0) {
@@ -3428,8 +3668,22 @@ export function DocTable({
                 ),
             );
             setSelectedFolderIds(new Set(failedFolderRootIds));
-            setCollectionActionWarning(
-                `${failedFolderRootIds.length} ${failedFolderRootIds.length === 1 ? "folder" : "folders"} could not be deleted. Please try again.`,
+            const failedFolderNames = folderSnapshot
+                .filter((folder) => failedFolderRootIds.includes(folder.id))
+                .map((folder) => folder.name);
+            notifyPartialFailure(
+                `${failedFolderRootIds.length} ${failedFolderRootIds.length === 1 ? "folder" : "folders"} could not be deleted${
+                        failedFolderNames.length > 0
+                            ? `: ${failedFolderNames.join(", ")}`
+                            : ""
+                    }. ${failedFolderRootIds.length === 1 ? "It is" : "They are"} still in the list and stay selected.`,
+                {
+                    action: `delete ${failedFolderRootIds.length === 1 ? "the folder" : "those folders"}`,
+                    dedupeKey: "bulk-delete-folders",
+                    // Retrying is the Delete button on the still-selected rows;
+                    // re-running this handler here would also re-delete the
+                    // documents that were removed successfully.
+                },
             );
         }
 
@@ -3563,6 +3817,11 @@ export function DocTable({
         clearCollectionSelection();
     }
 
+    function handleCreatorFilterChange(value: string | null) {
+        setCreatorFilter(value);
+        clearCollectionSelection();
+    }
+
     function handleSortChange(key: DocumentSortKey, direction: TableSortDirection | null) {
         setSort(direction ? { key, direction } : null);
         clearCollectionSelection();
@@ -3573,7 +3832,10 @@ export function DocTable({
 
         const rows = docs
             .filter((doc) => !q || doc.filename.toLowerCase().includes(q))
-            .filter((doc) => !enableHeaderFilters || !typeFilter || documentTypeValue(doc) === typeFilter);
+            .filter((doc) => !enableHeaderFilters || !typeFilter || documentTypeValue(doc) === typeFilter)
+            // Like the type filter, this narrows documents only: folders stay
+            // as the way in to whatever matches inside them.
+            .filter((doc) => !showCreator || !creatorFilter || doc.user_id === creatorFilter);
 
         if (!enableHeaderFilters || !effectiveSort) return rows;
 
@@ -3598,7 +3860,7 @@ export function DocTable({
 
             return a.filename.localeCompare(b.filename) * multiplier;
         });
-    }, [docs, effectiveSort, enableHeaderFilters, q, serverQueryActive, typeFilter]);
+    }, [creatorFilter, docs, effectiveSort, enableHeaderFilters, q, serverQueryActive, showCreator, typeFilter]);
     const hasVisibleCollectionUpload =
         collectionUploadProgress.some(
             (upload) =>
@@ -3640,6 +3902,43 @@ export function DocTable({
             widthClassName="w-40"
             options={typeOptions}
             onChange={handleTypeFilterChange}
+        />
+    ) : null;
+    const creatorPeople = useMemo(
+        () =>
+            distinctPeople(
+                [...documents, ...folders].map((row) => {
+                    const mine = !!user?.id && row.user_id === user.id;
+                    const owner = row as {
+                        owner_display_name?: string | null;
+                        owner_profile_photo?: string | null;
+                    };
+                    return {
+                        user_id: row.user_id,
+                        display_name: mine
+                            ? ownProfile?.displayName ?? owner.owner_display_name ?? "Me"
+                            : owner.owner_display_name,
+                        profile_photo: mine
+                            ? ownProfile?.profilePhoto ?? owner.owner_profile_photo
+                            : owner.owner_profile_photo,
+                    };
+                }),
+            ),
+        [documents, folders, ownProfile, user?.id],
+    );
+    const creatorFilterButton = enableHeaderFilters && showCreator ? (
+        <PersonFilter
+            label="Filter by creator"
+            selectedTitle={(name) => `Created by ${name}`}
+            value={
+                creatorPeople.find(
+                    (person) => person.user_id === creatorFilter,
+                ) ?? null
+            }
+            onChange={(person) =>
+                handleCreatorFilterChange(person?.user_id ?? null)
+            }
+            loadPeople={localPeople(creatorPeople)}
         />
     ) : null;
     const sizeFilterButton = enableHeaderFilters ? (
@@ -3769,6 +4068,7 @@ export function DocTable({
         selectedFolderIds,
     );
 
+    const retryToggleAllDocumentsRef = useRef<(() => void) | null>(null);
     const handleToggleAllDocuments = useCallback(async () => {
         selectionAnchorKeyRef.current = null;
         if (allVisibleRowsSelected || selectionCameFromSelectAll) {
@@ -3804,13 +4104,14 @@ export function DocTable({
             setSelectedFolderIds(new Set(selectAllFolderIds));
             setSelectionCameFromSelectAll(true);
         } catch (error) {
-            console.error("Select all matching documents failed", error);
-            setCollectionActionWarning(
-                userFacingApiError(
-                    error,
+            notifyError(error, {
+                action: "select every matching file",
+                fallback:
                     "All matching files could not be selected. Please try again.",
-                ),
-            );
+                // Through the ref: the search, filter and sort this reads
+                // may have changed while the request was in flight.
+                onRetry: () => retryToggleAllDocumentsRef.current?.(),
+            });
         } finally {
             setSelectingAllDocuments(false);
         }
@@ -3826,6 +4127,11 @@ export function DocTable({
         typeFilter,
         viewedFolderTreeIds,
     ]);
+
+    // "Retry" must re-enter the newest callback: the one the notice captured
+    // was built from the search, filter and selection as they were when the
+    // request failed.
+    useAssignLatest(retryToggleAllDocumentsRef, () => void handleToggleAllDocuments());
 
     const selectedItemCount =
         selectedFolderIds.size + selectedStandaloneDocIds.length;
@@ -4117,11 +4423,6 @@ export function DocTable({
                 onClose={() => setDocumentRenameWarning(null)}
                 message={documentRenameWarning}
             />
-            <WarningPopup
-                open={!!collectionActionWarning}
-                onClose={() => setCollectionActionWarning(null)}
-                message={collectionActionWarning}
-            />
             <ConfirmPopup
                 open={!!folderUploadConflict}
                 title="Folder already exists"
@@ -4236,7 +4537,7 @@ export function DocTable({
                 }
                 header={
                     loading || (serverQueryActive && serverQueryLoading) ? (
-                        <ProjectTableLoadingHeader />
+                        <ProjectTableLoadingHeader showCreator={showCreator} />
                     ) : (
                         <TableHeaderRow className="pr-3">
                             <TableStickyCell header widthClassName={DOC_NAME_COL_W}>
@@ -4273,6 +4574,12 @@ export function DocTable({
                                 <span>Version</span>
                                 {versionFilterButton}
                             </TableHeaderCell>
+                            {showCreator && (
+                                <TableHeaderCell className="flex w-32 items-center gap-1">
+                                    <span>Creator</span>
+                                    {creatorFilterButton}
+                                </TableHeaderCell>
+                            )}
                             <TableHeaderCell className="flex w-32 items-center gap-1">
                                 <span>Created</span>
                                 {createdFilterButton}
@@ -4287,7 +4594,7 @@ export function DocTable({
                 }
             >
                 {loading || (serverQueryActive && serverQueryLoading) ? (
-                    <ProjectTableLoading />
+                    <ProjectTableLoading showCreator={showCreator} />
                 ) : (
                     <div className="flex-1 flex flex-col min-h-0">
                         <div
@@ -4608,6 +4915,7 @@ export function DocTable({
                                                                     <span className="text-gray-300 pl-1">—</span>
                                                                 )}
                                                             </div>
+                                                            {renderCreatorCell(doc)}
                                                             <div className="w-32 shrink-0 text-xs text-gray-500 truncate">
                                                                 {doc.created_at ? (
                                                                     formatDate(doc.created_at)
@@ -4656,6 +4964,7 @@ export function DocTable({
                                                         {isVersionsOpen && (
                                                             <DocVersionHistory
                                                                 docId={doc.id}
+                                                                showCreator={showCreator}
                                                                 filename={docName}
                                                                 activeVersionNumber={versionNumber}
                                                                 loading={loadingVersionDocIds.has(doc.id)}
