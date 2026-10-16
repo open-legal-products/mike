@@ -1,8 +1,8 @@
 /**
  * The Word add-in's support hand-off, exercised from the frontend test runner.
  *
- * Fail-without-fix: "Contact support" was a `mailto:` anchor in the toast and
- * in PaneErrorFallback. The add-in's own code says navigation out of the pane
+ * Fail-without-fix: "Contact support" was a `mailto:` anchor in the toast.
+ * The add-in's own code says navigation out of the pane
  * is blocked in desktop Word (three separate `openBrowserWindow` helpers said
  * so), so that link did nothing there — and the request id the user needed
  * existed only inside the draft that never opened.
