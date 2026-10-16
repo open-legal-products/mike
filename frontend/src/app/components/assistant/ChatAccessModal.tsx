@@ -37,6 +37,31 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
     }, [chat.id]);
 
     /**
+     * The grant list could not be read: say so beside the people that did
+     * load (management is off until it is), and raise the notice whose
+     * Retry re-reads it.
+     */
+    const reportAccessFailure = useCallback(
+        (error: unknown, action: string, chatId: string) => {
+            setAccessError(
+                userFacingApiError(
+                    error,
+                    "Sharing details could not be loaded, so access cannot be changed here.",
+                ),
+            );
+            notifyError(error, {
+                action,
+                dedupeKey: `chat-access:${chatId}`,
+                onRetry: async () => {
+                    await refreshAccess();
+                    setAccessError(null);
+                },
+            });
+        },
+        [refreshAccess],
+    );
+
+    /**
      * Load the roster, and for a manager the grants as well.
      *
      * The owner-only grant fetch used to run in its own effect whose `.catch`
@@ -67,37 +92,16 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                 setAccessState({ chatId, value: nextAccess });
                 setAccessError(null);
             } catch (cause) {
-                notifyError(cause, {
-                    action: "load who this chat is shared with",
-                    dedupeKey: `chat-access:${chatId}`,
-                    onRetry: async () => {
-                        await refreshAccess();
-                        setAccessError(null);
-                    },
-                });
-                setAccessError(
-                    userFacingApiError(
-                        cause,
-                        "Sharing details could not be loaded, so access cannot be changed here.",
-                    ),
+                reportAccessFailure(
+                    cause,
+                    "load who this chat is shared with",
+                    chatId,
                 );
             }
             return people;
         },
-        [canManage, refreshAccess],
+        [canManage, reportAccessFailure],
     );
-
-    const reportAccessFailure = (error: unknown, action: string) => {
-        setAccessError("Sharing details could not be loaded, so access cannot be changed here.");
-        notifyError(error, {
-            action,
-            dedupeKey: `chat-access:${chat.id}`,
-            onRetry: async () => {
-                await refreshAccess();
-                setAccessError(null);
-            },
-        });
-    };
 
     return (
         <AccessModal
@@ -145,6 +149,7 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                         reportAccessFailure(
                             error,
                             "refresh who this chat is shared with",
+                            chat.id,
                         ),
                     );
                 },
@@ -154,6 +159,7 @@ export function ChatAccessModal({ open, chat, onClose }: Props) {
                         reportAccessFailure(
                             error,
                             "refresh who this chat is shared with",
+                            chat.id,
                         ),
                     );
                 },
