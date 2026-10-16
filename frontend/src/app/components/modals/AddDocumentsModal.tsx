@@ -260,6 +260,9 @@ function AddDocumentsModalForWorkspace({
                     ? `add ${names} to this project`
                     : `add ${failed.length} of ${toAssign.length} files to this project`,
             fallback: `${names} could not be added to this project. Try again.`,
+            // A second Confirm, or a Retry that fails again, replaces this
+            // notice: an older one's Retry would resend its own stale sets.
+            dedupeKey: `add-documents-assign:${targetProjectId}`,
             onRetry: () =>
                 void assignDocuments(targetProjectId, failed, [
                     ...carry,

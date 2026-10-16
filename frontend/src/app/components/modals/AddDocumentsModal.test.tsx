@@ -351,6 +351,38 @@ describe("AddDocumentsModal project assignment", () => {
         expect(onClose).not.toHaveBeenCalled();
     });
 
+    it("replaces the assignment notice instead of stacking a stale Retry", async () => {
+        vi.mocked(addDocumentToProject).mockRejectedValue(
+            new TypeError("Failed to fetch"),
+        );
+
+        render(
+            <>
+                <AddDocumentsModal
+                    open
+                    projectId="project-1"
+                    onClose={vi.fn()}
+                    onSelect={vi.fn()}
+                    breadcrumb={["Documents"]}
+                    initialSelectedDocuments={[
+                        document("doc-1", "Brief.docx") as never,
+                    ]}
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        await screen.findByRole("alert");
+        fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+        await waitFor(() =>
+            expect(addDocumentToProject).toHaveBeenCalledTimes(2),
+        );
+
+        // One notice, so there is one Retry and it carries the newest sets.
+        await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(1));
+    });
+
     it("retries only the documents that failed", async () => {
         vi.mocked(addDocumentToProject).mockImplementation(
             async (projectId: string, documentId: string) => {
