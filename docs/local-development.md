@@ -38,6 +38,41 @@ docker compose up --build
 
 Open [http://localhost:3000](http://localhost:3000) and sign up.
 
+`npm run stack:up -- --build` does the same thing but first sweeps stacks left
+behind by earlier checkouts, worktrees, and reviews (see "Stop and clean up").
+
+## Stop and clean up
+
+Ctrl-C, `docker compose stop`, and `docker stop` only pause a stack: its
+containers stay behind in `Exited` state, pin their images and volumes, and
+come back by themselves after the next Docker restart because the services
+use `restart: unless-stopped`. Every checkout directory (or `-p` project name)
+creates its own set, so forgotten stacks accumulate until the machine is slow
+and the disk is full. Use the lifecycle script instead:
+
+```bash
+npm run stack:down              # remove containers + network, keep data volumes
+npm run stack:down -- --purge   # also delete the data volumes and local images
+npm run stack:status            # what this repo has running or left behind
+npm run stack:gc                # sweep leftovers (runs automatically before
+                                # stack:up and the e2e setup script)
+```
+
+The sweep only touches resources it can attribute to this repository: fully
+stopped Compose projects built from this `docker-compose.yml` (containers and
+networks go immediately; data volumes only after the stack has been idle for
+`MIKE_GC_VOLUME_AGE_DAYS`, default 7), Supabase CLI stacks for this
+checkout's `project_id` (plus any ids listed in `MIKE_GC_SUPABASE_PROJECTS`),
+anonymous dangling volumes, dangling images, and build cache older than the
+same threshold. Running stacks and other projects are listed, never touched.
+`npm run stack:gc -- --dry-run` shows the plan; `-- --deep` also removes all
+unused images and build cache (the next start re-pulls them). Set `MIKE_GC=0`
+to skip the automatic sweep.
+
+For the Supabase CLI stack used by `npm run test:e2e:local` and
+`npm run test:stack`, `supabase stop` removes the containers and keeps the
+data; `supabase stop --no-backup` removes both.
+
 ## Local service endpoints
 
 | Service | Address | Notes |
