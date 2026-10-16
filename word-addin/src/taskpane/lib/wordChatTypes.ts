@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import type { RedlineEdit } from "./redline";
 
+export type WordChatStorageMode = "cloud" | "local";
 export type WorkflowAttachment = { id: string; title: string };
 
 /**

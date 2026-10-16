@@ -391,3 +391,55 @@ test("a clean SSE cancellation finalizes and persists a partial local turn", asy
   await expect(page.getByText("Historical change.")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("<EDITS>");
 });
+
+test("a device-only save failure after a finished answer is reported as a save failure", async ({
+  addin,
+  page,
+}) => {
+  // Make IndexedDB refuse every ASSISTANT message write, as a full disk or
+  // a revoked storage quota would. The user's own message still saves.
+  await page.addInitScript(() => {
+    const originalPut = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (
+      this: IDBObjectStore,
+      value: unknown,
+      key?: IDBValidKey,
+    ) {
+      if (
+        this.name === "word-chat-messages" &&
+        typeof value === "object" &&
+        value !== null &&
+        (value as { role?: unknown }).role === "assistant"
+      ) {
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      }
+      return originalPut.call(this, value, key);
+    } as typeof IDBObjectStore.prototype.put;
+  });
+  await addin.mockChatStream(["The finished answer."], {
+    chatId: LOCAL_CHAT_ID,
+    assistantMessageId: ASSISTANT_MESSAGE_ID,
+  });
+  await addin.gotoTaskpane({ token: TOKEN });
+  await addin.expectAuthedShell();
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
+  await page.getByRole("switch", { name: "Save chats in the cloud" }).click();
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await page.getByRole("menuitem", { name: "Assistant" }).click();
+
+  await page.getByPlaceholder("How can I help?").fill("Answer and save");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  await expect(page.getByText("The finished answer.")).toBeVisible();
+  await expect(
+    page.getByText(/wasn't saved on this device/).first(),
+  ).toBeVisible();
+  // Without the fix the save's rejection escaped into the turn's catch: the
+  // finished answer was reported as a failed one, with a Retry that would
+  // re-send the whole turn.
+  await expect(page.getByText(/get a response/i)).toHaveCount(0);
+  await expect(
+    page.getByText("Mike couldn't finish that answer. Try again."),
+  ).toHaveCount(0);
+});

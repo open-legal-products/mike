@@ -22,6 +22,7 @@ import {
   saveLocalWordMessage,
   setLocalWordChatActiveTurn,
 } from "../lib/localWordChats";
+import { saveWordMessageOrNotify } from "../lib/localWordChatSaves";
 import type { WordChatStorageMode } from "../lib/wordChatSettings";
 import { notifyWordChatHistoryChanged } from "../lib/wordChatHistoryEvents";
 import type {
@@ -897,11 +898,21 @@ export function useWordAssistantChat({
           await awaitClientToolCalls();
           await editController.waitForMessageEdits(assistantMessageId);
           if (wordChatStorage === "local" && requestChatId) {
-            await saveLocalWordMessage({
+            // The answer finished and its edits are already in the document;
+            // only the device copy failed. Letting this throw would fall into
+            // the catch below and report "couldn't get a response" for an
+            // answer the user can see, so it gets the save-specific notice
+            // and a Retry that re-saves this message, never re-sends the turn.
+            const completedPayload = {
               documentId: wordDocumentId,
               ownerId: wordChatOwnerId,
               chatId: requestChatId,
               message: buildLocalAssistantMessage(),
+            };
+            await saveWordMessageOrNotify({
+              storage: wordChatStorage,
+              chatId: requestChatId,
+              save: () => saveLocalWordMessage(completedPayload),
             });
           } else if (wordChatStorage === "cloud") {
             notifyWordChatHistoryChanged();
@@ -944,12 +955,20 @@ export function useWordAssistantChat({
               (streamedContent ||
                 completeAssistantEvents(assistantEvents).length > 0)
             ) {
-              await saveLocalWordMessage({
+              // Device-only mode has no server copy: a lost save loses the
+              // transcript, so the failure is shown with a Retry that
+              // re-saves this exact message.
+              const cancelledPayload = {
                 documentId: wordDocumentId,
                 ownerId: wordChatOwnerId,
                 chatId: requestChatId,
                 message: buildLocalAssistantMessage(),
-              }).catch(() => {});
+              };
+              await saveWordMessageOrNotify({
+                storage: wordChatStorage,
+                chatId: requestChatId,
+                save: () => saveLocalWordMessage(cancelledPayload),
+              });
             } else if (wordChatStorage === "cloud") {
               notifyWordChatHistoryChanged();
             }
@@ -1029,12 +1048,17 @@ export function useWordAssistantChat({
           });
           assistantEvents = setAssistantError(assistantEvents, errorMessage);
           if (wordChatStorage === "local" && requestChatId) {
-            await saveLocalWordMessage({
+            const failedTurnPayload = {
               documentId: wordDocumentId,
               ownerId: wordChatOwnerId,
               chatId: requestChatId,
               message: buildLocalAssistantMessage(errorMessage),
-            }).catch(() => {});
+            };
+            await saveWordMessageOrNotify({
+              storage: wordChatStorage,
+              chatId: requestChatId,
+              save: () => saveLocalWordMessage(failedTurnPayload),
+            });
           } else if (wordChatStorage === "cloud") {
             // The Word-chat backend persists non-abort stream failures before
             // sending its terminal error frame. Refresh history exactly once
