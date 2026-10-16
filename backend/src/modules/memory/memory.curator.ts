@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { checkProjectAccess, ensureChatAccess, ensureReviewAccess, projectHasSharedAudience } from "../../lib/access";
+import { checkProjectAccess, creatorCanReachWorkspace, ensureChatAccess, ensureReviewAccess, projectHasSharedAudience } from "../../lib/access";
 import { hasDirectContentGrants } from "../../lib/contentAccess";
 import { findNewAttachmentsOutsideWorkspace } from "../../lib/documentWorkspace";
 import { streamChatWithTools, type OpenAIToolSchema, type UserApiKeys } from "../../lib/llm";
@@ -451,7 +451,8 @@ export async function loadEligibleMemoryMessages(
   });
 }
 
-async function loadConversation(
+/** Exported for tests. */
+export async function loadConversation(
   db: Db,
   state: ConsolidationState,
 ): Promise<CuratorConversation | null> {
@@ -528,13 +529,22 @@ async function loadConversation(
   } else if (state.surface === "word") {
     const { data, error } = await db
       .from("word_chats")
-      .select("id, user_id, model")
+      .select("id, user_id, org_id, model")
       .eq("id", state.conversation_id)
       .maybeSingle();
     if (error) throw new Error("Memory curator could not load the Word chat");
     if (!data || data.user_id !== state.actor_user_id) return null;
+    orgId = (data.org_id as string | null) ?? null;
+    // A Word chat is a standalone chat nobody else can read: like one in
+    // the web assistant, it learns into its author's memory for its own
+    // workspace, and only while they can still reach it (the routes'
+    // check). This mirrors memory_source_allows_app_memory /
+    // memory_source_org_id.
+    if (!(await creatorCanReachWorkspace(db, state.actor_user_id, orgId)))
+      return null;
+    appOrgId = await teamOrgIdOf(db, orgId);
     const outside = await findNewAttachmentsOutsideWorkspace(db, {
-      messages: [], chatId: state.conversation_id, orgId: null,
+      messages: [], chatId: state.conversation_id, orgId,
       messagesTable: "word_chat_messages", storedHistory: "checked",
     });
     if (outside.length) return null;
