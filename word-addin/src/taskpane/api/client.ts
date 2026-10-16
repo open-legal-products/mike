@@ -12,6 +12,7 @@ import type {
 // the web app's type-check graph.
 export type { ApiKeyStatus } from "../types";
 import type { RouterProfileLists } from "@mike/model-catalog";
+import { SERVER_FAILURE_MESSAGE } from "@mike/user-error";
 import { networkFailure } from "../lib/networkError";
 import { sessionHandledError } from "../lib/sessionRefresh";
 import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
@@ -77,12 +78,6 @@ export class MikeApiError extends Error {
   }
 }
 
-/**
- * A 5xx body is a stack trace, a proxy's HTML, or a provider's raw
- * complaint — never something written for a user. Replace it wholesale.
- */
-const SERVER_ERROR_MESSAGE = "Something went wrong on our side. Try again.";
-
 export interface ParsedApiError {
   message: string;
   code: string | null;
@@ -138,8 +133,9 @@ export function parseApiErrorBody(args: {
   }
 
   return {
-    // 4xx detail is written for users by the backend; 5xx text never is.
-    message: args.status >= 500 ? SERVER_ERROR_MESSAGE : (detail ?? generic),
+    // 4xx detail is written for users by the backend. A 5xx body (a stack
+    // trace, a proxy's HTML, a provider's complaint) never is: replace it.
+    message: args.status >= 500 ? SERVER_FAILURE_MESSAGE : (detail ?? generic),
     code,
     requestId,
   };

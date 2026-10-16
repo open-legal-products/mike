@@ -116,6 +116,13 @@ export function networkMessage(origin?: string): string {
     return "Mike couldn't reach the server. Check your connection and try again.";
 }
 
+/**
+ * What a server failure says. Exported so the add-in's API client, which
+ * replaces every 5xx body with it, says the same sentence.
+ */
+export const SERVER_FAILURE_MESSAGE =
+    "Something went wrong on our side. Try again.";
+
 const KIND_MESSAGES: Record<UserErrorKind, string> = {
     offline: "Your device is offline. Check your connection and try again.",
     network: networkMessage(),
@@ -130,7 +137,7 @@ const KIND_MESSAGES: Record<UserErrorKind, string> = {
     rate_limited: "Too many requests. Wait a moment and try again.",
     unavailable:
         "Mike is temporarily unavailable. Try again in a moment.",
-    server: "Something went wrong on our side. Try again.",
+    server: SERVER_FAILURE_MESSAGE,
     unknown: GENERIC_FAILURE_MESSAGE,
 };
 

@@ -19,10 +19,9 @@
  *   The backend's comment on that payload says exactly this: flattening it
  *   to "try again" sends the user to retry something that cannot succeed.
  */
-export class WordChatTerminalError extends Error {
-  readonly userVisible = true;
-  readonly kind: "server" | "validation";
-  readonly retryable: boolean;
+import { UserVisibleError } from "@mike/user-error";
+
+export class WordChatTerminalError extends UserVisibleError {
   /** Backend error code, e.g. `invalid_api_key`, when the frame carried one. */
   readonly code: string | null;
 
@@ -30,11 +29,12 @@ export class WordChatTerminalError extends Error {
     message: string,
     frame: { safeToDisplay?: boolean; code?: string | null } = {},
   ) {
-    super(message);
-    this.name = "WordChatTerminalError";
     const usersOwnSetup = frame.safeToDisplay === true;
-    this.kind = usersOwnSetup ? "validation" : "server";
-    this.retryable = !usersOwnSetup;
+    super(message, {
+      kind: usersOwnSetup ? "validation" : "server",
+      retryable: !usersOwnSetup,
+    });
+    this.name = "WordChatTerminalError";
     this.code = frame.code ?? null;
   }
 }
