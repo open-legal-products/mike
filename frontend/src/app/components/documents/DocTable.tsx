@@ -1541,11 +1541,10 @@ export function DocTable({
                     fallback:
                         "This file could not be deleted. Please try again.",
                     supportNote: `Document ${doc.filename}`,
-                    onRetry: () => {
-                        void handleRemoveDoc(doc.id).catch(() => {
-                            // Reported by the notice raised on the retry itself.
-                        });
-                    },
+                    // Through the same entry point, so a failed retry is
+                    // reported again and a document that has gained versions
+                    // since goes through its confirmation.
+                    onRetry: () => requestRemoveDoc(doc),
                 });
             });
             return;
@@ -1709,6 +1708,18 @@ export function DocTable({
             entry,
             status: "pending" as UploadProgressStatus,
         }));
+        // What a Retry re-sends: only the entries whose upload did not
+        // complete, so the files already stored are not uploaded twice.
+        const entriesThatDidNotLand = (outcomes: UploadOutcome<unknown>[]) => {
+            const failedClientIds = new Set(
+                outcomes
+                    .filter((outcome) => outcome.status !== "completed")
+                    .map((outcome) => outcome.clientId),
+            );
+            return progressFiles
+                .filter((progress) => failedClientIds.has(progress.clientId))
+                .map((progress) => progress.entry);
+        };
         const uploadId = crypto.randomUUID();
         const clientIdByFile = new Map(
             progressFiles.map((progress) => [
@@ -1898,22 +1909,13 @@ export function DocTable({
             handleDocsSelected(uploaded);
             const failedCount = supportedEntries.length - uploaded.length;
             if (failedCount > 0) {
-                const failedClientIds = new Set(
-                    [
-                        ...folderFailureOutcomes,
-                        ...(batchOutcomes ?? []),
-                    ]
-                        .filter((outcome) => outcome.status !== "completed")
-                        .map((outcome) => outcome.clientId),
-                );
-                const failedEntries = progressFiles
-                    .filter((progress) => failedClientIds.has(progress.clientId))
-                    .map((progress) => progress.entry);
+                const outcomes = [
+                    ...folderFailureOutcomes,
+                    ...(batchOutcomes ?? []),
+                ];
+                const failedEntries = entriesThatDidNotLand(outcomes);
                 notifyPartialFailure(
-                    failedUploadMessage([
-                            ...folderFailureOutcomes,
-                            ...(batchOutcomes ?? []),
-                        ]),
+                    failedUploadMessage(outcomes),
                     {
                         action: "upload every file",
                         // Retry re-uploads only the files that failed, so the
@@ -1937,20 +1939,7 @@ export function DocTable({
             // uploaded, so the whole batch is safe to run again.
             const retryEntries =
                 err instanceof UploadBatchError
-                    ? (() => {
-                          const failedClientIds = new Set(
-                              err.outcomes
-                                  .filter(
-                                      (outcome) => outcome.status !== "completed",
-                                  )
-                                  .map((outcome) => outcome.clientId),
-                          );
-                          return progressFiles
-                              .filter((progress) =>
-                                  failedClientIds.has(progress.clientId),
-                              )
-                              .map((progress) => progress.entry);
-                      })()
+                    ? entriesThatDidNotLand(err.outcomes)
                     : supportedEntries;
             notifyError(
                 err instanceof UploadBatchError
