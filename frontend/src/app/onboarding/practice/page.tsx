@@ -12,7 +12,6 @@ import { PillButtonUI } from "@/shared/ui/PillButtonUI";
 import { FullScreenLoader } from "@/app/components/shared/FullScreenLoader";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
-import { NOT_SAVED_STATUS } from "@/app/lib/userFacingError";
 
 export default function OnboardingPracticePage() {
     const router = useRouter();
@@ -56,10 +55,8 @@ function PracticeDetailsForm({
         if (saved) {
             router.push("/onboarding/invitations");
         } else {
-            // `updatePersonalisation` classified the failure and raised the
-            // notice that carries the sentence, Retry and support; this line
-            // only tells the user the form did not go through.
-            setError(NOT_SAVED_STATUS);
+            // `updatePersonalisation` already raised the notice with the
+            // sentence, Retry and support; an inline line would repeat it.
             setSubmitting(false);
         }
     };

@@ -140,14 +140,18 @@ describe("OnboardingPracticePage", () => {
     expect(push).toHaveBeenCalledWith("/onboarding/invitations");
   });
 
-  it("stays on practice details when saving fails", async () => {
+  it("stays on practice details when saving fails, leaving the report to the notice", async () => {
+    // updatePersonalisation raises the notice; the form must not repeat it.
     updatePersonalisation.mockResolvedValue(false);
     const user = userEvent.setup();
     render(<OnboardingPracticePage />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Not saved");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled(),
+    );
+    expect(updatePersonalisation).toHaveBeenCalledTimes(1);
     expect(push).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
 });
