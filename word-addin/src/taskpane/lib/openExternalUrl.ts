@@ -17,7 +17,9 @@ export function openExternalUrl(url: string): boolean {
     Office?: { context?: { ui?: { openBrowserWindow?: (url: string) => void } } };
   };
   const ui = host.Office?.context?.ui;
-  if (ui && typeof ui.openBrowserWindow === "function") {
+  // The bridge supports only http(s): a `mailto:` there is a silent no-op
+  // that would still read as success.
+  if (/^https?:/i.test(url) && ui && typeof ui.openBrowserWindow === "function") {
     try {
       ui.openBrowserWindow(url);
       return true;
@@ -26,7 +28,13 @@ export function openExternalUrl(url: string): boolean {
     }
   }
   try {
-    return window.open(url, "_blank", "noopener,noreferrer") !== null;
+    // No `noopener` feature: with it `window.open` returns null even when the
+    // page opened, hiding the outcome. The opener is severed by hand instead,
+    // before the new page can load and reach back into the pane.
+    const opened = window.open(url, "_blank");
+    if (!opened) return false;
+    opened.opener = null;
+    return true;
   } catch {
     return false;
   }
