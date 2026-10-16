@@ -186,7 +186,12 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
             });
             // The workspace changed while this page was in flight: it
             // belongs to a list that is no longer on screen.
-            if (loadedWorkspaceRef.current !== identity) return;
+            if (
+                loadedWorkspaceRef.current !== identity ||
+                activeIdentity.current !== identity
+            ) {
+                return;
+            }
             const page = data.slice(0, CHAT_PAGE_SIZE);
             nextChatCursorRef.current = cursorFor(page.at(-1));
             setChats((current) => {

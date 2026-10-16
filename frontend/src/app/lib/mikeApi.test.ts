@@ -3452,6 +3452,8 @@ describe("workspace parameter on list requests", () => {
             (workspace) => listTabularReviewIds(undefined, { workspace }),
             "/api/tabular-review/ids",
         ],
+        ["listWorkflows", (workspace) => listWorkflows("assistant", workspace), "/api/workflows"],
+        ["listQuickActions", (workspace) => listQuickActions("app", workspace), "/api/quick-actions"],
         ["listWorkflowsPage", (workspace) => listWorkflowsPage({ workspace }), "/api/workflows"],
         ["listWorkflowIds", (workspace) => listWorkflowIds({ workspace }), "/api/workflows/ids"],
         [

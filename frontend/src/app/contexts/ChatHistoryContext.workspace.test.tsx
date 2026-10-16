@@ -13,6 +13,7 @@ const workspace = vi.hoisted(() => ({
     current: "personal" as string | undefined,
 }));
 const STABLE_USER = vi.hoisted(() => ({ id: "u1", email: "u1@example.com" }));
+const auth = vi.hoisted(() => ({ user: STABLE_USER as typeof STABLE_USER | null }));
 
 vi.mock("@/app/lib/mikeApi", () => ({
     createChat: (...args: unknown[]) => createChat(...args),
@@ -21,7 +22,7 @@ vi.mock("@/app/lib/mikeApi", () => ({
     deleteChat: vi.fn(async () => undefined),
 }));
 vi.mock("@/app/contexts/AuthContext", () => ({
-    useAuth: () => ({ user: STABLE_USER }),
+    useAuth: () => ({ user: auth.user }),
 }));
 vi.mock("@/app/contexts/WorkspaceContext", () => ({
     useWorkspaceParam: () => workspace.current,
@@ -46,10 +47,12 @@ const chat = (id: string, title: string) => ({
 });
 
 let saveChat: ReturnType<typeof useChatHistoryContext>["saveChat"];
+let loadMoreChats: ReturnType<typeof useChatHistoryContext>["loadMoreChats"];
 function Probe() {
     const context = useChatHistoryContext();
     useEffect(() => {
         saveChat = context.saveChat;
+        loadMoreChats = context.loadMoreChats;
     });
     const { chats } = context;
     return (
@@ -70,6 +73,7 @@ const tree = () => (
 beforeEach(() => {
     vi.clearAllMocks();
     workspace.current = "personal";
+    auth.user = STABLE_USER;
 });
 
 // A chat started on its own belongs to the workspace it is started in.
@@ -113,6 +117,37 @@ describe("starting a chat", () => {
 });
 
 describe("ChatHistoryProvider and the active workspace", () => {
+    it("discards a pending history page when the user signs out", async () => {
+        let resolvePage!: (rows: ReturnType<typeof chat>[]) => void;
+        listChats
+            .mockResolvedValueOnce(Array.from({ length: 21 }, (_, index) =>
+                chat(`c${index}`, `Personal note ${index}`),
+            ))
+            .mockImplementationOnce(() => new Promise((resolve) => {
+                resolvePage = resolve;
+            }));
+        const { rerender } = render(tree());
+        await screen.findByText(/Personal note 0/);
+
+        let pending!: Promise<void>;
+        act(() => { pending = loadMoreChats(); });
+        expect(listChats).toHaveBeenLastCalledWith(expect.objectContaining({
+            workspace: "personal",
+            beforeId: "c19",
+        }));
+
+        auth.user = null;
+        rerender(tree());
+        await screen.findByText("empty");
+
+        await act(async () => {
+            resolvePage([chat("private", "Private history page")]);
+            await pending;
+        });
+        expect(screen.getByText("empty")).toBeInTheDocument();
+        expect(screen.queryByText("Private history page")).not.toBeInTheDocument();
+    });
+
     it("asks for the active workspace's chats", async () => {
         listChats.mockResolvedValue([chat("c1", "Personal note")]);
         render(tree());
