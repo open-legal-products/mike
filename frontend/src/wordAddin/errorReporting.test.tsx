@@ -123,9 +123,8 @@ describe("add-in notify", () => {
             value: { writeText },
             configurable: true,
         });
-        const open = vi
-            .spyOn(window, "open")
-            .mockReturnValue({} as unknown as Window);
+        const draftWindow = { opener: window } as unknown as Window;
+        const open = vi.spyOn(window, "open").mockReturnValue(draftWindow);
 
         render(<ToastViewportUI />);
         const onRetry = vi.fn();
@@ -156,10 +155,10 @@ describe("add-in notify", () => {
         expect(draft).toContain("Client: word-addin");
         expect(draft).toContain("Page: Chat");
         expect(draft).toContain("Request ID: req-7");
-        expect(open.mock.calls[0]?.slice(1)).toEqual([
-            "_blank",
-            "noopener,noreferrer",
-        ]);
+        // Opened without the `noopener` feature (which hides the result);
+        // the opener is severed by hand instead.
+        expect(open.mock.calls[0]?.slice(1)).toEqual(["_blank"]);
+        expect(draftWindow.opener).toBeNull();
     });
 
     it("stays silent on cancellation and dedupes the session-expired notice", () => {
