@@ -10,10 +10,11 @@ import {
 } from "./DocTable";
 import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import { SelectionActionsMenu } from "@/app/components/shared/SelectionActionsMenu";
-import { downloadDocumentsZip } from "@/app/lib/mikeApi";
+import { deleteDocument, downloadDocumentsZip } from "@/app/lib/mikeApi";
 vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/app/lib/mikeApi")>(),
   downloadDocumentsZip: vi.fn().mockRejectedValue(new Error("download failed")),
+  deleteDocument: vi.fn(),
 }));
 
 import type { Document } from "@/app/components/shared/types";
@@ -153,6 +154,35 @@ describe("DocTable failure reporting", () => {
         expect(
             screen.getByRole("button", { name: "Retry" }),
         ).toBeInTheDocument();
+    });
+
+    it("reports a row delete again when its Retry fails too", async () => {
+        const user = userEvent.setup();
+        vi.mocked(deleteDocument).mockRejectedValue(new Error("boom"));
+
+        render(
+            <Harness
+                documents={[makeDoc("doc-1", "Lease.pdf")]}
+                operations={makeOperations()}
+            />,
+        );
+
+        await user.click(
+            screen.getAllByRole("button", { name: "Open row actions" })[0],
+        );
+        await user.click(screen.getByRole("menuitem", { name: /^Delete/ }));
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't delete the document",
+        );
+
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+
+        await waitFor(() => expect(deleteDocument).toHaveBeenCalledTimes(2));
+        // The retry's own failure is reported, not swallowed.
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't delete the document",
+        );
+        expect(screen.getByText("Lease.pdf")).toBeInTheDocument();
     });
 
     it("puts a document back in its folder when moving it to the root fails", async () => {
