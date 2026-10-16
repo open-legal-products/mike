@@ -145,6 +145,9 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   const [reloadToken, setReloadToken] = useState(0);
   // Setters only, so a stale closure is harmless here.
   const retryLoad = useCallback(() => {
+    // Without this the screen falls through to "Workflow not found." until
+    // the retry answers.
+    setLoading(true);
     setLoadFailed(false);
     setReloadToken((token) => token + 1);
   }, []);

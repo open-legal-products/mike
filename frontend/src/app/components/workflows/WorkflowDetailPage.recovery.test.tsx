@@ -281,4 +281,18 @@ describe("WorkflowDetailPage failures", () => {
         expect(await screen.findByText("Workflow not found.")).toBeVisible();
         expect(screen.queryByRole("alert")).toBeNull();
     });
+
+    it("shows the loading screen, not \"not found\", while a load retry runs", async () => {
+        vi.mocked(getWorkflow).mockRejectedValueOnce(
+            Object.assign(new Error("Internal error"), { status: 500 }),
+        );
+        render(<WorkflowDetailPage id="wf-1" workflowType="assistant" />);
+        const tryAgain = await screen.findByRole("button", { name: "Try again" });
+
+        vi.mocked(getWorkflow).mockReturnValue(new Promise(() => {}));
+        await userEvent.setup().click(tryAgain);
+
+        await waitFor(() => expect(getWorkflow).toHaveBeenCalledTimes(2));
+        expect(screen.queryByText("Workflow not found.")).toBeNull();
+    });
 });
