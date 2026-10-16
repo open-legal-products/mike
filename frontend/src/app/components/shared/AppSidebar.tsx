@@ -54,9 +54,10 @@ import {
     SignOutSkeuoIcon,
 } from "@/app/components/shared/AppSidebarSkeuoIcons";
 import { listProjectsPage } from "@/app/lib/mikeApi";
+import { notifyError } from "@/app/lib/userFacingError";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import type { Project } from "@/app/components/shared/types";
 import { cn } from "@/app/lib/utils";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { useAssistantHistoryStatuses } from "@/app/hooks/useAssistantHistoryStatuses";
 import { useSidebarHistory } from "@/app/hooks/useSidebarHistory";
 import { useTabularHistoryStatuses } from "@/app/hooks/useTabularHistoryStatuses";
@@ -115,7 +116,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     } =
         useChatHistoryContext();
     const history = useSidebarHistory();
-    const [signOutWarningOpen, setSignOutWarningOpen] = useState(false);
     const router = useRouter();
     const pathname = usePathname();
     const activeReviewId = pathname.match(/\/tabular-reviews\/([^/]+)/)?.[1] ?? null;
@@ -272,6 +272,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const [loadingMoreRecentProjects, setLoadingMoreRecentProjects] =
         useState(false);
     const loadingMoreRecentProjectsRef = useRef(false);
+    const [recentProjectsAttempt, setRecentProjectsAttempt] = useState(0);
     const displayedRecentProjects =
         recentProjects ??
         (projectsCacheKey
@@ -319,18 +320,27 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 setRecentProjects(next);
                 setHasMoreRecentProjects(hasMore);
             })
-            .catch(() => {
+            .catch((error) => {
                 if (controller.signal.aborted) return;
                 setRecentProjects([]);
                 setHasMoreRecentProjects(false);
+                // An empty Projects section reads as "you have no projects",
+                // which is the one thing this failure does not mean.
+                notifyError(error, {
+                    action: "load your recent projects",
+                    dedupeKey: "sidebar-recent-projects",
+                    onRetry: () =>
+                        setRecentProjectsAttempt((attempt) => attempt + 1),
+                });
             });
 
         return () => {
             controller.abort();
             projectsRequestRef.current = request + 1;
         };
-    }, [userId, projectsCacheKey, workspaceParam]);
+    }, [recentProjectsAttempt, userId, projectsCacheKey, workspaceParam]);
 
+    const retryLoadMoreRecentProjectsRef = useRef<(() => void) | null>(null);
     const loadMoreRecentProjects = useCallback(async () => {
         if (
             !userId ||
@@ -376,8 +386,14 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
             setHasMoreRecentProjects(
                 projects.length > RECENT_PROJECT_PAGE_SIZE,
             );
-        } catch {
-            // Keep the current page and allow the next scroll to retry.
+        } catch (error) {
+            // The current page survives; the user is told the next one did
+            // not arrive instead of scrolling at a list that stopped growing.
+            notifyError(error, {
+                action: "load more projects",
+                dedupeKey: "sidebar-recent-projects-more",
+                onRetry: () => retryLoadMoreRecentProjectsRef.current?.(),
+            });
         } finally {
             if (request === projectsRequestRef.current) {
                 loadingMoreRecentProjectsRef.current = false;
@@ -391,6 +407,10 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
         userId,
         workspaceParam,
     ]);
+
+    // "Retry" re-enters the latest paging callback; a callback cannot
+    // reference itself.
+    useAssignLatest(retryLoadMoreRecentProjectsRef, () => void loadMoreRecentProjects());
 
     const handleRecentProjectsScroll = useCallback(
         (event: UIEvent<HTMLDivElement>) => {
@@ -408,6 +428,21 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const handleToggle = () => {
         onToggle();
     };
+
+    // A failed sign-out leaves the session live, which the user must know
+    // about — on a shared machine especially. Signing out again is safe, so
+    // the notice carries a real Retry.
+    function handleSignOut() {
+        void signOut()
+            .then(() => router.push("/"))
+            .catch((error) => {
+                notifyError(error, {
+                    action: "sign out",
+                    dedupeKey: "sign-out",
+                    onRetry: handleSignOut,
+                });
+            });
+    }
 
     useEffect(() => {
         setCurrentChatId(routeChatId);
@@ -961,11 +996,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                               ) : null}
                               <DropdownItem
                                   onSelect={() => {
-                                      void signOut()
-                                          .then(() => router.push("/"))
-                                          .catch(() =>
-                                              setSignOutWarningOpen(true),
-                                          );
+                                      void handleSignOut();
                                   }}
                                   className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"
                               >
@@ -977,12 +1008,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                     )}
                 </div>
             </div>
-            <WarningPopup
-                open={signOutWarningOpen}
-                title="Sign out failed"
-                message="Unable to sign out. Please try again."
-                onClose={() => setSignOutWarningOpen(false)}
-            />
         </>
     );
 }

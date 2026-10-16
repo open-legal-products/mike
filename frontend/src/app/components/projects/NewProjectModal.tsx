@@ -691,7 +691,13 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                     </div>
                 )}
 
-                {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
+                {error && (
+                    // role="alert" so the failure is announced, not just
+                    // painted red under a form the user may not be looking at.
+                    <p role="alert" className="mt-3 text-sm text-red-500">
+                        {error}
+                    </p>
+                )}
             </form>
         </Modal>
     );
