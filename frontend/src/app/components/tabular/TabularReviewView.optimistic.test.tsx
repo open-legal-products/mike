@@ -326,7 +326,7 @@ describe("TRView optimistic reverts", () => {
 
         const user = userEvent.setup();
         await renderView();
-        await user.click(screen.getByRole("button", { name: /Run review/ }));
+        await user.click(screen.getByTitle("Run review"));
         expect(await screen.findByRole("alert")).toHaveTextContent(
             "Couldn't run this review",
         );
@@ -376,18 +376,19 @@ describe("TRView optimistic reverts", () => {
 
         const user = userEvent.setup();
         await renderView();
-        await user.click(screen.getByRole("button", { name: /Run review/ }));
+        await user.click(screen.getByTitle("Run review"));
         expect(streamTabularGeneration).toHaveBeenCalled();
 
         // Remove the other row while the run keeps going.
         act(() => {
             tableProps.current!.onSelectionChange(["row-1"]);
         });
-        // The row actions live in the toolbar's overflow menu at this width.
-        await user.click(
-            screen.getByRole("button", { name: "Toolbar actions" }),
-        );
-        await user.click(screen.getByRole("button", { name: "Actions" }));
+        // The selection menu is the toolbar's "Actions" pill; the page header
+        // has an icon-only "Actions" menu of its own.
+        const selectionActions = screen
+            .getAllByRole("button", { name: "Actions" })
+            .find((button) => button.dataset.slot === "tab-pill-button");
+        await user.click(selectionActions!);
         await user.click(screen.getByRole("menuitem", { name: /^Delete/ }));
         expect(screen.queryByTestId("row-row-1")).toBeNull();
 
