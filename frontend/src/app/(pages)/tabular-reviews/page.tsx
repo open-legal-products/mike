@@ -320,11 +320,12 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
     }
 
     const retryDeleteSelectedRef = useLatestRef(
-        () => void handleDeleteSelected(),
+        (ids: string[]) => void handleDeleteSelected(ids),
     );
 
-    async function handleDeleteSelected() {
-        const ids = [...selectedIds];
+    // `ids` is passed only by Retry, so it re-sends exactly the batch that
+    // failed, whatever is selected by then, without re-asking to confirm.
+    async function handleDeleteSelected(ids: string[] = [...selectedIds]) {
         setConfirmDeleteAllOpen(false);
         setSelectionCameFromSelectAll(false);
         // Prefer the loaded row's role; select-all-matching can hand back
@@ -364,10 +365,9 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
         notifyBulkReviewDeleteOutcome({
             blocked,
             failedCount: failedIds.length,
-            // Through the ref, so the retry deletes the rows that are
-            // selected now (the ones that failed) rather than the whole
-            // selection this closure captured.
-            retry: () => retryDeleteSelectedRef.current(),
+            // Through the ref for the newest handler, with only the ids
+            // that failed.
+            retry: () => retryDeleteSelectedRef.current(failedIds),
         });
     }
 

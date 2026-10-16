@@ -174,9 +174,14 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         }
     }
 
-    const retryDeleteSelectedRef = useRef<(() => void) | null>(null);
-    const handleDeleteSelectedReviews = useCallback(async () => {
-        const ids = [...selectedReviewIds];
+    const retryDeleteSelectedRef = useRef<((ids: string[]) => void) | null>(
+        null,
+    );
+    // `ids` is passed only by Retry, so it re-sends exactly the batch that
+    // failed, whatever is selected by then.
+    const handleDeleteSelectedReviews = useCallback(async (
+        ids: string[] = [...selectedReviewIds],
+    ) => {
         const roleById = new Map(
             reviews.map((review) => [review.id, roleFrom(review)] as const),
         );
@@ -206,10 +211,9 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         notifyBulkReviewDeleteOutcome({
             blocked,
             failedCount: failedIds.length,
-            // Through the ref, so the retry deletes the rows that are
-            // selected now (the ones that failed) rather than the whole
-            // selection this closure captured.
-            retry: () => retryDeleteSelectedRef.current?.(),
+            // Through the ref for the newest handler, with only the ids
+            // that failed.
+            retry: () => retryDeleteSelectedRef.current?.(failedIds),
         });
     }, [
         getReviewOwnerId,
@@ -222,7 +226,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
 
     // "Retry" must re-enter the newest handler, not the one that was
     // created when the delete failed.
-    useAssignLatest(retryDeleteSelectedRef, () => void handleDeleteSelectedReviews());
+    useAssignLatest(retryDeleteSelectedRef, (ids: string[]) => void handleDeleteSelectedReviews(ids));
 
     return (
         <>
@@ -265,7 +269,7 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 }
                 onOpenDetails={handleOpenDetails}
                 onDeleteReview={handleDeleteReviewRow}
-                onDeleteSelectedReviews={handleDeleteSelectedReviews}
+                onDeleteSelectedReviews={() => handleDeleteSelectedReviews()}
                 onOwnerOnlyAction={setOwnerOnlyAction}
                 setSelectedReviewIds={setSelectedReviewIds}
             />
