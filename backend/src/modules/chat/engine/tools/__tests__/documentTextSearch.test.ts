@@ -45,6 +45,33 @@ it.each([null, { revision: "new-revision", status: "ready", text: "New text" }, 
 });
 
 const coverage = { total_versions: 4, indexed_versions: 2, pending_versions: 1, failed_versions: 1, versions_needing_ocr: 1 };
+it.each([
+  { limit: undefined, offset: undefined, expectedLimit: 10, expectedOffset: 0 },
+  { limit: null, offset: null, expectedLimit: 10, expectedOffset: 0 },
+  { limit: "5", offset: "10", expectedLimit: 10, expectedOffset: 0 },
+  { limit: 1.5, offset: 2.5, expectedLimit: 10, expectedOffset: 0 },
+  { limit: 0, offset: -1, expectedLimit: 10, expectedOffset: 0 },
+  { limit: 21, offset: 100001, expectedLimit: 10, expectedOffset: 0 },
+  { limit: 1, offset: 0, expectedLimit: 1, expectedOffset: 0 },
+  { limit: 20, offset: 100000, expectedLimit: 20, expectedOffset: 100000 },
+  { limit: "5", offset: 10, expectedLimit: 10, expectedOffset: 10 },
+  { limit: 5, offset: "10", expectedLimit: 5, expectedOffset: 0 },
+])("normalizes optional model pagination before querying and recording events: %j", async ({ limit, offset, expectedLimit, expectedOffset }) => {
+  const fake = scriptedDb([{ rpc: "find_document_text", data: { matches: [], next_offset: null, coverage } }]);
+  mocks.find.mockImplementationOnce(findDocumentText);
+  const frames: Record<string, unknown>[] = [];
+  const result = await runToolCalls([{ id: "search-call", function: {
+    name: "find_documents", arguments: JSON.stringify({ scope: "library", query: "clause", limit, offset }),
+  } }], new Map(), "actor", fake.db, (frame) => frames.push(JSON.parse(frame.slice(6))));
+  fake.done();
+  expect(fake.calls[0].args).toMatchObject({ p_limit: expectedLimit, p_offset: expectedOffset });
+  expect(frames).toEqual([
+    { type: "doc_search_start", search_id: "search-call", scope: "library", query: "clause", offset: expectedOffset },
+    { type: "doc_search", search_id: "search-call", scope: "library", query: "clause", offset: expectedOffset, match_count: 0, next_offset: null, coverage },
+  ]);
+  expect(result.documentSearchEvents).toEqual([frames[1]]);
+  expect(JSON.parse((result.toolResults[0] as { content: string }).content)).toMatchObject({ ok: true });
+});
 async function searchActivity(db = {} as Db) {
   const frames: Record<string, unknown>[] = [];
   const result = await runToolCalls([{ id: "search-call", function: { name: "find_documents", arguments: JSON.stringify({ scope: "library", query: "clause", offset: 10 }) } }],

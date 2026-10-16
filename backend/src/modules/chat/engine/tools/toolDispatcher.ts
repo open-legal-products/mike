@@ -634,11 +634,15 @@ export async function runToolCalls(
           : fencedContent,
       });
     } else if (tc.function.name === "find_documents") {
+      const limit = typeof args.limit === "number" && Number.isInteger(args.limit)
+        && args.limit >= 1 && args.limit <= 20 ? args.limit : undefined;
+      const offset = typeof args.offset === "number" && Number.isInteger(args.offset)
+        && args.offset >= 0 && args.offset <= 100000 ? args.offset : undefined;
       const search: DocumentSearchEvent = {
         type: "doc_search", search_id: tc.id,
         scope: typeof args.scope === "string" ? args.scope.slice(0, 32) : "",
         query: typeof args.query === "string" ? args.query.slice(0, 500) : "",
-        offset: typeof args.offset === "number" ? args.offset : 0,
+        offset: offset ?? 0,
       };
       write(`data: ${JSON.stringify({ ...search, type: "doc_search_start" })}\n\n`);
       const finishSearch = (details: Partial<DocumentSearchEvent>) => {
@@ -655,7 +659,7 @@ export async function runToolCalls(
         projectId: args.scope === "project" ? projectId : null,
         documentId: label ? docIndex?.[label]?.document_id : rawDocId,
         versionId: typeof args.version_id === "string" ? args.version_id : null,
-        limit: args.limit as number | undefined, offset: args.offset as number | undefined,
+        limit, offset,
       }).catch(internalFailure);
       if (!result.ok) {
         const failure = documentSearchFailure(result);
