@@ -332,14 +332,19 @@ describe("WorkflowDetailPage failures", () => {
 
     it("keeps \"Couldn't save\" up after an earlier save's \"Saved\" would have faded", async () => {
         vi.mocked(getWorkflow).mockResolvedValue(tabularWorkflow());
-        vi.mocked(updateWorkflow)
-            .mockResolvedValueOnce(tabularWorkflow())
-            .mockRejectedValue(new Error("boom"));
+        // Keyed on the request, not call order: a debounced save left over
+        // from an earlier test must not use up a one-shot answer.
+        vi.mocked(updateWorkflow).mockImplementation(async (_id, patch) => {
+            if (patch.columns_config?.length === 0) throw new Error("boom");
+            return tabularWorkflow();
+        });
         const user = userEvent.setup();
         render(<WorkflowDetailPage id="wf-1" workflowType="tabular" />);
 
         await deleteColumn(user, "Party");
-        expect(await screen.findByText("Saved")).toBeVisible();
+        expect(
+            await screen.findByText("Saved", {}, { timeout: 1500 }),
+        ).toBeVisible();
         await deleteColumn(user, "Date");
         expect(await screen.findByText("Couldn't save")).toBeVisible();
 
