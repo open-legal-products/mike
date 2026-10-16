@@ -145,7 +145,7 @@ describe("OnboardingPracticePage", () => {
     const user = userEvent.setup();
     render(<OnboardingPracticePage />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Unable to save your practice details");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Not saved.");
     expect(push).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
   });

@@ -55,7 +55,10 @@ function PracticeDetailsForm({
         if (saved) {
             router.push("/onboarding/invitations");
         } else {
-            setError("Unable to save your practice details");
+            // `updatePersonalisation` classified the failure and raised the
+            // notice that carries the sentence, Retry and support; this line
+            // only tells the user the form did not go through.
+            setError("Not saved.");
             setSubmitting(false);
         }
     };
