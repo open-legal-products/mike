@@ -35,7 +35,7 @@ describe("SupportPage", () => {
         vi.spyOn(console, "error").mockImplementation(() => {});
     });
 
-    it("says the message did not send, and offers a retry that works", async () => {
+    it("says the message did not send, and Submit sends it again", async () => {
         authenticatedFetch
             .mockResolvedValueOnce(
                 new Response(JSON.stringify({ detail: "no" }), { status: 503 }),
@@ -52,7 +52,8 @@ describe("SupportPage", () => {
             screen.getByRole("link", { name: "Email support directly" }),
         ).toHaveAttribute("href", expect.stringContaining("will@mikeoss.com"));
 
-        await user.click(screen.getByRole("button", { name: "Retry" }));
+        // The form keeps what was typed, so Submit is the retry.
+        await user.click(screen.getByRole("button", { name: "Submit" }));
 
         expect(authenticatedFetch).toHaveBeenCalledTimes(2);
         expect(

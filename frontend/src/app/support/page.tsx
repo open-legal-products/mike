@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { FieldLabel } from "@/app/components/ui/form-field";
 import { authenticatedFetch } from "@/app/lib/authEvents";
+import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
 import {
     describeError,
     supportMailtoFor,
@@ -58,7 +59,8 @@ export default function SupportPage() {
         },
     ];
 
-    const submitFeedback = async () => {
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
         setError(null);
         setIsSubmitting(true);
 
@@ -110,11 +112,6 @@ export default function SupportPage() {
         } finally {
             setIsSubmitting(false);
         }
-    };
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        await submitFeedback();
     };
 
     if (isSubmitted) {
@@ -268,24 +265,15 @@ export default function SupportPage() {
                                     className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"
                                 >
                                     {error.message}
-                                    {error.retryable && (
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                void submitFeedback()
-                                            }
-                                            disabled={isSubmitting}
-                                            className="ml-2 rounded-sm underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:no-underline disabled:opacity-60"
-                                        >
-                                            Retry
-                                        </button>
-                                    )}
                                     <a
                                         href={supportMailtoFor(
                                             error,
                                             `Support form failed. Subject: ${subject}`,
                                         )}
-                                        className="ml-2 rounded-sm underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+                                        className={textButtonUIClassName({
+                                            size: "normal",
+                                            className: "ml-2 px-0",
+                                        })}
                                     >
                                         Email support directly
                                     </a>

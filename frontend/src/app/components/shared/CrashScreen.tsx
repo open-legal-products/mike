@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useCrashBoundary } from "@/app/hooks/useCrashBoundary";
 import { PillButtonUI } from "@/shared/ui/PillButtonUI";
+import { textButtonUIClassName } from "@/shared/ui/TextButtonUI.styles";
 
 /**
  * The body of `app/error.tsx` and `app/global-error.tsx`: one markup, so the
@@ -54,7 +55,10 @@ export function CrashScreen({
                 <p className="mt-6 text-sm text-gray-500">
                     <a
                         href={supportHref}
-                        className="font-medium underline underline-offset-2 transition-colors hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300/45"
+                        className={textButtonUIClassName({
+                            size: "normal",
+                            className: "px-0",
+                        })}
                     >
                         Contact support
                     </a>
