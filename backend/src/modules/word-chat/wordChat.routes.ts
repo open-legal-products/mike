@@ -1,6 +1,10 @@
 import { BACKEND_REPORTING_OWNER } from "../../lib/reportedUpstreamCodes";
 import { sendInternalError } from "../../lib/httpError";
 import {
+  resolveWorkspaceFilter,
+  sendWorkspaceFailure,
+} from "../../lib/workspace";
+import {
   attachAssistantTurnSse,
   getActiveAssistantTurn,
   getAssistantTurnRun,
@@ -263,7 +267,8 @@ function turnNotFound(res: Response): void {
   });
 }
 
-// GET /word-chat?document_id=<embedded document UUID>&limit=10
+// GET /word-chat?document_id=<embedded document UUID>&workspace=personal|<org id>&limit=10
+// Without `workspace` the list spans every workspace the caller can reach.
 wordChatRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
   const userId = res.locals.userId as string;
   const parsedDocumentId = parseDocumentId(req.query.document_id);
@@ -279,9 +284,12 @@ wordChatRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
     ? Math.max(requestedOffset, 0)
     : 0;
   const db = createServerSupabase();
+  const workspace = await resolveWorkspaceFilter(db, userId, req.query.workspace);
+  if (!workspace.ok) return void sendWorkspaceFailure(res, workspace);
   const result = await listWordChats(db, {
     userId,
     clientDocumentId: parsedDocumentId.value,
+    workspace: workspace.workspace,
     limit,
     offset,
   });
@@ -698,6 +706,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     requestedModel: parsedModel.value,
     requestedReasoning: parsedReasoning.value,
     requestedTimeZone: req.body?.time_zone,
+    requestedOrgId: body.org_id,
   });
   if (!prep.ok) {
     if (prep.status === 500 && "error" in prep)
@@ -718,6 +727,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     apiMessages,
     workflowStore,
     apiKeys,
+    orgId,
     selectedModel,
     selectedReasoningLevel,
     nonce,
@@ -876,6 +886,9 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       model: selectedModel,
       reasoning: selectedReasoningLevel,
       apiKeys,
+      // The chat's organization: its keys and models, its memory, where
+      // generated documents are filed, and no personal connectors in it.
+      orgId,
       signal: stream.signal,
       conversationId: persistChat ? chatId : null,
         includeMemory: true,
@@ -956,6 +969,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       db,
       {
         userId,
+        orgId,
         userEmail,
         chatId: null,
         projectId: null,
@@ -980,6 +994,7 @@ wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
         db,
         {
           userId,
+          orgId,
           userEmail,
           chatId: null,
           projectId: null,

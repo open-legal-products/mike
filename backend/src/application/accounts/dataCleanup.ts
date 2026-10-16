@@ -733,16 +733,16 @@ export async function deleteAllUserChats(
     // in the same transaction, including Word chats removed by document
     // cascades. An assistant chat carries its workspace (a project chat its
     // project's), so it is deleted by filter, with no pre-enumeration for a
-    // new one to slip past. Word chats exist only in Personal: the add-in
-    // works nowhere else.
+    // new one to slip past. A Word chat carries its workspace too, so it is
+    // deleted the same way; the document rows stay, since one document can
+    // hold chats in several workspaces.
     const assistantChats = db.from("chats").delete().eq("user_id", userId);
+    const wordChats = db.from("word_chats").delete().eq("user_id", userId);
     const [assistantResult, wordResult] = await Promise.all([
         orgId
             ? assistantChats.eq("org_id", orgId)
             : assistantChats.is("org_id", null),
-        orgId
-            ? Promise.resolve({ error: null })
-            : db.from("word_documents").delete().eq("user_id", userId),
+        orgId ? wordChats.eq("org_id", orgId) : wordChats.is("org_id", null),
     ]);
 
     await throwIfError(assistantResult.error, "Failed to delete assistant chats");

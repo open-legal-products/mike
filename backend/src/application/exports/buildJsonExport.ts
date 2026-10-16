@@ -155,15 +155,29 @@ async function loadUserChats(
     return { chats, messages };
 }
 
-async function loadUserWordChats(db: Db, userId: string) {
-    const documents = await selectAll(db, "word_documents", {
-        filter: (query) => query.eq("user_id", userId),
-        order: ["created_at"],
-    });
+async function loadUserWordChats(
+    db: Db,
+    userId: string,
+    orgId: ExportWorkspace,
+) {
+    // A Word chat is private to its author and carries its workspace, like a
+    // chat started on its own. The document rows are the author's, and one
+    // document can hold chats in several workspaces, so an organization's
+    // export lists only those its chats are in.
     const chats = await selectAll(db, "word_chats", {
+        filter: (query) => inWorkspace(query.eq("user_id", userId), orgId),
+        order: ["created_at"],
+    });
+    const allDocuments = await selectAll(db, "word_documents", {
         filter: (query) => query.eq("user_id", userId),
         order: ["created_at"],
     });
+    const chatDocumentIds = new Set(idsFrom(chats, "word_document_id"));
+    const documents = orgId
+        ? allDocuments.filter((document) =>
+              chatDocumentIds.has(String(document.id)),
+          )
+        : allDocuments;
     const messages = await selectByIds(
         db,
         "word_chat_messages",
@@ -325,10 +339,7 @@ export async function buildUserChatsExport(
 ) {
     const [assistant, wordAddin, tabular] = await Promise.all([
         loadUserChats(db, userId, userEmail, orgId),
-        // The Word add-in works in Personal only.
-        orgId
-            ? Promise.resolve({ documents: [], chats: [], messages: [] })
-            : loadUserWordChats(db, userId),
+        loadUserWordChats(db, userId, orgId),
         loadUserTabularChats(db, userId, userEmail, orgId),
     ]);
 
