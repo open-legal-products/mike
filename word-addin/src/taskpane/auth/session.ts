@@ -1,7 +1,7 @@
 /// <reference types="office-js" />
 import { networkFailure } from "../lib/networkError";
 import { responseError } from "../api/client";
-import { userMessage } from "../lib/notify";
+import { notifyError, userMessage } from "../lib/notify";
 import { parseGoogleOAuthDialogMessage } from "./oauthProtocol";
 
 const LEGACY_ACCESS_KEY = "mike_token";
@@ -332,9 +332,13 @@ export async function signOut(): Promise<void> {
     _user = null;
     await clearLegacyTokenStorage();
   } catch (error) {
-    _error = userMessage(error, {
+    // The pane stays signed in, so the failure is a toast whose Retry signs
+    // out again, not the sign-in screen's error state.
+    notifyError(error, {
       action: "sign out",
       fallback: "Mike couldn't sign you out. Try again.",
+      dedupeKey: "sign-out",
+      onRetry: signOut,
     });
   }
   broadcast();

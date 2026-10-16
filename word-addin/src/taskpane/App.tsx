@@ -26,8 +26,6 @@ import type {
   WordChatOpenHandler,
 } from "./lib/wordChatTypes";
 import { setReportingUser } from "./lib/errorReporting";
-import { TextButtonUI } from "@mike/text-button-ui";
-import { refreshSession } from "./auth/session";
 
 export default function App(): React.ReactElement {
   const { user, loading, error, logout } = useAuth();
@@ -248,16 +246,10 @@ export default function App(): React.ReactElement {
       <div className="absolute inset-x-3 top-14 z-30">
         {error && (
           <div
-            className="mb-2 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 shadow-sm"
+            className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 shadow-sm"
             role="alert"
           >
-            <span className="min-w-0 flex-1">{error}</span>
-            <TextButtonUI
-              size="xs"
-              onClick={() => void refreshSession().catch(() => null)}
-            >
-              Retry
-            </TextButtonUI>
+            {error}
           </div>
         )}
         <ApiKeyBanner />

@@ -353,12 +353,16 @@ test.describe("auth flow", () => {
     page,
   }) => {
     addin.seedToken("seeded-jwt");
-    await page.route("**/auth/logout", (route) =>
-      route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "Sign out is temporarily unavailable" }),
-      }),
+    // Fails once; the fixture's working logout answers the Retry.
+    await page.route(
+      "**/auth/logout",
+      (route) =>
+        route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Sign out is temporarily unavailable" }),
+        }),
+      { times: 1 },
     );
     await addin.gotoTaskpane();
     await addin.expectAuthedShell();
@@ -372,6 +376,10 @@ test.describe("auth flow", () => {
       "Mike is temporarily unavailable",
     );
     await addin.expectAuthedShell();
+
+    // The toast's Retry signs out again.
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
   });
 
   test("a pre-seeded cookie session survives a task-pane reload", async ({
