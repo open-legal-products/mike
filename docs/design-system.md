@@ -472,9 +472,12 @@ goes in it and when.
    handler that failed has usually been re-created. Read it through a ref
    kept current with `useLatestRef` / `useAssignLatest`
    (`app/hooks/useLatestRef.ts`), and re-send only what did not land.
-5. **Destructive actions are retried through their confirmation.** Retry
-   after a failed delete re-opens the confirmation; it never deletes from the
-   notice.
+5. **Destructive actions are retried through their own entry point.** Retry
+   after a failed single delete that asked for confirmation re-opens that
+   confirmation; it never deletes from the notice. A delete that never asked
+   (a row action on a single-version document, a review or a project) re-runs
+   the same entry point. A bulk delete's Retry re-runs only the items that
+   failed, which the user has already confirmed.
 6. **Cancellation is not an error.** `notifyError` returns `null` for an
    `AbortError` and shows nothing.
 7. **Repeats collapse.** Polling and autosave loops pass a `dedupeKey` so a
