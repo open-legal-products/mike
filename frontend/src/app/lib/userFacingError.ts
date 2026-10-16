@@ -47,15 +47,12 @@ export function knownErrorCodeMessage(
 
 import {
     buildSupportMailto,
-    describeError,
-    type DescribeErrorOptions,
     type UserFacingError,
 } from "@/shared/lib/userError";
 import {
-    retryToastAction,
-    showToast,
-    type ToastAction,
-} from "@/shared/lib/toastStore";
+    createErrorNotifier,
+    type NotifyErrorOptions,
+} from "@/shared/lib/errorNotifier";
 import { isReported, reportError } from "@/app/lib/errorReporting";
 
 export {
@@ -68,18 +65,11 @@ export {
     type UserFacingError,
 } from "@/shared/lib/userError";
 
-export interface NotifyErrorOptions extends DescribeErrorOptions {
-    /** Re-run the failed action. Offered only when a retry is honest. */
-    onRetry?: () => void | Promise<void>;
-    /** Collapse repeats (polling loops, autosave) into one toast. */
-    dedupeKey?: string;
-    /** Force the support link on or off regardless of classification. */
-    support?: boolean;
-    /** Extra actions beyond Retry. */
-    actions?: ToastAction[];
-    /** Extra text for the support email body, e.g. which document. */
-    supportNote?: string;
-}
+export {
+    notifyInfo,
+    notifySuccess,
+    type NotifyErrorOptions,
+} from "@/shared/lib/errorNotifier";
 
 /** The pre-filled support email for a described failure on this page. */
 export function supportMailtoFor(
@@ -135,8 +125,8 @@ function signInActionHref(): string | null {
  * the API client under `component: mike-api`, and a cancellation is not a
  * failure at all. What is left is an unclassifiable throw (a bug in this
  * code) and a 5xx that reached a screen without going through the API
- * client. This runs BEFORE the console.warn below so the console bridge
- * recognises the error as already sent and drops its own copy.
+ * client. It runs BEFORE the shared notifier's console.warn so the console
+ * bridge recognises the error as already sent and drops its own copy.
  */
 function reportRealFault(
     error: unknown,
@@ -170,60 +160,34 @@ function withReportedUpstreamMessage(error: unknown, options: NotifyErrorOptions
  * Show a failure to the user. Returns the description so the caller can
  * also render it inline, or `null` when the failure is a cancellation the
  * user caused and does not need to hear about.
+ *
+ * The shared notifier (`@/shared/lib/errorNotifier`) owns the toast, the
+ * Retry and the cancellation rule; the web app adds its upstream copy, its
+ * Sentry reporting, "Sign in", and a `mailto:` support link.
  */
-export function notifyError(
-    error: unknown,
-    options: NotifyErrorOptions = {},
-): UserFacingError | null {
-    const described = describeError(error, withReportedUpstreamMessage(error, options));
-    if (described.kind === "aborted") return null;
-
-    reportRealFault(error, described, options.action);
-
-    // warn, not error: Sentry's console bridge forwards console.error, and
-    // a 4xx or a cancellation the user just saw is not an incident. The one
-    // above already reported anything that was a real fault.
-    if (process.env.NODE_ENV !== "production") {
-        console.warn("[user-error]", described.title, described.cause);
-    }
-
-    const actions: ToastAction[] = [...(options.actions ?? [])];
-    if (options.onRetry && described.retryable) {
-        actions.push(
-            retryToastAction(options.onRetry, (retryError) =>
-                notifyError(retryError, options),
-            ),
-        );
-    }
-    // "Your session has expired" with nothing to click leaves the user to
-    // find the way back to the login screen themselves.
-    const signInHref = signInActionHref();
-    if (described.kind === "unauthenticated" && signInHref) {
-        actions.push({
-            label: "Sign in",
-            onClick: () => window.location.assign(signInHref),
-        });
-    }
-    const wantsSupport = options.support ?? described.supportable;
-
-    showToast({
-        tone: "error",
-        title: described.title,
-        message: described.message,
-        actions,
-        supportHref: wantsSupport
-            ? supportMailtoFor(described, options.supportNote)
-            : undefined,
-        dedupeKey: options.dedupeKey,
-    });
-
-    return described;
-}
-
-export function notifySuccess(message: string, title?: string): string {
-    return showToast({ tone: "success", title, message });
-}
-
-export function notifyInfo(message: string, title?: string): string {
-    return showToast({ tone: "info", title, message });
-}
+export const notifyError = createErrorNotifier<NotifyErrorOptions>({
+    describeOptions: withReportedUpstreamMessage,
+    beforeShow: (error, described, options) => {
+        reportRealFault(error, described, options.action);
+        return false;
+    },
+    present: (described, options, wantsSupport) => {
+        // "Your session has expired" with nothing to click leaves the user to
+        // find the way back to the login screen themselves.
+        const signInHref = signInActionHref();
+        return {
+            actions:
+                described.kind === "unauthenticated" && signInHref
+                    ? [
+                          {
+                              label: "Sign in",
+                              onClick: () => window.location.assign(signInHref),
+                          },
+                      ]
+                    : [],
+            supportHref: wantsSupport
+                ? supportMailtoFor(described, options.supportNote)
+                : undefined,
+        };
+    },
+});

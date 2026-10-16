@@ -230,6 +230,7 @@ module.exports = async (_env, options) => {
         // Error presentation: one classifier and one toast stack for both
         // clients, so a failure reads the same in Word as it does on the web.
         "@mike/toast-store": frontendShared("lib", "toastStore.ts"),
+        "@mike/error-notifier": frontendShared("lib", "errorNotifier.ts"),
         "@mike/toast-ui": frontendSharedUi("ToastUI.tsx"),
         "@mike/user-error": frontendShared("lib", "userError.ts"),
         // One model catalog (routers, picker rows, key-based availability)

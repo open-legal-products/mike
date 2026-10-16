@@ -8,9 +8,10 @@
  * (see ./supportHandoff) — a plain `mailto:` LINK does nothing in desktop
  * Word, which is why it is an action and not an anchor.
  *
- * Mirrors frontend/src/app/lib/userFacingError.ts so a failure reads the
- * same in Word as it does in the browser. Screens must never render a raw
- * `error.message` from the API, a stream, or Office.js.
+ * The toast, the Retry and the cancellation rule are the web app's own
+ * (`@mike/error-notifier`), so a failure reads the same in Word as it does in
+ * the browser; this file adds only what differs in the pane. Screens must
+ * never render a raw `error.message` from the API, a stream, or Office.js.
  */
 import {
   buildSupportMailto,
@@ -18,11 +19,13 @@ import {
   type DescribeErrorOptions,
   type UserFacingError,
 } from "@mike/user-error";
+import { showToast } from "@mike/toast-store";
 import {
-  retryToastAction,
-  showToast,
-  type ToastAction,
-} from "@mike/toast-store";
+  createErrorNotifier,
+  notifyInfo,
+  notifySuccess,
+  type NotifyErrorOptions as SharedNotifyErrorOptions,
+} from "@mike/error-notifier";
 import {
   isSessionHandledError,
   retryWhenSessionRecovers,
@@ -46,23 +49,19 @@ export {
   type UserErrorKind,
   type UserFacingError,
 } from "@mike/user-error";
+export { notifyInfo, notifySuccess } from "@mike/error-notifier";
 
 /** Which client the support email came from. */
 export const SUPPORT_PRODUCT = "word-addin";
 
-export interface NotifyErrorOptions extends DescribeErrorOptions {
-  /** Re-run the failed action. Offered only when a retry is honest. */
-  onRetry?: () => void | Promise<void>;
-  /** Collapse repeats (polling loops, autosave) into one toast. */
-  dedupeKey?: string;
-  /** Force the support link on or off regardless of classification. */
-  support?: boolean;
-  /** Extra actions beyond Retry. */
-  actions?: ToastAction[];
-  /** Extra text for the support email body, e.g. which document. */
-  supportNote?: string;
+export interface NotifyErrorOptions extends SharedNotifyErrorOptions {
   /** Short screen name, e.g. "Workflows". Falls back to the pane URL. */
   page?: string;
+}
+
+/** Where a failure was seen: the screen name, else the pane URL. */
+function supportPage(page?: string): string | undefined {
+  return page ?? (typeof window !== "undefined" ? window.location.href : undefined);
 }
 
 /** The pre-filled support email for a failure seen in the task pane. */
@@ -74,9 +73,7 @@ export function supportMailtoFor(
   options: { note?: string; page?: string } = {},
 ): string {
   return buildSupportMailto(error, {
-    page:
-      options.page ??
-      (typeof window !== "undefined" ? window.location.href : undefined),
+    page: supportPage(options.page),
     product: SUPPORT_PRODUCT,
     note: options.note,
   });
@@ -97,9 +94,7 @@ export async function handOffToSupport(
   error: SupportErrorFields,
   options: { note?: string; page?: string } = {},
 ): Promise<void> {
-  const page =
-    options.page ??
-    (typeof window !== "undefined" ? window.location.href : undefined);
+  const page = supportPage(options.page);
   const details = buildSupportDiagnostics(error, {
     note: options.note,
     page,
@@ -159,62 +154,34 @@ export async function handOffToSupport(
  * also render it inline, or `null` when the failure is a cancellation the
  * user caused and does not need to hear about.
  */
-export function notifyError(
-  error: unknown,
-  options: NotifyErrorOptions = {},
-): UserFacingError | null {
-  const described = describeError(error, options);
-  if (described.kind === "aborted") return null;
-
+export const notifyError = createErrorNotifier<NotifyErrorOptions>({
   // A 401 the session layer already handled: its own toast (or the login
   // gate) said what happened, so a second notice would only repeat it with
   // the request's raw "Not authenticated". The screen's Retry runs instead
   // once the session check succeeds again.
-  if (isSessionHandledError(described)) {
+  beforeShow: (_error, described, options) => {
+    if (!isSessionHandledError(described)) return false;
     if (options.onRetry) retryWhenSessionRecovers(options.onRetry);
-    return described;
-  }
-
-  // warn, not error: Sentry's console bridge forwards console.error, and a
-  // 4xx or a cancellation the user just saw is not an incident. Real faults
-  // were already reported where they were caught (5xx, transport).
-  if (process.env.NODE_ENV !== "production") {
-    console.warn("[user-error]", described.title, described.cause);
-  }
-
-  const actions: ToastAction[] = [...(options.actions ?? [])];
-  if (options.onRetry && described.retryable) {
-    actions.push(
-      retryToastAction(options.onRetry, (retryError) =>
-        notifyError(retryError, options),
-      ),
-    );
-  }
-  const wantsSupport = options.support ?? described.supportable;
-  if (wantsSupport) {
-    // An ACTION, not a link: desktop Word refuses to follow a `mailto:`
-    // anchor out of the pane, so the old link did nothing at all there.
-    actions.push({
-      label: "Contact support",
-      keepOpen: true,
-      onClick: () =>
-        handOffToSupport(described, {
-          note: options.supportNote,
-          page: options.page,
-        }),
-    });
-  }
-
-  showToast({
-    tone: "error",
-    title: described.title,
-    message: described.message,
-    actions,
-    dedupeKey: options.dedupeKey,
-  });
-
-  return described;
-}
+    return true;
+  },
+  // An ACTION, not a link: desktop Word refuses to follow a `mailto:`
+  // anchor out of the pane, so the old link did nothing at all there.
+  present: (described, options, wantsSupport) => ({
+    actions: wantsSupport
+      ? [
+          {
+            label: "Contact support",
+            keepOpen: true,
+            onClick: () =>
+              handOffToSupport(described, {
+                note: options.supportNote,
+                page: options.page,
+              }),
+          },
+        ]
+      : [],
+  }),
+});
 
 /**
  * One deduped toast when the backend says the session is gone and a refresh
@@ -246,14 +213,6 @@ export function notifySessionCheckFailed(
     actions: onRetry ? [{ label: "Retry", onClick: onRetry }] : [],
     dedupeKey: "session-check-failed",
   });
-}
-
-export function notifySuccess(message: string, title?: string): string {
-  return showToast({ tone: "success", title, message });
-}
-
-export function notifyInfo(message: string, title?: string): string {
-  return showToast({ tone: "info", title, message });
 }
 
 /**

@@ -82,6 +82,10 @@ export default defineConfig({
                 replacement: resolvePath("./src/shared/lib/toastStore.ts"),
             },
             {
+                find: "@mike/error-notifier",
+                replacement: resolvePath("./src/shared/lib/errorNotifier.ts"),
+            },
+            {
                 find: "@mike/toast-ui",
                 replacement: resolvePath("./src/shared/ui/ToastUI.tsx"),
             },
