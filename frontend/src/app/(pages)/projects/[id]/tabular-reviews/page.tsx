@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useMemo, useState } from "react";
+import { use, useCallback, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     deleteTabularReview,
@@ -22,8 +22,8 @@ import {
 import type { TabularReview } from "@/app/components/shared/types";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import {
     type TabularReviewSortKey,
     type TabularReviewSortDirection,
@@ -31,6 +31,7 @@ import {
 } from "@/app/hooks/usePaginatedTabularReviews";
 import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import { notifyPartialFailure } from "@/app/lib/userFacingError";
 
 interface Props {
     params: Promise<{ id: string }>;
@@ -45,9 +46,6 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
     const previewEmptyStates = searchParams.get("emptyStates") === "1";
     const { project, projectId, search, setOwnerOnlyAction } = workspace;
     const [detailsReview, setDetailsReview] = useState<TabularReview | null>(
-        null,
-    );
-    const [bulkDeleteNotice, setBulkDeleteNotice] = useState<string | null>(
         null,
     );
     const [deletingReviewIds, setDeletingReviewIds] = useState<Set<string>>(
@@ -174,9 +172,9 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         }
     }
 
+    const retryDeleteSelectedRef = useRef<(() => void) | null>(null);
     const handleDeleteSelectedReviews = useCallback(async () => {
         const ids = [...selectedReviewIds];
-        setBulkDeleteNotice(null);
         const roleById = new Map(
             reviews.map((review) => [review.id, roleFrom(review)] as const),
         );
@@ -211,7 +209,23 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
                 : null,
         ].filter((notice): notice is string => notice !== null);
-        if (notices.length > 0) setBulkDeleteNotice(notices.join(" "));
+        if (notices.length > 0) {
+            // One notice for the batch, with a Retry for the rows that are
+            // still selected.
+            notifyPartialFailure(
+                notices.join(" "),
+                {
+                    action: "delete those reviews",
+                    // Through the ref, so the retry deletes the rows that are
+                    // selected now (the ones that failed) rather than the
+                    // whole selection this closure captured.
+                    onRetry:
+                        failedIds.length > 0
+                            ? () => retryDeleteSelectedRef.current?.()
+                            : undefined,
+                },
+            );
+        }
     }, [
         getReviewOwnerId,
         reviews,
@@ -220,6 +234,10 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
         setSelectedReviewIds,
         user?.id,
     ]);
+
+    // "Retry" must re-enter the newest handler, not the one that was
+    // created when the delete failed.
+    useAssignLatest(retryDeleteSelectedRef, () => void handleDeleteSelectedReviews());
 
     return (
         <>
@@ -277,12 +295,6 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 lockProject
                 onClose={() => setDetailsReview(null)}
                 onSave={handleDetailsSave}
-            />
-            <WarningPopup
-                open={!!bulkDeleteNotice}
-                title="Some reviews were not deleted"
-                message={bulkDeleteNotice}
-                onClose={() => setBulkDeleteNotice(null)}
             />
         </>
     );

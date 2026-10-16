@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
+import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import {
+    notifyPartialFailure,
+    userFacingApiError,
+} from "@/app/lib/userFacingError";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     deleteTabularReview,
@@ -22,8 +27,6 @@ import {
     type AccessContact,
 } from "@/app/components/popups/PermissionDeniedPopup";
 import { can, roleFrom } from "@/app/lib/permissions";
-import { userFacingApiError } from "@/app/lib/userFacingError";
-import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useWorkspaceOrgId, useWorkspaceParam } from "@/app/contexts/WorkspaceContext";
@@ -121,9 +124,6 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
     const [selectionCameFromSelectAll, setSelectionCameFromSelectAll] =
         useState(false);
     const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState(false);
-    const [bulkDeleteNotice, setBulkDeleteNotice] = useState<string | null>(
-        null,
-    );
     const [deletingReviewIds, setDeletingReviewIds] = useState<Set<string>>(
         () => new Set(),
     );
@@ -319,11 +319,14 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
         void handleDeleteSelected();
     }
 
+    const retryDeleteSelectedRef = useLatestRef(
+        () => void handleDeleteSelected(),
+    );
+
     async function handleDeleteSelected() {
         const ids = [...selectedIds];
         setConfirmDeleteAllOpen(false);
         setSelectionCameFromSelectAll(false);
-        setBulkDeleteNotice(null);
         // Prefer the loaded row's role; select-all-matching can hand back
         // ids that were never paged in, and for those the creator id is the
         // only signal available.
@@ -366,7 +369,23 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
                 ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
                 : null,
         ].filter((notice): notice is string => notice !== null);
-        if (notices.length > 0) setBulkDeleteNotice(notices.join(" "));
+        if (notices.length > 0) {
+            // One notice for the batch, with a Retry for the rows that are
+            // still selected.
+            notifyPartialFailure(
+                notices.join(" "),
+                {
+                    action: "delete those reviews",
+                    // Through the ref, so the retry deletes the rows that are
+                    // selected now (the ones that failed) rather than the
+                    // whole selection this closure captured.
+                    onRetry:
+                        failedIds.length > 0
+                            ? () => retryDeleteSelectedRef.current()
+                            : undefined,
+                },
+            );
+        }
     }
 
     async function handleDeleteReviewRow(review: TabularReview) {
@@ -515,12 +534,6 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
                         : null
                 }
                 onClose={() => setOwnerOnlyAction(null)}
-            />
-            <WarningPopup
-                open={!!bulkDeleteNotice}
-                title="Some reviews were not deleted"
-                message={bulkDeleteNotice}
-                onClose={() => setBulkDeleteNotice(null)}
             />
             <ConfirmPopup
                 open={confirmDeleteAllOpen && selectedIds.length > 0}
