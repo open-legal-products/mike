@@ -10,6 +10,11 @@ interface WorkflowListProps {
   onSelect: (workflow: Workflow) => void;
   loading?: boolean;
   error?: string | null;
+  /**
+   * The load failed and a toast already says so (with Retry): show no list
+   * and no "nothing found" copy, which would claim there are no workflows.
+   */
+  loadFailed?: boolean;
   selectedId?: string;
   emptyMessage?: string;
 }
@@ -21,6 +26,7 @@ export function WorkflowList({
   onSelect,
   loading = false,
   error = null,
+  loadFailed = false,
   selectedId,
   emptyMessage = "No assistant workflows found",
 }: WorkflowListProps): React.ReactElement {
@@ -51,7 +57,7 @@ export function WorkflowList({
           <div className="flex h-full items-center justify-center">
             <Spinner label="Loading workflows…" />
           </div>
-        ) : error ? (
+        ) : loadFailed ? null : error ? (
           <p className="py-8 text-center text-sm text-destructive">{error}</p>
         ) : filtered.length === 0 ? (
           <p className="py-8 text-center text-sm text-gray-400">

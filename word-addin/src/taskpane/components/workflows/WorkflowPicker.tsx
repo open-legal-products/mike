@@ -36,7 +36,8 @@ export function WorkflowPicker({
 }: WorkflowPickerProps): React.ReactElement {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [fetchLoading, setFetchLoading] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  // The failure itself is reported by the toast below, which carries Retry.
+  const [fetchFailed, setFetchFailed] = useState(false);
   // Bumped by the "Retry" on the failure toast; the list has no button of
   // its own to hang a retry on.
   const [fetchAttempt, setFetchAttempt] = useState(0);
@@ -94,18 +95,14 @@ export function WorkflowPicker({
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        setFetchError(
-          userMessage(reason, {
-            fallback: "Mike couldn't load your workflows. Try again.",
-          })
-        );
+        setFetchFailed(true);
         notifyError(reason, {
           action: "load your workflows",
           dedupeKey: "workflow-list",
           page: "Workflows",
           onRetry: () => {
             setFetchLoading(true);
-            setFetchError(null);
+            setFetchFailed(false);
             setFetchAttempt((count) => count + 1);
           },
         });
@@ -239,7 +236,7 @@ export function WorkflowPicker({
           onSearchChange={setSearch}
           onSelect={openWorkflow}
           loading={fetchLoading}
-          error={fetchError}
+          loadFailed={fetchFailed}
           emptyMessage="No workflows found."
         />
       </div>
