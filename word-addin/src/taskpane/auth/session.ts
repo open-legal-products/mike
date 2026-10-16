@@ -111,6 +111,23 @@ export function refreshSession(): Promise<AddinAuthUser | null> {
   });
 }
 
+/**
+ * Drop the pane's signed-in state locally, without calling /auth/logout.
+ *
+ * Used when the backend has positively said this session is gone: there is
+ * nothing left to log out, and leaving `_user` populated would keep the
+ * chat UI on screen while telling the user to sign in — with no gate to
+ * sign in through. Bumping the generation abandons any in-flight sign-in.
+ */
+export function markSessionEnded(): void {
+  if (_user === null) return;
+  _sessionGeneration += 1;
+  _user = null;
+  _error = null;
+  _loading = false;
+  broadcast();
+}
+
 export function initialize(): void {
   if (_initialized) return;
   _initialized = true;

@@ -13,6 +13,7 @@ import type {
 export type { ApiKeyStatus } from "../types";
 import type { RouterProfileLists } from "@mike/model-catalog";
 import { networkFailure } from "../lib/networkError";
+import { sessionHandledError } from "../lib/sessionRefresh";
 import { reportApiFailure, reportNetworkFailure } from "../lib/errorReporting";
 import type { ReasoningLevel } from "../lib/wordChatTypes";
 import {
@@ -218,11 +219,15 @@ export async function responseError(
     requestId: parsed.requestId,
     bodyPreview: text.slice(0, 200),
   });
+  // A 401 the session layer already handled carries its own sentence: the
+  // session toast or login gate said what happened, and the body's "Not
+  // authenticated" would only contradict it.
+  const handled = sessionHandledError(response);
   const apiError = new MikeApiError({
     status: response.status,
-    code: parsed.code,
+    code: handled?.code ?? parsed.code,
     requestId: parsed.requestId,
-    message: parsed.message,
+    message: handled?.message ?? parsed.message,
   });
   // A 5xx is the server's fault and worth an event; 4xx are user-facing
   // outcomes (validation, permission) and stay out of Sentry.

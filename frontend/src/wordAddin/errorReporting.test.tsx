@@ -19,6 +19,7 @@ import {
 } from "../../../word-addin/src/taskpane/lib/networkError";
 import {
     notifyError,
+    notifySessionExpired,
     userMessage,
 } from "../../../word-addin/src/taskpane/lib/notify";
 
@@ -160,12 +161,16 @@ describe("add-in notify", () => {
         ]);
     });
 
-    it("stays silent on cancellation", () => {
+    it("stays silent on cancellation and dedupes the session-expired notice", () => {
         render(<ToastViewportUI />);
         act(() => {
             expect(notifyError(new DOMException("x", "AbortError"))).toBeNull();
+            notifySessionExpired();
+            notifySessionExpired();
         });
-        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.getAllByRole("alert")).toHaveLength(1);
+        expect(screen.getByRole("alert")).toHaveTextContent("session has expired");
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     });
 
     it("userMessage returns the sentence without showing anything", () => {

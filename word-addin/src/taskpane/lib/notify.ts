@@ -23,6 +23,12 @@ import {
   showToast,
   type ToastAction,
 } from "@mike/toast-store";
+import {
+  isSessionHandledError,
+  retryWhenSessionRecovers,
+  SESSION_CHECK_FAILED_MESSAGE,
+  SESSION_EXPIRED_MESSAGE,
+} from "./sessionRefresh";
 import { openExternalUrl } from "./openExternalUrl";
 import {
   buildSupportDiagnostics,
@@ -160,6 +166,15 @@ export function notifyError(
   const described = describeError(error, options);
   if (described.kind === "aborted") return null;
 
+  // A 401 the session layer already handled: its own toast (or the login
+  // gate) said what happened, so a second notice would only repeat it with
+  // the request's raw "Not authenticated". The screen's Retry runs instead
+  // once the session check succeeds again.
+  if (isSessionHandledError(described)) {
+    if (options.onRetry) retryWhenSessionRecovers(options.onRetry);
+    return described;
+  }
+
   // warn, not error: Sentry's console bridge forwards console.error, and a
   // 4xx or a cancellation the user just saw is not an incident. Real faults
   // were already reported where they were caught (5xx, transport).
@@ -199,6 +214,38 @@ export function notifyError(
   });
 
   return described;
+}
+
+/**
+ * One deduped toast when the backend says the session is gone and a refresh
+ * could not bring it back. No "Retry": there is nothing to retry until the
+ * user signs in again.
+ */
+export function notifySessionExpired(): void {
+  showToast({
+    tone: "error",
+    title: "Sign in required",
+    message: SESSION_EXPIRED_MESSAGE,
+    dedupeKey: "session-expired",
+  });
+}
+
+/**
+ * The refresh never reached the backend, so nothing is known about the
+ * session. Do NOT say it expired: the pane is probably still signed in and
+ * the user has a connection to fix, not a password to type. `onRetry`
+ * re-checks the session.
+ */
+export function notifySessionCheckFailed(
+  onRetry?: () => void | Promise<void>,
+): void {
+  showToast({
+    tone: "error",
+    title: "Connection problem",
+    message: SESSION_CHECK_FAILED_MESSAGE,
+    actions: onRetry ? [{ label: "Retry", onClick: onRetry }] : [],
+    dedupeKey: "session-check-failed",
+  });
 }
 
 export function notifySuccess(message: string, title?: string): string {
