@@ -30,6 +30,7 @@ import {
   isSessionHandledError,
   retryWhenSessionRecovers,
   SESSION_CHECK_FAILED_MESSAGE,
+  SESSION_ERROR_CODES,
   SESSION_EXPIRED_MESSAGE,
 } from "./sessionRefresh";
 import { openExternalUrl } from "./openExternalUrl";
@@ -145,11 +146,14 @@ export async function handOffToSupport(
 export const notifyError = createErrorNotifier<NotifyErrorOptions>({
   // A 401 the session layer already handled: its own toast (or the login
   // gate) said what happened, so a second notice would only repeat it with
-  // the request's raw "Not authenticated". The screen's Retry runs instead
-  // once the session check succeeds again.
+  // the request's raw "Not authenticated". After an unreachable check the
+  // screen's Retry runs once the check succeeds again; an expired session
+  // queues nothing, since the sign-out already dropped that session's work.
   beforeShow: (_error, described, options) => {
     if (!isSessionHandledError(described)) return false;
-    if (options.onRetry) retryWhenSessionRecovers(options.onRetry);
+    if (options.onRetry && described.code === SESSION_ERROR_CODES.unreachable) {
+      retryWhenSessionRecovers(options.onRetry);
+    }
     return true;
   },
   // An ACTION, not a link: desktop Word refuses to follow a `mailto:`

@@ -309,6 +309,20 @@ describe("a 401 the session layer handled", () => {
         expect(reload).not.toHaveBeenCalled();
     });
 
+    it("does not queue a reload for a screen that failed on an expired session", async () => {
+        // In the pane the expiry handler clears the queue BEFORE the screen's
+        // catch reports its error, so anything queued here would outlive it.
+        const { error } = await failedWorkflowLoad(
+            Object.assign(new Error("HTTP 401"), { status: 401 }),
+        );
+        const reload = vi.fn();
+        notifyError(error, { onRetry: reload });
+        // A later sign-in must not run a retry from the old session.
+        announceSessionRecovered();
+        await Promise.resolve();
+        expect(reload).not.toHaveBeenCalled();
+    });
+
     it("words an expired session the same way the expiry toast does", async () => {
         const { error, onExpired } = await failedWorkflowLoad(
             Object.assign(new Error("HTTP 401"), { status: 401 }),
