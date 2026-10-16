@@ -9,6 +9,7 @@ import type {
     PanelDocument,
 } from "../shared/types";
 import { ConnectorSkeuoIcon } from "@/app/components/shared/AppSidebarSkeuoIcons";
+import { notifyError } from "@/app/lib/userFacingError";
 import { EditCard } from "./EditCard";
 import { PreResponseWrapper } from "./PreResponseWrapper";
 import { ResponseStatus, type StatusState } from "./message/ResponseStatus";
@@ -301,8 +302,15 @@ export function AssistantMessage({
             await navigator.clipboard.write([item]);
             setIsCopied(true);
             setTimeout(() => setIsCopied(false), 2000);
-        } catch {
-            // ignore
+        } catch (err) {
+            // A clipboard refusal is a browser permission the user controls,
+            // so support cannot help and a retry needs a fresh click.
+            notifyError(err, {
+                action: "copy this answer",
+                fallback:
+                    "Mike couldn't write to the clipboard. Check your browser's clipboard permission, then try again.",
+                support: false,
+            });
         }
     };
 
