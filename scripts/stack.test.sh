@@ -15,13 +15,17 @@
 #   mike-gctest-running   running       -> untouched, listed with its stop cmd
 #   gctest-other          stopped, someone else's compose file
 #                                       -> untouched
-#   then MIKE_GC_VOLUME_AGE_DAYS=0      -> the kept data volume is removed
+#   gctest-supa           stopped, labelled like a Supabase CLI stack whose
+#                         id is in MIKE_GC_SUPABASE_PROJECTS
+#                                       -> removed, data volume kept (young)
+#   then MIKE_GC_VOLUME_AGE_DAYS=0      -> the kept data volumes are removed
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK="$ROOT/scripts/stack.sh"
 # Confine every sweep to the fixtures so the test never touches real stacks.
 export MIKE_GC_ONLY='*gctest*'
+export MIKE_GC_SUPABASE_PROJECTS=gctest-supa
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/stack-gc-test.XXXXXX")"
 FAILED=0
 
@@ -30,7 +34,7 @@ fail() { printf '  FAIL  %s\n' "$1"; FAILED=1; }
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
 cleanup() {
-    for p in mike-gctest-stopped mike-gctest-gone mike-gctest-running gctest-other; do
+    for p in mike-gctest-stopped mike-gctest-gone mike-gctest-running gctest-other gctest-supa; do
         docker compose -p "$p" down -v --remove-orphans >/dev/null 2>&1 || true
     done
     rm -rf "$WORK"
@@ -40,21 +44,27 @@ trap cleanup EXIT
 # A compose project whose containers exit immediately and that declares a
 # data volume, like the real stack's one-shot jobs + db_data.
 fixture() {
-    local dir=$1 marker=$2
+    local dir=$1 marker=$2 labels=""
+    # "supa" mimics the Supabase CLI, which labels everything it creates with
+    # com.supabase.cli.project=<id> and sets no config_files label.
+    [ "$marker" = supa ] && labels='labels: { com.supabase.cli.project: gctest-supa }'
     mkdir -p "$dir"
     {
         [ "$marker" = mike ] && echo "# MikeOSS — test fixture (marker line recognised by scripts/stack.sh)"
-        cat <<'EOF'
+        cat <<EOF
 services:
   job:
     image: alpine:3.20
     command: ["sh", "-c", "exit 0"]
     volumes: ["data:/data"]
+    $labels
   svc:
     image: alpine:3.20
     command: ["sleep", "600"]
+    $labels
 volumes:
   data:
+    $labels
 EOF
     } >"$dir/docker-compose.yml"
 }
@@ -70,15 +80,17 @@ fixture "$WORK/stopped" mike
 fixture "$WORK/gone"    mike
 fixture "$WORK/running" mike
 fixture "$WORK/other"   none
+fixture "$WORK/supa"    supa
 
 (cd "$WORK/stopped" && docker compose -p mike-gctest-stopped up -d >/dev/null 2>&1 && docker compose -p mike-gctest-stopped stop >/dev/null 2>&1)
 (cd "$WORK/gone"    && docker compose -p mike-gctest-gone    up -d >/dev/null 2>&1 && docker compose -p mike-gctest-gone    stop >/dev/null 2>&1)
 rm -rf "$WORK/gone"
 (cd "$WORK/running" && docker compose -p mike-gctest-running up -d >/dev/null 2>&1)
 (cd "$WORK/other"   && docker compose -p gctest-other         up -d >/dev/null 2>&1 && docker compose -p gctest-other         stop >/dev/null 2>&1)
+(cd "$WORK/supa"    && docker compose -p gctest-supa          up -d >/dev/null 2>&1 && docker compose -p gctest-supa          stop >/dev/null 2>&1)
 
 echo "Before:"
-for p in mike-gctest-stopped mike-gctest-gone mike-gctest-running gctest-other; do
+for p in mike-gctest-stopped mike-gctest-gone mike-gctest-running gctest-other gctest-supa; do
     printf '  %-22s containers=%s volumes=%s\n' "$p" "$(containers "$p")" "$(volumes "$p")"
 done
 
@@ -98,11 +110,14 @@ check "orphan stack: containers removed"      '[ "$(containers mike-gctest-gone)
 check "running stack untouched"               '[ "$(containers mike-gctest-running)" = 2 ] && [ "$(volumes mike-gctest-running)" = 1 ]'
 check "foreign stack untouched"               '[ "$(containers gctest-other)" = 2 ] && [ "$(volumes gctest-other)" = 1 ]'
 check "running stack listed with stop cmd"    'grep -q "scripts/stack.sh down -p mike-gctest-running" "$WORK/gc.log"'
+check "supabase stack: containers removed"    '[ "$(containers gctest-supa)" = 0 ]'
+check "supabase stack: young data volume kept" '[ "$(volumes gctest-supa)" = 1 ]'
 
 echo "Sweep with a 0-day threshold removes idle data volumes:"
 (cd "$ROOT" && MIKE_GC_VOLUME_AGE_DAYS=0 bash "$STACK" gc >"$WORK/gc0.log" 2>&1) || { cat "$WORK/gc0.log"; fail "gc exited non-zero"; }
 check "stopped stack: data volume removed"    '[ "$(volumes mike-gctest-stopped)" = 0 ]'
 check "orphan stack: data volume removed"     '[ "$(volumes mike-gctest-gone)" = 0 ]'
+check "supabase stack: data volume removed"   '[ "$(volumes gctest-supa)" = 0 ]'
 check "running stack volume still kept"       '[ "$(volumes mike-gctest-running)" = 1 ]'
 check "foreign stack volume still kept"       '[ "$(volumes gctest-other)" = 1 ]'
 

@@ -247,15 +247,17 @@ gc() {
             in_scope "$volproj" || continue
             why="$volproj"
             case " $removed_projects " in
-                *" $volproj "*) mine=1; case " $idle_projects " in *" $volproj "*) idle_ok=1;; esac;;
+                *" $volproj "*) mine=1;;
                 *) case "$volproj" in mike*) mine=1;; esac;;
             esac
         fi
         [ "$mine" = 1 ] || continue
         # A declared-but-unmounted volume of a live stack is dangling too.
         case " $running_projects " in *" ${volproj:-/} "*) continue;; esac
+        # Volumes of a project downed in step 1 (Compose or Supabase CLI) use
+        # that project's idle time; already-orphaned ones only have CreatedAt.
         case " $removed_projects " in
-            *" ${volproj:-/} "*) ;;                      # idle_ok decided above
+            *" ${volproj:-/} "*) case " $idle_projects " in *" $volproj "*) idle_ok=1;; esac;;
             *) [ "$(age_of "$created")" -ge "$AGE_SECS" ] && idle_ok=1;;
         esac
         if [ "$idle_ok" != 1 ]; then
