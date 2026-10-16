@@ -90,7 +90,11 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { DocumentWorkspaceScope } from "@/app/contexts/WorkspaceContext";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
-import { describeError, notifyError } from "@/app/lib/userFacingError";
+import {
+  describeError,
+  isAbortError,
+  notifyError,
+} from "@/app/lib/userFacingError";
 import { downloadWorkflowZip } from "./workflowZipExport";
 import { WorkflowAssets, type WorkflowAssetsHandle } from "./WorkflowAssets";
 // dynamic import keeps Tiptap (browser-only) out of the SSR bundle
@@ -284,13 +288,16 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
           setNotFound(true);
           return;
         }
-        const described = notifyError(error, {
-          action: "load this workflow",
-          dedupeKey: `workflow-load:${id}`,
-          onRetry: retryLoad,
-        });
-        if (described) setLoadFailed(true);
-        else setNotFound(true);
+        // A cancelled request is not a failure the user needs to hear about.
+        if (isAbortError(error)) {
+          setNotFound(true);
+          return;
+        }
+        // The whole screen could not render, so the screen itself says so
+        // with its own "Try again"; a notice with a second Retry for the same
+        // failure would only repeat it. The API client has already reported
+        // any server fault.
+        setLoadFailed(true);
       })
       .finally(() => setLoading(false));
   }, [id, workflowType, reloadToken, retryLoad]);

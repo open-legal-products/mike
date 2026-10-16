@@ -251,14 +251,21 @@ describe("WorkflowDetailPage failures", () => {
             </>,
         );
 
-        const alert = await screen.findByRole("alert");
-        expect(alert).toHaveTextContent("Couldn't load this workflow");
-        // The screen itself says so too, with a "Try again": a transport
-        // failure must not be reported as "Workflow not found."
+        // The screen says so with its own "Try again": a transport failure
+        // must not be reported as "Workflow not found.", and a notice with a
+        // second Retry would repeat the same failure.
         expect(
             await screen.findByRole("button", { name: "Try again" }),
         ).toBeVisible();
+        expect(screen.getByText("Couldn't load this workflow")).toBeVisible();
         expect(screen.queryByText("Workflow not found.")).toBeNull();
+        expect(screen.queryByRole("alert")).toBeNull();
+
+        vi.mocked(getWorkflow).mockClear();
+        await userEvent.setup().click(
+            screen.getByRole("button", { name: "Try again" }),
+        );
+        await waitFor(() => expect(getWorkflow).toHaveBeenCalledTimes(1));
     });
     it("shows a missing workflow once, without a load-failure notice", async () => {
         vi.mocked(getWorkflow).mockRejectedValue(
