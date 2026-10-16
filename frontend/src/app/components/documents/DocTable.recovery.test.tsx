@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -253,6 +253,49 @@ describe("DocTable failure reporting", () => {
         // Only the row that failed is sent again: NDA.pdf already moved.
         await waitFor(() => expect(moveDocument).toHaveBeenCalledTimes(1));
         expect(moveDocument).toHaveBeenCalledWith("doc-1", null);
+    });
+
+    it("names the documents a retried drag-move still could not move, with another retry", async () => {
+        const user = userEvent.setup();
+        const moveDocument = vi.fn(async (id: string) => {
+            if (id === "doc-1") throw new Error("boom");
+            return { ...makeDoc(id, "NDA.pdf"), folder_id: "folder-1" };
+        });
+
+        render(
+            <Harness
+                documents={[makeDoc("doc-1", "Lease.pdf"), makeDoc("doc-2", "NDA.pdf")]}
+                operations={makeOperations({ moveDocument })}
+            />,
+        );
+
+        const folderRow = document.querySelector(
+            '[data-folder-row][data-folder-id="folder-1"]',
+        );
+        expect(folderRow).not.toBeNull();
+        const payload: Record<string, string> = {
+            "application/mike-docs": JSON.stringify(["doc-1", "doc-2"]),
+        };
+        fireEvent.drop(folderRow!, {
+            dataTransfer: {
+                types: Object.keys(payload),
+                files: [],
+                items: [],
+                getData: (type: string) => payload[type] ?? "",
+            },
+        });
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("Lease.pdf");
+        moveDocument.mockClear();
+        await user.click(screen.getByRole("button", { name: "Retry" }));
+
+        // The retry goes through the same reporting: the file that still
+        // failed is named and can be retried again.
+        await waitFor(() => expect(moveDocument).toHaveBeenCalledTimes(1));
+        expect(moveDocument).toHaveBeenCalledWith("doc-1", "folder-1");
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Lease.pdf");
+        expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     });
 
     it("reports a failed download of the selection with a retry", async () => {

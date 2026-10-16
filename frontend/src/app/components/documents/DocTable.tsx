@@ -2202,72 +2202,7 @@ export function DocTable({
                 !requireCapability("docs.organize", "move documents", "editor")
             )
                 return;
-            const updatedAt = new Date().toISOString();
-            setDocuments((prev) =>
-                prev.map((document) =>
-                    movingIds.includes(document.id)
-                        ? {
-                              ...document,
-                              folder_id: targetFolderId,
-                              updated_at: updatedAt,
-                          }
-                        : document,
-                ),
-            );
-            const results = await Promise.allSettled(
-                movingIds.map((documentId) =>
-                    operations.moveDocument(documentId, targetFolderId),
-                ),
-            );
-            const updatedById = new Map(
-                results.flatMap((result) =>
-                    result.status === "fulfilled"
-                        ? [[result.value.id, result.value] as const]
-                        : [],
-                ),
-            );
-            setDocuments((prev) =>
-                prev.map((document) =>
-                    updatedById.has(document.id)
-                        ? { ...document, ...updatedById.get(document.id)! }
-                        : document,
-                ),
-            );
-            const failedCount = results.length - updatedById.size;
-            if (failedCount > 0) {
-                // The refresh above puts the failed rows back where they
-                // really are, so the optimistic move is already undone.
-                await operations.refreshCollection();
-                const failedIds = movingIds.filter(
-                    (id) => !updatedById.has(id),
-                );
-                const failedNames = documents
-                    .filter((document) => failedIds.includes(document.id))
-                    .map((document) => document.filename);
-                notifyPartialFailure(
-                    `${failedCount} ${failedCount === 1 ? "document" : "documents"} could not be moved${
-                            failedNames.length > 0
-                                ? `: ${failedNames.join(", ")}`
-                                : ""
-                        }.`,
-                    {
-                        action: `move ${failedCount === 1 ? "the document" : "those documents"}`,
-                        onRetry: () => {
-                            void Promise.all(
-                                failedIds.map((id) =>
-                                    operations.moveDocument(id, targetFolderId),
-                                ),
-                            )
-                                .then(() => operations.refreshCollection())
-                                .catch((error) => {
-                                    notifyError(error, {
-                                        action: "move those documents",
-                                    });
-                                });
-                        },
-                    },
-                );
-            }
+            await moveDocsToFolder(movingIds, targetFolderId);
         } else if (subFolderId && subFolderId !== targetFolderId) {
             if (
                 !requireCapability("docs.organize", "move folders", "editor")
@@ -3464,20 +3399,29 @@ export function DocTable({
     // Takes the ids explicitly so a "Retry" can re-run exactly the rows that
     // failed. Reading the selection again would resend the whole original
     // batch: the notice's closure is frozen, and `setSelectedDocIds` below
-    // cannot reach it.
-    const removeDocsFromFolder = useCallback(async (ids: string[]) => {
+    // cannot reach it. Drag-moves and "Remove from subfolder" (a move to the
+    // root) both land here, so a retry is reported the same way as the
+    // first attempt.
+    const moveDocsToFolder = useCallback(async (
+        ids: string[],
+        targetFolderId: string | null,
+    ) => {
         if (ids.length === 0) return;
-        setSelectedFolderIds(new Set());
         const snapshot = docs;
+        const updatedAt = new Date().toISOString();
         setDocuments((prev) =>
             prev.map((document) =>
                 ids.includes(document.id)
-                    ? { ...document, folder_id: null }
+                    ? {
+                          ...document,
+                          folder_id: targetFolderId,
+                          updated_at: updatedAt,
+                      }
                     : document,
             ),
         );
         const results = await Promise.allSettled(
-            ids.map((id) => operations.moveDocument(id, null)),
+            ids.map((id) => operations.moveDocument(id, targetFolderId)),
         );
         // Rows the server did move carry its version of the record. A move
         // that resolves without one (a 204, say) still counts as moved, so
@@ -3492,20 +3436,22 @@ export function DocTable({
         const failedIds = ids.filter(
             (_, index) => results[index].status === "rejected",
         );
-        // Put the rows that did not move back in their folders instead of
-        // leaving them at the root where they never arrived.
+        // Put the rows that did not move back where they were instead of
+        // leaving them where they never arrived.
         setDocuments((prev) =>
             prev.map((document) => {
                 if (updatedById.has(document.id)) {
                     return { ...document, ...updatedById.get(document.id)! };
                 }
                 if (!failedIds.includes(document.id)) return document;
-                return {
-                    ...document,
-                    folder_id:
-                        snapshot.find((doc) => doc.id === document.id)
-                            ?.folder_id ?? document.folder_id,
-                };
+                const before = snapshot.find((doc) => doc.id === document.id);
+                return before
+                    ? {
+                          ...document,
+                          folder_id: before.folder_id,
+                          updated_at: before.updated_at,
+                      }
+                    : document;
             }),
         );
         if (failedIds.length === 0) return;
@@ -3513,25 +3459,33 @@ export function DocTable({
         const failedNames = snapshot
             .filter((doc) => failedIds.includes(doc.id))
             .map((doc) => doc.filename);
+        const one = failedIds.length === 1;
+        const where =
+            targetFolderId === null
+                ? ` out of ${one ? "its folder" : "their folders"}`
+                : "";
         notifyPartialFailure(
-            `${failedIds.length} ${failedIds.length === 1 ? "document" : "documents"} could not be moved out of ${failedIds.length === 1 ? "its folder" : "their folders"}${
+            `${failedIds.length} ${one ? "document" : "documents"} could not be moved${where}${
                     failedNames.length > 0 ? `: ${failedNames.join(", ")}` : ""
                 }.`,
             {
-                action: `move ${failedIds.length === 1 ? "the document" : "those documents"} out of ${failedIds.length === 1 ? "its folder" : "their folders"}`,
+                action: `move ${one ? "the document" : "those documents"}${where}`,
                 onRetry: () => {
                     setSelectedDocIds(failedIds);
-                    void removeDocsFromFolder(failedIds);
+                    void moveDocsToFolder(failedIds, targetFolderId);
                 },
             },
         );
-    }, [
-        docs,
-        operations,
-        setDocuments,
-        setSelectedDocIds,
-        setSelectedFolderIds,
-    ]);
+    }, [docs, operations, setDocuments, setSelectedDocIds]);
+
+    const removeDocsFromFolder = useCallback(
+        async (ids: string[]) => {
+            if (ids.length === 0) return;
+            setSelectedFolderIds(new Set());
+            await moveDocsToFolder(ids, null);
+        },
+        [moveDocsToFolder, setSelectedFolderIds],
+    );
 
     const handleRemoveSelectedFromFolder = useCallback(async () => {
         if (!requireCapability("docs.organize", "move documents", "editor"))
