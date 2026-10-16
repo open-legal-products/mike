@@ -19,7 +19,7 @@ import {
     useWorkspace,
     useWorkspaceOrgId,
 } from "@/app/contexts/WorkspaceContext";
-import { userFacingApiError } from "@/app/lib/userFacingError";
+import { notifyError, userFacingApiError } from "@/app/lib/userFacingError";
 import {
     SUPPORTED_DOCUMENT_ACCEPT,
     combineUploadWarnings,
@@ -149,9 +149,13 @@ function NewTRModalForWorkspace({
     const [uploadError, setUploadError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const creatingRef = useRef(false);
+    // The project whose files the picker is loading; see handleSelectProject.
+    const projectRequestRef = useRef<string | null>(null);
 
     // Workflow templates
     const [workflows, setWorkflows] = useState<Workflow[]>([]);
+    // Bumped by the "Retry" on a failed template load so the effect refetches.
+    const [workflowReloadKey, setWorkflowReloadKey] = useState(0);
     const [loadingWorkflows, setLoadingWorkflows] = useState(false);
     const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(
         null,
@@ -198,11 +202,18 @@ function NewTRModalForWorkspace({
             .catch((error) => {
                 devLog("[workflows/ui:tabular-review-modal] failed", error);
                 setWorkflows([]);
+                // An empty list reads as "this firm has no templates", so a
+                // failed load has to say that it failed.
+                notifyError(error, {
+                    action: "load the workflow templates",
+                    dedupeKey: "new-review-workflows",
+                    onRetry: () => setWorkflowReloadKey((key) => key + 1),
+                });
             })
             .finally(() => setLoadingWorkflows(false));
 
         if (isProjectMode) preselectedProjectDocsRef.current = false;
-    }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [open, workflowReloadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (!open || !profile?.tabularModel) return;
@@ -242,20 +253,27 @@ function NewTRModalForWorkspace({
         handleClose();
     }
 
+    // Also drops a project load still in flight, so it cannot land later.
+    function clearProjectSelection() {
+        projectRequestRef.current = null;
+        setLoadingDocs(false);
+        setSelectedProjectId("");
+        setProjectDocs([]);
+        setProjectFolders([]);
+        setSelectedDocuments([]);
+    }
+
     function handleClose() {
         setStep("details");
         setReviewExists(false);
         setTitle("");
         setUnderProject(false);
-        setSelectedProjectId("");
+        clearProjectSelection();
         setDirectGrants([]);
         setMemberGrants([]);
         setSelectedModel("");
         setNoModelsWarning(null);
-        setProjectDocs([]);
-        setProjectFolders([]);
         setExtraStandaloneDocs([]);
-        setSelectedDocuments([]);
         setGroupBySubfolder(false);
         setSelectedWorkflowId(null);
         setUploadError(null);
@@ -340,6 +358,11 @@ function NewTRModalForWorkspace({
     }
 
     async function handleSelectProject(projectId: string) {
+        projectRequestRef.current = projectId;
+        // A slower load for a project the user has since moved away from
+        // must not fill the picker, end its loading state, or raise a notice
+        // whose Retry would switch the picker back.
+        const superseded = () => projectRequestRef.current !== projectId;
         setSelectedProjectId(projectId);
         setProjectDocs([]);
         setProjectFolders([]);
@@ -347,6 +370,7 @@ function NewTRModalForWorkspace({
         setLoadingDocs(true);
         try {
             const proj = await getProject(projectId);
+            if (superseded()) return;
             setDirectGrants([]);
             setMemberGrants([]);
             const docs = (proj.documents ?? []).filter(
@@ -355,8 +379,17 @@ function NewTRModalForWorkspace({
             setProjectDocs(docs);
             setProjectFolders(proj.folders ?? []);
             setSelectedDocuments(docs);
+        } catch (error) {
+            if (superseded()) return;
+            // Without this the picker just sat there empty, and the rejection
+            // went nowhere because the caller does not await it.
+            notifyError(error, {
+                action: "load this project's files",
+                dedupeKey: `new-review-project:${projectId}`,
+                onRetry: () => void handleSelectProject(projectId),
+            });
         } finally {
-            setLoadingDocs(false);
+            if (!superseded()) setLoadingDocs(false);
         }
     }
 
@@ -653,12 +686,7 @@ function NewTRModalForWorkspace({
                                     checked={underProject}
                                     onCheckedChange={(next) => {
                                         setUnderProject(next);
-                                        if (!next) {
-                                            setSelectedProjectId("");
-                                            setProjectDocs([]);
-                                            setProjectFolders([]);
-                                            setSelectedDocuments([]);
-                                        }
+                                        if (!next) clearProjectSelection();
                                     }}
                                 >
                                     Create under a project

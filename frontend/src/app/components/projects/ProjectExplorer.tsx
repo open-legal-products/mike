@@ -32,6 +32,11 @@ import {
     DropdownAtPoint,
     DropdownItem,
 } from "@/shared/ui/dropdown";
+import {
+    notifyMoveFailure,
+    type ProjectTreeItemKind,
+} from "@/app/lib/projectTreeMoves";
+import { useLatestRef } from "@/app/hooks/useLatestRef";
 
 interface Props {
     projectName?: string | null;
@@ -174,6 +179,30 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
         setContextMenu({ x: e.clientX, y: e.clientY, parentId, folderId, docId });
     }
 
+    // A drop is fired as `void handleDropOnTarget(...)`, so a rejecting move
+    // handler would otherwise become an unhandled rejection and the item
+    // would look moved while nothing happened. The owner of the tree reverts
+    // its own state; this layer guarantees the user hears about it, and that
+    // a failing retry is reported again rather than swallowed. Retry
+    // re-enters the handler this component holds now, not the prop captured
+    // when the failing drop happened (`moveAndReport` is hoisted).
+    const moveRetryRef = useLatestRef(moveAndReport);
+    async function moveAndReport(
+        kind: ProjectTreeItemKind,
+        id: string,
+        targetFolderId: string | null,
+    ) {
+        const move = kind === "doc" ? onMoveDoc : onMoveFolder;
+        if (!move) return;
+        try {
+            await move(id, targetFolderId);
+        } catch (error) {
+            notifyMoveFailure(kind, id, error, () =>
+                moveRetryRef.current(kind, id, targetFolderId),
+            );
+        }
+    }
+
     function wouldCreateCycle(movingId: string, targetId: string): boolean {
         let cur: ProjectFolder | undefined = folders.find((f) => f.id === targetId);
         while (cur) {
@@ -191,12 +220,12 @@ export const ProjectExplorer = forwardRef<ProjectExplorerHandle, Props>(function
         if (docId && onMoveDoc) {
             const doc = documents.find((d) => d.id === docId);
             if (!doc || (doc.folder_id ?? null) === targetFolderId) return;
-            await onMoveDoc(docId, targetFolderId);
+            await moveAndReport("doc", docId, targetFolderId);
         } else if (movingFolderId && movingFolderId !== targetFolderId && onMoveFolder) {
             if (targetFolderId !== null && wouldCreateCycle(movingFolderId, targetFolderId)) return;
             const folder = folders.find((f) => f.id === movingFolderId);
             if (!folder || (folder.parent_folder_id ?? null) === targetFolderId) return;
-            await onMoveFolder(movingFolderId, targetFolderId);
+            await moveAndReport("folder", movingFolderId, targetFolderId);
         }
     }
 

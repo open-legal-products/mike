@@ -39,7 +39,8 @@ vi.mock("@/app/lib/authApi", async (importOriginal) => ({
     startGoogleOAuth,
 }));
 
-vi.mock("@/app/lib/mikeApi", () => ({
+vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("@/app/lib/mikeApi")>()),
     getUserProfile,
     completeUserOnboarding,
 }));

@@ -41,6 +41,8 @@ import {
     type AccessContact,
 } from "@/app/components/popups/PermissionDeniedPopup";
 import { AccessModal } from "@/app/components/modals/AccessModal";
+import { notifyError } from "@/app/lib/userFacingError";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { DocumentWorkspaceScope } from "@/app/contexts/WorkspaceContext";
 import { useItemWorkspace } from "@/app/hooks/useItemWorkspace";
@@ -184,6 +186,11 @@ export function ProjectWorkspaceProvider({
     // Direct access grants, loaded only when the share dialog is opened: every
     // project page would otherwise pay for a roster nobody looked at.
     const [grants, setGrants] = useState<ProjectGrant[] | null>(null);
+    // The grant list failed to load. `grants` stays null so the Access panel
+    // says the list is unavailable instead of rendering an empty list, which
+    // reads as "nobody has access to this project".
+    const [grantsUnavailable, setGrantsUnavailable] = useState(false);
+    const [projectReloadToken, setProjectReloadToken] = useState(0);
     const [projectDetailsOpen, setProjectDetailsOpen] = useState(false);
     const [projectMemoryOpen, setProjectMemoryOpen] = useState(false);
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<OwnerGate | null>(
@@ -260,11 +267,17 @@ export function ProjectWorkspaceProvider({
                 setFolders(loaded.folders ?? []);
             })
             .catch((error) => {
-                console.error("[project workspace] failed to load project", error);
-                if (!cancelled) {
-                    setProject(null);
-                    setFolders([]);
-                }
+                if (cancelled) return;
+                // Without this the workspace just renders as an empty
+                // project: no documents, no chats, no explanation.
+                setProject(null);
+                setFolders([]);
+                notifyError(error, {
+                    action: "load this project",
+                    dedupeKey: `project-load:${projectId}`,
+                    onRetry: () =>
+                        setProjectReloadToken((token) => token + 1),
+                });
             })
             .finally(() => {
                 if (!cancelled) setProjectLoading(false);
@@ -272,7 +285,7 @@ export function ProjectWorkspaceProvider({
         return () => {
             cancelled = true;
         };
-    }, [projectId, showShell]);
+    }, [projectId, showShell, projectReloadToken]);
 
     const search = searchBySection[activeSection];
     const setSearch = useCallback(
@@ -351,18 +364,28 @@ export function ProjectWorkspaceProvider({
         [roleKnown],
     );
 
+    const refreshGrantsRef = useRef<(() => void) | null>(null);
     const refreshGrants = useCallback(async () => {
         try {
             const access = await getProjectAccess(projectId);
             setGrants(access.grants);
+            setGrantsUnavailable(false);
         } catch (error) {
-            console.error("[project workspace] failed to load access", error);
-            setGrants([]);
+            setGrantsUnavailable(true);
+            notifyError(error, {
+                action: "load who has access",
+                dedupeKey: `project-access:${projectId}`,
+                onRetry: () => refreshGrantsRef.current?.(),
+            });
         }
     }, [projectId]);
 
+    // "Retry" re-runs the current closure, not the one that failed.
+    useAssignLatest(refreshGrantsRef, () => void refreshGrants());
+
     useEffect(() => {
         setGrants(null);
+        setGrantsUnavailable(false);
     }, [projectId]);
 
     useEffect(() => {
@@ -371,9 +394,16 @@ export function ProjectWorkspaceProvider({
         // one consumer, render only at that tier anyway. Below admin the
         // modal shows the /people roster, so there is nothing to fetch and
         // no point collecting a 403 on every open.
-        if (accessModalOpen && grants === null && canDo("access.manage"))
+        // `grantsUnavailable` also stops this from re-firing forever once a
+        // load has failed: the user retries from the notice.
+        if (
+            accessModalOpen &&
+            grants === null &&
+            !grantsUnavailable &&
+            canDo("access.manage")
+        )
             void refreshGrants();
-    }, [accessModalOpen, grants, refreshGrants, canDo]);
+    }, [accessModalOpen, grants, grantsUnavailable, refreshGrants, canDo]);
 
     const createChat = useCallback(() => {
         if (!canDo("content.edit")) {
@@ -483,8 +513,16 @@ export function ProjectWorkspaceProvider({
             setDeleteProjectStatus("deleted");
             window.setTimeout(() => router.push("/projects"), 500);
         } catch (error) {
-            console.error("deleteProject failed", error);
+            // The dialog otherwise drops back to its resting state with the
+            // project still listed, which reads as "nothing happened".
             setDeleteProjectStatus("idle");
+            notifyError(error, {
+                action: "delete this project",
+                dedupeKey: `project-delete:${projectId}`,
+                // Retry re-opens the confirmation rather than deleting from
+                // the notice: a destructive action is always confirmed.
+                onRetry: () => setDeleteProjectConfirmOpen(true),
+            });
         }
     }
 
@@ -668,6 +706,7 @@ export function ProjectWorkspaceProvider({
                             ]}
                             access={{
                                 grants: grants ?? [],
+                                grantsUnavailable,
                                 orgId: project.org_id ?? null,
                                 ownerLabel: "Project owners",
                                 canManage: canDo("access.manage"),

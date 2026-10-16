@@ -41,11 +41,21 @@ verify that the latest database migration has been applied
 ## Port 54322 is already allocated
 
 Another local Postgres or Supabase stack is using Mike's default host port.
-Stop that stack or choose another mapping, for example:
+`npm run stack:status` lists the stacks this repository has left behind,
+including active stacks in other checkouts. Stop the one holding the port
+(`npm run stack:down -- -p <project>` or
+`supabase stop --project-id <id>`), or choose another mapping:
 
 ```bash
 DB_PORT=54323 docker compose up --build
 ```
+
+## Docker is slow or the disk is full of old stacks
+
+Stopped stacks are never removed on their own; see "Stop and clean up" in
+`docs/local-development.md`. `npm run stack:gc` sweeps what this repository
+left behind, and `npm run stack:gc -- --deep` also drops unused images and
+build cache.
 
 ## The model picker reports a missing key
 

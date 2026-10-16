@@ -1,0 +1,44 @@
+# CI: does scripts/stack.sh still sweep exactly the right Docker leftovers?
+#
+# scripts/stack.sh gc runs before every local stack start (scripts/stack.sh up
+# and scripts/e2e-local-stack.sh). It removes stopped stacks this repository
+# created and must never touch a running stack or another project's
+# containers. A bug in either direction is costly: too timid and the machine
+# fills up with dead stacks again; too eager and it deletes a developer's
+# database. scripts/stack.test.sh boots throwaway fixture stacks that mimic
+# the real leftovers and asserts the sweep's decisions, so run it whenever the
+# script changes. The runner has Docker; the test confines itself to its own
+# fixtures with MIKE_GC_ONLY.
+name: Stack script
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/stack.sh
+      - scripts/stack.test.sh
+      - .github/workflows/stack-script.yml
+  pull_request:
+    paths:
+      - scripts/stack.sh
+      - scripts/stack.test.sh
+      - .github/workflows/stack-script.yml
+  workflow_dispatch:
+
+concurrency:
+  group: stack-script-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions:
+  contents: read
+
+jobs:
+  gc-regression:
+    name: gc fixture test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the fixture test
+        run: bash scripts/stack.test.sh

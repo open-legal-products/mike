@@ -113,6 +113,11 @@ import type { MessageExcerpt } from "@/shared/lib/messageExcerpts";
 import { readDocumentDragPayload } from "@/app/lib/docTableSelection";
 import { userFacingApiError } from "@/app/lib/userFacingError";
 import {
+    moveProjectItemOptimistically,
+    notifyMoveFailure,
+    type ProjectTreeItemKind,
+} from "@/app/lib/projectTreeMoves";
+import {
     collectDroppedDocumentUploadEntries,
     documentUploadEntriesFromFiles,
     documentUploadFolderSegments,
@@ -1085,42 +1090,42 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         }
     };
 
-    const handleMoveDoc = async (
-        docId: string,
-        targetFolderId: string | null,
-    ) => {
-        setProject((prev) =>
-            prev
-                ? {
-                      ...prev,
-                      documents: (prev.documents ?? []).map((d) =>
-                          d.id === docId
-                              ? { ...d, folder_id: targetFolderId }
-                              : d,
-                      ),
-                  }
-                : prev,
-        );
-        await moveDocumentToFolder(projectId, docId, targetFolderId);
-    };
+    // Optimistic: the tree moves at once, and a failed request puts only
+    // that item back and rethrows so the drop target can report it.
+    const handleMoveDoc = (docId: string, targetFolderId: string | null) =>
+        moveProjectItemOptimistically({
+            project,
+            setProject,
+            kind: "doc",
+            id: docId,
+            targetFolderId,
+            request: () =>
+                moveDocumentToFolder(projectId, docId, targetFolderId),
+        });
 
-    const handleMoveFolder = async (
+    const handleMoveFolder = (
         folderId: string,
         targetFolderId: string | null,
-    ) => {
-        setProject((prev) =>
-            prev
-                ? {
-                      ...prev,
-                      folders: (prev.folders ?? []).map((f) =>
-                          f.id === folderId
-                              ? { ...f, parent_folder_id: targetFolderId }
-                              : f,
-                      ),
-                  }
-                : prev,
-        );
-        await moveSubfolderToFolder(projectId, folderId, targetFolderId);
+    ) =>
+        moveProjectItemOptimistically({
+            project,
+            setProject,
+            kind: "folder",
+            id: folderId,
+            targetFolderId,
+            request: () =>
+                moveSubfolderToFolder(projectId, folderId, targetFolderId),
+        });
+
+    // The explorer reports failures on its own drop targets; this is the
+    // panel's root drop target, outside it.
+    const moveToRoot = async (kind: ProjectTreeItemKind, id: string) => {
+        const move = kind === "doc" ? handleMoveDoc : handleMoveFolder;
+        try {
+            await move(id, null);
+        } catch (error) {
+            notifyMoveFailure(kind, id, error, () => moveToRoot(kind, id));
+        }
     };
 
     const requestDeleteDoc = async (docId: string) => {
@@ -1470,10 +1475,10 @@ export default function ProjectAssistantChatPage({ params }: Props) {
                                 );
                                 if (docId) {
                                     e.stopPropagation();
-                                    await handleMoveDoc(docId, null);
+                                    await moveToRoot("doc", docId);
                                 } else if (folderId) {
                                     e.stopPropagation();
-                                    await handleMoveFolder(folderId, null);
+                                    await moveToRoot("folder", folderId);
                                 }
                                 // External file drops are not stopped — they bubble to handleExplorerFileDrop
                             }}

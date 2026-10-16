@@ -19,7 +19,7 @@ Website: [mikeoss.com](https://mikeoss.com)
 - Run reusable assistant and tabular-review workflows
 - Organize projects, folders, and a document library
 - Verify citations and research US case law with CourtListener
-- Work from Microsoft Word with the beta task-pane add-in
+- Work from Microsoft Word with the task-pane add-in
 - Run supported language models locally through Ollama
 
 ## Quick start
@@ -52,6 +52,10 @@ and local email capture without requiring managed infrastructure.
 
 5. Open [http://localhost:3000](http://localhost:3000) and create an account.
 
+To stop, run `npm run stack:down` rather than `docker compose stop`: stopped
+containers are never removed on their own and keep images and volumes in use.
+See "Stop and clean up" in `docs/local-development.md`.
+
 The bundled credentials and infrastructure are intended for local development
 only. See [Local development](docs/local-development.md) for service endpoints,
 authentication behavior, Ollama setup, and first-run guidance.
@@ -70,7 +74,7 @@ variables, and the [Sentry data audit](docs/sentry-data-audit.md).
 | --- | --- |
 | `frontend/` | Next.js web application |
 | `backend/` | Express API, document processing, and database access |
-| `word-addin/` | Microsoft Word task-pane add-in (beta) |
+| `word-addin/` | Microsoft Word task-pane add-in |
 | `backend/schema.sql` | Complete schema for fresh databases |
 | `backend/migrations/` | Dated migrations for existing deployments |
 | `docker-compose.yml` | Local application and infrastructure stack |

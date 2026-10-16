@@ -10,6 +10,8 @@ import {
   type LibraryScope,
 } from "@/app/lib/mikeApi";
 import { useDocumentWorkspace } from "@/app/contexts/WorkspaceContext";
+import { notifyError } from "@/app/lib/userFacingError";
+import { useAssignLatest } from "@/app/hooks/useLatestRef";
 import type { Document, LibraryFolder, Project } from "./types";
 
 export type DirectoryTab = "files" | "templates" | "projects";
@@ -156,6 +158,14 @@ export function useDirectoryData(
     [],
   );
 
+    const retryRef = useRef<{
+    loadTab: (tab: DirectoryTab) => void;
+    loadFolderChildren: (tab: LibraryDirectoryTab, folderId: string) => void;
+    loadMoreLibraryDocuments: (tab: LibraryDirectoryTab, parentId: string | null) => void;
+    loadMoreProjects: () => void;
+    loadProjectLevel: (projectId: string, parentFolderId: string | null) => void;
+    loadMoreProjectDocuments: (projectId: string, parentFolderId: string | null) => void;
+  } | null>(null);
     const loadTab = useCallback(
         async (tab: DirectoryTab) => {
             if (
@@ -203,7 +213,7 @@ export function useDirectoryData(
                     ...loadedTabsRef.current,
                     [tab]: true,
                 };
-            } catch {
+            } catch (error) {
                 if (tab === "files") {
                     setStandaloneDocuments([]);
                     setFileFolders([]);
@@ -213,6 +223,14 @@ export function useDirectoryData(
                 } else {
                     setProjects([]);
                 }
+                // The picker is now empty for a reason the user cannot see,
+                // so say so instead of passing an empty shelf off as the
+                // truth.
+                notifyError(error, {
+                    action: `load your ${tab}`,
+                    dedupeKey: `directory:${tab}`,
+                    onRetry: () => retryRef.current?.loadTab(tab),
+                });
             } finally {
                 loadingTabsRef.current = {
                     ...loadingTabsRef.current,
@@ -269,10 +287,14 @@ export function useDirectoryData(
             },
           }));
         } catch (error) {
-          console.error(
-            "[file-directory] failed to load folder children",
-            error,
-          );
+          // A folder that stays empty after the spinner looks like an empty
+          // folder, so the failure has to be said out loud.
+          notifyError(error, {
+            action: "open the folder",
+            dedupeKey: `directory-folder:${tab}:${folderId}`,
+            onRetry: () =>
+              retryRef.current?.loadFolderChildren(tab, folderId),
+          });
         } finally {
           setLoadingFolderIds((prev) => {
             const next = new Set(prev[tab]);
@@ -333,10 +355,12 @@ export function useDirectoryData(
             },
           }));
         } catch (error) {
-          console.error(
-            "[file-directory] failed to load more documents",
-            error,
-          );
+          notifyError(error, {
+            action: `load more ${tab}`,
+            dedupeKey: `directory-more:${tab}:${levelKey}`,
+            onRetry: () =>
+              retryRef.current?.loadMoreLibraryDocuments(tab, parentId),
+          });
         } finally {
           setLoadingMoreDocumentsByLevel((prev) => ({
             ...prev,
@@ -375,7 +399,11 @@ export function useDirectoryData(
       );
       setProjectsHasMore(rows.length > DIRECTORY_PAGE_SIZE);
     } catch (error) {
-      console.error("[file-directory] failed to load more projects", error);
+      notifyError(error, {
+        action: "load more projects",
+        dedupeKey: "directory-more-projects",
+        onRetry: () => retryRef.current?.loadMoreProjects(),
+      });
     } finally {
       loadingMoreProjectsRef.current = false;
       setLoadingMoreProjects(false);
@@ -416,10 +444,12 @@ export function useDirectoryData(
             [levelKey]: result.documentsHasMore,
           }));
         } catch (error) {
-          console.error(
-            "[file-directory] failed to load project folder",
-            error,
-          );
+          notifyError(error, {
+            action: "open the project folder",
+            dedupeKey: `directory-project-level:${levelKey}`,
+            onRetry: () =>
+              retryRef.current?.loadProjectLevel(projectId, parentFolderId),
+          });
         } finally {
           setLoadingProjectLevels((current) => {
             const next = new Set(current);
@@ -474,10 +504,15 @@ export function useDirectoryData(
             [levelKey]: result.documentsHasMore,
           }));
         } catch (error) {
-          console.error(
-            "[file-directory] failed to load more project files",
-            error,
-          );
+          notifyError(error, {
+            action: "load more project files",
+            dedupeKey: `directory-project-more:${levelKey}`,
+            onRetry: () =>
+              retryRef.current?.loadMoreProjectDocuments(
+                projectId,
+                parentFolderId,
+              ),
+          });
         } finally {
           setLoadingProjectLevels((current) => {
             const next = new Set(current);
@@ -492,6 +527,24 @@ export function useDirectoryData(
     },
         [enabled],
     );
+
+    // "Retry" on a failed load re-enters the latest loader (see useLatestRef).
+    useAssignLatest(retryRef, {
+        loadTab: (tab: DirectoryTab) => void loadTab(tab),
+        loadFolderChildren: (tab: LibraryDirectoryTab, folderId: string) =>
+            void loadFolderChildren(tab, folderId),
+        loadMoreLibraryDocuments: (
+            tab: LibraryDirectoryTab,
+            parentId: string | null,
+        ) => void loadMoreLibraryDocuments(tab, parentId),
+        loadMoreProjects: () => void loadMoreProjects(),
+        loadProjectLevel: (projectId: string, parentFolderId: string | null) =>
+            void loadProjectLevel(projectId, parentFolderId),
+        loadMoreProjectDocuments: (
+            projectId: string,
+            parentFolderId: string | null,
+        ) => void loadMoreProjectDocuments(projectId, parentFolderId),
+    });
 
     useEffect(() => {
         if (!enabled) return;

@@ -46,7 +46,10 @@ export function knownErrorCodeMessage(
 // user cannot fix, a "Contact support" link that opens a pre-filled email.
 
 import {
+    UserVisibleError,
     buildSupportMailto,
+    describeError as describeSharedError,
+    type DescribeErrorOptions,
     type UserFacingError,
 } from "@/shared/lib/userError";
 import {
@@ -58,7 +61,6 @@ import { isReported, reportError } from "@/app/lib/errorReporting";
 export {
     SUPPORT_EMAIL,
     UserVisibleError,
-    describeError,
     isAbortError,
     isNetworkError,
     type UserErrorKind,
@@ -146,7 +148,7 @@ function reportRealFault(
  * too, so the error copy for them has a single source. A call site's own
  * `codeMessages` entry still wins.
  */
-function withReportedUpstreamMessage(error: unknown, options: NotifyErrorOptions): NotifyErrorOptions {
+function withReportedUpstreamMessage<T extends DescribeErrorOptions>(error: unknown, options: T): T {
     // Duck-typed like describeError: the code is read off any error shape,
     // and mikeApi's table is consulted only when there is a code to look up.
     const raw = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
@@ -154,6 +156,19 @@ function withReportedUpstreamMessage(error: unknown, options: NotifyErrorOptions
     const upstream = code ? reportedUpstreamMessage(code) : null;
     if (!code || !upstream) return options;
     return { ...options, codeMessages: { [code]: upstream, ...options.codeMessages } };
+}
+
+/**
+ * The web app's `describeError`: the shared classifier plus mikeApi's fixed
+ * sentences for server-reported 5xx codes. Web code imports it from here so
+ * an inline message and a notice for the same failure read the same words;
+ * calling the shared one directly drops those sentences.
+ */
+export function describeError(
+    error: unknown,
+    options: DescribeErrorOptions = {},
+): UserFacingError {
+    return describeSharedError(error, withReportedUpstreamMessage(error, options));
 }
 
 /**
@@ -191,3 +206,25 @@ export const notifyError = createErrorNotifier<NotifyErrorOptions>({
         };
     },
 });
+
+/**
+ * Report a batch action (delete, move, upload) that failed for some items.
+ *
+ * `message` names what did not happen ("2 documents could not be moved:
+ * a.pdf, b.pdf."). The items' own requests already went through the API
+ * client, which reported any server fault, so this summary is classified as
+ * a conflict: shown, retryable when `onRetry` re-runs only the items that
+ * failed, and neither sent to Sentry again nor offered to support.
+ */
+export function notifyPartialFailure(
+    message: string,
+    options: Omit<NotifyErrorOptions, "support"> = {},
+): UserFacingError | null {
+    return notifyError(
+        new UserVisibleError(message, {
+            kind: "conflict",
+            retryable: Boolean(options.onRetry),
+        }),
+        options,
+    );
+}

@@ -16,6 +16,7 @@ import type {
 } from "@/app/components/shared/types";
 import ProjectAssistantChatPage from "./page";
 import { getProject } from "@/app/lib/mikeApi";
+import { ToastViewportUI, clearToasts } from "@/shared/ui/ToastUI";
 import type { DocxCloseGuard } from "@/app/components/shared/views/DocxRenderer.types";
 
 const state = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ const state = vi.hoisted(() => ({
     deleteDocument: vi.fn(),
     discardDraft: vi.fn(),
     uploadProjectDocuments: vi.fn(),
+    moveDocumentToFolder: vi.fn(),
     loadChats: vi.fn().mockResolvedValue(undefined),
     setCurrentChatId: vi.fn(),
     setNewChatMessages: vi.fn(),
@@ -67,6 +69,7 @@ vi.mock("@/app/lib/mikeApi", async (importOriginal) => ({
     getDocument: state.getDocument,
     deleteDocument: state.deleteDocument,
     uploadProjectDocuments: state.uploadProjectDocuments,
+    moveDocumentToFolder: state.moveDocumentToFolder,
     listProjectChats: vi
         .fn()
         .mockImplementation(async () => state.projectChats),
@@ -108,7 +111,14 @@ vi.mock("@/app/components/projects/ProjectExplorer", () => ({
     }: {
         documents: Document[];
         onDocClick: (doc: Document) => void;
-    }) => <button onClick={() => onDocClick(documents[0])}>Open draft</button>,
+    }) => (
+        <button
+            data-folder={documents[0]?.folder_id ?? "root"}
+            onClick={() => onDocClick(documents[0])}
+        >
+            Open draft
+        </button>
+    ),
 }));
 vi.mock("@/app/components/assistant/ChatInput", () => ({
     ChatInput: ({
@@ -1345,5 +1355,50 @@ describe("leaving a project chat mid-stream", () => {
         expect(body.state.cancelled).toBe(false);
         expect(screen.queryByText(/First answer/)).not.toBeInTheDocument();
         expect(screen.queryByText(/and the rest/)).not.toBeInTheDocument();
+    });
+});
+
+describe("project explorer root drop", () => {
+    // Dropping a document on the panel outside the tree moved it to the root
+    // optimistically; a failed request left it shown at the root with no
+    // word to the user.
+    it("puts a document back and says so when the move to the root fails", async () => {
+        clearToasts();
+        vi.mocked(getProject).mockResolvedValueOnce({
+            id: "p1",
+            name: "Matter",
+            access_role: "owner",
+            documents: [{ id: "doc1", filename: "Draft.docx", folder_id: "f1" }],
+            folders: [{ id: "f1", name: "Drafts", parent_folder_id: null }],
+        } as unknown as Awaited<ReturnType<typeof getProject>>);
+        state.moveDocumentToFolder.mockRejectedValue(
+            new TypeError("Failed to fetch"),
+        );
+        await renderWorkspace();
+        render(<ToastViewportUI />);
+        const explorer = screen.getByRole("button", { name: "Open draft" });
+        expect(explorer).toHaveAttribute("data-folder", "f1");
+
+        await act(async () => {
+            fireEvent.drop(explorer.parentElement!, {
+                dataTransfer: {
+                    getData: (type: string) =>
+                        type === "application/mike-doc" ? "doc1" : "",
+                    files: [],
+                    types: ["application/mike-doc"],
+                },
+            });
+        });
+
+        expect(state.moveDocumentToFolder).toHaveBeenCalledWith(
+            "p1",
+            "doc1",
+            null,
+        );
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+            "Couldn't move this document",
+        );
+        expect(explorer).toHaveAttribute("data-folder", "f1");
+        clearToasts();
     });
 });
