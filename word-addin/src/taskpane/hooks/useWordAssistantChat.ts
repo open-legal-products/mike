@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   resumeAssistant,
   streamAssistant,
@@ -1161,7 +1161,11 @@ export function useWordAssistantChat({
     ): Promise<void> => runTurn({ kind: "send", submission, options }),
     [runTurn],
   );
-  runTurnRef.current = runTurn;
+  // After commit, not during render: a discarded concurrent render must not
+  // leave a Retry calling that render's closure.
+  useLayoutEffect(() => {
+    runTurnRef.current = runTurn;
+  }, [runTurn]);
 
   /**
    * Attach to an answer the server is already generating into `chatId` — a
