@@ -38,6 +38,8 @@ import {
     ReasoningBlock,
 } from "../assistant/message/EventBlocks";
 import { readSseFrames } from "@/app/lib/sse";
+import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
+import { notifyError } from "@/app/lib/userFacingError";
 import { LIQUID_GLASS_FLAT_CLASS } from "@/app/components/ui/liquid-surface";
 import { ChatPanelHeader } from "../shared/ChatPanelHeader";
 import { HeaderActionsMenu } from "../shared/HeaderActionsMenu";
@@ -592,25 +594,36 @@ export function TRChatPanel({
 
     // Load existing chats from DB on mount
     useEffect(() => {
-        getTabularChats(reviewId)
-            .then((loadedChats) => {
-                setChats(sortChatsByActivity(loadedChats));
-                if (!initialChatId) return;
-                const initialChat = loadedChats.find(
-                    (chat) => chat.id === initialChatId,
-                );
-                setCurrentChatModel(initialChat?.model ?? null);
-                setCurrentChatReasoningLevel(
-                    initialChat?.reasoning_level ?? null,
-                );
-            })
-            .catch(() => {
-                if (initialChatId) {
-                    setCurrentChatModel(null);
-                    setCurrentChatReasoningLevel(null);
-                }
-            })
-            .finally(() => setIsLoadingChats(false));
+        const loadChats = () => {
+            setIsLoadingChats(true);
+            getTabularChats(reviewId)
+                .then((loadedChats) => {
+                    setChats(sortChatsByActivity(loadedChats));
+                    if (!initialChatId) return;
+                    const initialChat = loadedChats.find(
+                        (chat) => chat.id === initialChatId,
+                    );
+                    setCurrentChatModel(initialChat?.model ?? null);
+                    setCurrentChatReasoningLevel(
+                        initialChat?.reasoning_level ?? null,
+                    );
+                })
+                .catch((error) => {
+                    if (initialChatId) {
+                        setCurrentChatModel(null);
+                        setCurrentChatReasoningLevel(null);
+                    }
+                    // Without this the chat menu just stays empty and the
+                    // model/reasoning pickers silently fall back to defaults.
+                    notifyError(error, {
+                        action: "load your chat history",
+                        dedupeKey: `tr-chats:${reviewId}`,
+                        onRetry: loadChats,
+                    });
+                })
+                .finally(() => setIsLoadingChats(false));
+        };
+        loadChats();
     }, [reviewId]); // eslint-disable-line react-hooks/exhaustive-deps -- initialChatId is the mount-time thread; live chat id changes must not refetch settings
 
     // ChatInput persists through UserProfileContext. Mirror successful saves
@@ -983,8 +996,19 @@ export function TRChatPanel({
     }
 
     async function handleDeleteChat(chatId: string) {
+        // Everything the optimistic removal throws away, so a failed delete
+        // can put the thread back instead of losing it from the menu.
+        const snapshot = {
+            chats,
+            currentChatId,
+            currentChatTitle,
+            currentChatModel,
+            currentChatReasoningLevel,
+            messages,
+        };
         setChats((prev) => prev.filter((c) => c.id !== chatId));
-        if (chatId === currentChatId) {
+        const clearedActiveThread = chatId === currentChatId;
+        if (clearedActiveThread) {
             historyRequestGeneration.current++;
             setIsLoadingMessages(false);
             setMessageLoadWarning(false);
@@ -999,14 +1023,48 @@ export function TRChatPanel({
             setCurrentChatReasoningLevel(null);
             setMessages([]);
         }
+        // Every thread switch (and every submit) bumps this, so it doubles
+        // as "has the panel moved on since we emptied it?".
+        const clearedGeneration = streamGenerationRef.current;
         try {
             await deleteTabularChat(reviewId, chatId);
-        } catch {
-            /* ignore */
+        } catch (error) {
+            // Put back only the thread that failed to delete: the list is
+            // reloaded, renamed and appended to while this request is in
+            // flight, and restoring the whole snapshot threw that away.
+            setChats((current) =>
+                restoreOptimisticallyDeletedRows(current, snapshot.chats, [
+                    chatId,
+                ]),
+            );
+            if (
+                clearedActiveThread &&
+                // Reopen the deleted thread only if the user has not since
+                // opened another, started a new chat or sent a message —
+                // re-seating these messages over that would lose their work.
+                streamGenerationRef.current === clearedGeneration
+            ) {
+                currentChatIdRef.current = snapshot.currentChatId;
+                setCurrentChatId(snapshot.currentChatId);
+                setCurrentChatTitle(snapshot.currentChatTitle);
+                setCurrentChatModel(snapshot.currentChatModel);
+                setCurrentChatReasoningLevel(
+                    snapshot.currentChatReasoningLevel,
+                );
+                setMessages(snapshot.messages);
+            }
+            notifyError(error, {
+                action: "delete this chat",
+                onRetry: () => {
+                    void handleDeleteChat(chatId);
+                },
+            });
         }
     }
 
     async function handleRenameChat(chatId: string, title: string) {
+        const previousTitle =
+            chats.find((c) => c.id === chatId)?.title ?? null;
         setChats((prev) =>
             touchChatActivity(
                 prev.map((c) => (c.id === chatId ? { ...c, title } : c)),
@@ -1016,8 +1074,19 @@ export function TRChatPanel({
         if (chatId === currentChatId) setCurrentChatTitle(title);
         try {
             await renameTabularChat(reviewId, chatId, title);
-        } catch {
-            /* ignore */
+        } catch (error) {
+            setChats((prev) =>
+                prev.map((c) =>
+                    c.id === chatId ? { ...c, title: previousTitle } : c,
+                ),
+            );
+            if (chatId === currentChatId) setCurrentChatTitle(previousTitle);
+            notifyError(error, {
+                action: "rename this chat",
+                onRetry: () => {
+                    void handleRenameChat(chatId, title);
+                },
+            });
         }
     }
 
