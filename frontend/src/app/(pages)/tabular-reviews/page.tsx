@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
-import { userFacingApiError } from "@/app/lib/userFacingError";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     deleteTabularReview,
