@@ -696,8 +696,50 @@ test("a pre-[DONE] error event surfaces in the assistant bubble", async ({
   await page.getByRole("button", { name: "Send" }).click();
 
   // The client throws on the pre-[DONE] error; ChatPanel replaces the bubble
-  // content with the backend's own (user-facing) message, no "Error:" prefix.
+  // content with the backend's own (user-facing) message, no "Error:" prefix,
+  // and a toast offers a Retry that resends the turn.
   await expect(page.getByText("model rate limited").first()).toBeVisible();
+  await expect(
+    page.getByTestId("toast").getByRole("button", { name: "Retry" }),
+  ).toBeVisible();
+});
+
+test("the failed-answer Retry re-sends in its own chat, never in one opened since", async ({
+  addin,
+  page,
+}) => {
+  await addin.mockChatStream(["partial answer"], {
+    errorBefore: "model rate limited",
+  });
+  await addin.gotoTaskpane();
+  await addin.expectAuthedShell();
+
+  await page.getByPlaceholder("How can I help?").fill("Prompt from chat A");
+  await page.getByRole("button", { name: "Send" }).click();
+  const retry = page.getByTestId("toast").getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+
+  // Same chat: Retry re-sends the same prompt.
+  let posts = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/word-chat$/.test(request.url())) {
+      posts += 1;
+    }
+  });
+  await retry.click();
+  await expect.poll(() => posts).toBe(1);
+  await expect(retry).toBeVisible();
+
+  // Another chat: the toast is still on screen, but the prompt has no chat
+  // of its own to go to, so nothing is sent into the new conversation.
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(page.getByText("Prompt from chat A")).toHaveCount(0);
+  await retry.click();
+  await expect(
+    page.getByText("This chat has changed. Open the original chat to check its answer."),
+  ).toBeVisible();
+  expect(posts).toBe(1);
+  await expect(page.getByText("Prompt from chat A")).toHaveCount(0);
 });
 
 test("sends a document snapshot without claiming the model read it", async ({

@@ -45,7 +45,16 @@ import {
   upsertDocumentReadEvent,
 } from "../lib/wordChatEvents";
 import { readCurrentDocumentName } from "../lib/wordDocumentIdentity";
-import { describeError, notifyError } from "../lib/notify";
+import {
+  UserVisibleError,
+  describeError,
+  notifyError,
+  notifyInfo,
+} from "../lib/notify";
+import {
+  TURN_OUTCOME_UNKNOWN_MESSAGE,
+  failedTurnRecovery,
+} from "../lib/wordTurnRecovery";
 
 /**
  * What one run of the turn pipeline was asked to do. Sending and resuming
@@ -58,6 +67,7 @@ type WordTurnInput =
       kind: "send";
       submission: WordChatSubmission;
       options: WordChatSubmitOptions;
+      chatId?: string;
     }
   | { kind: "resume"; chatId: string; turnId: string };
 
@@ -228,9 +238,9 @@ export function useWordAssistantChat({
     );
     setIsResponseLoading(false);
     setRequestError(null);
-    // sessionKey is the explicit boundary between conversations.
+    // Conversation, document and account changes all invalidate old actions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionKey]);
+  }, [sessionKey, wordDocumentId, wordChatOwnerId, wordChatStorage]);
 
   const cancel = useCallback((): void => {
     const cursor = activeTurnRef.current;
@@ -250,6 +260,8 @@ export function useWordAssistantChat({
     // the sealed edits and saves the partial transcript.
     abortRef.current?.abort();
   }, [wordDocumentId]);
+  // Each notice captures its own failed turn; only the runner is kept fresh.
+  const runTurnRef = useRef<((input: WordTurnInput) => Promise<void>) | null>(null);
   const dismissRequestError = useCallback(
     (): void => setRequestError(null),
     [],
@@ -288,6 +300,7 @@ export function useWordAssistantChat({
       let assistantEvents: WordAssistantEvent[] = [];
       let runCursor: WordTurnCursor | null = null;
       let turnIsTerminal = false;
+      let requestPosted = false;
 
       // Whether this send still owns the transcript. Cancellation is tracked
       // separately: an aborted stream is no longer current, but the sealed
@@ -337,7 +350,7 @@ export function useWordAssistantChat({
         const requestChatId =
           input.kind === "resume"
             ? input.chatId
-            : (chatId ??
+            : (input.chatId ?? chatId ??
               (wordChatStorage === "local" ? crypto.randomUUID() : undefined));
         if (requestChatId && !chatId) {
           onChatIdChange(requestChatId);
@@ -798,6 +811,7 @@ export function useWordAssistantChat({
           for (let attempt = 0; ; attempt += 1) {
             try {
               if (opener === "post" && submission) {
+                requestPosted = true;
                 await streamAssistant(
                   {
                     ...handlers,
@@ -958,11 +972,60 @@ export function useWordAssistantChat({
             action: "get a response",
             fallback: "Mike couldn't finish that answer. Try again.",
           };
-          const errorMessage = describeError(error, failureCopy).message;
-          notifyError(error, {
+          const recovery = failedTurnRecovery({
+            wasSend: input.kind === "send",
+            requestPosted,
+            turnIsTerminal,
+            chatId: cursor.chatId,
+            turnId: cursor.turnId,
+            status: describeError(error, failureCopy).status,
+          });
+          const failure =
+            recovery.kind === "uncertain"
+              ? new UserVisibleError(TURN_OUTCOME_UNKNOWN_MESSAGE, {
+                  cause: error,
+                })
+              : error;
+          const errorMessage = describeError(failure, failureCopy).message;
+          // Immutable input + the owning sequence prevents an old action from
+          // reading a newer submission or acting in another document/session.
+          const retryInput: WordTurnInput | null =
+            recovery.kind === "resume"
+              ? {
+                  kind: "resume",
+                  chatId: recovery.chatId,
+                  turnId: recovery.turnId,
+                }
+              : recovery.kind === "resend" && input.kind === "send"
+                ? { ...input, chatId: cursor.chatId ?? undefined }
+                : null;
+          notifyError(failure, {
             ...failureCopy,
             dedupeKey: "assistant-turn",
             page: "Assistant",
+            onRetry: retryInput
+              ? async () => {
+                  if (!sendIsCurrent()) {
+                    notifyInfo(
+                      "This chat has changed. Open the original chat to check its answer.",
+                    );
+                    return;
+                  }
+                  if (sendingRef.current || isResponseLoadingRef.current) {
+                    return;
+                  }
+                  if (retryInput.kind === "resume") {
+                    // Replay the SAME server turn from the beginning into one
+                    // bubble. Stable edit IDs keep the applied-edit guards.
+                    setMessages((current) =>
+                      current.filter(
+                        (message) => message.id !== assistantMessageId,
+                      ),
+                    );
+                  }
+                  await runTurnRef.current?.(retryInput);
+                }
+              : undefined,
           });
           assistantEvents = setAssistantError(assistantEvents, errorMessage);
           if (wordChatStorage === "local" && requestChatId) {
@@ -1068,6 +1131,7 @@ export function useWordAssistantChat({
     ): Promise<void> => runTurn({ kind: "send", submission, options }),
     [runTurn],
   );
+  runTurnRef.current = runTurn;
 
   /**
    * Attach to an answer the server is already generating into `chatId` — a
