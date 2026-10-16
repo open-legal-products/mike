@@ -1,9 +1,11 @@
 import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
+import { scriptedDb } from "../../../__tests__/helpers/scriptedDb";
 import type { StreamChatParams } from "../../../lib/llm";
 import {
   buildMemoryCuratorTranscript,
+  loadConversation,
   loadEligibleMemoryMessages,
   MEMORY_CURATOR_WRITE_TOOL,
   memoryCuratorModelForChat,
@@ -816,5 +818,62 @@ describe("memory.consolidate deferral cost", () => {
     // No set_memory_consolidation_status claim, and no memory_files writes.
     expect(rpc).not.toHaveBeenCalled();
     expect(tables).not.toContain("memory_files");
+  });
+});
+
+describe("memory curator Word conversation", () => {
+  const state = {
+    id: "state",
+    surface: "word" as const,
+    conversation_id: "word-chat",
+    actor_user_id: "actor",
+    project_id: null,
+    generation: 1,
+    processed_generation: 0,
+    latest_turn_id: "turn",
+    status: "running",
+  };
+  const withActor = (db: ReturnType<typeof scriptedDb>["db"]) =>
+    Object.assign(db, {
+      auth: {
+        admin: {
+          getUserById: async () => ({
+            data: { user: { email: "actor@example.com" } },
+            error: null,
+          }),
+        },
+      },
+    });
+
+  it("learns an organization's Word chat into its author's memory for that workspace", async () => {
+    const fake = scriptedDb([
+      { table: "word_chats", data: { id: "word-chat", user_id: "actor", org_id: "firm", model: "m" } },
+      // The author is still a member of a team organization.
+      { table: "organizations", data: { kind: "team" } },
+      { table: "org_members", data: { role: "member" } },
+      { table: "organizations", data: { kind: "team" } },
+      // Stored history holds nothing from another workspace.
+      { table: "word_chat_messages", data: [] },
+      // loadEligibleMemoryMessages: no eligible turns yet.
+      { table: "word_chat_messages", data: [] },
+    ]);
+    const conversation = await loadConversation(withActor(fake.db), state);
+    expect(conversation).toMatchObject({
+      orgId: "firm",
+      appOrgId: "firm",
+      appMemoryEligible: true,
+      projectId: null,
+    });
+    fake.done();
+  });
+
+  it("skips an organization's Word chat once its author has left", async () => {
+    const fake = scriptedDb([
+      { table: "word_chats", data: { id: "word-chat", user_id: "actor", org_id: "firm", model: "m" } },
+      { table: "organizations", data: { kind: "team" } },
+      { table: "org_members", data: null },
+    ]);
+    expect(await loadConversation(withActor(fake.db), state)).toBeNull();
+    fake.done();
   });
 });

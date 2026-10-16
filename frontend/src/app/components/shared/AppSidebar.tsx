@@ -12,7 +12,6 @@ import {
 } from "react";
 import {
   PanelLeft,
-  Check,
   ChevronsUpDown,
   ChevronDown,
   Loader2,
@@ -22,9 +21,10 @@ import { useUserProfile } from "@/app/contexts/UserProfileContext";
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import {
     PERSONAL_WORKSPACE,
-    PERSONAL_WORKSPACE_LABEL,
     useWorkspace,
 } from "@/app/contexts/WorkspaceContext";
+import { workspaceName } from "@/shared/lib/workspaceSelection";
+import { WorkspaceMenuUI } from "@/shared/ui/WorkspaceMenuUI";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { SidebarChatItem } from "@/app/components/shared/SidebarChatItem";
@@ -32,10 +32,6 @@ import {
     Dropdown,
     DropdownContent,
     DropdownItem,
-    DropdownLabel,
-    DropdownRadioGroup,
-    DropdownRadioItem,
-    DropdownSeparator,
     DropdownTrigger,
 } from "@/shared/ui/dropdown";
 import { SidebarHeading } from "@/app/components/shared/SidebarHeading";
@@ -211,10 +207,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     } | null>(null);
     const switchWorkspace = (next: string) => {
         if (next === workspaceId) return;
-        const name =
-            next === PERSONAL_WORKSPACE
-                ? PERSONAL_WORKSPACE_LABEL
-                : (organizations?.find((org) => org.id === next)?.name ?? "");
+        const name = workspaceName(next, organizations);
         if (pathname === WORKSPACE_HOME) {
             pendingWorkspaceRef.current = null;
             setWorkspace(next);
@@ -237,19 +230,6 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     // switch never paints the previous workspace's matters from cache.
     const projectsCacheKey = userId ? `${userId}:${workspaceId ?? ""}` : null;
     const activeProjectsKeyRef = useRef<string | null>(null);
-    // The switcher only exists for somebody who has more than one place to
-    // be. With no organizations there is nothing to choose between, and the
-    // menu stays exactly as it was.
-    const workspaceOptions =
-        workspaceId && organizations && organizations.length > 0
-            ? [
-                  { id: PERSONAL_WORKSPACE, name: PERSONAL_WORKSPACE_LABEL },
-                  ...organizations.map((org) => ({
-                      id: org.id,
-                      name: org.name,
-                  })),
-              ]
-            : null;
     // The sidebar is headed by whose work it is showing: the organization's
     // name in its workspace, and plain "Mike" for personal work. `null` while
     // a remembered organization's name is still loading — saying "Mike" for
@@ -832,45 +812,12 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                       : "w-56",
                               )}
                           >
-                              {workspaceOptions ? (
-                                  <>
-                                      {/* Same inset as the items below,
-                                          so the heading sits over their
-                                          text; normal case, and the size
-                                          and weight of the sidebar's own
-                                          section headings. */}
-                                      <DropdownLabel className="px-2 text-xs font-semibold normal-case tracking-normal">
-                                          Workspace
-                                      </DropdownLabel>
-                                      <DropdownRadioGroup
-                                          aria-label="Workspace"
-                                          value={
-                                              workspaceId ?? PERSONAL_WORKSPACE
-                                          }
-                                          onValueChange={switchWorkspace}
-                                          className="max-h-44 overflow-y-auto"
-                                      >
-                                          {workspaceOptions.map((option) => (
-                                              <DropdownRadioItem
-                                                  key={option.id}
-                                                  value={option.id}
-                                                  className="min-h-8 gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-gray-700"
-                                              >
-                                                  <span className="min-w-0 flex-1 whitespace-normal break-words">
-                                                      {option.name}
-                                                  </span>
-                                                  {option.id === workspaceId ? (
-                                                      <Check
-                                                          aria-hidden="true"
-                                                          className="h-3.5 w-3.5 shrink-0 text-gray-500"
-                                                      />
-                                                  ) : null}
-                                              </DropdownRadioItem>
-                                          ))}
-                                      </DropdownRadioGroup>
-                                      <DropdownSeparator className="my-1" />
-                                  </>
-                              ) : null}
+                              <WorkspaceMenuUI
+                                  workspaceId={workspaceId}
+                                  organizations={organizations}
+                                  onSelect={switchWorkspace}
+                                  trailingSeparator
+                              />
                               <DropdownItem
                                   onSelect={() => router.push("/settings")}
                                   className="h-8 gap-2 rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:text-gray-700 focus:text-gray-700 data-[selected=true]:text-gray-900 data-[selected=true]:hover:text-gray-900 data-[selected=true]:focus:text-gray-900"

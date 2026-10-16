@@ -248,6 +248,17 @@ module.exports = async (_env, options) => {
         "@mike/composer-send-button-ui": frontendSharedUi(
           "ComposerSendButtonUI.styles.ts",
         ),
+        // The active workspace (Personal or an organization): one set of
+        // rules, one provider-state hook and one menu for both clients.
+        "@mike/workspace-selection": frontendShared(
+          "lib",
+          "workspaceSelection.ts",
+        ),
+        "@mike/workspace-selection-state": frontendShared(
+          "hooks",
+          "useWorkspaceSelection.ts",
+        ),
+        "@mike/workspace-menu-ui": frontendSharedUi("WorkspaceMenuUI.tsx"),
       },
     },
     module: {

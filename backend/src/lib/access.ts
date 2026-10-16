@@ -349,6 +349,22 @@ export async function resolveStandaloneOrgId(
     return { ok: true, orgId };
 }
 
+/**
+ * Whether the creator of content filed under `orgId` can still reach it:
+ * always in Personal (no organization, or their own), and in a team
+ * organization only while they are a member of it — the creator branch of
+ * ensureSharedRowAccess, for content nobody else can be given, such as a
+ * Word chat.
+ */
+export async function creatorCanReachWorkspace(
+    db: Db,
+    userId: string,
+    orgId: string | null | undefined,
+): Promise<boolean> {
+    const teamOrgId = await teamOrgIdOf(db, orgId);
+    return !teamOrgId || (await getOrgRole(userId, teamOrgId, db)) !== null;
+}
+
 type ProjectRow = {
     id: string;
     user_id: string | null;

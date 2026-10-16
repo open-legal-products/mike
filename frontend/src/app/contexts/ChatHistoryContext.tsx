@@ -16,6 +16,7 @@ import {
     useWorkspaceOrgId,
     useWorkspaceParam,
 } from "@/app/contexts/WorkspaceContext";
+import { workspaceIdentityKey } from "@/shared/lib/workspaceSelection";
 import {
     createChat,
     deleteChat,
@@ -80,7 +81,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
     // the first page, through loadChats's identity changing below.
     const workspace = useWorkspaceParam();
     const workspaceOrgId = useWorkspaceOrgId();
-    const identity = JSON.stringify([user?.id ?? null, workspace ?? "personal"]);
+    const identity = workspaceIdentityKey(user?.id, workspace);
     const activeIdentity = useRef<string | null>(identity);
     useLayoutEffect(() => {
         activeIdentity.current = identity;

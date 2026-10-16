@@ -1,4 +1,3 @@
-import { wordChatHasWorkspaceAttachments } from "../../lib/wordWorkspace";
 // Business logic + data-access for the word-chat module.
 //
 // Service layer behind wordChat.routes.ts. Every function takes an explicit
@@ -45,7 +44,20 @@ import {
   resolveEffectiveReasoningLevel,
 } from "../../lib/modelSelection";
 import { replaysReasoning } from "../../lib/llm/registry";
+import {
+  creatorCanReachWorkspace,
+  resolveStandaloneOrgId,
+} from "../../lib/access";
+import { PERSONAL_WORKSPACE, type WorkspaceFilter } from "../../lib/workspace";
+import {
+  CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL,
+  DOCUMENT_WORKSPACE_MISMATCH_CODE,
+  findNewAttachmentsOutsideWorkspace,
+} from "../../lib/documentWorkspace";
 import type { WordEditApplyMode } from "../chat/chat.service";
+
+/** A device-only (storage: "local") chat was asked for in an organization. */
+export const WORD_ORG_CHAT_REQUIRES_CLOUD_CODE = "word_org_chat_requires_cloud";
 
 type LookupResult<T> =
   { ok: true; value: T | null } | { ok: false; detail: string };
@@ -119,6 +131,12 @@ async function getAccessibleWordChat(
     .maybeSingle();
   if (error) return { ok: false, detail: error.message };
   if (!data) return { ok: true, value: null };
+  // A chat in a team organization's workspace stays with the organization:
+  // its author reaches it only while still a member, and otherwise it reads
+  // as missing, like any chat that is not theirs.
+  if (!(await creatorCanReachWorkspace(db, userId, data.org_id as string | null))) {
+    return { ok: true, value: null };
+  }
   return {
     ok: true,
     value: { ...(data as Record<string, unknown>), project_id: null },
@@ -167,6 +185,8 @@ export async function listWordChats(
   args: {
     userId: string;
     clientDocumentId: string;
+    /** Resolved by resolveWorkspaceFilter; null lists every workspace. */
+    workspace: WorkspaceFilter;
     limit: number;
     offset: number;
   },
@@ -192,11 +212,16 @@ export async function listWordChats(
   let query = db
     .from("word_chats")
     .select(
-      "id, user_id, title, model, reasoning_level, created_at, updated_at",
+      "id, user_id, org_id, title, model, reasoning_level, created_at, updated_at",
     )
     .eq("word_document_id", wordDocumentRowId)
-    .eq("user_id", args.userId)
-    .order("updated_at", { ascending: false });
+    .eq("user_id", args.userId);
+  // A Word chat's org_id is null or a team organization (resolveStandaloneOrgId
+  // never stores a person's own), so these are workspaceMatches in SQL. The
+  // organization's membership was checked by resolveWorkspaceFilter.
+  if (args.workspace === PERSONAL_WORKSPACE) query = query.is("org_id", null);
+  else if (args.workspace) query = query.eq("org_id", args.workspace);
+  query = query.order("updated_at", { ascending: false });
   query =
     args.offset > 0
       ? query.range(args.offset, args.offset + args.limit - 1)
@@ -206,10 +231,23 @@ export async function listWordChats(
     console.error("[word-chat] failed to list chats", error);
     return { ok: false, kind: "error" };
   }
-  return {
-    ok: true,
-    chats: (data ?? []).map((chat) => ({ ...chat, project_id: null })),
+  // Unnarrowed (a pane from before workspaces), the list still leaves out
+  // chats in an organization the caller has left, as the detail route does.
+  const reachable = new Map<string | null, Promise<boolean>>();
+  const reach = (orgId: string | null) => {
+    if (!reachable.has(orgId)) {
+      reachable.set(orgId, creatorCanReachWorkspace(db, args.userId, orgId));
+    }
+    return reachable.get(orgId) as Promise<boolean>;
   };
+  const chats = [];
+  for (const chat of (data ?? []) as Record<string, unknown>[]) {
+    const orgId = (chat.org_id as string | null | undefined) ?? null;
+    if (args.workspace || (await reach(orgId))) {
+      chats.push({ ...chat, project_id: null });
+    }
+  }
+  return { ok: true, chats };
 }
 
 // GET /word-chat/:chatId
@@ -342,7 +380,9 @@ export async function updateWordChatModel(
   }
   if (!chatLookup.value) return { ok: false, kind: "not_found" };
 
-  const settings = await getUserModelSettings(args.userId, db);
+  // The chat's organization decides which keys, and so which models, it has.
+  const orgId = (chatLookup.value.org_id as string | null | undefined) ?? null;
+  const settings = await getUserModelSettings(args.userId, db, { orgId });
   const resolution = await resolveEffectiveChatModel({
     requested: args.requestedModel,
     chatModel: chatLookup.value.model as string | null,
@@ -350,6 +390,7 @@ export async function updateWordChatModel(
     apiKeys: settings.api_keys,
     userId: args.userId,
     db,
+    orgId,
   });
   if (!resolution.ok) {
     return {
@@ -566,6 +607,8 @@ export type PreparedWordChatStream = {
   apiMessages: ReturnType<typeof buildMessages>;
   workflowStore: Awaited<ReturnType<typeof buildWorkflowStore>>;
   apiKeys: Awaited<ReturnType<typeof getUserModelSettings>>["api_keys"];
+  /** The organization the chat belongs to, or null for Personal. */
+  orgId: string | null;
   selectedModel: string;
   selectedReasoningLevel: ReturnType<typeof resolveEffectiveReasoningLevel>;
   nonce: ReturnType<typeof generateSpotlightNonce>;
@@ -594,6 +637,11 @@ export async function prepareWordChatStream(
       ReturnType<typeof resolveEffectiveReasoningLevel> | undefined;
     /** The task pane's IANA time zone; unvalidated request input. */
     requestedTimeZone?: unknown;
+    /**
+     * The organization whose workspace a NEW chat is started in; unvalidated
+     * request input. Ignored when a stored chat is resumed: its own wins.
+     */
+    requestedOrgId?: unknown;
   },
 ): Promise<
   | { ok: true; prepared: PreparedWordChatStream }
@@ -613,18 +661,88 @@ export async function prepareWordChatStream(
   let chatReasoningLevel: string | null = null;
   let wordDocumentRowId: string | null = null;
 
-  // Validate before model selection, persistence or memory scheduling. Existing
-  // history is checked too: Word has no organization-scoped destination.
+  // The workspace the chat belongs to: a resumed chat's own, fixed when it
+  // was created; otherwise the one the pane asked for, as for a standalone
+  // web chat. Everything below — attachments, keys and models, workflows,
+  // connectors, memory and audit — follows it.
+  let orgId: string | null = null;
+  const resuming = !!chatId && persistChat;
+  if (chatId && resuming) {
+    const documentLookup = await getWordDocumentRowId(
+      clientDocumentId,
+      userId,
+      db,
+    );
+    if (!documentLookup.ok) {
+      console.error("[word-chat] failed to resume chat", documentLookup.detail);
+      return { ok: false, status: 500, detail: "Failed to resume Word chat" };
+    }
+    if (!documentLookup.value) {
+      return { ok: false, status: 404, detail: "Chat not found" };
+    }
+    wordDocumentRowId = documentLookup.value;
+    const existingLookup = await getAccessibleWordChat(
+      chatId,
+      wordDocumentRowId,
+      userId,
+      db,
+    );
+    if (!existingLookup.ok) {
+      console.error("[word-chat] failed to resume chat", existingLookup.detail);
+      return { ok: false, status: 500, detail: "Failed to resume Word chat" };
+    }
+    const existing = existingLookup.value;
+    if (!existing) {
+      return { ok: false, status: 404, detail: "Chat not found" };
+    }
+    orgId = (existing.org_id as string | null | undefined) ?? null;
+    chatTitle = typeof existing.title === "string" ? existing.title : null;
+    chatModel = typeof existing.model === "string" ? existing.model : null;
+    chatReasoningLevel =
+      typeof existing.reasoning_level === "string"
+        ? existing.reasoning_level
+        : null;
+  } else {
+    const standalone = await resolveStandaloneOrgId(db, {
+      userId,
+      orgId: args.requestedOrgId,
+    });
+    if (!standalone.ok) {
+      return { ok: false, status: 400, detail: standalone.detail };
+    }
+    // The web app has no device-only chats, so neither has an organization:
+    // its chats are the organization's, and kept where it can manage them.
+    if (standalone.orgId && !persistChat) {
+      return {
+        ok: false,
+        status: 400,
+        code: WORD_ORG_CHAT_REQUIRES_CLOUD_CODE,
+        detail:
+          "Chats in an organization's workspace are saved to your account. Turn on cloud history to chat here.",
+      };
+    }
+    orgId = standalone.orgId;
+  }
+
+  // Validate before model selection, persistence or memory scheduling. The
+  // stored history is checked too, not only what the pane resent.
   try {
-    if (await wordChatHasWorkspaceAttachments(db, messages)) {
-      return { ok: false, status: 400, code: "document_workspace_mismatch",
-        detail: "Word chats support Personal workspace attachments only. Start a new chat with Personal documents and workflows." };
+    const outside = await findNewAttachmentsOutsideWorkspace(db, {
+      messages,
+      chatId: resuming ? chatId : null,
+      orgId,
+      messagesTable: "word_chat_messages",
+      storedHistory: "checked",
+    });
+    if (outside.length) {
+      return { ok: false, status: 400, code: DOCUMENT_WORKSPACE_MISMATCH_CODE,
+        detail: CHAT_ATTACHMENT_WORKSPACE_MISMATCH_DETAIL };
     }
   } catch (error) {
     return { ok: false, status: 500, detail: "Could not validate Word chat attachments", error };
   }
 
-  if (persistChat) {
+  if (persistChat && !wordDocumentRowId) {
     wordDocumentRowId = await ensureWordDocumentRow(
       clientDocumentId,
       userId,
@@ -639,43 +757,13 @@ export async function prepareWordChatStream(
     }
   }
 
-  if (chatId && persistChat) {
-    const existingLookup = await getAccessibleWordChat(
-      chatId,
-      wordDocumentRowId as string,
-      userId,
-      db,
-    );
-    if (!existingLookup.ok) {
-      console.error("[word-chat] failed to resume chat", existingLookup.detail);
-      return { ok: false, status: 500, detail: "Failed to resume Word chat" };
-    }
-    const existing = existingLookup.value;
-    if (!existing) {
-      return { ok: false, status: 404, detail: "Chat not found" };
-    }
-    try {
-      if (await wordChatHasWorkspaceAttachments(db, [], chatId)) {
-        return { ok: false, status: 400, code: "document_workspace_mismatch",
-          detail: "This Word chat contains attachments from another workspace. Start a new chat with Personal attachments." };
-      }
-    } catch (error) {
-      return { ok: false, status: 500, detail: "Could not validate Word chat attachments", error };
-    }
-    chatTitle = typeof existing.title === "string" ? existing.title : null;
-    chatModel = typeof existing.model === "string" ? existing.model : null;
-    chatReasoningLevel =
-      typeof existing.reasoning_level === "string"
-        ? existing.reasoning_level
-        : null;
-  }
-
   const selection = await resolveUserChatSelection(db, {
     userId,
     chatModel,
     chatReasoningLevel,
     requestedModel: args.requestedModel,
     requestedReasoning: args.requestedReasoning,
+    orgId,
   });
   if (!selection.ok) return selection;
   const { modelSettings, selectedModel, selectedReasoningLevel } = selection;
@@ -707,6 +795,7 @@ export async function prepareWordChatStream(
         word_document_id: wordDocumentRowId,
         model: selectedModel,
         reasoning_level: selectedReasoningLevel,
+        org_id: orgId,
       })
       .select("id, title")
       .single();
@@ -842,7 +931,7 @@ export async function prepareWordChatStream(
       "replace",
       { timeZone, now: new Date(), userSentAt },
     );
-    const workflowStore = await buildWorkflowStore(userId, userEmail, db);
+    const workflowStore = await buildWorkflowStore(userId, userEmail, db, orgId);
 
     return {
       ok: true,
@@ -857,6 +946,7 @@ export async function prepareWordChatStream(
         apiMessages,
         workflowStore,
         apiKeys,
+        orgId,
         selectedModel,
         selectedReasoningLevel,
         nonce,
