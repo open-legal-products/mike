@@ -1,4 +1,5 @@
 import type { Db } from "./supabase";
+import { chunkArray } from "./arrays";
 import {
     hasOrgPrivateContentAccess,
     listOrgPrivateContentAccess,
@@ -822,26 +823,35 @@ export async function filterAccessibleDocumentIds(
     db: Db,
 ): Promise<string[]> {
     if (documentIds.length === 0) return [];
-    const { data: docs } = await db
-        .from("documents")
-        .select("id, user_id, project_id, workflow_id, org_id")
-        .in("id", documentIds);
-    const rows = (docs ?? []) as {
+    type DocumentAccessRow = {
         id: string;
         user_id: string | null;
         project_id: string | null;
         workflow_id?: string | null;
         org_id?: string | null;
-    }[];
-    if (rows.length === 0) return [];
-
-    const verdicts = await Promise.all(
-        rows.map(async (doc) => ({
-            id: doc.id,
-            access: await ensureDocAccess(doc, userId, userEmail, db),
-        })),
-    );
-    return verdicts.filter((entry) => entry.access.ok).map((entry) => entry.id);
+    };
+    const accessibleIds: string[] = [];
+    // Keep UUID filters below the gateway's request/header limits, as in the
+    // add-on asset lookup. A failed batch is not an empty permissions verdict.
+    for (const batch of chunkArray([...new Set(documentIds)], 50)) {
+        const { data, error } = await db
+            .from("documents")
+            .select("id, user_id, project_id, workflow_id, org_id")
+            .in("id", batch);
+        if (error) {
+            throw new Error("Document access lookup failed", { cause: error });
+        }
+        const verdicts = await Promise.all(
+            ((data ?? []) as DocumentAccessRow[]).map(async (doc) => ({
+                id: doc.id,
+                access: await ensureDocAccess(doc, userId, userEmail, db),
+            })),
+        );
+        accessibleIds.push(
+            ...verdicts.filter((entry) => entry.access.ok).map((entry) => entry.id),
+        );
+    }
+    return accessibleIds;
 }
 
 const ACCESSIBLE_PROJECTS_PAGE_SIZE = 1000;

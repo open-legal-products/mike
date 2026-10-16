@@ -5,6 +5,7 @@
 // the ids RPC until it runs dry).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { attachActiveVersionPaths } from "../../../lib/documentVersions";
 
 const {
     ensureReviewAccess,
@@ -488,6 +489,99 @@ describe("getTabularReviewDetail", () => {
 });
 
 describe("getTabularReviewDetail document visibility", () => {
+    it("returns an internal failure when the document access lookup fails", async () => {
+        const error = new Error("Document access lookup failed");
+        filterAccessibleDocumentIds.mockRejectedValueOnce(error);
+        const { db, calls } = makeFakeDb({
+            tables: {
+                tabular_reviews: {
+                    data: { id: "rev-1", document_ids: ["d1"] },
+                    error: null,
+                },
+                tabular_cells: { data: [], error: null },
+            },
+        });
+        await expect(
+            getTabularReviewDetail(db, { reviewId: "rev-1", ...WHO }),
+        ).resolves.toEqual({ ok: false, kind: "error", error });
+        expect(callTo(calls, "documents")).toBeUndefined();
+    });
+
+    it("loads all authorised document metadata in bounded batches", async () => {
+        const ids = Array.from({ length: 120 }, (_, index) => `d-${index}`);
+        loadReviewRows.mockResolvedValue([
+            { id: "row-folder", label: "Folder", source_document_ids: ids },
+        ]);
+        filterAccessibleDocumentIds.mockResolvedValueOnce(ids);
+        const docs = ids.map((id) => ({
+            id,
+            current_version_id: `version-${id}`,
+        }));
+        const { db, calls } = makeFakeDb({
+            tables: {
+                tabular_reviews: {
+                    data: { id: "rev-1", document_ids: ids },
+                    error: null,
+                },
+                tabular_cells: {
+                    data: [
+                        { id: "c1", row_id: "row-folder", content: "Answer" },
+                    ],
+                    error: null,
+                },
+                documents: [
+                    { data: docs.slice(0, 50), error: null },
+                    { data: docs.slice(50, 100), error: null },
+                    { data: docs.slice(100), error: null },
+                ],
+            },
+        });
+        const result = await getTabularReviewDetail(db, {
+            reviewId: "rev-1",
+            ...WHO,
+        });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.data.documents).toEqual(docs);
+        expect(result.data.rows.map((row) => row.id)).toEqual(["row-folder"]);
+        expect(result.data.cells.map((cell) => cell.id)).toEqual(["c1"]);
+        const lookups = calls.filter((call) => call.table === "documents");
+        expect(
+            lookups.map((call) => (call.filters.id as string[]).length),
+        ).toEqual([50, 50, 20]);
+        expect(lookups.flatMap((call) => call.filters.id)).toEqual(ids);
+        expect(
+            vi
+                .mocked(attachActiveVersionPaths)
+                .mock.calls.map(([, batch]) => batch.length),
+        ).toEqual([50, 50, 20]);
+    });
+
+    it("returns an internal failure instead of partial metadata when a later batch fails", async () => {
+        const ids = Array.from({ length: 60 }, (_, index) => `d-${index}`);
+        filterAccessibleDocumentIds.mockResolvedValueOnce(ids);
+        const error = { message: "Database unavailable" };
+        const { db } = makeFakeDb({
+            tables: {
+                tabular_reviews: {
+                    data: { id: "rev-1", document_ids: ids },
+                    error: null,
+                },
+                tabular_cells: { data: [], error: null },
+                documents: [
+                    {
+                        data: ids.slice(0, 50).map((id) => ({ id })),
+                        error: null,
+                    },
+                    { data: null, error },
+                ],
+            },
+        });
+        await expect(
+            getTabularReviewDetail(db, { reviewId: "rev-1", ...WHO }),
+        ).resolves.toEqual({ ok: false, kind: "error", error });
+    });
+
     // Review access is not document access: a review in project Y can be
     // built from project X's documents, and a Y member without X access must
     // not read X's filenames or extracted cell text through the review.
