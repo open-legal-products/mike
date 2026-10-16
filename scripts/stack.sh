@@ -192,8 +192,12 @@ gc() {
                 ;;
             supabase)
                 if supabase_allowed "$supa"; then
-                    act "docker compose -p $project down --remove-orphans   # supabase cli '$supa', idle $(days_ago "$idle")d"
-                    [ "$DRY_RUN" = 1 ] || docker compose -p "$project" down --remove-orphans >/dev/null 2>&1 || true
+                    # The CLI's containers carry only the compose *project*
+                    # label (no service label), so `docker compose down`
+                    # does not see them. Remove them by label, the way
+                    # `supabase stop` does; the network goes in step 2.
+                    act "docker rm \$(docker ps -aq --filter label=com.supabase.cli.project=$supa)   # supabase cli '$supa', idle $(days_ago "$idle")d"
+                    [ "$DRY_RUN" = 1 ] || docker ps -aq --filter "label=com.supabase.cli.project=$supa" | xargs -r docker rm >/dev/null 2>&1 || true
                     removed_projects="$removed_projects $project"
                     [ "$idle" -ge "$AGE_SECS" ] && idle_projects="$idle_projects $project"
                 else
@@ -211,7 +215,9 @@ gc() {
     while IFS=$'\t' read -r net netproj supa; do
         supa="$(blank "$supa")"
         in_scope "$netproj" || continue
-        printf '%s\n' "$projects" | grep -qx "$netproj" && continue   # still has containers
+        case " $removed_projects " in *" $netproj "*) ;; *)
+            printf '%s\n' "$projects" | grep -qx "$netproj" && continue   # still has containers
+        esac
         if [ -n "$supa" ]; then supabase_allowed "$supa" || continue
         else case "$netproj" in mike*) ;; *) continue;; esac; fi
         act "docker network rm $net"

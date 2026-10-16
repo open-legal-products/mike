@@ -34,9 +34,12 @@ fail() { printf '  FAIL  %s\n' "$1"; FAILED=1; }
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
 cleanup() {
-    for p in mike-gctest-stopped mike-gctest-gone mike-gctest-running gctest-other gctest-supa; do
+    for p in mike-gctest-stopped mike-gctest-gone mike-gctest-running gctest-other; do
         docker compose -p "$p" down -v --remove-orphans >/dev/null 2>&1 || true
     done
+    docker rm -f supabase_db_gctest-supa supabase_rest_gctest-supa >/dev/null 2>&1 || true
+    docker network rm supabase_network_gctest-supa >/dev/null 2>&1 || true
+    docker volume rm supabase_db_gctest-supa >/dev/null 2>&1 || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -44,29 +47,39 @@ trap cleanup EXIT
 # A compose project whose containers exit immediately and that declares a
 # data volume, like the real stack's one-shot jobs + db_data.
 fixture() {
-    local dir=$1 marker=$2 labels=""
-    # "supa" mimics the Supabase CLI, which labels everything it creates with
-    # com.supabase.cli.project=<id> and sets no config_files label.
-    [ "$marker" = supa ] && labels='labels: { com.supabase.cli.project: gctest-supa }'
+    local dir=$1 marker=$2
     mkdir -p "$dir"
     {
         [ "$marker" = mike ] && echo "# MikeOSS — test fixture (marker line recognised by scripts/stack.sh)"
-        cat <<EOF
+        cat <<'EOF'
 services:
   job:
     image: alpine:3.20
     command: ["sh", "-c", "exit 0"]
     volumes: ["data:/data"]
-    $labels
   svc:
     image: alpine:3.20
     command: ["sleep", "600"]
-    $labels
 volumes:
   data:
-    $labels
 EOF
     } >"$dir/docker-compose.yml"
+}
+
+# The Supabase CLI does not use Compose. It creates containers, a network and
+# volumes directly, labelled com.docker.compose.project=<id> AND
+# com.supabase.cli.project=<id> — with no service or config_files label, so
+# `docker compose -p <id> down` does not see them. Mimic that exactly.
+supa_fixture() {
+    local id=$1 L
+    L="--label com.docker.compose.project=$id --label com.supabase.cli.project=$id"
+    docker network create $L "supabase_network_$id" >/dev/null
+    docker volume create $L "supabase_db_$id" >/dev/null
+    docker run -d $L --name "supabase_db_$id" --network "supabase_network_$id" \
+        -v "supabase_db_$id:/data" alpine:3.20 sleep 600 >/dev/null
+    docker run -d $L --name "supabase_rest_$id" --network "supabase_network_$id" \
+        alpine:3.20 sleep 600 >/dev/null
+    docker stop "supabase_db_$id" "supabase_rest_$id" >/dev/null
 }
 
 containers() { docker ps -a -q --filter "label=com.docker.compose.project=$1" | wc -l | tr -d ' '; }
@@ -80,14 +93,13 @@ fixture "$WORK/stopped" mike
 fixture "$WORK/gone"    mike
 fixture "$WORK/running" mike
 fixture "$WORK/other"   none
-fixture "$WORK/supa"    supa
 
 (cd "$WORK/stopped" && docker compose -p mike-gctest-stopped up -d >/dev/null 2>&1 && docker compose -p mike-gctest-stopped stop >/dev/null 2>&1)
 (cd "$WORK/gone"    && docker compose -p mike-gctest-gone    up -d >/dev/null 2>&1 && docker compose -p mike-gctest-gone    stop >/dev/null 2>&1)
 rm -rf "$WORK/gone"
 (cd "$WORK/running" && docker compose -p mike-gctest-running up -d >/dev/null 2>&1)
 (cd "$WORK/other"   && docker compose -p gctest-other         up -d >/dev/null 2>&1 && docker compose -p gctest-other         stop >/dev/null 2>&1)
-(cd "$WORK/supa"    && docker compose -p gctest-supa          up -d >/dev/null 2>&1 && docker compose -p gctest-supa          stop >/dev/null 2>&1)
+supa_fixture gctest-supa
 
 echo "Before:"
 for p in mike-gctest-stopped mike-gctest-gone mike-gctest-running gctest-other gctest-supa; do
@@ -111,6 +123,7 @@ check "running stack untouched"               '[ "$(containers mike-gctest-runni
 check "foreign stack untouched"               '[ "$(containers gctest-other)" = 2 ] && [ "$(volumes gctest-other)" = 1 ]'
 check "running stack listed with stop cmd"    'grep -q "scripts/stack.sh down -p mike-gctest-running" "$WORK/gc.log"'
 check "supabase stack: containers removed"    '[ "$(containers gctest-supa)" = 0 ]'
+check "supabase stack: network removed"       '[ -z "$(docker network ls -q --filter label=com.supabase.cli.project=gctest-supa)" ]'
 check "supabase stack: young data volume kept" '[ "$(volumes gctest-supa)" = 1 ]'
 
 echo "Sweep with a 0-day threshold removes idle data volumes:"
