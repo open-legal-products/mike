@@ -461,7 +461,11 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
     savePrompt: () => void persistPrompt(promptMdRef.current),
     saveColumns: () => {
       const attempted = lastColumnsAttemptRef.current;
-      if (attempted) void saveColumns(attempted);
+      if (!attempted) return;
+      // Like every other column change: show it, then save it. The failure
+      // put the old list back on screen.
+      setColumns(attempted);
+      void saveColumns(attempted);
     },
   });
 

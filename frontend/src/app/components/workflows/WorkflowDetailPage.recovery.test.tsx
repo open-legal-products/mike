@@ -383,4 +383,26 @@ describe("WorkflowDetailPage failures", () => {
         expect(screen.queryByText("Party")).toBeNull();
         expect(screen.queryByText("Date")).toBeNull();
     });
+
+    it("shows the columns a Retry saved", async () => {
+        vi.mocked(getWorkflow).mockResolvedValue(tabularWorkflow());
+        vi.mocked(updateWorkflow).mockRejectedValueOnce(new Error("boom"));
+        const user = userEvent.setup();
+        render(
+            <>
+                <WorkflowDetailPage id="wf-1" workflowType="tabular" />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await deleteColumn(user, "Party");
+        const alert = await screen.findByRole("alert");
+        expect(await screen.findByText("Party")).toBeVisible();
+
+        vi.mocked(updateWorkflow).mockResolvedValue(tabularWorkflow());
+        await user.click(within(alert).getByRole("button", { name: "Retry" }));
+
+        await waitFor(() => expect(screen.queryByText("Party")).toBeNull());
+        expect(screen.getByText("Date")).toBeVisible();
+    });
 });
