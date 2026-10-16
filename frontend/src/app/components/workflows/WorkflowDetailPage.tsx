@@ -181,6 +181,19 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
 
   // Save status
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  // Every save-status change goes through here, so an earlier save's
+  // "Saved" fade cannot clear a later "Saving…" or "Couldn't save".
+  const showSaveStatus = useCallback((status: SaveStatus) => {
+    if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+    saveStatusTimerRef.current =
+      status === "saved"
+        ? setTimeout(() => setSaveStatus("idle"), 2000)
+        : null;
+    setSaveStatus(status);
+  }, []);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Column selection
@@ -343,17 +356,16 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
   // ---------------------------------------------------------------------------
   const persistPrompt = useCallback(
     async (newPromptMd: string) => {
-      setSaveStatus("saving");
+      showSaveStatus("saving");
       try {
         await updateWorkflow(id, { skill_md: newPromptMd });
-        setSaveStatus("saved");
-        setTimeout(() => setSaveStatus("idle"), 2000);
+        showSaveStatus("saved");
       } catch (error) {
         // An autosave that fails silently loses the user's writing without
         // ever saying so. One notice per workflow however many ticks fail,
         // and "Retry" saves what is in the editor *now*, not the draft this
         // tick happened to carry.
-        setSaveStatus("error");
+        showSaveStatus("error");
         notifyError(error, {
           action: "save your changes",
           dedupeKey: `workflow-autosave:${id}`,
@@ -361,19 +373,19 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
         });
       }
     },
-    [id],
+    [id, showSaveStatus],
   );
 
   const save = useCallback(
     (newPromptMd: string) => {
       if (readOnly) return;
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      setSaveStatus("saving");
+      showSaveStatus("saving");
       debounceRef.current = setTimeout(() => {
         void persistPrompt(newPromptMd);
       }, 800);
     },
-    [persistPrompt, readOnly],
+    [persistPrompt, readOnly, showSaveStatus],
   );
 
   async function handleDeleteWorkflow() {
@@ -412,7 +424,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
     // and then calls this, so this closure still holds the pre-edit list.
     const previous = columns;
     lastColumnsAttemptRef.current = next;
-    setSaveStatus("saving");
+    showSaveStatus("saving");
     try {
       const updated = await updateWorkflow(id, { columns_config: next });
       setWorkflow((current) => ({
@@ -422,13 +434,12 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
           current?.open_source_submission ??
           null,
       }));
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 2000);
+      showSaveStatus("saved");
     } catch (error) {
       // Put the table back before saying so, so the screen never shows a
       // column layout the server never accepted.
       setColumns(previous);
-      setSaveStatus("error");
+      showSaveStatus("error");
       notifyError(error, {
         action: "save the columns",
         dedupeKey: `workflow-columns:${id}`,

@@ -77,6 +77,40 @@ vi.mock("@/app/components/workflows/OpenSourceWorkflowModal", () => ({
     OpenSourceWorkflowModal: () => null,
 }));
 
+function tabularWorkflow(): Workflow {
+    return {
+        ...assistantWorkflow(),
+        metadata: { ...assistantWorkflow().metadata, type: "tabular" as const },
+        skill_md: null,
+        columns_config: [
+            { index: 0, name: "Party", prompt: "Who?", format: "text" },
+            { index: 1, name: "Date", prompt: "When?", format: "text" },
+        ],
+    } as unknown as Workflow;
+}
+
+/** Delete one column through its own row actions. */
+async function deleteColumn(
+    user: ReturnType<typeof userEvent.setup>,
+    name: string,
+) {
+    // The smallest ancestor of the column's name holding one row-actions
+    // button is that column's row.
+    let row: HTMLElement | null = await screen.findByText(name);
+    while (
+        row &&
+        within(row).queryAllByRole("button", { name: "Open row actions" })
+            .length !== 1
+    ) {
+        row = row.parentElement;
+    }
+    const button = within(row!).getByRole("button", {
+        name: "Open row actions",
+    });
+    await user.click(button);
+    await user.click(await screen.findByRole("menuitem", { name: /^Delete/ }));
+}
+
 function assistantWorkflow(): Workflow {
     return {
         id: "wf-1",
@@ -294,5 +328,25 @@ describe("WorkflowDetailPage failures", () => {
 
         await waitFor(() => expect(getWorkflow).toHaveBeenCalledTimes(2));
         expect(screen.queryByText("Workflow not found.")).toBeNull();
+    });
+
+    it("keeps \"Couldn't save\" up after an earlier save's \"Saved\" would have faded", async () => {
+        vi.mocked(getWorkflow).mockResolvedValue(tabularWorkflow());
+        vi.mocked(updateWorkflow)
+            .mockResolvedValueOnce(tabularWorkflow())
+            .mockRejectedValue(new Error("boom"));
+        const user = userEvent.setup();
+        render(<WorkflowDetailPage id="wf-1" workflowType="tabular" />);
+
+        await deleteColumn(user, "Party");
+        expect(await screen.findByText("Saved")).toBeVisible();
+        await deleteColumn(user, "Date");
+        expect(await screen.findByText("Couldn't save")).toBeVisible();
+
+        // Past the first save's 2s fade.
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 2200));
+        });
+        expect(screen.getByText("Couldn't save")).toBeVisible();
     });
 });
