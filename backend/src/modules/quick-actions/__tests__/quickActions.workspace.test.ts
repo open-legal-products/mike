@@ -18,13 +18,13 @@ describe("quick action workspace", () => {
     fake.done();
   });
 
-  it("never exposes organization actions on the Word surface even if requested", async () => {
+  it("shows the Word surface the organization's actions in the organization's workspace", async () => {
     const fake = scriptedDb([
       { table: "quick_actions", data: [{ id: "firm-action", workflow_id: "firm" }] },
       { table: "workflows", data: [{ id: "firm", type: "assistant", org_id: "org" }] },
       { table: "organizations", data: { kind: "team" } },
     ]);
-    expect(await listQuickActions(fake.db, { userId: "u", userEmail: undefined, surface: "word", workspace: "org" })).toMatchObject({ ok: true, data: [] });
+    expect(await listQuickActions(fake.db, { userId: "u", userEmail: undefined, surface: "word", workspace: "org" })).toMatchObject({ ok: true, data: [{ id: "firm-action" }] });
     fake.done();
   });
 });
