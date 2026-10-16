@@ -29,9 +29,11 @@ import {
     type TabularReviewSortDirection,
     usePaginatedTabularReviews,
 } from "@/app/hooks/usePaginatedTabularReviews";
-import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import {
+    deleteTabularReviewsWithConcurrency,
+    notifyBulkReviewDeleteOutcome,
+} from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
-import { notifyPartialFailure } from "@/app/lib/userFacingError";
 
 interface Props {
     params: Promise<{ id: string }>;
@@ -201,31 +203,14 @@ export default function ProjectTabularReviewsPage({ params }: Props) {
                 restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
             );
         }
-        const notices = [
-            blocked > 0
-                ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only a review owner can delete them.`
-                : null,
-            failedIds.length > 0
-                ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
-                : null,
-        ].filter((notice): notice is string => notice !== null);
-        if (notices.length > 0) {
-            // One notice for the batch, with a Retry for the rows that are
-            // still selected.
-            notifyPartialFailure(
-                notices.join(" "),
-                {
-                    action: "delete those reviews",
-                    // Through the ref, so the retry deletes the rows that are
-                    // selected now (the ones that failed) rather than the
-                    // whole selection this closure captured.
-                    onRetry:
-                        failedIds.length > 0
-                            ? () => retryDeleteSelectedRef.current?.()
-                            : undefined,
-                },
-            );
-        }
+        notifyBulkReviewDeleteOutcome({
+            blocked,
+            failedCount: failedIds.length,
+            // Through the ref, so the retry deletes the rows that are
+            // selected now (the ones that failed) rather than the whole
+            // selection this closure captured.
+            retry: () => retryDeleteSelectedRef.current?.(),
+        });
     }, [
         getReviewOwnerId,
         reviews,

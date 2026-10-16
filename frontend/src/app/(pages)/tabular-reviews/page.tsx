@@ -4,10 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/app/hooks/useDebouncedValue";
 import { useLatestRef } from "@/app/hooks/useLatestRef";
 import { restoreOptimisticallyDeletedRows } from "@/app/lib/optimisticRows";
-import {
-    notifyPartialFailure,
-    userFacingApiError,
-} from "@/app/lib/userFacingError";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
     deleteTabularReview,
@@ -27,6 +24,7 @@ import {
     type AccessContact,
 } from "@/app/components/popups/PermissionDeniedPopup";
 import { can, roleFrom } from "@/app/lib/permissions";
+import { userFacingApiError } from "@/app/lib/userFacingError";
 import { ConfirmPopup } from "@/app/components/popups/ConfirmPopup";
 import { useAuth } from "@/app/contexts/AuthContext";
 import { useWorkspaceOrgId, useWorkspaceParam } from "@/app/contexts/WorkspaceContext";
@@ -38,7 +36,10 @@ import {
     type TabularReviewSortKey,
     usePaginatedTabularReviews,
 } from "@/app/hooks/usePaginatedTabularReviews";
-import { deleteTabularReviewsWithConcurrency } from "@/app/lib/deleteTabularReviewsWithConcurrency";
+import {
+    deleteTabularReviewsWithConcurrency,
+    notifyBulkReviewDeleteOutcome,
+} from "@/app/lib/deleteTabularReviewsWithConcurrency";
 import { useQueryParamTab } from "@/app/hooks/useQueryParamTab";
 
 type ReviewScope = TabularReviewScope;
@@ -361,31 +362,14 @@ function TabularReviewsWorkspacePage({ workspace }: { workspace?: string }) {
                 restoreOptimisticallyDeletedRows(current, snapshot, failedIds),
             );
         }
-        const notices = [
-            blocked > 0
-                ? `${blocked} selected review${blocked === 1 ? " was" : "s were"} skipped because only a review owner can delete them.`
-                : null,
-            failedIds.length > 0
-                ? `${failedIds.length} review${failedIds.length === 1 ? " was" : "s were"} not deleted because the request failed. ${failedIds.length === 1 ? "It remains" : "They remain"} selected so you can try again.`
-                : null,
-        ].filter((notice): notice is string => notice !== null);
-        if (notices.length > 0) {
-            // One notice for the batch, with a Retry for the rows that are
-            // still selected.
-            notifyPartialFailure(
-                notices.join(" "),
-                {
-                    action: "delete those reviews",
-                    // Through the ref, so the retry deletes the rows that are
-                    // selected now (the ones that failed) rather than the
-                    // whole selection this closure captured.
-                    onRetry:
-                        failedIds.length > 0
-                            ? () => retryDeleteSelectedRef.current()
-                            : undefined,
-                },
-            );
-        }
+        notifyBulkReviewDeleteOutcome({
+            blocked,
+            failedCount: failedIds.length,
+            // Through the ref, so the retry deletes the rows that are
+            // selected now (the ones that failed) rather than the whole
+            // selection this closure captured.
+            retry: () => retryDeleteSelectedRef.current(),
+        });
     }
 
     async function handleDeleteReviewRow(review: TabularReview) {
