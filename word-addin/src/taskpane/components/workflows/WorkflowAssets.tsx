@@ -8,22 +8,7 @@ import {
   uploadWorkflowAssetVersion,
 } from "../../api/mikeApi";
 import { userMessage } from "../../lib/notify";
-
-/**
- * Open a URL in the system browser. Office's openBrowserWindow is the
- * sanctioned way out of the task-pane webview — window.open is blocked in
- * some hosts (notably desktop Word), where it silently does nothing. Fall
- * back to window.open when the API isn't available (hermetic e2e bundle,
- * older hosts).
- */
-function openExternalUrl(url: string): void {
-  const ui = typeof Office !== "undefined" ? Office.context?.ui : undefined;
-  if (ui && typeof ui.openBrowserWindow === "function") {
-    ui.openBrowserWindow(url);
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-}
+import { openExternalUrl } from "../../lib/openExternalUrl";
 
 export function WorkflowAssets({
   workflowId,

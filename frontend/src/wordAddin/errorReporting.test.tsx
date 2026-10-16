@@ -110,16 +110,54 @@ describe("add-in notify", () => {
         vi.restoreAllMocks();
     });
 
-    it("offers Retry on a retryable failure", () => {
+    it("shows Retry and opens a word-addin support email, details on the clipboard", async () => {
+        // "Contact support" is an ACTION now, not a `mailto:` anchor: desktop
+        // Word refuses to follow a link out of the pane, so the old anchor
+        // did nothing there and took the request id with it. The destination
+        // is still the support mailbox — the web app's /support form posts to
+        // a route the backend does not mount.
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, "clipboard", {
+            value: { writeText },
+            configurable: true,
+        });
+        const open = vi
+            .spyOn(window, "open")
+            .mockReturnValue({} as unknown as Window);
+
         render(<ToastViewportUI />);
+        const onRetry = vi.fn();
         act(() => {
             notifyError(
                 new MikeApiError({ status: 500, message: "x", requestId: "req-7" }),
-                { action: "apply the edit", onRetry: vi.fn(), page: "Chat" },
+                { action: "apply the edit", onRetry, page: "Chat" },
             );
         });
-        expect(screen.getByRole("alert")).toHaveTextContent("Couldn't apply the edit");
+        const alert = screen.getByRole("alert");
+        expect(alert).toHaveTextContent("Couldn't apply the edit");
         expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+
+        const support = screen.getByRole("button", { name: "Contact support" });
+        await act(async () => {
+            support.click();
+        });
+
+        const details = writeText.mock.calls[0]?.[0] as string;
+        expect(details).toContain("Client: word-addin");
+        expect(details).toContain("Page: Chat");
+        expect(details).toContain("Request ID: req-7");
+
+        const opened = open.mock.calls[0]?.[0] as string;
+        expect(opened.startsWith("mailto:will@mikeoss.com?")).toBe(true);
+        expect(opened).not.toContain("/support");
+        const draft = decodeURIComponent(opened);
+        expect(draft).toContain("Client: word-addin");
+        expect(draft).toContain("Page: Chat");
+        expect(draft).toContain("Request ID: req-7");
+        expect(open.mock.calls[0]?.slice(1)).toEqual([
+            "_blank",
+            "noopener,noreferrer",
+        ]);
     });
 
     it("stays silent on cancellation", () => {
