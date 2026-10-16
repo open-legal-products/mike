@@ -645,4 +645,55 @@ describe("NewTRModal load failures", () => {
         expect(alert).toHaveTextContent("Couldn't load this project's files");
         expect(alert).not.toHaveTextContent("API error: 500");
     });
+
+    it("ignores a project's file load that fails after another project was chosen", async () => {
+        const user = userEvent.setup();
+        vi.mocked(listWorkflows).mockResolvedValue([]);
+        let failFirst!: (error: unknown) => void;
+        vi.mocked(getProject)
+            .mockImplementationOnce(
+                () =>
+                    new Promise((_, reject) => {
+                        failFirst = reject;
+                    }),
+            )
+            .mockResolvedValueOnce({
+                id: "project-2",
+                documents: [],
+                folders: [],
+            } as never);
+
+        render(
+            <>
+                <NewTRModal
+                    open
+                    onClose={vi.fn()}
+                    onAdd={vi.fn()}
+                    projects={
+                        [
+                            { id: "project-1", name: "Acquisition" },
+                            { id: "project-2", name: "Merger" },
+                        ] as never
+                    }
+                />
+                <ToastViewportUI />
+            </>,
+        );
+
+        await user.click(
+            screen.getByRole("switch", { name: "Create under a project" }),
+        );
+        await user.click(screen.getByText("Select project..."));
+        await user.click(await screen.findByText("Acquisition"));
+        await user.click(screen.getByText("Acquisition"));
+        await user.click(await screen.findByText("Merger"));
+        await waitFor(() => expect(getProject).toHaveBeenCalledWith("project-2"));
+
+        failFirst(Object.assign(new Error("API error: 500"), { status: 500 }));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // The failure belongs to a project no longer chosen: no notice, and
+        // so no Retry that would switch the picker back to it.
+        expect(screen.queryByRole("alert")).toBeNull();
+    });
 });
