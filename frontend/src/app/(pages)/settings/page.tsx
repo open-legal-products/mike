@@ -19,7 +19,6 @@ import { WarningPopup } from "@/app/components/popups/WarningPopup";
 import { deleteAccount, isMfaRequiredError } from "@/app/lib/mikeApi";
 import { authMessages } from "@/app/lib/authMessages";
 import {
-  NOT_SAVED_STATUS,
   describeError,
   notifyError,
 } from "@/app/lib/userFacingError";
@@ -65,7 +64,6 @@ export default function SettingsPage() {
   const [displayName, setDisplayName] = useState("");
   const [isSavingName, setIsSavingName] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [nameError, setNameError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [isSavingEmail, setIsSavingEmail] = useState(false);
   const [emailSaved, setEmailSaved] = useState(false);
@@ -213,18 +211,14 @@ export default function SettingsPage() {
     const nextName = displayName.trim();
     if (nextName === (profile?.displayName ?? "")) return;
     setIsSavingName(true);
-    setNameError(null);
     const success = await updateDisplayName(nextName);
     setIsSavingName(false);
 
+    // A failure is reported once, by the profile context's notice (message,
+    // Retry, support); the field shows no second status for it.
     if (success) {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } else {
-      // The profile context classified the failure and raised the notice
-      // (message, Retry, support). This line is only the field's status, so
-      // the user never reads two different explanations of one failure.
-      setNameError(NOT_SAVED_STATUS);
     }
   };
 
@@ -241,16 +235,14 @@ export default function SettingsPage() {
               <div className="flex items-start justify-between gap-3">
                 <FieldLabel htmlFor="display-name">Display Name</FieldLabel>
                 <span
-                  className={`text-xs ${nameError ? "text-red-600" : "text-gray-400"}`}
+                  className="text-xs text-gray-400"
                   aria-live="polite"
                 >
                   {isSavingName
                     ? "Saving..."
-                    : nameError
-                      ? nameError
-                      : saved
-                        ? "Saved"
-                        : ""}
+                    : saved
+                      ? "Saved"
+                      : ""}
                 </span>
               </div>
               <SettingsTextInput
@@ -259,7 +251,6 @@ export default function SettingsPage() {
                 value={displayName}
                 onChange={(e) => {
                   setDisplayName(e.target.value);
-                  setNameError(null);
                   setSaved(false);
                 }}
                 onBlur={() => void handleSaveDisplayName()}

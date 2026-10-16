@@ -200,9 +200,8 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     // Every mutator below keeps its `boolean` contract so callers need no
     // churn, but a failure is never silent any more: the context classifies
     // the error once and raises the notice that carries the sentence, an
-    // honest "Retry" and the support link. Callers therefore keep at most a
-    // short inline status (NOT_SAVED_STATUS) and never a second, competing
-    // explanation of the same failure.
+    // honest "Retry" and the support link. That notice is the only report:
+    // callers show no inline status for the same failure.
     //
     // The `if (!user) return false` guards stay silent on purpose: there is
     // no failed request to report, only a call made before there is a session.

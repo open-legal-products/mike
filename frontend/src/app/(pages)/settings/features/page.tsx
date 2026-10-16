@@ -11,7 +11,6 @@ import { SettingsHeading } from "@/app/components/settings/SettingsHeading";
 import { SettingsRow } from "@/app/components/settings/SettingsRow";
 import { ToggleSwitchUI } from "@/shared/ui/ToggleSwitchUI";
 import { useUserProfile } from "@/app/contexts/UserProfileContext";
-import { NOT_SAVED_STATUS } from "@/app/lib/userFacingError";
 
 export default function FeaturesPage() {
   const {
@@ -20,12 +19,8 @@ export default function FeaturesPage() {
     updateLegalResearchUs,
     updateQuickActionsVisible,
   } = useUserProfile();
-  const [quickActionsError, setQuickActionsError] = useState<string | null>(
-    null,
-  );
   const [saving, setSaving] = useState(false);
   const [savingQuickActions, setSavingQuickActions] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [optimisticLegalResearchUs, setOptimisticLegalResearchUs] = useState<
     boolean | null
   >(null);
@@ -36,26 +31,22 @@ export default function FeaturesPage() {
   const quickActionsVisible = profile?.quickActionsVisible ?? true;
 
   const setQuickActionsVisible = async (visible: boolean) => {
-    setQuickActionsError(null);
     setSavingQuickActions(true);
-    const ok = await updateQuickActionsVisible(visible);
+    // A failure is reported by the profile context's notice (with Retry);
+    // the toggle reads the profile, so it is already back where it was.
+    await updateQuickActionsVisible(visible);
     setSavingQuickActions(false);
-    // The profile context raised the notice that explains the failure and
-    // offers Retry; this is only the row's status.
-    if (!ok) setQuickActionsError(NOT_SAVED_STATUS);
   };
 
   const handleCourtListenerChange = async (enabled: boolean) => {
     if (saving) return;
-    setSaveError(null);
     setOptimisticLegalResearchUs(enabled);
     setSaving(true);
-    const ok = await updateLegalResearchUs(enabled);
+    // A failure is reported by the profile context's notice (with Retry);
+    // dropping the optimistic value puts the toggle back.
+    await updateLegalResearchUs(enabled);
     setSaving(false);
     setOptimisticLegalResearchUs(null);
-    if (!ok) {
-      setSaveError(NOT_SAVED_STATUS);
-    }
   };
 
   return (
@@ -69,11 +60,6 @@ export default function FeaturesPage() {
               <SettingsDescription>
                 Show the quick actions row on the assistant start screen.
               </SettingsDescription>
-              {quickActionsError && (
-                <p className="text-sm text-red-600" role="alert">
-                  {quickActionsError}
-                </p>
-              )}
             </div>
             <ToggleSwitchUI
               checked={quickActionsVisible}
@@ -97,11 +83,6 @@ export default function FeaturesPage() {
               <SettingsDescription>
                 CourtListener provides access to US case law.
               </SettingsDescription>
-              {saveError && (
-                <p className="text-sm text-red-600" role="alert">
-                  {saveError}
-                </p>
-              )}
             </div>
             <ToggleSwitchUI
               checked={courtListenerEnabled}

@@ -1,9 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FeaturesPage from "./page";
 
 const state = vi.hoisted(() => ({
     source: "env" as "env" | "user" | null,
+    updateLegalResearchUs: vi.fn(),
 }));
 
 vi.mock("@/app/contexts/UserProfileContext", () => ({
@@ -19,7 +21,7 @@ vi.mock("@/app/contexts/UserProfileContext", () => ({
             },
         },
         updateApiKey: vi.fn(),
-        updateLegalResearchUs: vi.fn(),
+        updateLegalResearchUs: state.updateLegalResearchUs,
         updateQuickActionsVisible: vi.fn(),
     }),
 }));
@@ -50,5 +52,24 @@ describe("FeaturesPage CourtListener key", () => {
         expect(screen.getByTestId("courtlistener-key-state")).toHaveTextContent(
             "personal",
         );
+    });
+});
+
+describe("FeaturesPage save failures", () => {
+    it("reports a failed toggle only through the notice", async () => {
+        // The profile context raises the notice (with Retry) itself; the row
+        // must not repeat the failure inline.
+        state.source = "env";
+        state.updateLegalResearchUs.mockResolvedValue(false);
+        const user = userEvent.setup();
+        render(<FeaturesPage />);
+
+        await user.click(
+            screen.getByRole("switch", { name: "Enable CourtListener" }),
+        );
+        await waitFor(() =>
+            expect(state.updateLegalResearchUs).toHaveBeenCalledWith(false),
+        );
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 });

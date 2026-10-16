@@ -158,6 +158,23 @@ describe("SettingsPage Google email changes", () => {
         expect(state.updateOrganisation).not.toHaveBeenCalled();
     });
 
+    it("reports a failed name save only through the notice", async () => {
+        // updateDisplayName raises the notice itself; the field must not
+        // repeat the failure inline.
+        state.updateDisplayName.mockResolvedValue(false);
+        const user = userEvent.setup();
+        render(<SettingsPage />);
+
+        const name = screen.getByPlaceholderText("Enter your name");
+        await user.clear(name);
+        await user.type(name, "Alex Chen");
+        await user.tab();
+        await waitFor(() =>
+            expect(state.updateDisplayName).toHaveBeenCalledWith("Alex Chen"),
+        );
+        expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument();
+    });
+
     it("keeps the session and shows the reason when deletion is refused", async () => {
         const user = userEvent.setup();
         const detail =
