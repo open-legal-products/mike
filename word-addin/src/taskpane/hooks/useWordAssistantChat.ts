@@ -1025,8 +1025,14 @@ export function useWordAssistantChat({
             onRetry: retryInput
               ? async () => {
                   if (!sendIsCurrent()) {
+                    // A newer send in this same chat is not a chat change.
+                    const sameChat =
+                      mountedRef.current &&
+                      generation === sessionGenerationRef.current;
                     notifyInfo(
-                      "This chat has changed. Open the original chat to check its answer.",
+                      sameChat
+                        ? "A newer message was sent after this one, so Retry no longer applies to it."
+                        : "This chat has changed. Open the original chat to check its answer.",
                     );
                     return;
                   }

@@ -43,6 +43,8 @@ it('an old failure Retry refuses after a newer successful turn', async () => {
     await act(async () => { retry(); });
     await waitFor(() => expect(result.current.isResponseLoading).toBe(false));
     expect(mocks.stream).toHaveBeenCalledTimes(2);
+    // Same chat still open: the notice must not claim the chat changed.
+    expect(mocks.info).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/newer message/));
 });
 it('Retry on a known interrupted turn must not POST a fresh turn', async () => {
     mocks.stream.mockImplementationOnce(async (args) => { args.onMetadata({ chatId: 'chat-1', turnId: 'turn-1', assistantMessageId: 'answer-1' }); throw new WordChatStreamInterrupted(); }).mockResolvedValue(undefined);
@@ -67,6 +69,7 @@ it.each(['session change', 'document change', 'unmount'])('refuses a failed-turn
         hook.rerender({ sessionKey: change === 'session change' ? 2 : 1, documentId: change === 'document change' ? 'doc-2' : 'doc-1' });
     await act(async () => { await retry(); });
     expect(mocks.stream).toHaveBeenCalledTimes(1);
+    expect(mocks.info).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/This chat has changed/));
 });
 it('offers no repost when delivery failed before turn metadata', async () => {
     mocks.stream.mockRejectedValueOnce(new TypeError('Failed to fetch'));
