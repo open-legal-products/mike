@@ -19,6 +19,7 @@ import {
 } from "../../../word-addin/src/taskpane/lib/networkError";
 import {
     notifyError,
+    notifySessionCheckFailed,
     notifySessionExpired,
     userMessage,
 } from "../../../word-addin/src/taskpane/lib/notify";
@@ -198,6 +199,23 @@ describe("failed toast retries", () => {
         expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load this document");
         await act(async () => { screen.getByRole("button", { name: "Retry" }).click(); });
         expect(onRetry).toHaveBeenCalledTimes(2);
+        expect(screen.queryByRole("alert")).toBeNull();
+    });
+});
+
+describe("an unreachable session check", () => {
+    afterEach(() => clearToasts());
+
+    it("says so again when its Retry fails, instead of rejecting the click", async () => {
+        clearToasts();
+        render(<ToastViewportUI />);
+        const recheck = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch"))
+            .mockResolvedValueOnce(undefined);
+        act(() => { notifySessionCheckFailed(recheck); });
+        await act(async () => { screen.getByRole("button", { name: "Retry" }).click(); });
+        expect(screen.getByRole("alert")).toHaveTextContent("Connection problem");
+        await act(async () => { screen.getByRole("button", { name: "Retry" }).click(); });
+        expect(recheck).toHaveBeenCalledTimes(2);
         expect(screen.queryByRole("alert")).toBeNull();
     });
 });

@@ -19,7 +19,7 @@ import {
   type DescribeErrorOptions,
   type UserFacingError,
 } from "@mike/user-error";
-import { showToast } from "@mike/toast-store";
+import { retryToastAction, showToast } from "@mike/toast-store";
 import {
   createErrorNotifier,
   notifyInfo,
@@ -198,7 +198,11 @@ export function notifySessionCheckFailed(
     tone: "error",
     title: "Connection problem",
     message: SESSION_CHECK_FAILED_MESSAGE,
-    actions: onRetry ? [{ label: "Retry", onClick: onRetry }] : [],
+    // A re-check that fails outright says so again instead of becoming an
+    // unhandled rejection from the click.
+    actions: onRetry
+      ? [retryToastAction(onRetry, () => notifySessionCheckFailed(onRetry))]
+      : [],
     dedupeKey: "session-check-failed",
   });
 }
