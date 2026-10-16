@@ -5,7 +5,11 @@
         "test:e2e": "playwright test",
         "test:e2e:local": "bash scripts/e2e-local-stack.sh",
         "test:e2e:headed": "playwright test --headed",
-        "test:e2e:ui": "playwright test --ui"
+        "test:e2e:ui": "playwright test --ui",
+        "stack:up": "bash scripts/stack.sh up",
+        "stack:down": "bash scripts/stack.sh down",
+        "stack:gc": "bash scripts/stack.sh gc",
+        "stack:status": "bash scripts/stack.sh status"
     },
     "devDependencies": {
         "@axe-core/playwright": "^4.13.0",
