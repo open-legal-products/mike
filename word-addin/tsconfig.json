@@ -127,6 +127,15 @@
       ],
       "@mike/composer-send-button-ui": [
         "../frontend/src/shared/ui/ComposerSendButtonUI.styles.ts"
+      ],
+      "@mike/workspace-selection": [
+        "../frontend/src/shared/lib/workspaceSelection.ts"
+      ],
+      "@mike/workspace-selection-state": [
+        "../frontend/src/shared/hooks/useWorkspaceSelection.ts"
+      ],
+      "@mike/workspace-menu-ui": [
+        "../frontend/src/shared/ui/WorkspaceMenuUI.tsx"
       ]
     },
     "jsx": "react-jsx",

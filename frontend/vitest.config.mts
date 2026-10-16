@@ -99,6 +99,20 @@ export default defineConfig({
                     "./src/shared/api/uploadSessionClient.ts",
                 ),
             },
+            {
+                find: /^@mike\/workspace-selection$/,
+                replacement: resolvePath("./src/shared/lib/workspaceSelection.ts"),
+            },
+            {
+                find: /^@mike\/workspace-selection-state$/,
+                replacement: resolvePath(
+                    "./src/shared/hooks/useWorkspaceSelection.ts",
+                ),
+            },
+            {
+                find: /^@mike\/workspace-menu-ui$/,
+                replacement: resolvePath("./src/shared/ui/WorkspaceMenuUI.tsx"),
+            },
         ],
     },
     test: {
