@@ -649,6 +649,28 @@ export function useWordTrackedEdits({
             ? `Applied ${appliedCount} of ${matchesFound} occurrences; the rest couldn’t be applied.`
             : undefined;
 
+        // Checked on the LAST pass, before the applied branch: a replace-all
+        // pass Word faulted on may have landed, so earlier passes must not
+        // make the card look safely resolvable. Their handles are released;
+        // the user reviews the whole change in Word.
+        if (last.reason === "unverified") {
+          if (handles.length > 0) await releaseTrackedEdits(handles);
+          setEditRuntimeState(key, {
+            status: "unverified",
+            matches: matchesFound,
+            appliedMatches: appliedCount,
+            busy: false,
+            error: UNVERIFIED_APPLY_MESSAGE,
+          });
+          void updatePersistedEdit(key, {
+            apply_status: "failed",
+            matched_occurrences: matchesFound,
+            applied_occurrences: appliedCount,
+            error_code: "unverified",
+            error_message: UNVERIFIED_APPLY_MESSAGE,
+          });
+          return;
+        }
         if (appliedCount > 0) {
           editHandlesRef.current.set(key, handles);
           if (first.persistentAnchor) {
@@ -707,22 +729,6 @@ export function useWordTrackedEdits({
             applied_occurrences: 0,
             error_code: "already-applied",
             error_message: ALREADY_APPLIED_MESSAGE,
-          });
-          return;
-        }
-        if (first.reason === "unverified") {
-          setEditRuntimeState(key, {
-            status: "unverified",
-            matches: matchesFound,
-            busy: false,
-            error: UNVERIFIED_APPLY_MESSAGE,
-          });
-          void updatePersistedEdit(key, {
-            apply_status: "failed",
-            matched_occurrences: matchesFound,
-            applied_occurrences: 0,
-            error_code: "unverified",
-            error_message: UNVERIFIED_APPLY_MESSAGE,
           });
           return;
         }

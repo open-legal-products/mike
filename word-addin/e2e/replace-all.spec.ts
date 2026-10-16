@@ -129,6 +129,37 @@ test("review mode: one card applies and accepts every occurrence", async ({
   expect(calls.rejectedChanges).toEqual([]);
 });
 
+test("a replace-all pass Word faulted on keeps the card unconfirmed, with no Accept or Reject", async ({
+  addin,
+  page,
+}) => {
+  await addin.mockChatStream([REPLACE_ALL_BLOCK]);
+  await addin.gotoTaskpane({
+    documentText: DOC_TEXT,
+    // Pass 1 lands; pass 2's sync faults after Word was sent the mutation.
+    trackedMutationSyncFailure: "before-apply",
+    trackedMutationSyncFailureAfter: 1,
+  });
+  await addin.expectAuthedShell();
+
+  await page
+    .getByPlaceholder("How can I help?")
+    .fill("Replace all Acme Corp with Acme Ltd");
+  await page.getByRole("button", { name: "Send" }).click();
+  await applyReviewProposal(page);
+
+  // Word may have applied the faulted pass, so the card must neither say
+  // "the rest couldn't be applied" nor offer to resolve only what it holds.
+  await expect(
+    page.getByText(/Mike couldn't confirm whether this change was applied/),
+  ).toBeVisible();
+  await expect(page.getByText(/the rest couldn’t be applied/)).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /^(Accept|Reject)$/ }),
+  ).toHaveCount(0);
+  expect((await addin.wordCalls()).trackedChanges).toEqual([WRITE]);
+});
+
 test("review mode: rejecting the card rejects every occurrence", async ({
   addin,
   page,
