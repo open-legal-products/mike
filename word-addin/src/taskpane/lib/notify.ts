@@ -118,25 +118,13 @@ export async function handOffToSupport(
 
   const outcome = supportHandoffResult({ copied, opened, details });
   if (outcome.details) {
-    // Imported here, not at the top of the file. `tsconfig.json` maps "react"
-    // onto `@types/react/index.d.ts` so the webpack build type-checks, and
-    // Playwright's loader honours that mapping at RUNTIME: a top-level
-    // `import ... from "react"` makes every Node-side spec that reaches this
-    // module (e2e/sse.spec.ts does, via api/mikeApi) try to execute a
-    // declaration file and die. Nothing else in this module needs React.
-    const { createElement } = await import("react");
     showToast({
       tone: "info",
       title: outcome.message,
-      // Selectable, and sticky: the user is copying this by hand.
-      message: createElement(
-        "pre",
-        {
-          className:
-            "mt-1 max-h-40 select-text overflow-auto whitespace-pre-wrap break-words text-[11px] leading-4",
-        },
-        outcome.details,
-      ),
+      // The toast's plain message; its line breaks would collapse there, so
+      // the fields are separated in-line. Sticky: the user is copying this
+      // by hand.
+      message: outcome.details.split("\n").join(" · "),
       durationMs: null,
       dedupeKey: "support-details",
     });
